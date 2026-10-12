@@ -11,6 +11,8 @@ namespace Nemerle.Compiler
   /// Open-addressing map from a pair of 64-bit keys to an int (>= 0). Set overwrites.
   internal sealed class NitraPairMap
   {
+    public static mutable Finds : long;
+    public static mutable Sets : long;
     private mutable first : array[long];
     private mutable second : array[long];
     private mutable values : array[int];
@@ -30,6 +32,7 @@ namespace Nemerle.Compiler
     }
     public Find(a : long, b : long) : int
     {
+      ++Finds;
       mutable i=Slot(a,b) & mask; mutable answer= -2;
       while(answer== -2)
       {
@@ -41,6 +44,7 @@ namespace Nemerle.Compiler
     }
     public Set(a : long, b : long, value : int) : void
     {
+      ++Sets;
       when((used+1)*2>first.Length) Grow();
       mutable i=Slot(a,b) & mask; mutable placed=false;
       while(!placed)

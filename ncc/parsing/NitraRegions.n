@@ -40,6 +40,8 @@ namespace Nemerle.Compiler
   /// Open-addressing map from a 64-bit key to a non-negative int.
   internal sealed class NitraLongMap
   {
+    public static mutable Finds : long;
+    public static mutable Adds : long;
     private mutable keys : array[long];
     private mutable values : array[int];
     private mutable mask : int;
@@ -54,6 +56,7 @@ namespace Nemerle.Compiler
     }
     public Find(key : long) : int
     {
+      ++Finds;
       mutable i=Slot(key) & mask; mutable answer= -2;
       while(answer== -2)
       {
@@ -65,6 +68,7 @@ namespace Nemerle.Compiler
     }
     public Add(key : long, value : int) : void
     {
+      ++Adds;
       when((used+1)*2>keys.Length) Grow();
       mutable i=Slot(key) & mask;
       while(values[i] >=0) i=(i+1) & mask;
@@ -267,8 +271,13 @@ namespace Nemerle.Compiler
         heapStart[i]=start; heapId[i]=id;
       }
     }
+    internal mutable PushCount : int;
+    internal mutable SubscribeCount : int;
+    internal mutable LexicalCalls : int;
+    internal mutable PossibleCalls : int;
     private Push(kind : int, owner : int, stage : int, pos : int, count : int, end : int) : void
     {
+      ++PushCount;
       when(workTop==workArray.Length) { mutable a=workArray; Array.Resize(ref a,workTop*2); workArray=a; }
       mutable w=default(NitraWorkItem);
       w.Kind=kind; w.Owner=owner; w.Stage=stage; w.Pos=pos; w.Count=count; w.End=end;
@@ -314,6 +323,7 @@ namespace Nemerle.Compiler
     }
     private Subscribe(owner : int, operation : NitraOperation, p : int, kind : int, stage : int, pos : int, count : int) : void
     {
+      ++SubscribeCount;
       def o=operation.Interface ?? operation;
       when(o.Code<0) o.Classify();
       unless(Possible(o,p)) { ++result.FamilyEliminations; return; }
@@ -559,6 +569,7 @@ namespace Nemerle.Compiler
     // ---- lexical scanning (shared by all lexical operations) ----
     private Lexical(o : NitraOperation, p : int) : SCG.HashSet[int]
     {
+      ++LexicalCalls;
       def key=Key(o.Id,p); when(lexical.ContainsKey(key)) return lexical[key];
       unless(lexicalActive.Add(key)) throw ArgumentException("cyclic lexical recognition at "+p.ToString());
       Count(); def ends=SCG.HashSet.[int]();
@@ -653,6 +664,7 @@ namespace Nemerle.Compiler
     }
     private Possible(o : NitraOperation, p : int) : bool
     {
+      ++PossibleCalls;
       if(!prepared.Ready || o.Nullable) true else Begins(o,p)
     }
     // Can a non-empty derivation of o start at p? Over-approximate (first-character sets).
@@ -759,6 +771,7 @@ namespace Nemerle.Compiler
     {
       result.Rule=name; result.Root= -1; keepChildren=detailed;
       def started=System.Diagnostics.Stopwatch.GetTimestamp();
+      def allocStart=GC.GetAllocatedBytesForCurrentThread(); def findStart=NitraLongMap.Finds+NitraPairMap.Finds;
       try
       {
         def o=root.Interface ?? root; when(o.Code<0) o.Classify();
@@ -786,7 +799,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result

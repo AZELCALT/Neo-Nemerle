@@ -57,9 +57,11 @@ namespace Nemerle.Compiler
       def recognized=grammar.Recognize(rule,source,true,false);
       {
         def started=System.Diagnostics.Stopwatch.GetTimestamp();
+        def allocStart=GC.GetAllocatedBytesForCurrentThread(); def findStart=NitraLongMap.Finds+NitraPairMap.Finds; def setStart=NitraPairMap.Sets+NitraLongMap.Adds;
         def builder=NitraStructureBuilder(recognized,resolver); def result=builder.Run();
         when(NitraRecognizer.PhasesOn)
         {
+          NitraRecognizer.NoteCount("sel_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NitraRecognizer.NoteCount("sel_hash_finds",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NitraRecognizer.NoteCount("sel_hash_sets",((NitraPairMap.Sets+NitraLongMap.Adds-setStart) :> int));
           NitraRecognizer.NotePhase("select",System.Diagnostics.Stopwatch.GetTimestamp()-started);
           NitraRecognizer.NoteCount("later",builder.LaterCount); NitraRecognizer.NoteCount("ask",builder.AskCount); NitraRecognizer.NoteCount("build",builder.BuildCount);
           NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); for(mutable k=1;k<=5;++k) { NitraRecognizer.NotePhase("step"+k.ToString(),builder.StepTicks[k]); NitraRecognizer.NoteCount("steps"+k.ToString(),builder.StepCounts[k]); } NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
