@@ -42,6 +42,8 @@ namespace Nemerle.Compiler
   {
     public static mutable Finds : long;
     public static mutable Adds : long;
+    public mutable Hits : long;
+    public mutable Probes : long;
     private mutable keys : array[long];
     private mutable values : array[int];
     private mutable mask : int;
@@ -50,19 +52,18 @@ namespace Nemerle.Compiler
     { keys=array(256); values=array(256); mask=255; for(mutable i=0;i<256;++i) values[i]= -1; }
     private static Slot(key : long) : int
     {
-      def lo=key & 0x7FFFFFFFL; def hi=(key >> 32) & 0x7FFFFFFFL;
-      def h=(lo*2654435761L+hi) & 0x7FFFFFFFL;
-      ((h ^ (h >> 13)) :> int)
+      def h=unchecked(key * -7046029254386353131L);
+      (((h >> 29) ^ (h >> 40)) & 0x7FFFFFFFL) :> int
     }
     public Find(key : long) : int
     {
-      ++Finds;
+      ++Finds; ++Hits;
       mutable i=Slot(key) & mask; mutable answer= -2;
       while(answer== -2)
       {
         if(values[i]<0) answer= -1
         else if(keys[i]==key) answer=values[i]
-        else i=(i+1) & mask;
+        else { ++Probes; i=(i+1) & mask; }
       }
       answer
     }
@@ -99,8 +100,8 @@ namespace Nemerle.Compiler
     private static Mix(a : long, b : long) : long { (a*2654435761L+b) & 0x7FFFFFFFL }
     private static Slot(a : long, b : long) : int
     {
-      def h=Mix(Mix(Mix(a & 0x7FFFFFFFL,(a >> 32) & 0x7FFFFFFFL),b & 0x7FFFFFFFL),(b >> 32) & 0x7FFFFFFFL);
-      ((h ^ (h >> 13)) :> int)
+      def h=unchecked((a * -7046029254386353131L) ^ (b * -4658895280553007687L));
+      (((h >> 29) ^ (h >> 40)) & 0x7FFFFFFFL) :> int
     }
     public Add(a : long, b : long) : bool
     {
