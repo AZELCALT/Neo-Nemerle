@@ -103,6 +103,14 @@ namespace Nemerle.Compiler
       def h=unchecked((a * -7046029254386353131L) ^ (b * -4658895280553007687L));
       (((h >> 29) ^ (h >> 40)) & 0x7FFFFFFFL) :> int
     }
+    public Clear() : void { when(used>0) { Array.Clear(full,0,full.Length); used=0; } }
+    public Has(a : long, b : long) : bool
+    {
+      mutable i=Slot(a,b) & mask; mutable found=false; mutable go=true;
+      while(go && full[i])
+      { if(first[i]==a && second[i]==b) { found=true; go=false } else i=(i+1) & mask; }
+      found
+    }
     public Add(a : long, b : long) : bool
     {
       when((used+1)*2>first.Length) Grow();
@@ -156,6 +164,10 @@ namespace Nemerle.Compiler
     private mutable rSubscribers : array[int] = array(256);
     private mutable rOwned : array[int] = array(256);
     private mutable rEdgeHead : array[int] = array(256);
+    private mutable rFState : array[int] = array(256);
+    private mutable rFEnds : array[NitraEnds] = array(256);
+    private mutable rFMax : array[int] = array(256);
+    private mutable edDead : array[bool] = array(512);
     // Derivation edges, chained per region (newest first). Kinds: 2 sequence (a=stage), 1 alternative (a=index),
     // 9 subtract left end, 4 repeat item (a=count, b=state position), 5 repeat separator (a=count, b=state position).
     private mutable edges : int;
@@ -248,6 +260,9 @@ namespace Nemerle.Compiler
       mutable h=rSubscribers; Array.Resize(ref h,n); rSubscribers=h;
       mutable i=rOwned; Array.Resize(ref i,n); rOwned=i;
       mutable j=rEdgeHead; Array.Resize(ref j,n); rEdgeHead=j;
+      mutable k1=rFState; Array.Resize(ref k1,n); rFState=k1;
+      mutable k2=rFEnds; Array.Resize(ref k2,n); rFEnds=k2;
+      mutable k3=rFMax; Array.Resize(ref k3,n); rFMax=k3;
     }
     private GrowLinks() : void
     {
@@ -304,10 +319,11 @@ namespace Nemerle.Compiler
         mutable v4=edFrom; Array.Resize(ref v4,n); edFrom=v4;
         mutable v5=edTo; Array.Resize(ref v5,n); edTo=v5;
         mutable v6=edChild; Array.Resize(ref v6,n); edChild=v6;
+        mutable v7=edDead; Array.Resize(ref v7,n); edDead=v7;
       }
       def id=edges; ++edges;
       edNext[id]=rEdgeHead[r]; rEdgeHead[r]=id;
-      edKind[id]=kind; edA[id]=a; edB[id]=b; edFrom[id]=from; edTo[id]=to; edChild[id]=child;
+      edDead[id]=false; edKind[id]=kind; edA[id]=a; edB[id]=b; edFrom[id]=from; edTo[id]=to; edChild[id]=child;
     }
     private Push(kind : int, owner : int, stage : int, pos : int, count : int, end : int, from : int, child : int) : void
     {
@@ -347,7 +363,7 @@ namespace Nemerle.Compiler
         when(regions==rOp.Length) GrowRegions();
         id=regions; ++regions;
         rOp[id]=o; rStart[id]=p; rClosed[id]=false; rPending[id]=0; rOutstanding[id]=0;
-        rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1; rEdgeHead[id]= -1;
+        rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1; rEdgeHead[id]= -1; rFState[id]=0; rFEnds[id]=null; rFMax[id]= -1;
         memo.Add(key,id); ++open; HeapPush(p,id);
         ++result.SampleCreations; when(o.SharedPrefix) ++result.PrefixSamples;
         Push(0,id,0,p,0,p,p,-1);
@@ -573,6 +589,11 @@ namespace Nemerle.Compiler
           }
       }
       rClosed[r]=true; --open;
+      when(prepared.Native)
+      {
+        if(deferFeasible) feasibleBatch.Add(r)
+        else { oneBatch.Clear(); oneBatch.Add(r); FeasibleBatch(oneBatch); }
+      }
       mutable l=rSubscribers[r];
       while(l>=0)
       {
@@ -582,6 +603,202 @@ namespace Nemerle.Compiler
       }
       rSubscribers[r]= -1;
     }
+
+
+    // ---- feasibility (the native selection rule), settled when a region closes ----
+    // A feasible end of a region is one with a derivation whose every child span is itself feasible, where a
+    // greedy native call only takes the longest feasible end of its target. State: 0 unknown, 1 valid,
+    // 2 invalid (selection falls back to its search), 3 being computed with the rest of a cycle group.
+    private mutable deferFeasible : bool;
+    private feasibleBatch : SCG.List[int] = SCG.List();
+    private oneBatch : SCG.List[int] = SCG.List();
+    private fOwners : SCG.List[int] = SCG.List();
+    private fIds : SCG.List[int] = SCG.List();
+    private reachA : NitraPairSet = NitraPairSet();
+    private reachB : NitraPairSet = NitraPairSet();
+    private greedyMax : SCG.Dictionary[long,int] = SCG.Dictionary();
+    internal mutable FeasibleBatches : int;
+    internal mutable FeasibleInvalid : int;
+    private static ChildOf(R : NitraOperation, kind : int, a : int) : NitraOperation
+    { match(kind) { | 2 | 1 => R.Children[a] | 9 | 4 => R.Children[0] | _ => R.Children[1] } }
+    private static RepeatCap(o : NitraOperation, count : int) : int
+    { if(o.Max<0) Math.Min(count,Math.Max(1,o.Min)) else count }
+    private AddFeasible(r : int, q : int) : bool
+    { if(rEnds[r].Contains(q)) rFEnds[r].Add(q) else false }
+    private EdgeFeasible(r : int, e : int, c : NitraOperation) : bool
+    {
+      def o=c.Pass;
+      when(o.Code<0) o.Classify();
+      if(o.Code<=2) true
+      else if(!o.GreedyCall && (o.OpaqueValue || o.Fast && (o.Code==6 || o.Code==7))) true
+      else
+      {
+        def child=edChild[e];
+        if(child<0) true
+        else if(rFState[child]==1 || rFState[child]==3) rFEnds[child].Contains(edTo[e])
+        else { rFState[r]=2; false }
+      }
+    }
+    // Greedy children keep only the longest feasible end per group; the others are dead edges.
+    private PruneGreedy(r : int) : void
+    {
+      def R=rOp[r]; greedyMax.Clear();
+      mutable e=rEdgeHead[r];
+      while(e>=0 && rFState[r]==3)
+      {
+        def c=ChildOf(R,edKind[e],edA[e]); def g=c.Pass;
+        when(g.GreedyCall)
+        {
+          if(edKind[e]==5 || g.Children.Count==0 || g.Children[0].Pass.GreedyCall || edChild[e] >=0 && rFState[edChild[e]]!=1 && rFState[edChild[e]]!=3)
+            rFState[r]=2
+          else if(edChild[e] >=0 && rFState[edChild[e]]==3) rFState[r]=2
+          else
+          {
+            def ok=edChild[e]<0 || rFEnds[edChild[e]].Contains(edTo[e]);
+            when(ok)
+            {
+              def group=match(edKind[e]) { | 2 => ((edA[e] :> long) << 32)+(edFrom[e] :> long) | 1 => (edA[e] :> long) | 9 => 0L | _ => (edFrom[e] :> long) };
+              mutable best= -1;
+              unless(greedyMax.TryGetValue(group,out best)) best= -1;
+              when(edTo[e] >best) greedyMax[group]=edTo[e];
+            }
+          }
+        }
+        e=edNext[e];
+      }
+      e=rEdgeHead[r];
+      while(e>=0 && rFState[r]==3)
+      {
+        def c=ChildOf(R,edKind[e],edA[e]);
+        when(c.Pass.GreedyCall)
+        {
+          def group=match(edKind[e]) { | 2 => ((edA[e] :> long) << 32)+(edFrom[e] :> long) | 1 => (edA[e] :> long) | 9 => 0L | _ => (edFrom[e] :> long) };
+          def ok=edChild[e]<0 || rFEnds[edChild[e]].Contains(edTo[e]);
+          edDead[e]=(!ok) || (!greedyMax.ContainsKey(group)) || greedyMax[group]!=edTo[e];
+        }
+        e=edNext[e];
+      }
+    }
+    private ProcessEdge(r : int, e : int) : bool
+    {
+      if(rFState[r]==2 || edDead[e]) false
+      else
+      {
+        def R=rOp[r]; def q=edTo[e];
+        match(edKind[e])
+        {
+          | 2 =>
+            def stage=edA[e];
+            if(reachA.Has(r :> long,((stage :> long) << 32)+(edFrom[e] :> long)) && EdgeFeasible(r,e,R.Children[stage]))
+            {
+              mutable changed=reachA.Add(r :> long,(((stage+1) :> long) << 32)+(q :> long));
+              when(stage+1==R.Children.Count && AddFeasible(r,q)) changed=true;
+              changed
+            }
+            else false
+          | 1 | 9 => if(EdgeFeasible(r,e,ChildOf(R,edKind[e],edA[e]))) AddFeasible(r,q) else false
+          | 5 =>
+            if(reachA.Has(r :> long,((edA[e] :> long) << 32)+(edB[e] :> long)) && EdgeFeasible(r,e,R.Children[1]))
+            {
+              mutable changed=reachB.Add(((r :> long) << 32)+(edA[e] :> long),((edB[e] :> long) << 32)+(q :> long));
+              when(R.Text=="trailing" && edA[e] >=R.Min && AddFeasible(r,q)) changed=true;
+              changed
+            }
+            else false
+          | _ =>
+            def count=edA[e]; def statePos=edB[e];
+            def separated=R.Code==7 && count>0;
+            if(reachA.Has(r :> long,((count :> long) << 32)+(statePos :> long))
+               && (!separated || reachB.Has(((r :> long) << 32)+(count :> long),((statePos :> long) << 32)+(edFrom[e] :> long)))
+               && EdgeFeasible(r,e,R.Children[0]))
+            {
+              def next=RepeatCap(R,count+1);
+              mutable changed=reachA.Add(r :> long,((next :> long) << 32)+(q :> long));
+              when(next >=R.Min && AddFeasible(r,q)) changed=true;
+              changed
+            }
+            else false
+        }
+      }
+    }
+    private FeasibleBatch(batch : SCG.List[int]) : void
+    {
+      ++FeasibleBatches;
+      fOwners.Clear(); fIds.Clear(); reachA.Clear(); reachB.Clear();
+      foreach(r in batch) { rFState[r]=3; rFEnds[r]=NitraEnds(); }
+      foreach(r in batch)
+      {
+        def R=rOp[r]; when(R.Code<0) R.Classify();
+        def trivial=R.Code==0 || R.Code==1 || R.Code==2 || R.Code==8 || R.Code==9 || !R.GreedyCall && (R.OpaqueValue || R.Fast && (R.Code==6 || R.Code==7));
+        if(trivial) { def ends=rEnds[r]; for(mutable i=0;i<ends.Count;++i) _=rFEnds[r].Add(ends.Items[i]); }
+        else if(R.GreedyCall || R.Code==11 || R.Code==12 || false) rFState[r]=2
+        else
+        {
+          def p=rStart[r];
+          if(R.Code==3 && R.Children.Count==0) { _=AddFeasible(r,p); }
+          else
+          {
+            _=reachA.Add(r :> long,(p :> long));
+            when((R.Code==6 || R.Code==7) && R.Min==0) _=AddFeasible(r,p);
+          }
+          mutable e=rEdgeHead[r];
+          while(e>=0)
+          {
+            def child=edChild[e];
+            when(child>=0 && rFState[child]!=1 && rFState[child]!=3) rFState[r]=2;
+            fOwners.Add(r); fIds.Add(e); e=edNext[e];
+          }
+          when(rFState[r]==3) PruneGreedy(r);
+        }
+      }
+      def m=fIds.Count; def keys : array[long]=array(m); def items : array[int]=array(m);
+      for(mutable k=0;k<m;++k)
+      {
+        def e=fIds[k]; def sub=(if(edKind[e]==5) 0 else if(edKind[e]==4) 1 else 2)*16777216+(edA[e] & 16777215);
+        keys[k]=((edTo[e] :> long) << 32)+(sub :> long); items[k]=k;
+      }
+      when(m>1) Array.Sort(keys,items);
+      def iterate=batch.Count>1;
+      mutable i=0;
+      while(i<m)
+      {
+        mutable j=i; def to=keys[i] >> 32;
+        while(j<m && (keys[j] >> 32)==to) ++j;
+        mutable changed=true;
+        while(changed)
+        {
+          changed=false;
+          for(mutable k=i;k<j;++k) when(ProcessEdge(fOwners[items[k]],fIds[items[k]])) changed=true;
+          unless(iterate) changed=false;
+        }
+        i=j;
+      }
+      // A region that depended on an invalid one is invalid itself.
+      mutable spread=true;
+      while(spread)
+      {
+        spread=false;
+        for(mutable k=0;k<m;++k)
+        {
+          def r=fOwners[k]; def child=edChild[fIds[k]];
+          when(rFState[r]==3 && child>=0 && rFState[child]==2) { rFState[r]=2; spread=true; }
+        }
+      }
+      foreach(r in batch)
+      {
+        if(rFState[r]==2) ++FeasibleInvalid
+        else
+        {
+          rFState[r]=1; mutable top= -1; def ends=rFEnds[r];
+          for(mutable i2=0;i2<ends.Count;++i2) when(ends.Items[i2] >top) top=ends.Items[i2];
+          rFMax[r]=top;
+        }
+      }
+    }
+    internal RegionOf(o : NitraOperation, p : int) : int { memo.Find(Key((o.Interface ?? o).Id,p)) }
+    internal FeasibleState(r : int) : int { rFState[r] }
+    internal FeasibleEnds(r : int) : NitraEnds { rFEnds[r] }
+    internal FeasibleMax(r : int) : int { rFMax[r] }
 
     // ---- settlement of same-position cycles ----
     // Reached only when no queued work remains. Children never start before their
@@ -651,9 +868,16 @@ namespace Nemerle.Compiler
         when(o.Holds || o.Code==9) throw ArgumentException("cyclic negative or longest-match recognition constraint");
       }
       unless(leafFound) throw ArgumentException("unsettled recognition dependency");
+      deferFeasible=true;
       for(mutable v=0;v<n;++v)
         if(leaving[component[v]]) HeapPush(start,group[v])
         else unless(rClosed[group[v]]) { ++SettleClosed; CloseRegion(group[v]); }
+      deferFeasible=false;
+      when(feasibleBatch.Count>0)
+      {
+        def done=SCG.List.[int](feasibleBatch); feasibleBatch.Clear();
+        FeasibleBatch(done);
+      }
       ++SettleGroups; SettleMembers+=n;
       DrainClose();
     }
@@ -903,7 +1127,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); NoteCount("g_fbatches",FeasibleBatches); NoteCount("g_finvalid",FeasibleInvalid); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result
