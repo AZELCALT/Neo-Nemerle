@@ -185,6 +185,9 @@ namespace Nemerle.Compiler
     internal mutable BuildCount : int;
     internal mutable EndpointVisits : int;
     internal mutable EndpointBuilds : int;
+    internal mutable FeasibleTicks : long;
+    internal mutable FeasibleCalls : int;
+    internal mutable Frames : int;
 
     public this(recognition : NitraRecognitionResult, resolver : Func[NitraStructuralChoice,int])
     { result.Recognition=recognition; evidence=recognition.Evidence; this.resolver=resolver; }
@@ -235,7 +238,7 @@ namespace Nemerle.Compiler
       else
       {
         def index=SCG.Dictionary.[int,SCG.List[int]]();
-        evidence.ForEachOperation(o.Id,fun(p : int,ends : NitraEnds)
+        evidence.ForEachOperation(o,fun(p : int,ends : NitraEnds)
         {
           for(mutable k=0;k<ends.Count;++k)
           {
@@ -263,6 +266,10 @@ namespace Nemerle.Compiler
             def q=later.Items[i];
             when(rev.ContainsKey(q)) foreach(p in rev[q]) { ++EndpointVisits; _=found.Add(p); }
           }
+          // Zero-width results are not stored anywhere: they hold at every position the next character cannot start.
+          def child=o.Children[slot];
+          when((child.Interface ?? child).Sure)
+            for(mutable i=0;i<later.Count;++i) when(evidence.IsZero(child,later.Items[i])) _=found.Add(later.Items[i]);
         }
         backMap.Set(a,(end :> long),backSets.Count); backSets.Add(found); found
       }
@@ -273,7 +280,7 @@ namespace Nemerle.Compiler
     {
       when(sp==frames.Length) { mutable a=frames; Array.Resize(ref a,sp*2); frames=a; }
       when(frames[sp]==null) frames[sp]=NitraAskFrame();
-      def f=frames[sp]; ++sp;
+      def f=frames[sp]; ++sp; ++Frames;
       f.Kind=kind; f.Op=o; f.P=p; f.E=e; f.Key=key; f.I=0; f.J=0; f.K=0; f.Phase=0; f.Pending=false; f.Failed=false;
       f.Q=0; f.Last=0; f.X=0; f.Count=0; f.SepFlag=false; f.Cur=null; f.Next=null; f.Back=null;
       f.SeqPlan=null; f.RepPlan=null; f.Choices=null; f.Pairs=null; f.Sorted=null;
@@ -538,13 +545,17 @@ namespace Nemerle.Compiler
     }
     private Query(o : NitraOperation, p : int, e : int) : bool
     {
+      def started=if(NitraRecognizer.PhasesOn) System.Diagnostics.Stopwatch.GetTimestamp() else 0L;
       BeginSearch();
       def r=Enter(o,p,e);
-      if(r<0) { Drain(); ret } else r==1
+      def answer=if(r<0) { Drain(); ret } else r==1;
+      when(NitraRecognizer.PhasesOn) { FeasibleTicks+=System.Diagnostics.Stopwatch.GetTimestamp()-started; ++FeasibleCalls; }
+      answer
     }
     // Plans are built even when feasibility is plain membership (no native selection).
     private StartPlan(o : NitraOperation, p : int, e : int, map : NitraPairMap) : int
     {
+      def started=if(NitraRecognizer.PhasesOn) System.Diagnostics.Stopwatch.GetTimestamp() else 0L;
       BeginSearch();
       def key=Pair(o,p); mutable index=map.Find(key,(e :> long));
       when(index<0)
@@ -554,6 +565,7 @@ namespace Nemerle.Compiler
         when(r<0) Drain();
         index=map.Find(key,(e :> long));
       }
+      when(NitraRecognizer.PhasesOn) { FeasibleTicks+=System.Diagnostics.Stopwatch.GetTimestamp()-started; ++FeasibleCalls; }
       index
     }
 

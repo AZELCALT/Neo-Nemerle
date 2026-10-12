@@ -282,11 +282,13 @@ namespace Nemerle.Compiler
       mutable w=original; mutable go=true;
       while(go)
       {
+        // Without diagnostics only productions matter: they feed MatchedProductions.
+        def record=keepChildren || w.Kind=="variant";
         def key=Key(w.Id,p);
-        if(viewMap.Find(key)>=0) go=false
+        if(record && viewMap.Find(key) >= 0) go=false
         else
         {
-          viewMap.Add(key,o.Id); viewOps.Add(w.Id); viewStarts.Add(p); viewTargets.Add(o.Id);
+          when(record) { viewMap.Add(key,o.Id); viewOps.Add(w.Id); viewStarts.Add(p); viewTargets.Add(o.Id); }
           go=w!=o && w.Children.Count==1 && w.Interface==o;
           when(go) w=w.Children[0];
         }
@@ -324,6 +326,11 @@ namespace Nemerle.Compiler
           NoteView(operation,o,p);
           unless(kind==10) foreach(end in ends) Push(kind,owner,stage,pos,count,end);
         }
+      }
+      else if(ZeroOnly(o,p))
+      {
+        NoteView(operation,o,p);
+        unless(kind==10) Push(kind,owner,stage,pos,count,p);
       }
       else
       {
@@ -420,16 +427,8 @@ namespace Nemerle.Compiler
     }
 
     // ---- closing ----
-    private KnownCount(o : NitraOperation, p : int) : int
-    {
-      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=memo.Find(key);
-      if(id>=0) rEnds[id].Count else if(lexical.ContainsKey(key)) lexical[key].Count else 0
-    }
-    private KnownContains(o : NitraOperation, p : int, end : int) : bool
-    {
-      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=memo.Find(key);
-      if(id>=0) rEnds[id].Contains(end) else lexical.ContainsKey(key) && lexical[key].Contains(end)
-    }
+    private KnownCount(o : NitraOperation, p : int) : int { EvidenceAt(o,p).Count }
+    private KnownContains(o : NitraOperation, p : int, end : int) : bool { EvidenceAt(o,p).Contains(end) }
     private Eligible(r : int) : bool { !rClosed[r] && rPending[r]==0 && rOutstanding[r]==0 }
     private TryClose(r : int) : void
     {
@@ -654,22 +653,73 @@ namespace Nemerle.Compiler
     }
     private Possible(o : NitraOperation, p : int) : bool
     {
-      when(!prepared.Ready || o.Nullable) return true;
-      when(p>=source.Length) return false;
-      def ch=source[p];
-      unless(firstSets.ContainsKey(ch))
+      if(!prepared.Ready || o.Nullable) true else Begins(o,p)
+    }
+    // Can a non-empty derivation of o start at p? Over-approximate (first-character sets).
+    private Begins(o : NitraOperation, p : int) : bool
+    {
+      if(p>=source.Length) false
+      else
       {
-        // Grammar dispatch is immutable and source-independent. Share bounded
-        // ASCII tables across inputs; non-ASCII tables stay local to this run.
-        if((ch :> int)<128) lock(prepared.FirstAscii)
+        def ch=source[p];
+        unless(firstSets.ContainsKey(ch))
         {
-          mutable bits=prepared.FirstAscii[ch :> int];
-          when(bits==null) { bits=First(ch); prepared.FirstAscii[ch :> int]=bits; }
-          firstSets.Add(ch,bits);
+          // Grammar dispatch is immutable and source-independent. Share bounded
+          // ASCII tables across inputs; non-ASCII tables stay local to this run.
+          if((ch :> int)<128) lock(prepared.FirstAscii)
+          {
+            mutable bits=prepared.FirstAscii[ch :> int];
+            when(bits==null) { bits=First(ch); prepared.FirstAscii[ch :> int]=bits; }
+            firstSets.Add(ch,bits);
+          }
+          else firstSets.Add(ch,First(ch));
         }
-        else firstSets.Add(ch,First(ch));
+        firstSets[ch][o.Id]
       }
-      firstSets[ch][o.Id]
+    }
+    internal ZeroOnly(o : NitraOperation, p : int) : bool { o.Sure && prepared.Ready && !Begins(o,p) }
+    private zeros : SCG.Dictionary[int,NitraEnds] = SCG.Dictionary();
+    private lexWrapped : SCG.Dictionary[long,NitraEnds] = SCG.Dictionary();
+    private static emptyEnds : NitraEnds = NitraEnds();
+    private mutable regionsByOp : SCG.Dictionary[int,SCG.List[int]];
+    private mutable scannedByOp : SCG.Dictionary[int,SCG.List[long]];
+    // Ends of any operation at a position, as the recognizer settled them.
+    internal EvidenceAt(o : NitraOperation, p : int) : NitraEnds
+    {
+      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=memo.Find(key);
+      if(id>=0) rEnds[id]
+      else if(lexWrapped.ContainsKey(key)) lexWrapped[key]
+      else if(lexical.ContainsKey(key))
+      { def ends=NitraEnds(); foreach(e in lexical[key]) _=ends.Add(e); lexWrapped[key]=ends; ends }
+      else if(ZeroOnly(canonical,p))
+      {
+        unless(zeros.ContainsKey(p)) { def one=NitraEnds(); _=one.Add(p); zeros[p]=one; }
+        zeros[p]
+      }
+      else emptyEnds
+    }
+    // Stored (non zero-width) entries of one operation: (start, ends).
+    internal EvidenceForEach(o : NitraOperation, action : Action[int,NitraEnds]) : void
+    {
+      when(regionsByOp==null)
+      {
+        regionsByOp=SCG.Dictionary(); scannedByOp=SCG.Dictionary();
+        for(mutable r=0;r<regions;++r)
+        {
+          def id=rOp[r].Id;
+          unless(regionsByOp.ContainsKey(id)) regionsByOp[id]=SCG.List();
+          regionsByOp[id].Add(r);
+        }
+        foreach(pair in lexical)
+        {
+          def id=(pair.Key/4294967296L) :> int;
+          unless(scannedByOp.ContainsKey(id)) scannedByOp[id]=SCG.List();
+          scannedByOp[id].Add(pair.Key);
+        }
+      }
+      def canonical=o.Interface ?? o;
+      when(regionsByOp.ContainsKey(canonical.Id)) foreach(r in regionsByOp[canonical.Id]) action.Invoke(rStart[r],rEnds[r]);
+      when(scannedByOp.ContainsKey(canonical.Id)) foreach(k in scannedByOp[canonical.Id]) action.Invoke((k%4294967296L) :> int,EvidenceAt(canonical,(k%4294967296L) :> int));
     }
     private static categoryNames : array[string] = array["Lu","Ll","Lt","Lm","Lo","Mn","Mc","Me","Nd","Nl","No","Zs","Zl","Zp","Cc","Cf","Cs","Co","Pc","Pd","Ps","Pe","Pi","Pf","Po","Sm","Sc","Sk","So","Cn"];
     private Category(c : char, name : string) : bool
@@ -724,41 +774,38 @@ namespace Nemerle.Compiler
     // ---- output ----
     private Export(root : NitraOperation, retain : bool, detailed : bool) : void
     {
+      when(Environment.GetEnvironmentVariable("NITRA_DUMP")=="1")
+      {
+        def histogram=SCG.Dictionary.[string,int]();
+        for(mutable r=0;r<regions;++r)
+        {
+          def o=rOp[r]; def key=o.Kind+" "+(o.Label ?? "")+" ch="+o.Children.Count.ToString()+" id="+o.Id.ToString()+(if(rClosed[r]) "" else " OPEN");
+          histogram[key]=(if(histogram.ContainsKey(key)) histogram[key] else 0)+1;
+        }
+        def rows=SCG.List.[string*int](); foreach(pair in histogram) rows.Add((pair.Key,pair.Value));
+        rows.Sort(fun(a,b) { b[1].CompareTo(a[1]) });
+        Console.Error.WriteLine("NITRA_DUMP regions="+regions.ToString()+" evaluations="+result.Evaluations.ToString()+" links="+links.ToString()+" views="+viewOps.Count.ToString());
+        for(mutable i=0;i<Math.Min(40,rows.Count);++i) Console.Error.WriteLine("  "+rows[i][1].ToString()+"  "+rows[i][0]);
+      }
       // Variant productions that matched anywhere.
-      for(mutable r=0;r<regions;++r) when(rOp[r].Kind=="variant" && rEnds[r].Count>0) _=matchedProductions.Add(rOp[r].Label);
       for(mutable v=0;v<viewOps.Count;++v)
       {
         def op=prepared.Operations[viewOps[v]];
-        when(op.Kind=="variant")
-        {
-          def id=memo.Find(Key(viewTargets[v],viewStarts[v]));
-          when(id>=0 && rEnds[id].Count>0 || id<0 && lexical.ContainsKey(Key(viewTargets[v],viewStarts[v])) && lexical[Key(viewTargets[v],viewStarts[v])].Count>0)
-            _=matchedProductions.Add(op.Label);
-        }
-      }
-      def accepted=retain && result.Complete && result.Accepted;
-      mutable evidence : NitraEvidence=null;
-      when(accepted || detailed)
-      {
-        evidence=NitraEvidence(); evidence.Root=root; evidence.Source=source; evidence.Scanned=lexical;
-        foreach(operation in prepared.Operations) when(operation.GreedyCall) evidence.NativeSelection=true;
-        for(mutable r=0;r<regions;++r) evidence.Add(Key(rOp[r].Id,rStart[r]),rEnds[r]);
-        for(mutable v=0;v<viewOps.Count;++v)
-        {
-          def target=Key(viewTargets[v],viewStarts[v]); def id=memo.Find(target);
-          def ends=if(id>=0) rEnds[id] else evidence.At(prepared.Operations[viewTargets[v]],viewStarts[v]);
-          evidence.Add(Key(viewOps[v],viewStarts[v]),ends);
-        }
+        when(op.Kind=="variant" && EvidenceAt(prepared.Operations[viewTargets[v]],viewStarts[v]).Count>0) _=matchedProductions.Add(op.Label);
       }
       when(detailed)
       {
         def projected=SCG.Dictionary.[long,SCG.HashSet[int]]();
-        evidence.ForEach(fun(id : int,p : int,ends : NitraEnds)
+        def add(op : NitraOperation, p : int, ends : NitraEnds) : void
         {
-          def set=SCG.HashSet.[int]();
+          def key=Key(op.Id,p);
+          def set=if(projected.ContainsKey(key)) projected[key] else { def fresh=SCG.HashSet.[int](); projected[key]=fresh; fresh };
           for(mutable i=0;i<ends.Count;++i) _=set.Add(ends.Items[i]);
-          projected[Key(id,p)]=set;
-        });
+        }
+        for(mutable r=0;r<regions;++r) add(rOp[r],rStart[r],rEnds[r]);
+        for(mutable v=0;v<viewOps.Count;++v)
+          add(prepared.Operations[viewOps[v]],viewStarts[v],EvidenceAt(prepared.Operations[viewTargets[v]],viewStarts[v]));
+        foreach(pair in lexical) unless(projected.ContainsKey(pair.Key)) projected[pair.Key]=pair.Value;
         def canonicalRegions=SCG.Dictionary.[long,int]();
         foreach(pair in projected)
         {
@@ -793,7 +840,12 @@ namespace Nemerle.Compiler
           region.Children.Sort();
         }
       }
-      when(accepted) result.Evidence=evidence;
+      when(retain && result.Complete && result.Accepted)
+      {
+        def evidence=NitraEvidence(); evidence.Root=root; evidence.Source=source; evidence.Recognizer=this;
+        evidence.NativeSelection=prepared.Native;
+        result.Evidence=evidence;
+      }
     }
   }
 }

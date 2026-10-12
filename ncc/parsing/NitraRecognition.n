@@ -21,6 +21,8 @@ namespace Nemerle.Compiler
     public mutable Holds : bool;
     // Pure lexical operation: ends come straight from the scanner, no region is opened.
     public mutable Scanned : bool;
+    // The operation always has a zero-width result at any position (never depends on lookahead or input).
+    public mutable Sure : bool;
     // Recomputed when preparation finishes (Fast is final only then).
     public Classify() : void
     {
@@ -106,6 +108,8 @@ namespace Nemerle.Compiler
   {
     internal Entries : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
     internal mutable Ready : bool;
+    // Some call is greedy (native-compatible rules): selection must honour native choices.
+    internal mutable Native : bool;
     internal FirstAscii : array[array[bool]] = array(128);
     internal Operations : SCG.List[NitraOperation] = SCG.List();
     public Modules : SCG.List[string] = SCG.List();
@@ -311,29 +315,93 @@ namespace Nemerle.Compiler
           when(yes) { o.Nullable=true; changed=true; }
         }
       }
-      // Compile common sequence prefixes into recognition interfaces. Original
-      // sequence children stay intact for captures and native field consumers.
-      // Keys retain child operation identities: unlike structural samples, a
-      // prefix cannot erase different capture views supplied by its consumers.
-      def prefixes=SCG.Dictionary.[string,NitraOperation]();
-      def originalOperations=SCG.List(result.Operations);
-      foreach(o in originalOperations) when(o.Kind=="seq" && o.Children.Count>2)
+      // Sure: a zero-width result exists at every position regardless of input.
       {
-        mutable prefix=o.Children[0];
-        for(mutable i=1;i<o.Children.Count;++i)
+        mutable moved=true;
+        while(moved)
         {
-          def child=o.Children[i]; def key=prefix.Id.ToString()+":"+child.Id.ToString();
-          if(prefixes.ContainsKey(key)) prefix=prefixes[key];
-          else
+          moved=false;
+          foreach(o in result.Operations) unless(o.Sure)
           {
-            def joined=Op("seq",null); joined.SharedPrefix=true;
-            joined.Children.Add(prefix); joined.Children.Add(child);
-            joined.Nullable=prefix.Nullable && child.Nullable;
-            joined.Fast=regular(joined) && !visible(joined); joined.Interface=joined;
-            prefixes.Add(key,joined); prefix=joined;
+            mutable yes=false;
+            match(o.Kind)
+            {
+              | "empty" => yes=true;
+              | "literal" => yes=o.Text.Length==0;
+              | "repeat" | "separated" => yes=o.Min==0 && (!o.Children[0].Nullable || o.AllEnds);
+              | "seq" => yes=true; foreach(c in o.Children) unless(c.Sure) yes=false;
+              | "rule" | "alt" | "variant" | "capture" | "call" | "longest" => foreach(c in o.Children) when(c.Sure) yes=true;
+              | _ => ();
+            }
+            when(yes) { o.Sure=true; moved=true; }
           }
         }
-        o.Interface=prefix;
+      }
+      // Sequence prefixes become recognition interfaces only where several sequences
+      // share them (branching or shared endings). A prefix with one continuation is
+      // folded into that continuation: one sequence region, not a chain of nested ones.
+      // Original sequence children stay intact for captures and native field consumers.
+      // Keys retain child operation identities: unlike structural samples, a
+      // prefix cannot erase different capture views supplied by its consumers.
+      def originalOperations=SCG.List(result.Operations);
+      def sequences=SCG.List.[NitraOperation]();
+      foreach(o in originalOperations) when(o.Kind=="seq" && o.Children.Count>2) sequences.Add(o);
+      def pathKey(o : NitraOperation, length : int) : string
+      {
+        def b=StringBuilder();
+        for(mutable i=0;i<length;++i) { when(i>0) _=b.Append(':'); _=b.Append(o.Children[i].Id); }
+        b.ToString()
+      }
+      def passCount=SCG.Dictionary.[string,int](); def continuations=SCG.Dictionary.[string,SCG.HashSet[int]]();
+      def terminal=SCG.HashSet.[string]();
+      foreach(o in sequences)
+        for(mutable length=2;length<=o.Children.Count;++length)
+        {
+          def key=pathKey(o,length);
+          passCount[key]=(if(passCount.ContainsKey(key)) passCount[key] else 0)+1;
+          if(length==o.Children.Count) _=terminal.Add(key)
+          else
+          {
+            unless(continuations.ContainsKey(key)) continuations[key]=SCG.HashSet();
+            _=continuations[key].Add(o.Children[length].Id);
+          }
+        }
+      def kept(key : string) : bool
+      { passCount[key] >=2 && (terminal.Contains(key) || continuations.ContainsKey(key) && continuations[key].Count>=2) }
+      def make(children : SCG.List[NitraOperation], shared : bool) : NitraOperation
+      {
+        def joined=Op("seq",null); joined.SharedPrefix=shared; mutable nullable=true;
+        foreach(c in children) { joined.Children.Add(c); unless(c.Nullable) nullable=false; }
+        joined.Nullable=nullable;
+        joined.Fast=regular(joined) && !visible(joined); joined.Interface=joined; joined
+      }
+      def keptOps=SCG.Dictionary.[string,NitraOperation]();
+      def keptOp(o : NitraOperation, length : int) : NitraOperation
+      {
+        def key=pathKey(o,length);
+        if(keptOps.ContainsKey(key)) keptOps[key]
+        else
+        {
+          mutable ancestor=0;
+          for(mutable l=length-1;l>=2 && ancestor==0;--l) when(kept(pathKey(o,l))) ancestor=l;
+          def children=SCG.List.[NitraOperation](); mutable from=0;
+          when(ancestor>0) { children.Add(keptOp(o,ancestor)); from=ancestor; }
+          for(mutable i=from;i<length;++i) children.Add(o.Children[i]);
+          def op=make(children,true); keptOps[key]=op; op
+        }
+      }
+      foreach(o in sequences)
+      {
+        mutable best=0;
+        for(mutable l=o.Children.Count;l>=2 && best==0;--l) when(kept(pathKey(o,l))) best=l;
+        if(best==0) ()
+        else if(best==o.Children.Count) o.Interface=keptOp(o,best)
+        else
+        {
+          def children=SCG.List.[NitraOperation](); children.Add(keptOp(o,best));
+          for(mutable i=best;i<o.Children.Count;++i) children.Add(o.Children[i]);
+          o.Interface=make(children,false);
+        }
       }
       foreach(o in result.Operations) foreach(c in o.Children) c.Parents.Add(o);
       // Identity wrappers retain production/capture views, not separate discovery
@@ -360,7 +428,7 @@ namespace Nemerle.Compiler
         _=guarding.Remove(o.Id); _=guarded.Add(o.Id); o.FirstGuard
       }
       foreach(o in result.Operations) _=guard(o);
-      foreach(o in result.Operations) o.Classify();
+      foreach(o in result.Operations) { o.Classify(); when(o.GreedyCall) result.Native=true; }
       result.Ready=true;
       result
     }

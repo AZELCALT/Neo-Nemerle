@@ -55,8 +55,6 @@ namespace Nemerle.Compiler
       unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
       when(grammar==null) throw ArgumentNullException("grammar");
       def recognized=grammar.Recognize(rule,source,true,false);
-      if(Environment.GetEnvironmentVariable("NITRA_LEGACY_SELECT")=="1") NitraLegacyStructureBuilder(recognized,resolver).Run()
-      else
       {
         def started=System.Diagnostics.Stopwatch.GetTimestamp();
         def builder=NitraStructureBuilder(recognized,resolver); def result=builder.Run();
@@ -64,7 +62,7 @@ namespace Nemerle.Compiler
         {
           NitraRecognizer.NotePhase("select",System.Diagnostics.Stopwatch.GetTimestamp()-started);
           NitraRecognizer.NoteCount("later",builder.LaterCount); NitraRecognizer.NoteCount("ask",builder.AskCount); NitraRecognizer.NoteCount("build",builder.BuildCount);
-          NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
+          NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
         }
         result
       }
