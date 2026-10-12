@@ -454,6 +454,9 @@ namespace Nemerle.Compiler
       }
     }
     internal mutable ChunkSteps : int;
+    internal mutable SettleClosed : int;
+    internal mutable SettleGroups : int;
+    internal mutable SettleMembers : int;
     private Step(w : NitraWorkItem) : void
     {
       def r=w.Owner; def o=rOp[r];
@@ -612,7 +615,8 @@ namespace Nemerle.Compiler
       unless(leafFound) throw ArgumentException("unsettled recognition dependency");
       for(mutable v=0;v<n;++v)
         if(leaving[component[v]]) HeapPush(start,group[v])
-        else unless(rClosed[group[v]]) CloseRegion(group[v]);
+        else unless(rClosed[group[v]]) { ++SettleClosed; CloseRegion(group[v]); }
+      ++SettleGroups; SettleMembers+=n;
       DrainClose();
     }
 
@@ -861,7 +865,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result

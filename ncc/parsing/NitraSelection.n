@@ -217,6 +217,7 @@ namespace Nemerle.Compiler
     private mutable items : array[NitraBuildItem] = array(64);
     private mutable top : int;
     internal mutable LaterCount : int;
+    internal mutable CyclicCuts : int;
     internal mutable AskCount : int;
     internal mutable BuildCount : int;
     internal mutable EndpointVisits : int;
@@ -408,7 +409,7 @@ namespace Nemerle.Compiler
         else { cell=Cell(o,p); cTarget[cell0]=cell; }
       }
       def en=Entry(cell,e); def known=eState[en];
-      when(known==2) { cyclic=true; return 0; }
+      when(known==2) { cyclic=true; ++CyclicCuts; return 0; }
       when(known>=0) return known;
       eState[en]=2;
       Begin(o,p,e,cell,en)
@@ -891,7 +892,7 @@ namespace Nemerle.Compiler
         when(NitraRecognizer.PhasesOn)
         {
           NitraRecognizer.NoteCount("m_cell",cellMap.Hits :> int); NitraRecognizer.NoteCount("m_entry",entryMap.Hits :> int);
-          NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
+          NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
         }
       }
       catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); result.Root=null; }
