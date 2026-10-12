@@ -135,6 +135,9 @@ namespace Nemerle.Compiler
     public mutable Pos : int;
     public mutable Count : int;
     public mutable End : int;
+    // Start of the delivering child's span and its region (-1 when scanned or zero-width).
+    public mutable From : int;
+    public mutable Child : int;
   }
   internal sealed class NitraRecognizer
   {
@@ -152,6 +155,17 @@ namespace Nemerle.Compiler
     private mutable rHeld : array[NitraEnds] = array(256);
     private mutable rSubscribers : array[int] = array(256);
     private mutable rOwned : array[int] = array(256);
+    private mutable rEdgeHead : array[int] = array(256);
+    // Derivation edges, chained per region (newest first). Kinds: 2 sequence (a=stage), 1 alternative (a=index),
+    // 9 subtract left end, 4 repeat item (a=count, b=state position), 5 repeat separator (a=count, b=state position).
+    private mutable edges : int;
+    private mutable edNext : array[int] = array(512);
+    private mutable edKind : array[int] = array(512);
+    private mutable edA : array[int] = array(512);
+    private mutable edB : array[int] = array(512);
+    private mutable edFrom : array[int] = array(512);
+    private mutable edTo : array[int] = array(512);
+    private mutable edChild : array[int] = array(512);
     // Consumer links: child region -> continuation of an owner region.
     private mutable links : int;
     private mutable lChild : array[int] = array(256);
@@ -233,6 +247,7 @@ namespace Nemerle.Compiler
       mutable g=rHeld; Array.Resize(ref g,n); rHeld=g;
       mutable h=rSubscribers; Array.Resize(ref h,n); rSubscribers=h;
       mutable i=rOwned; Array.Resize(ref i,n); rOwned=i;
+      mutable j=rEdgeHead; Array.Resize(ref j,n); rEdgeHead=j;
     }
     private GrowLinks() : void
     {
@@ -277,12 +292,29 @@ namespace Nemerle.Compiler
     internal mutable SubscribeCount : int;
     internal mutable LexicalCalls : int;
     internal mutable PossibleCalls : int;
-    private Push(kind : int, owner : int, stage : int, pos : int, count : int, end : int) : void
+    private Record(r : int, kind : int, a : int, b : int, from : int, to : int, child : int) : void
+    {
+      when(edges==edNext.Length)
+      {
+        def n=edges*2;
+        mutable v0=edNext; Array.Resize(ref v0,n); edNext=v0;
+        mutable v1=edKind; Array.Resize(ref v1,n); edKind=v1;
+        mutable v2=edA; Array.Resize(ref v2,n); edA=v2;
+        mutable v3=edB; Array.Resize(ref v3,n); edB=v3;
+        mutable v4=edFrom; Array.Resize(ref v4,n); edFrom=v4;
+        mutable v5=edTo; Array.Resize(ref v5,n); edTo=v5;
+        mutable v6=edChild; Array.Resize(ref v6,n); edChild=v6;
+      }
+      def id=edges; ++edges;
+      edNext[id]=rEdgeHead[r]; rEdgeHead[r]=id;
+      edKind[id]=kind; edA[id]=a; edB[id]=b; edFrom[id]=from; edTo[id]=to; edChild[id]=child;
+    }
+    private Push(kind : int, owner : int, stage : int, pos : int, count : int, end : int, from : int, child : int) : void
     {
       ++PushCount;
       when(workTop==workArray.Length) { mutable a=workArray; Array.Resize(ref a,workTop*2); workArray=a; }
       mutable w=default(NitraWorkItem);
-      w.Kind=kind; w.Owner=owner; w.Stage=stage; w.Pos=pos; w.Count=count; w.End=end;
+      w.Kind=kind; w.Owner=owner; w.Stage=stage; w.Pos=pos; w.Count=count; w.End=end; w.From=from; w.Child=child;
       workArray[workTop]=w; ++workTop; ++rPending[owner];
     }
 
@@ -315,10 +347,10 @@ namespace Nemerle.Compiler
         when(regions==rOp.Length) GrowRegions();
         id=regions; ++regions;
         rOp[id]=o; rStart[id]=p; rClosed[id]=false; rPending[id]=0; rOutstanding[id]=0;
-        rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1;
+        rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1; rEdgeHead[id]= -1;
         memo.Add(key,id); ++open; HeapPush(p,id);
         ++result.SampleCreations; when(o.SharedPrefix) ++result.PrefixSamples;
-        Push(0,id,0,p,0,p);
+        Push(0,id,0,p,0,p,p,-1);
       }
       NoteView(original,o,p);
       id
@@ -337,7 +369,7 @@ namespace Nemerle.Compiler
         else
         {
           NoteView(operation,o,p);
-          unless(kind==10) Push(kind,owner,stage,pos,count,e);
+          unless(kind==10) Push(kind,owner,stage,pos,count,e,p,-1);
         }
       }
       else if(o.Scanned)
@@ -347,13 +379,13 @@ namespace Nemerle.Compiler
         else
         {
           NoteView(operation,o,p);
-          unless(kind==10) foreach(end in ends) Push(kind,owner,stage,pos,count,end);
+          unless(kind==10) foreach(end in ends) Push(kind,owner,stage,pos,count,end,p,-1);
         }
       }
       else if(ZeroOnly(o,p))
       {
         NoteView(operation,o,p);
-        unless(kind==10) Push(kind,owner,stage,pos,count,p);
+        unless(kind==10) Push(kind,owner,stage,pos,count,p,p,-1);
       }
       else
       {
@@ -371,7 +403,7 @@ namespace Nemerle.Compiler
         unless(kind==10)
         {
           def ends=rEnds[child];
-          for(mutable i=0;i<ends.Count;++i) Push(kind,owner,stage,pos,count,ends.Items[i]);
+          for(mutable i=0;i<ends.Count;++i) Push(kind,owner,stage,pos,count,ends.Items[i],p,child);
         }
       }
     }
@@ -383,7 +415,7 @@ namespace Nemerle.Compiler
       {
         when(end>result.Furthest) result.Furthest=end;
         mutable l=rSubscribers[r];
-        while(l>=0) { unless(lKind[l]==10) Push(lKind[l],lOwner[l],lStage[l],lPos[l],lCount[l],end); l=lNextSubscriber[l]; }
+        while(l>=0) { unless(lKind[l]==10) Push(lKind[l],lOwner[l],lStage[l],lPos[l],lCount[l],end,rStart[r],r); l=lNextSubscriber[l]; }
       }
     }
     private Candidate(r : int, end : int) : void
@@ -433,7 +465,7 @@ namespace Nemerle.Compiler
             ++result.Observations; ++ChunkSteps;
             def e=LeafEnd(c,pos);
             if(e<0) { ++result.FamilyEliminations; go=false }
-            else { NoteView(child,c,pos); ++stage; pos=e; go=Reach(r,stage,pos,0); }
+            else { NoteView(child,c,pos); Record(r,2,stage,0,pos,e,-1); ++stage; pos=e; go=Reach(r,stage,pos,0); }
           }
           else
           {
@@ -445,9 +477,9 @@ namespace Nemerle.Compiler
               if(ends.Count==1)
               {
                 mutable e=0; foreach(x in ends) e=x;
-                ++ChunkSteps; ++stage; pos=e; go=Reach(r,stage,pos,0);
+                ++ChunkSteps; Record(r,2,stage,0,pos,e,-1); ++stage; pos=e; go=Reach(r,stage,pos,0);
               }
-              else { foreach(end in ends) Push(2,r,stage+1,pos,0,end); go=false }
+              else { foreach(end in ends) Push(2,r,stage+1,pos,0,end,pos,-1); go=false }
             }
           }
         }
@@ -468,21 +500,27 @@ namespace Nemerle.Compiler
           {
             | 3 => when(Reach(r,0,p,0)) Sequence(r,o,0,p)
             | 6 | 7 => Advance(r,p,0)
-            | 4 | 5 => foreach(c in o.Children) Subscribe(r,c,p,1,0,p,0)
+            | 4 | 5 => for(mutable i=0;i<o.Children.Count;++i) Subscribe(r,o.Children[i],p,1,i,p,0)
             | 8 => Subscribe(r,o.Children[0],p,8,0,p,0)
             | 9 => Subscribe(r,o.Children[0],p,10,0,p,0)
             | 10 => Subscribe(r,o.Children[0],p,9,0,p,0); Subscribe(r,o.Children[1],p,10,0,p,0)
             | 11 => throw ArgumentException(o.Text)
             | _ => throw ArgumentException("unsupported recognition operation: "+o.Kind)
           }
-        | 1 | 9 => Candidate(r,w.End)
+        | 1 | 9 =>
+          Record(r,w.Kind,if(w.Kind==1) w.Stage else 0,0,rStart[r],w.End,w.Child);
+          Candidate(r,w.End)
         | 8 => Candidate(r,rStart[r])
-        | 2 => when(Reach(r,w.Stage,w.End,0)) Sequence(r,o,w.Stage,w.End)
+        | 2 =>
+          Record(r,2,w.Stage-1,0,w.From,w.End,w.Child);
+          when(Reach(r,w.Stage,w.End,0)) Sequence(r,o,w.Stage,w.End)
         | 4 =>
+          Record(r,4,w.Count,w.Pos,w.From,w.End,w.Child);
           when(w.End==w.Pos && !o.AllEnds) throw ArgumentException("non-progressing repetition at "+w.Pos.ToString());
           def next=if(o.Max<0 && w.Count>=Math.Max(1,o.Min)) Math.Max(1,o.Min) else w.Count+1;
           Advance(r,w.End,next)
         | 5 =>
+          Record(r,5,w.Count,w.Pos,w.From,w.End,w.Child);
           when(o.Text=="trailing" && w.Count>=o.Min) Candidate(r,w.End);
           Subscribe(r,o.Children[0],w.End,4,0,w.Pos,w.Count)
         | _ => ()
@@ -865,7 +903,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result
