@@ -1,0 +1,766 @@
+// Structural-region recognizer. See nemerle/grammar/NITRA-REGIONS.md.
+// One region per (structural interface, source position), kept in flat arrays.
+// Region ends are all-ends relations: ambiguity is retained, never resolved here.
+using System;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+namespace Nemerle.Compiler
+{
+  /// Append-only set of end positions with first-seen order.
+  internal sealed class NitraEnds
+  {
+    public mutable Items : array[int] = array(2);
+    public mutable Count : int;
+    private mutable index : SCG.HashSet[int];
+    public Contains(value : int) : bool
+    {
+      if(index!=null) index.Contains(value)
+      else
+      {
+        mutable found=false; mutable i=0;
+        while(i<Count && !found) { when(Items[i]==value) found=true; ++i; }
+        found
+      }
+    }
+    public Add(value : int) : bool
+    {
+      if(Contains(value)) false
+      else
+      {
+        when(Count==Items.Length) { mutable grown=Items; Array.Resize(ref grown,Count*2); Items=grown; }
+        Items[Count]=value; ++Count;
+        if(index!=null) _=index.Add(value);
+        else when(Count>8) { index=SCG.HashSet(); for(mutable i=0;i<Count;++i) _=index.Add(Items[i]); }
+        true
+      }
+    }
+  }
+  /// Open-addressing map from a 64-bit key to a non-negative int.
+  internal sealed class NitraLongMap
+  {
+    private mutable keys : array[long];
+    private mutable values : array[int];
+    private mutable mask : int;
+    private mutable used : int;
+    public this()
+    { keys=array(256); values=array(256); mask=255; for(mutable i=0;i<256;++i) values[i]= -1; }
+    private static Slot(key : long) : int
+    {
+      def lo=key & 0x7FFFFFFFL; def hi=(key >> 32) & 0x7FFFFFFFL;
+      def h=(lo*2654435761L+hi) & 0x7FFFFFFFL;
+      ((h ^ (h >> 13)) :> int)
+    }
+    public Find(key : long) : int
+    {
+      mutable i=Slot(key) & mask; mutable answer= -2;
+      while(answer== -2)
+      {
+        if(values[i]<0) answer= -1
+        else if(keys[i]==key) answer=values[i]
+        else i=(i+1) & mask;
+      }
+      answer
+    }
+    public Add(key : long, value : int) : void
+    {
+      when((used+1)*2>keys.Length) Grow();
+      mutable i=Slot(key) & mask;
+      while(values[i] >=0) i=(i+1) & mask;
+      keys[i]=key; values[i]=value; ++used;
+    }
+    private Grow() : void
+    {
+      def oldKeys=keys; def oldValues=values;
+      keys=array(oldKeys.Length*2); values=array(oldKeys.Length*2); mask=keys.Length-1;
+      for(mutable i=0;i<values.Length;++i) values[i]= -1;
+      for(mutable j=0;j<oldKeys.Length;++j) when(oldValues[j] >=0)
+      {
+        mutable i=Slot(oldKeys[j]) & mask;
+        while(values[i] >=0) i=(i+1) & mask;
+        keys[i]=oldKeys[j]; values[i]=oldValues[j];
+      }
+    }
+  }
+  /// Open-addressing set of pairs of 64-bit keys.
+  internal sealed class NitraPairSet
+  {
+    private mutable first : array[long];
+    private mutable second : array[long];
+    private mutable full : array[bool];
+    private mutable mask : int;
+    private mutable used : int;
+    public this() { first=array(256); second=array(256); full=array(256); mask=255; }
+    private static Mix(a : long, b : long) : long { (a*2654435761L+b) & 0x7FFFFFFFL }
+    private static Slot(a : long, b : long) : int
+    {
+      def h=Mix(Mix(Mix(a & 0x7FFFFFFFL,(a >> 32) & 0x7FFFFFFFL),b & 0x7FFFFFFFL),(b >> 32) & 0x7FFFFFFFL);
+      ((h ^ (h >> 13)) :> int)
+    }
+    public Add(a : long, b : long) : bool
+    {
+      when((used+1)*2>first.Length) Grow();
+      mutable i=Slot(a,b) & mask; mutable fresh=true;
+      while(fresh && full[i])
+      { if(first[i]==a && second[i]==b) fresh=false else i=(i+1) & mask; }
+      when(fresh) { first[i]=a; second[i]=b; full[i]=true; ++used; }
+      fresh
+    }
+    private Grow() : void
+    {
+      def oldFirst=first; def oldSecond=second; def oldFull=full;
+      first=array(oldFirst.Length*2); second=array(oldFirst.Length*2); full=array(oldFirst.Length*2); mask=first.Length-1;
+      for(mutable j=0;j<oldFirst.Length;++j) when(oldFull[j])
+      {
+        mutable i=Slot(oldFirst[j],oldSecond[j]) & mask;
+        while(full[i]) i=(i+1) & mask;
+        first[i]=oldFirst[j]; second[i]=oldSecond[j]; full[i]=true;
+      }
+    }
+  }
+  /// One delivered end waiting to be consumed by its owner region.
+  internal struct NitraWorkItem
+  {
+    // 0 initialize, 1 candidate, 2 sequence stage, 4 repeat item end, 5 repeat separator end,
+    // 8 lookahead hit, 9 subtract left end, 10 completion barrier only.
+    public mutable Kind : int;
+    public mutable Owner : int;
+    public mutable Stage : int;
+    public mutable Pos : int;
+    public mutable Count : int;
+    public mutable End : int;
+  }
+  internal sealed class NitraRecognizer
+  {
+    prepared : NitraPreparedGrammar;
+    source : string;
+    result : NitraRecognitionResult = NitraRecognitionResult();
+    // Region table.
+    private mutable regions : int;
+    private mutable rOp : array[NitraOperation] = array(256);
+    private mutable rStart : array[int] = array(256);
+    private mutable rClosed : array[bool] = array(256);
+    private mutable rPending : array[int] = array(256);
+    private mutable rOutstanding : array[int] = array(256);
+    private mutable rEnds : array[NitraEnds] = array(256);
+    private mutable rHeld : array[NitraEnds] = array(256);
+    private mutable rSubscribers : array[int] = array(256);
+    private mutable rOwned : array[int] = array(256);
+    // Consumer links: child region -> continuation of an owner region.
+    private mutable links : int;
+    private mutable lChild : array[int] = array(256);
+    private mutable lOwner : array[int] = array(256);
+    private mutable lNextSubscriber : array[int] = array(256);
+    private mutable lNextOwned : array[int] = array(256);
+    private mutable lKind : array[int] = array(256);
+    private mutable lStage : array[int] = array(256);
+    private mutable lPos : array[int] = array(256);
+    private mutable lCount : array[int] = array(256);
+    private mutable workTop : int;
+    private mutable workArray : array[NitraWorkItem] = array(1024);
+    private memo : NitraLongMap = NitraLongMap();
+    private cursors : NitraPairSet = NitraPairSet();
+    private viewMap : NitraLongMap = NitraLongMap();
+    private viewOps : SCG.List[int] = SCG.List();
+    private viewStarts : SCG.List[int] = SCG.List();
+    private viewTargets : SCG.List[int] = SCG.List();
+    private lexical : SCG.Dictionary[long,SCG.HashSet[int]] = SCG.Dictionary();
+    private lexicalActive : SCG.HashSet[long] = SCG.HashSet();
+    private firstSets : SCG.Dictionary[char,array[bool]] = SCG.Dictionary();
+    private matchedProductions : SCG.HashSet[string] = SCG.HashSet();
+    private closeStack : SCG.Stack[int] = SCG.Stack();
+    private mutable closing : bool;
+    private mutable open : int;
+    private mutable keepChildren : bool;
+    // Open regions by start position (max-heap, lazy deletion of closed regions).
+    private mutable heapSize : int;
+    private mutable heapStart : array[int] = array(256);
+    private mutable heapId : array[int] = array(256);
+
+    public this(prepared : NitraPreparedGrammar, source : string)
+    { this.prepared=prepared; this.source=source; result.Source=source; }
+
+    private static Key(id : int, p : int) : long { (id :> long)*4294967296L+(p :> long) }
+    private Count() : void
+    { ++result.Evaluations; when(result.Evaluations>5000000) throw ArgumentException("recognition convergence limit exceeded (5000000)"); }
+
+    // ---- storage ----
+    private GrowRegions() : void
+    {
+      def n=rOp.Length*2;
+      mutable a=rOp; Array.Resize(ref a,n); rOp=a;
+      mutable b=rStart; Array.Resize(ref b,n); rStart=b;
+      mutable c=rClosed; Array.Resize(ref c,n); rClosed=c;
+      mutable d=rPending; Array.Resize(ref d,n); rPending=d;
+      mutable e=rOutstanding; Array.Resize(ref e,n); rOutstanding=e;
+      mutable f=rEnds; Array.Resize(ref f,n); rEnds=f;
+      mutable g=rHeld; Array.Resize(ref g,n); rHeld=g;
+      mutable h=rSubscribers; Array.Resize(ref h,n); rSubscribers=h;
+      mutable i=rOwned; Array.Resize(ref i,n); rOwned=i;
+    }
+    private GrowLinks() : void
+    {
+      def n=lChild.Length*2;
+      mutable a=lChild; Array.Resize(ref a,n); lChild=a;
+      mutable b=lOwner; Array.Resize(ref b,n); lOwner=b;
+      mutable c=lNextSubscriber; Array.Resize(ref c,n); lNextSubscriber=c;
+      mutable d=lNextOwned; Array.Resize(ref d,n); lNextOwned=d;
+      mutable e=lKind; Array.Resize(ref e,n); lKind=e;
+      mutable f=lStage; Array.Resize(ref f,n); lStage=f;
+      mutable g=lPos; Array.Resize(ref g,n); lPos=g;
+      mutable h=lCount; Array.Resize(ref h,n); lCount=h;
+    }
+    private HeapPush(start : int, id : int) : void
+    {
+      when(heapSize==heapStart.Length)
+      { mutable a=heapStart; Array.Resize(ref a,heapSize*2); heapStart=a; mutable b=heapId; Array.Resize(ref b,heapSize*2); heapId=b; }
+      mutable i=heapSize; ++heapSize;
+      while(i>0 && heapStart[(i-1)/2]<start) { heapStart[i]=heapStart[(i-1)/2]; heapId[i]=heapId[(i-1)/2]; i=(i-1)/2; }
+      heapStart[i]=start; heapId[i]=id;
+    }
+    private HeapPop() : void
+    {
+      --heapSize;
+      when(heapSize>0)
+      {
+        def start=heapStart[heapSize]; def id=heapId[heapSize]; mutable i=0; mutable go=true;
+        while(go)
+        {
+          mutable child=2*i+1;
+          if(child>=heapSize) go=false
+          else
+          {
+            when(child+1<heapSize && heapStart[child+1] >heapStart[child]) ++child;
+            if(heapStart[child] >start) { heapStart[i]=heapStart[child]; heapId[i]=heapId[child]; i=child; } else go=false;
+          }
+        }
+        heapStart[i]=start; heapId[i]=id;
+      }
+    }
+    private Push(kind : int, owner : int, stage : int, pos : int, count : int, end : int) : void
+    {
+      when(workTop==workArray.Length) { mutable a=workArray; Array.Resize(ref a,workTop*2); workArray=a; }
+      mutable w=default(NitraWorkItem);
+      w.Kind=kind; w.Owner=owner; w.Stage=stage; w.Pos=pos; w.Count=count; w.End=end;
+      workArray[workTop]=w; ++workTop; ++rPending[owner];
+    }
+
+    // ---- requests ----
+    private NoteView(original : NitraOperation, o : NitraOperation, p : int) : void
+    {
+      when(original==o) return;
+      mutable w=original; mutable go=true;
+      while(go)
+      {
+        def key=Key(w.Id,p);
+        if(viewMap.Find(key)>=0) go=false
+        else
+        {
+          viewMap.Add(key,o.Id); viewOps.Add(w.Id); viewStarts.Add(p); viewTargets.Add(o.Id);
+          go=w!=o && w.Children.Count==1 && w.Interface==o;
+          when(go) w=w.Children[0];
+        }
+      }
+    }
+    private Region(original : NitraOperation, o : NitraOperation, p : int) : int
+    {
+      def key=Key(o.Id,p); mutable id=memo.Find(key);
+      if(id>=0) { ++result.SampleReuse; when(o.SharedPrefix) ++result.PrefixReuse; }
+      else
+      {
+        when(regions>=500000) throw ArgumentException("recognition region limit exceeded (500000)");
+        when(regions==rOp.Length) GrowRegions();
+        id=regions; ++regions;
+        rOp[id]=o; rStart[id]=p; rClosed[id]=false; rPending[id]=0; rOutstanding[id]=0;
+        rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1;
+        memo.Add(key,id); ++open; HeapPush(p,id);
+        ++result.SampleCreations; when(o.SharedPrefix) ++result.PrefixSamples;
+        Push(0,id,0,p,0,p);
+      }
+      NoteView(original,o,p);
+      id
+    }
+    private Subscribe(owner : int, operation : NitraOperation, p : int, kind : int, stage : int, pos : int, count : int) : void
+    {
+      def o=operation.Interface ?? operation;
+      when(o.Code<0) o.Classify();
+      unless(Possible(o,p)) { ++result.FamilyEliminations; return; }
+      if(o.Scanned)
+      {
+        def ends=Lexical(o,p);
+        if(ends.Count==0) ++result.FamilyEliminations
+        else
+        {
+          NoteView(operation,o,p);
+          unless(kind==10) foreach(end in ends) Push(kind,owner,stage,pos,count,end);
+        }
+      }
+      else
+      {
+        def child=Region(operation,o,p);
+        def pending=(!rClosed[child]);
+        when(pending || keepChildren)
+        {
+          when(links==lChild.Length) GrowLinks();
+          def id=links; ++links;
+          lChild[id]=child; lOwner[id]=owner; lKind[id]=kind; lStage[id]=stage; lPos[id]=pos; lCount[id]=count;
+          lNextOwned[id]=rOwned[owner]; rOwned[owner]=id;
+          if(pending) { lNextSubscriber[id]=rSubscribers[child]; rSubscribers[child]=id; ++rOutstanding[owner]; }
+          else lNextSubscriber[id]= -1;
+        }
+        unless(kind==10)
+        {
+          def ends=rEnds[child];
+          for(mutable i=0;i<ends.Count;++i) Push(kind,owner,stage,pos,count,ends.Items[i]);
+        }
+      }
+    }
+
+    // ---- ends ----
+    private Emit(r : int, end : int) : void
+    {
+      when(rEnds[r].Add(end))
+      {
+        when(end>result.Furthest) result.Furthest=end;
+        mutable l=rSubscribers[r];
+        while(l>=0) { unless(lKind[l]==10) Push(lKind[l],lOwner[l],lStage[l],lPos[l],lCount[l],end); l=lNextSubscriber[l]; }
+      }
+    }
+    private Candidate(r : int, end : int) : void
+    {
+      if(rOp[r].Holds)
+      {
+        when(rHeld[r]==null) rHeld[r]=NitraEnds();
+        _=rHeld[r].Add(end);
+      }
+      else Emit(r,end);
+    }
+    private Reach(r : int, stage : int, p : int, count : int) : bool
+    {
+      if(cursors.Add((r :> long)*4294967296L+(p :> long),(stage :> long)*4294967296L+(count :> long))) { ++result.ContinuationAdvances; true }
+      else { ++result.DuplicateTransitionsAvoided; false }
+    }
+    private Advance(r : int, p : int, count : int) : void
+    {
+      def o=rOp[r];
+      when(Reach(r,0,p,count))
+      {
+        when(count>=o.Min) Candidate(r,p);
+        when(o.Max<0 || count<o.Max)
+        {
+          if(o.Code==7 && count>0) Subscribe(r,o.Children[1],p,5,0,p,count)
+          else Subscribe(r,o.Children[0],p,4,0,p,count);
+        }
+      }
+    }
+    private Step(w : NitraWorkItem) : void
+    {
+      def r=w.Owner; def o=rOp[r];
+      match(w.Kind)
+      {
+        | 0 =>
+          def p=rStart[r];
+          match(o.Code)
+          {
+            | 3 =>
+              when(Reach(r,0,p,0))
+                if(o.Children.Count==0) Candidate(r,p) else Subscribe(r,o.Children[0],p,2,1,p,0);
+            | 6 | 7 => Advance(r,p,0)
+            | 4 | 5 => foreach(c in o.Children) Subscribe(r,c,p,1,0,p,0)
+            | 8 => Subscribe(r,o.Children[0],p,8,0,p,0)
+            | 9 => Subscribe(r,o.Children[0],p,10,0,p,0)
+            | 10 => Subscribe(r,o.Children[0],p,9,0,p,0); Subscribe(r,o.Children[1],p,10,0,p,0)
+            | 11 => throw ArgumentException(o.Text)
+            | _ => throw ArgumentException("unsupported recognition operation: "+o.Kind)
+          }
+        | 1 | 9 => Candidate(r,w.End)
+        | 8 => Candidate(r,rStart[r])
+        | 2 =>
+          when(Reach(r,w.Stage,w.End,0))
+            if(w.Stage==o.Children.Count) Candidate(r,w.End) else Subscribe(r,o.Children[w.Stage],w.End,2,w.Stage+1,w.End,0);
+        | 4 =>
+          when(w.End==w.Pos && !o.AllEnds) throw ArgumentException("non-progressing repetition at "+w.Pos.ToString());
+          def next=if(o.Max<0 && w.Count>=Math.Max(1,o.Min)) Math.Max(1,o.Min) else w.Count+1;
+          Advance(r,w.End,next)
+        | 5 =>
+          when(o.Text=="trailing" && w.Count>=o.Min) Candidate(r,w.End);
+          Subscribe(r,o.Children[0],w.End,4,0,w.Pos,w.Count)
+        | _ => ()
+      }
+    }
+
+    // ---- closing ----
+    private KnownCount(o : NitraOperation, p : int) : int
+    {
+      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=memo.Find(key);
+      if(id>=0) rEnds[id].Count else if(lexical.ContainsKey(key)) lexical[key].Count else 0
+    }
+    private KnownContains(o : NitraOperation, p : int, end : int) : bool
+    {
+      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=memo.Find(key);
+      if(id>=0) rEnds[id].Contains(end) else lexical.ContainsKey(key) && lexical[key].Contains(end)
+    }
+    private Eligible(r : int) : bool { !rClosed[r] && rPending[r]==0 && rOutstanding[r]==0 }
+    private TryClose(r : int) : void
+    {
+      when(Eligible(r)) closeStack.Push(r);
+      DrainClose();
+    }
+    private DrainClose() : void
+    {
+      unless(closing)
+      {
+        closing=true;
+        try
+        {
+          while(closeStack.Count>0)
+          {
+            def next=closeStack.Pop();
+            when(Eligible(next)) CloseRegion(next);
+          }
+        }
+        finally { closing=false; }
+      }
+    }
+    private CloseRegion(r : int) : void
+    {
+      def o=rOp[r]; def p=rStart[r];
+      match(o.Code)
+      {
+        | 9 => when(KnownCount(o.Children[0],p)==0) Emit(r,p)
+        | 10 =>
+          when(rHeld[r]!=null)
+          {
+            def held=rHeld[r];
+            for(mutable i=0;i<held.Count;++i) unless(KnownContains(o.Children[1],p,held.Items[i])) Emit(r,held.Items[i]);
+          }
+        | _ =>
+          when(o.Holds && rHeld[r]!=null)
+          {
+            def held=rHeld[r]; mutable last= -1;
+            for(mutable i=0;i<held.Count;++i) when(held.Items[i] >last) last=held.Items[i];
+            when(last>=0) Emit(r,last);
+          }
+      }
+      rClosed[r]=true; --open;
+      mutable l=rSubscribers[r];
+      while(l>=0)
+      {
+        def owner=lOwner[l]; --rOutstanding[owner];
+        when(Eligible(owner)) closeStack.Push(owner);
+        l=lNextSubscriber[l];
+      }
+      rSubscribers[r]= -1;
+    }
+
+    // ---- settlement of same-position cycles ----
+    // Reached only when no queued work remains. Children never start before their
+    // owners, so the open regions at the greatest start depend only on each other.
+    private Settle() : void
+    {
+      while(heapSize>0 && rClosed[heapId[0]]) HeapPop();
+      when(heapSize==0) throw ArgumentException("unsettled recognition dependency");
+      def start=heapStart[0]; def group=SCG.List.[int]();
+      while(heapSize>0 && heapStart[0]==start)
+      {
+        def id=heapId[0]; HeapPop();
+        unless(rClosed[id]) group.Add(id);
+      }
+      def n=group.Count; def local=SCG.Dictionary.[int,int]();
+      for(mutable i=0;i<n;++i) local[group[i]]=i;
+      def index : array[int]=array(n); def low : array[int]=array(n); def cur : array[int]=array(n);
+      def component : array[int]=array(n); def onStack : array[bool]=array(n);
+      for(mutable i=0;i<n;++i) { index[i]= -1; component[i]= -1; }
+      def calls=SCG.Stack.[int](); def stack=SCG.Stack.[int](); mutable counter=0; mutable components=0;
+      for(mutable s=0;s<n;++s) when(index[s]<0)
+      {
+        index[s]=counter; low[s]=counter; ++counter; stack.Push(s); onStack[s]=true; cur[s]=rOwned[group[s]]; calls.Push(s);
+        while(calls.Count>0)
+        {
+          def v=calls.Peek(); def l=cur[v];
+          if(l>=0)
+          {
+            cur[v]=lNextOwned[l]; def child=lChild[l];
+            when(!rClosed[child] && local.ContainsKey(child))
+            {
+              def w=local[child];
+              if(index[w]<0)
+              { index[w]=counter; low[w]=counter; ++counter; stack.Push(w); onStack[w]=true; cur[w]=rOwned[group[w]]; calls.Push(w); }
+              else when(onStack[w] && index[w]<low[v]) low[v]=index[w];
+            }
+          }
+          else
+          {
+            _=calls.Pop();
+            when(low[v]==index[v])
+            {
+              mutable member= -1;
+              while(member!=v) { member=stack.Pop(); onStack[member]=false; component[member]=components; }
+              ++components;
+            }
+            when(calls.Count>0) { def u=calls.Peek(); when(low[v]<low[u]) low[u]=low[v]; }
+          }
+        }
+      }
+      def leaving : array[bool]=array(components);
+      for(mutable v=0;v<n;++v)
+      {
+        mutable l=rOwned[group[v]];
+        while(l>=0)
+        {
+          def child=lChild[l];
+          when(!rClosed[child] && local.ContainsKey(child) && component[local[child]]!=component[v]) leaving[component[v]]=true;
+          l=lNextOwned[l];
+        }
+      }
+      mutable leafFound=false;
+      for(mutable v=0;v<n;++v) unless(leaving[component[v]])
+      {
+        leafFound=true;
+        def o=rOp[group[v]];
+        when(o.Holds || o.Code==9) throw ArgumentException("cyclic negative or longest-match recognition constraint");
+      }
+      unless(leafFound) throw ArgumentException("unsettled recognition dependency");
+      for(mutable v=0;v<n;++v)
+        if(leaving[component[v]]) HeapPush(start,group[v])
+        else unless(rClosed[group[v]]) CloseRegion(group[v]);
+      DrainClose();
+    }
+
+    // ---- lexical scanning (shared by all lexical operations) ----
+    private Lexical(o : NitraOperation, p : int) : SCG.HashSet[int]
+    {
+      def key=Key(o.Id,p); when(lexical.ContainsKey(key)) return lexical[key];
+      unless(lexicalActive.Add(key)) throw ArgumentException("cyclic lexical recognition at "+p.ToString());
+      Count(); def ends=SCG.HashSet.[int]();
+      try
+      {
+        match(o.Kind)
+        {
+          | "empty" => _=ends.Add(p);
+          | "literal" =>
+            ++result.Observations;
+            when(p+o.Text.Length<=source.Length && string.CompareOrdinal(source,p,o.Text,0,o.Text.Length)==0) _=ends.Add(p+o.Text.Length);
+          | "class" =>
+            ++result.Observations;
+            when(p<source.Length)
+            {
+              mutable found=false;
+              foreach(c in o.Children)
+                if(c.Kind=="range") { when(c.Text[0]<=source[p] && source[p]<=c.Text[1]) found=true; }
+                else when(Category(source[p],c.Text)) found=true;
+              when(found!=(o.Text=="inverted")) _=ends.Add(p+1);
+            }
+          | "seq" =>
+            mutable positions=SCG.HashSet.[int](); _=positions.Add(p);
+            foreach(c in o.Children)
+            { def next=SCG.HashSet.[int](); foreach(q in positions) when(Possible(c,q)) next.UnionWith(Lexical(c,q)); positions=next; }
+            ends.UnionWith(positions);
+          | "not" | "and" =>
+            def child=if(Possible(o.Children[0],p)) Lexical(o.Children[0],p) else SCG.HashSet();
+            when((child.Count==0)==(o.Kind=="not")) _=ends.Add(p);
+          | "subtract" => ends.UnionWith(Lexical(o.Children[0],p)); ends.ExceptWith(Lexical(o.Children[1],p));
+          | "repeat" | "separated" =>
+            def pending=SCG.Queue.[int*int](); def visited=SCG.HashSet.[long](); pending.Enqueue((p,0));
+            while(pending.Count>0)
+            {
+              Count(); def (q,count)=pending.Dequeue();
+              when(visited.Add(Key(count,q)))
+              {
+                when(count>=o.Min) _=ends.Add(q);
+                when(o.Kind=="separated" && o.Text=="trailing" && count>0 && count>=o.Min) ends.UnionWith(Lexical(o.Children[1],q));
+                when(o.Max<0 || count<o.Max)
+                {
+                  def positions=SCG.HashSet.[int]();
+                  if(o.Kind=="separated" && count>0) positions.UnionWith(Lexical(o.Children[1],q)); else _=positions.Add(q);
+                  foreach(start in positions) when(Possible(o.Children[0],start)) foreach(last in Lexical(o.Children[0],start))
+                  {
+                    when(last==q && !o.AllEnds) throw ArgumentException("non-progressing repetition at "+q.ToString());
+                    pending.Enqueue((last,if(o.Max<0 && count>=Math.Max(1,o.Min)) Math.Max(1,o.Min) else count+1));
+                  }
+                }
+              }
+            }
+          | "deferred" => throw ArgumentException(o.Text);
+          | _ => foreach(c in o.Children) when(Possible(c,p)) ends.UnionWith(Lexical(c,p));
+        }
+        when((o.Kind=="longest" || (o.Kind=="repeat" || o.Kind=="separated") && !o.AllEnds) && ends.Count>1)
+        { mutable last=p; foreach(q in ends) when(q>last) last=q; ends.Clear(); _=ends.Add(last); }
+        lexical.Add(key,ends);
+        when(o.Kind=="variant" && ends.Count>0) _=matchedProductions.Add(o.Label);
+        ends
+      }
+      finally { _=lexicalActive.Remove(key); }
+    }
+    private First(ch : char) : array[bool]
+    {
+      ++result.DispatchBuilds;
+      def bits : array[bool]=array(prepared.Operations.Count); def pending=SCG.Queue.[NitraOperation]();
+      foreach(op in prepared.Operations) pending.Enqueue(op);
+      while(pending.Count>0)
+      {
+        def op=pending.Dequeue(); unless(bits[op.Id])
+        {
+          mutable yes=false;
+          match(op.Kind)
+          {
+            | "literal" => yes=op.Text.Length>0 && op.Text[0]==ch;
+            | "class" =>
+              foreach(c in op.Children)
+                if(c.Kind=="range") { when(c.Text[0]<=ch && ch<=c.Text[1]) yes=true; }
+                else when(Category(ch,c.Text)) yes=true;
+              yes=yes!=(op.Text=="inverted");
+            | "deferred" => yes=true;
+            | "seq" =>
+              mutable more=true; foreach(c in op.Children) when(more) { when(bits[c.Id]) yes=true; more=c.Nullable; }
+            | "subtract" => yes=bits[op.Children[0].Id];
+            | "repeat" | "separated" => yes=bits[op.Children[0].Id];
+            | _ => foreach(c in op.Children) when(bits[c.Id]) yes=true;
+          }
+          when(yes) { bits[op.Id]=true; foreach(parent in op.Parents) pending.Enqueue(parent); }
+        }
+      }
+      bits
+    }
+    private Possible(o : NitraOperation, p : int) : bool
+    {
+      when(!prepared.Ready || o.Nullable) return true;
+      when(p>=source.Length) return false;
+      def ch=source[p];
+      unless(firstSets.ContainsKey(ch))
+      {
+        // Grammar dispatch is immutable and source-independent. Share bounded
+        // ASCII tables across inputs; non-ASCII tables stay local to this run.
+        if((ch :> int)<128) lock(prepared.FirstAscii)
+        {
+          mutable bits=prepared.FirstAscii[ch :> int];
+          when(bits==null) { bits=First(ch); prepared.FirstAscii[ch :> int]=bits; }
+          firstSets.Add(ch,bits);
+        }
+        else firstSets.Add(ch,First(ch));
+      }
+      firstSets[ch][o.Id]
+    }
+    private static categoryNames : array[string] = array["Lu","Ll","Lt","Lm","Lo","Mn","Mc","Me","Nd","Nl","No","Zs","Zl","Zp","Cc","Cf","Cs","Co","Pc","Pd","Ps","Pe","Pi","Pf","Po","Sm","Sc","Sk","So","Cn"];
+    private Category(c : char, name : string) : bool
+    {
+      def names=categoryNames;
+      def category=(char.GetUnicodeCategory(c) :> int);
+      names[category]==name || (name.Length==1 && names[category].StartsWith(name,StringComparison.Ordinal))
+    }
+
+    // ---- driver ----
+    public Run(root : NitraOperation, name : string) : NitraRecognitionResult
+    { Run(root,name,false) }
+    public Run(root : NitraOperation, name : string, retain : bool) : NitraRecognitionResult
+    { Run(root,name,retain,true) }
+    public Run(root : NitraOperation, name : string, retain : bool, detailed : bool) : NitraRecognitionResult
+    {
+      result.Rule=name; result.Root= -1; keepChildren=detailed;
+      try
+      {
+        def o=root.Interface ?? root; when(o.Code<0) o.Classify();
+        mutable accepted=false;
+        if(!Possible(o,0)) ()
+        else if(o.Scanned) { def ends=Lexical(o,0); when(ends.Count>0) NoteView(root,o,0); accepted=ends.Contains(source.Length); }
+        else
+        {
+          def first=Region(root,o,0);
+          while(workTop>0 || open>0)
+          {
+            if(workTop>0)
+            {
+              --workTop; def w=workArray[workTop]; Count();
+              Step(w);
+              --rPending[w.Owner]; TryClose(w.Owner);
+            }
+            else Settle();
+          }
+          accepted=rEnds[first].Contains(source.Length);
+        }
+        result.Complete=true; result.Accepted=accepted;
+      }
+      catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); }
+      Export(root,retain,detailed);
+      result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
+      result
+    }
+
+    // ---- output ----
+    private Export(root : NitraOperation, retain : bool, detailed : bool) : void
+    {
+      // Compact endpoint evidence is authoritative. Diagnostic regions are a
+      // separate optional projection and never drive recognition or selection.
+      def projected=SCG.Dictionary.[long,SCG.HashSet[int]]();
+      def add(op : NitraOperation, p : int, ends : NitraEnds) : void
+      {
+        def key=Key(op.Id,p);
+        def set=if(projected.ContainsKey(key)) projected[key] else { def fresh=SCG.HashSet.[int](); projected[key]=fresh; fresh };
+        for(mutable i=0;i<ends.Count;++i) _=set.Add(ends.Items[i]);
+        when(op.Kind=="variant" && ends.Count>0) _=matchedProductions.Add(op.Label);
+      }
+      for(mutable r=0;r<regions;++r) add(rOp[r],rStart[r],rEnds[r]);
+      for(mutable v=0;v<viewOps.Count;++v)
+      {
+        def op=prepared.Operations[viewOps[v]]; def p=viewStarts[v]; def target=viewTargets[v];
+        def id=memo.Find(Key(target,p));
+        if(id>=0) add(op,p,rEnds[id])
+        else
+        {
+          def key=Key(target,p);
+          when(lexical.ContainsKey(key))
+          {
+            def holder=NitraEnds(); foreach(e in lexical[key]) _=holder.Add(e);
+            add(op,p,holder);
+          }
+        }
+      }
+      foreach(pair in lexical) unless(projected.ContainsKey(pair.Key)) projected[pair.Key]=pair.Value;
+      when(detailed)
+      {
+        def canonicalRegions=SCG.Dictionary.[long,int]();
+        foreach(pair in projected)
+        {
+          def op=prepared.Operations[(pair.Key/4294967296L) :> int]; def p=(pair.Key%4294967296L) :> int;
+          def region=NitraRegion(); region.Id=result.Regions.Count; region.Sample=region.Id;
+          region.Operation=op.Id; region.Kind=op.Kind; region.Label=op.Label; region.Start=p;
+          def canonical=Key((op.Interface ?? op).Id,p);
+          if(canonicalRegions.ContainsKey(canonical)) region.Sample=canonicalRegions[canonical];
+          else canonicalRegions[canonical]=region.Id;
+          region.Ends.AddRange(pair.Value); region.Ends.Sort(); result.Regions.Add(region);
+          when(op==root && p==0) result.Root=region.Id;
+        }
+        foreach(region in result.Regions)
+        {
+          def canonical=Key((prepared.Operations[region.Operation].Interface ?? prepared.Operations[region.Operation]).Id,region.Start);
+          def id=memo.Find(canonical);
+          when(id>=0)
+          {
+            def seen=SCG.HashSet.[int]();
+            mutable l=rOwned[id];
+            while(l>=0)
+            {
+              def child=lChild[l];
+              when(seen.Add(child))
+              {
+                def key=Key(rOp[child].Id,rStart[child]);
+                when(canonicalRegions.ContainsKey(key)) region.Children.Add(canonicalRegions[key]);
+              }
+              l=lNextOwned[l];
+            }
+          }
+          region.Children.Sort();
+        }
+      }
+      when(retain && result.Complete && result.Accepted)
+      {
+        def evidence=NitraEvidence(); evidence.Root=root; evidence.Source=source;
+        foreach(operation in prepared.Operations) when(operation.GreedyCall) evidence.NativeSelection=true;
+        foreach(pair in projected)
+          evidence.Ends[(((pair.Key/4294967296L) :> int),((pair.Key%4294967296L) :> int))]=pair.Value;
+        result.Evidence=evidence;
+      }
+    }
+  }
+}
