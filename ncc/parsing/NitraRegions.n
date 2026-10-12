@@ -14,6 +14,7 @@ namespace Nemerle.Compiler
     public mutable Items : array[int] = array(2);
     public mutable Count : int;
     private mutable index : SCG.HashSet[int];
+    public Clear() : void { Count=0; index=null; }
     public Contains(value : int) : bool
     {
       if(index!=null) index.Contains(value)
@@ -103,7 +104,11 @@ namespace Nemerle.Compiler
       def h=unchecked((a * -7046029254386353131L) ^ (b * -4658895280553007687L));
       (((h >> 29) ^ (h >> 40)) & 0x7FFFFFFFL) :> int
     }
-    public Clear() : void { when(used>0) { Array.Clear(full,0,full.Length); used=0; } }
+    public Clear() : void
+    {
+      if(first.Length>2048) { first=array(256); second=array(256); full=array(256); mask=255; used=0; }
+      else when(used>0) { Array.Clear(full,0,full.Length); used=0; }
+    }
     public Has(a : long, b : long) : bool
     {
       mutable i=Slot(a,b) & mask; mutable found=false; mutable go=true;
@@ -610,8 +615,12 @@ namespace Nemerle.Compiler
     private oneBatch : SCG.List[int] = SCG.List();
     // Regions in the order they closed; a negative entry -n introduces a group of n regions that closed together.
     private closeLog : SCG.List[int] = SCG.List();
-    private fOwners : SCG.List[int] = SCG.List();
-    private fIds : SCG.List[int] = SCG.List();
+    private mutable fOwners : array[int] = array(256);
+    private mutable fIds : array[int] = array(256);
+    private mutable fKeys : array[long] = array(256);
+    private mutable fItems : array[int] = array(256);
+    private mutable fCount : int;
+    private fPool : SCG.List[NitraEnds] = SCG.List();
     private reachA : NitraPairSet = NitraPairSet();
     private reachB : NitraPairSet = NitraPairSet();
     private greedyMax : SCG.Dictionary[long,int] = SCG.Dictionary();
@@ -739,8 +748,13 @@ namespace Nemerle.Compiler
     private FeasibleBatch(batch : SCG.List[int], iterate : bool) : void
     {
       ++FeasibleBatches;
-      fOwners.Clear(); fIds.Clear(); reachA.Clear(); reachB.Clear();
-      foreach(r in batch) { rFState[r]=3; rFEnds[r]=NitraEnds(); }
+      fCount=0; reachA.Clear(); reachB.Clear();
+      foreach(r in batch)
+      {
+        rFState[r]=3;
+        if(fPool.Count>0) { def last=fPool.Count-1; rFEnds[r]=fPool[last]; fPool.RemoveAt(last); rFEnds[r].Clear(); }
+        else rFEnds[r]=NitraEnds();
+      }
       foreach(r in batch)
       {
         def R=rOp[r]; when(R.Code<0) R.Classify();
@@ -761,18 +775,25 @@ namespace Nemerle.Compiler
           {
             def child=edChild[e];
             when(child>=0 && rFState[child]!=1 && rFState[child]!=3) rFState[r]=2;
-            fOwners.Add(r); fIds.Add(e); e=edNext[e];
+            when(fCount==fOwners.Length)
+            {
+              mutable a=fOwners; Array.Resize(ref a,fCount*2); fOwners=a;
+              mutable b=fIds; Array.Resize(ref b,fCount*2); fIds=b;
+              mutable c=fKeys; Array.Resize(ref c,fCount*2); fKeys=c;
+              mutable d=fItems; Array.Resize(ref d,fCount*2); fItems=d;
+            }
+            fOwners[fCount]=r; fIds[fCount]=e; ++fCount; e=edNext[e];
           }
           when(rFState[r]==3) PruneGreedy(r);
         }
       }
-      def m=fIds.Count; def keys : array[long]=array(m); def items : array[int]=array(m);
+      def m=fCount; def keys=fKeys; def items=fItems;
       for(mutable k=0;k<m;++k)
       {
         def e=fIds[k]; def sub=(if(edKind[e]==5) 0 else if(edKind[e]==4) 1 else 2)*16777216+(edA[e] & 16777215);
         keys[k]=((edTo[e] :> long) << 32)+(sub :> long); items[k]=k;
       }
-      when(m>1) Array.Sort(keys,items);
+      when(m>1) Array.Sort(keys,items,0,m);
       mutable i=0;
       while(i<m)
       {
@@ -806,7 +827,28 @@ namespace Nemerle.Compiler
           rFState[r]=1; mutable top= -1; def ends=rFEnds[r];
           for(mutable i2=0;i2<ends.Count;++i2) when(ends.Items[i2] >top) top=ends.Items[i2];
           rFMax[r]=top;
+          when(ends.Count==rEnds[r].Count) { fPool.Add(ends); rFEnds[r]=rEnds[r]; }
         }
+      }
+    }
+    internal RegionOp(r : int) : NitraOperation { rOp[r] }
+    internal EdgeHead(r : int) : int { rEdgeHead[r] }
+    internal EdgeNext(e : int) : int { edNext[e] }
+    internal EdgeKind(e : int) : int { edKind[e] }
+    internal EdgeA(e : int) : int { edA[e] }
+    internal EdgeFrom(e : int) : int { edFrom[e] }
+    internal EdgeB(e : int) : int { edB[e] }
+    internal EdgeTo(e : int) : int { edTo[e] }
+    // After settlement: does this recorded edge take part in the feasible derivations of its region?
+    internal EdgeUsable(r : int, e : int) : bool
+    {
+      if(edDead[e]) false
+      else
+      {
+        def o=ChildOf(rOp[r],edKind[e],edA[e]).Pass;
+        if(o.Code<=2) true
+        else if(!o.GreedyCall && (o.OpaqueValue || o.Fast && (o.Code==6 || o.Code==7))) true
+        else { def child=edChild[e]; child<0 || rFState[child]==1 && rFEnds[child].Contains(edTo[e]) }
       }
     }
     internal RegionOf(o : NitraOperation, p : int) : int { memo.Find(Key((o.Interface ?? o).Id,p)) }

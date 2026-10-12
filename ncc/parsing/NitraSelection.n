@@ -201,6 +201,45 @@ namespace Nemerle.Compiler
     private mutable eExpect : array[int] = array(256);
     internal mutable FastAnswers : int;
     internal mutable Verified : int;
+    internal mutable FastPlans : int;
+    internal mutable DbgNoRegion : int;
+    internal mutable DbgState : int;
+    internal mutable DbgOp : int;
+    internal mutable DbgCalls : int;
+    private GoodTriples(plan : NitraSeqPlan) : string
+    {
+      def list=SCG.List.[string]();
+      for(mutable k=0;k<plan.EdgeCount;++k) when(plan.Good[k]) list.Add(plan.Edges[3*k].ToString()+","+plan.Edges[3*k+1].ToString()+","+plan.Edges[3*k+2].ToString());
+      list.Sort(StringComparer.Ordinal); string.Join(";",list)
+    }
+    private RepSignature(plan : NitraRepPlan) : string
+    {
+      def rows=SCG.List.[string]();
+      for(mutable s=0;s<plan.StateP.Count;++s)
+        rows.Add(plan.StateP[s].ToString()+"/"+plan.StateCount[s].ToString()+" f="+plan.Finish[s].ToString()+" v="+plan.Viable[s].ToString()+" steps="+string.Join(",",plan.Steps[s]));
+      rows.Sort(StringComparer.Ordinal); plan.Ok.ToString()+"|"+string.Join(";",rows)
+    }
+    private ComparePlans(o : NitraOperation, fast : int, slow : int) : void
+    {
+      ++FastPlans;
+      if(o.Code==3)
+      {
+        def a=seqPlans[fast]; def b=if(slow >=0) seqPlans[slow] else null;
+        if(b==null) throw ArgumentException("plan mismatch (search built no plan) for "+o.Label)
+        else when(a.Ok!=b.Ok || GoodTriples(a)!=GoodTriples(b))
+          throw ArgumentException("plan mismatch for sequence "+(o.Label ?? "")+": recorded ["+GoodTriples(a)+"] ok="+a.Ok.ToString()+", search ["+GoodTriples(b)+"] ok="+b.Ok.ToString());
+      }
+      else if(o.Code==6 || o.Code==7)
+      {
+        def a=RepSignature(repPlans[fast]); def b=if(slow >=0) RepSignature(repPlans[slow]) else "none";
+        when(a!=b) throw ArgumentException("plan mismatch for repetition "+(o.Label ?? "")+": recorded "+a+", search "+b);
+      }
+      else
+      {
+        def a=string.Join(",",choicePlans[fast]); def b=if(slow >=0) string.Join(",",choicePlans[slow]) else "none";
+        when(a!=b) throw ArgumentException("plan mismatch for choice "+(o.Label ?? "")+": recorded "+a+", search "+b);
+      }
+    }
     private mutable epoch : int;
     private entryMap : NitraLongMap = NitraLongMap();
     private mutable entries : int;
@@ -773,6 +812,131 @@ namespace Nemerle.Compiler
       answer
     }
     // Plans are built even when feasibility is plain membership (no native selection).
+    // Plans read straight from the recorded edges of the region (exact regions only).
+    private planKeys : SCG.List[long] = SCG.List();
+    private planEdges : SCG.List[int] = SCG.List();
+    private SeqFromEdges(o : NitraOperation, r : int, p : int, e : int) : int
+    {
+      def rec=evidence.Recognizer; def n=o.Children.Count;
+      planKeys.Clear(); planEdges.Clear();
+      mutable id=rec.EdgeHead(r);
+      while(id >=0)
+      {
+        when(rec.EdgeKind(id)==2 && rec.EdgeTo(id)<=e && rec.EdgeUsable(r,id))
+        { planKeys.Add(((rec.EdgeA(id) :> long) << 32)+(planEdges.Count :> long)); planEdges.Add(rec.EdgeA(id)); planEdges.Add(rec.EdgeFrom(id)); planEdges.Add(rec.EdgeTo(id)); }
+        id=rec.EdgeNext(id);
+      }
+      def m=planEdges.Count/3; def keys=planKeys.ToArray(); Array.Sort(keys);
+      def edges : array[int]=array(3*m);
+      for(mutable k=0;k<m;++k)
+      {
+        def src=(keys[k] & 0xFFFFFFFFL) :> int;
+        edges[3*k]=planEdges[src]; edges[3*k+1]=planEdges[src+1]; edges[3*k+2]=planEdges[src+2];
+      }
+      def plan=NitraSeqPlan(n,edges,m);
+      for(mutable k=m-1;k >=0;--k)
+      {
+        def stage=edges[3*k]; def to=edges[3*k+2];
+        if(stage==n-1) plan.Good[k]=(to==e)
+        else
+        {
+          mutable ok=false;
+          for(mutable q=plan.First[stage+1];q<plan.First[stage+2] && !ok;++q) when(plan.Good[q] && edges[3*q+1]==to) ok=true;
+          plan.Good[k]=ok;
+        }
+      }
+      mutable root=false;
+      for(mutable k=plan.First[0];k<plan.First[1] && !root;++k) when(plan.Good[k] && edges[3*k+1]==p) root=true;
+      plan.Ok=root;
+      seqPlans.Add(plan); seqPlans.Count-1
+    }
+    private ChoiceFromEdges(o : NitraOperation, r : int, e : int) : int
+    {
+      def rec=evidence.Recognizer; planEdges.Clear();
+      mutable id=rec.EdgeHead(r);
+      while(id >=0)
+      {
+        when(rec.EdgeKind(id)==1 && rec.EdgeTo(id)==e && rec.EdgeUsable(r,id)) planEdges.Add(rec.EdgeA(id));
+        id=rec.EdgeNext(id);
+      }
+      def chosen=planEdges.ToArray(); Array.Sort(chosen);
+      choicePlans.Add(chosen); choicePlans.Count-1
+    }
+    private RepFromEdges(o : NitraOperation, r : int, p : int, e : int) : int
+    {
+      def rec=evidence.Recognizer; def separated=o.Code==7;
+      def items=SCG.Dictionary.[long,SCG.List[int]](); def seps=SCG.Dictionary.[long,SCG.List[int]]();
+      mutable id=rec.EdgeHead(r);
+      while(id >=0)
+      {
+        def kind=rec.EdgeKind(id);
+        when((kind==4 || kind==5) && rec.EdgeTo(id)<=e && rec.EdgeUsable(r,id))
+        {
+          def key=((rec.EdgeA(id) :> long) << 32)+(rec.EdgeB(id) :> long);
+          def table=if(kind==4) items else seps;
+          unless(table.ContainsKey(key)) table[key]=SCG.List();
+          when(kind==4) table[key].Add(rec.EdgeFrom(id));
+          table[key].Add(rec.EdgeTo(id));
+        }
+        id=rec.EdgeNext(id);
+      }
+      def plan=NitraRepPlan(); _=plan.State(p,0);
+      mutable s=0;
+      while(s<plan.StateP.Count)
+      {
+        def pp=plan.StateP[s]; def c=plan.StateCount[s]; def key=((c :> long) << 32)+(pp :> long);
+        when(c >=o.Min && pp==e) plan.Finish[s]=true;
+        when(separated && o.Text=="trailing" && c >=o.Min && c>0 && seps.ContainsKey(key) && seps[key].Contains(e)) plan.Finish[s]=true;
+        when(items.ContainsKey(key) && (o.Max<0 || c<o.Max))
+        {
+          def raw=items[key]; def pairs=SCG.List.[long]();
+          for(mutable k=0;k<raw.Count;k+=2)
+            when(raw[k+1] >pp && (!(separated && c>0) || seps.ContainsKey(key) && seps[key].Contains(raw[k])))
+              pairs.Add(((raw[k] :> long) << 32)+(raw[k+1] :> long));
+          pairs.Sort();
+          foreach(pair in pairs)
+          {
+            def q=(pair >> 32) :> int; def last=(pair & 0xFFFFFFFFL) :> int;
+            plan.Steps[s].Add(q); plan.Steps[s].Add(last);
+            def child=plan.State(last,RepeatKey(o,c+1));
+            plan.Parents[child].Add(s);
+          }
+        }
+        ++s;
+      }
+      def ready=SCG.Queue.[int]();
+      for(mutable v=0;v<plan.StateP.Count;++v) when(plan.Finish[v]) { plan.Viable[v]=true; ready.Enqueue(v); }
+      while(ready.Count>0)
+      {
+        def v=ready.Dequeue();
+        foreach(parent in plan.Parents[v]) unless(plan.Viable[parent]) { plan.Viable[parent]=true; ready.Enqueue(parent); }
+      }
+      plan.Ok=plan.Viable[0];
+      repPlans.Add(plan); repPlans.Count-1
+    }
+    // Returns a plan index with feasibility stored on the entry, or -1 to use the search.
+    private FastPlan(o : NitraOperation, p : int, e : int, cell : int, en : int) : int
+    {
+      def r=cRegion[cell];
+      when(r<0) ++DbgNoRegion;
+      when(r >=0 && evidence.Recognizer.FeasibleState(r)!=1) ++DbgState;
+      when(r >=0 && evidence.Recognizer.RegionOp(r)!=o) ++DbgOp;
+      ++DbgCalls;
+      if(r<0 || evidence.Recognizer.FeasibleState(r)!=1 || evidence.Recognizer.RegionOp(r)!=o) -1
+      else if(o.Code==3 && o.Children.Count>0)
+      {
+        def index=SeqFromEdges(o,r,p,e); eState[en]=if(seqPlans[index].Ok) 1 else 0; index
+      }
+      else if((o.Code==4 || o.Code==5) && o.Children.Count>1)
+      {
+        def index=ChoiceFromEdges(o,r,e); eState[en]=if(choicePlans[index].Length>0) 1 else 0; index
+      }
+      else if((o.Code==6 || o.Code==7) && !o.Fast)
+      {
+        def index=RepFromEdges(o,r,p,e); eState[en]=if(repPlans[index].Ok) 1 else 0; index
+      }
+      else -1
+    }
     private StartPlan(o : NitraOperation, p : int, e : int, cell : int, en : int) : int
     {
       def started=if(NitraRecognizer.PhasesOn) System.Diagnostics.Stopwatch.GetTimestamp() else 0L;
@@ -781,10 +945,18 @@ namespace Nemerle.Compiler
       mutable index=ePlan[en];
       when(index<0)
       {
-        eState[en]=2;
-        def r=Begin(o,p,e,cell,en);
-        when(r<0) Drain();
-        index=ePlan[en];
+        mutable fast= -1;
+        when(!fastOff && evidence.NativeSelection) fast=FastPlan(o,p,e,cell,en);
+        if(fast >=0 && !verifyOn) { ePlan[en]=fast; ++FastPlans; }
+        else
+        {
+          eState[en]=2;
+          def r=Begin(o,p,e,cell,en);
+          when(r<0) Drain();
+          index=ePlan[en];
+          when(fast >=0) ComparePlans(o,fast,index);
+        }
+        when(fast >=0 && !verifyOn) index=fast;
       }
       when(NitraRecognizer.PhasesOn) { FeasibleTicks+=System.Diagnostics.Stopwatch.GetTimestamp()-started; ++FeasibleCalls; }
       index
@@ -942,7 +1114,7 @@ namespace Nemerle.Compiler
         when(NitraRecognizer.PhasesOn)
         {
           NitraRecognizer.NoteCount("m_cell",cellMap.Hits :> int); NitraRecognizer.NoteCount("m_entry",entryMap.Hits :> int);
-          NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("g_fast",FastAnswers); NitraRecognizer.NoteCount("g_verified",Verified); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
+          NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("g_fast",FastAnswers); NitraRecognizer.NoteCount("g_verified",Verified); NitraRecognizer.NoteCount("g_fastplans",FastPlans); NitraRecognizer.NoteCount("d_calls",DbgCalls); NitraRecognizer.NoteCount("d_noregion",DbgNoRegion); NitraRecognizer.NoteCount("d_state",DbgState); NitraRecognizer.NoteCount("d_op",DbgOp); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
         }
       }
       catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); result.Root=null; }
