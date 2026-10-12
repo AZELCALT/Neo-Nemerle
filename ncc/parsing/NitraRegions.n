@@ -173,6 +173,7 @@ namespace Nemerle.Compiler
     private lexical : SCG.Dictionary[long,SCG.HashSet[int]] = SCG.Dictionary();
     private lexicalActive : SCG.HashSet[long] = SCG.HashSet();
     private firstSets : SCG.Dictionary[char,array[bool]] = SCG.Dictionary();
+    private asciiBits : array[array[bool]] = array(128);
     private matchedProductions : SCG.HashSet[string] = SCG.HashSet();
     private closeStack : SCG.Stack[int] = SCG.Stack();
     private mutable closing : bool;
@@ -328,7 +329,18 @@ namespace Nemerle.Compiler
       def o=operation.Interface ?? operation;
       when(o.Code<0) o.Classify();
       unless(Possible(o,p)) { ++result.FamilyEliminations; return; }
-      if(o.Scanned)
+      if(o.Code<=2)
+      {
+        ++result.Observations;
+        def e=LeafEnd(o,p);
+        if(e<0) ++result.FamilyEliminations
+        else
+        {
+          NoteView(operation,o,p);
+          unless(kind==10) Push(kind,owner,stage,pos,count,e);
+        }
+      }
+      else if(o.Scanned)
       {
         def ends=Lexical(o,p);
         if(ends.Count==0) ++result.FamilyEliminations
@@ -401,6 +413,47 @@ namespace Nemerle.Compiler
         }
       }
     }
+    // Advance a sequence from `stage` at `pos`. A run of scanned elements with exactly one end each
+    // is taken in one stretch without queueing; the first element that is not deterministic
+    // (a region, several ends) falls back to the general path, a failing element ends the path.
+    private Sequence(r : int, o : NitraOperation, stage0 : int, pos0 : int) : void
+    {
+      mutable stage=stage0; mutable pos=pos0; mutable go=true;
+      while(go)
+      {
+        if(stage==o.Children.Count) { Candidate(r,pos); go=false }
+        else
+        {
+          def child=o.Children[stage]; def c=child.Interface ?? child;
+          when(c.Code<0) c.Classify();
+          if(!c.Scanned) { Subscribe(r,child,pos,2,stage+1,pos,0); go=false }
+          else if(!Possible(c,pos)) { ++result.FamilyEliminations; go=false }
+          else if(c.Code<=2)
+          {
+            ++result.Observations; ++ChunkSteps;
+            def e=LeafEnd(c,pos);
+            if(e<0) { ++result.FamilyEliminations; go=false }
+            else { NoteView(child,c,pos); ++stage; pos=e; go=Reach(r,stage,pos,0); }
+          }
+          else
+          {
+            def ends=Lexical(c,pos);
+            if(ends.Count==0) { ++result.FamilyEliminations; go=false }
+            else
+            {
+              NoteView(child,c,pos);
+              if(ends.Count==1)
+              {
+                mutable e=0; foreach(x in ends) e=x;
+                ++ChunkSteps; ++stage; pos=e; go=Reach(r,stage,pos,0);
+              }
+              else { foreach(end in ends) Push(2,r,stage+1,pos,0,end); go=false }
+            }
+          }
+        }
+      }
+    }
+    internal mutable ChunkSteps : int;
     private Step(w : NitraWorkItem) : void
     {
       def r=w.Owner; def o=rOp[r];
@@ -410,9 +463,7 @@ namespace Nemerle.Compiler
           def p=rStart[r];
           match(o.Code)
           {
-            | 3 =>
-              when(Reach(r,0,p,0))
-                if(o.Children.Count==0) Candidate(r,p) else Subscribe(r,o.Children[0],p,2,1,p,0);
+            | 3 => when(Reach(r,0,p,0)) Sequence(r,o,0,p)
             | 6 | 7 => Advance(r,p,0)
             | 4 | 5 => foreach(c in o.Children) Subscribe(r,c,p,1,0,p,0)
             | 8 => Subscribe(r,o.Children[0],p,8,0,p,0)
@@ -423,9 +474,7 @@ namespace Nemerle.Compiler
           }
         | 1 | 9 => Candidate(r,w.End)
         | 8 => Candidate(r,rStart[r])
-        | 2 =>
-          when(Reach(r,w.Stage,w.End,0))
-            if(w.Stage==o.Children.Count) Candidate(r,w.End) else Subscribe(r,o.Children[w.Stage],w.End,2,w.Stage+1,w.End,0);
+        | 2 => when(Reach(r,w.Stage,w.End,0)) Sequence(r,o,w.Stage,w.End)
         | 4 =>
           when(w.End==w.Pos && !o.AllEnds) throw ArgumentException("non-progressing repetition at "+w.Pos.ToString());
           def next=if(o.Max<0 && w.Count>=Math.Max(1,o.Min)) Math.Max(1,o.Min) else w.Count+1;
@@ -675,19 +724,26 @@ namespace Nemerle.Compiler
       else
       {
         def ch=source[p];
-        unless(firstSets.ContainsKey(ch))
+        if((ch :> int)<128)
         {
-          // Grammar dispatch is immutable and source-independent. Share bounded
-          // ASCII tables across inputs; non-ASCII tables stay local to this run.
-          if((ch :> int)<128) lock(prepared.FirstAscii)
+          mutable bits=asciiBits[ch :> int];
+          when(bits==null)
           {
-            mutable bits=prepared.FirstAscii[ch :> int];
-            when(bits==null) { bits=First(ch); prepared.FirstAscii[ch :> int]=bits; }
-            firstSets.Add(ch,bits);
+            // Grammar dispatch is immutable and source-independent: ASCII tables are shared across inputs.
+            lock(prepared.FirstAscii)
+            {
+              bits=prepared.FirstAscii[ch :> int];
+              when(bits==null) { bits=First(ch); prepared.FirstAscii[ch :> int]=bits; }
+            }
+            asciiBits[ch :> int]=bits;
           }
-          else firstSets.Add(ch,First(ch));
+          bits[o.Id]
         }
-        firstSets[ch][o.Id]
+        else
+        {
+          unless(firstSets.ContainsKey(ch)) firstSets.Add(ch,First(ch));
+          firstSets[ch][o.Id]
+        }
       }
     }
     // End of an empty / literal / class operation at p, or -1. Leaves are never stored.
@@ -725,6 +781,11 @@ namespace Nemerle.Compiler
       else if(lexWrapped.ContainsKey(key)) lexWrapped[key]
       else if(lexical.ContainsKey(key))
       { def ends=NitraEnds(); foreach(e in lexical[key]) _=ends.Add(e); lexWrapped[key]=ends; ends }
+      else if(canonical.Code>=0 && canonical.Code<=2)
+      {
+        def e=LeafEnd(canonical,p);
+        if(e<0) emptyEnds else { def one=NitraEnds(); _=one.Add(e); lexWrapped[key]=one; one }
+      }
       else if(ZeroOnly(canonical,p))
       {
         unless(zeros.ContainsKey(p)) { def one=NitraEnds(); _=one.Add(p); zeros[p]=one; }
@@ -800,7 +861,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result
