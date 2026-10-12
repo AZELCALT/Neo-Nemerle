@@ -589,11 +589,7 @@ namespace Nemerle.Compiler
           }
       }
       rClosed[r]=true; --open;
-      when(prepared.Native)
-      {
-        if(deferFeasible) feasibleBatch.Add(r)
-        else { oneBatch.Clear(); oneBatch.Add(r); FeasibleBatch(oneBatch); }
-      }
+      when(prepared.Native) { if(deferFeasible) feasibleBatch.Add(r) else closeLog.Add(r); }
       mutable l=rSubscribers[r];
       while(l>=0)
       {
@@ -612,6 +608,8 @@ namespace Nemerle.Compiler
     private mutable deferFeasible : bool;
     private feasibleBatch : SCG.List[int] = SCG.List();
     private oneBatch : SCG.List[int] = SCG.List();
+    // Regions in the order they closed; a negative entry -n introduces a group of n regions that closed together.
+    private closeLog : SCG.List[int] = SCG.List();
     private fOwners : SCG.List[int] = SCG.List();
     private fIds : SCG.List[int] = SCG.List();
     private reachA : NitraPairSet = NitraPairSet();
@@ -721,7 +719,24 @@ namespace Nemerle.Compiler
         }
       }
     }
-    private FeasibleBatch(batch : SCG.List[int]) : void
+    // Settled once recognition accepted: children always close before their owners, so replaying the
+    // close order needs no recursion. Rejected input never pays for it.
+    private FinalizeFeasibility() : void
+    {
+      mutable i=0;
+      while(i<closeLog.Count)
+      {
+        if(closeLog[i] >=0) { oneBatch.Clear(); oneBatch.Add(closeLog[i]); FeasibleBatch(oneBatch,false); ++i; }
+        else
+        {
+          def n= -closeLog[i]; def group=SCG.List.[int]();
+          for(mutable k=1;k<=n;++k) group.Add(closeLog[i+k]);
+          FeasibleBatch(group,true); i+=n+1;
+        }
+      }
+      closeLog.Clear();
+    }
+    private FeasibleBatch(batch : SCG.List[int], iterate : bool) : void
     {
       ++FeasibleBatches;
       fOwners.Clear(); fIds.Clear(); reachA.Clear(); reachB.Clear();
@@ -758,7 +773,6 @@ namespace Nemerle.Compiler
         keys[k]=((edTo[e] :> long) << 32)+(sub :> long); items[k]=k;
       }
       when(m>1) Array.Sort(keys,items);
-      def iterate=batch.Count>1;
       mutable i=0;
       while(i<m)
       {
@@ -875,8 +889,7 @@ namespace Nemerle.Compiler
       deferFeasible=false;
       when(feasibleBatch.Count>0)
       {
-        def done=SCG.List.[int](feasibleBatch); feasibleBatch.Clear();
-        FeasibleBatch(done);
+        closeLog.Add(-feasibleBatch.Count); closeLog.AddRange(feasibleBatch); feasibleBatch.Clear();
       }
       ++SettleGroups; SettleMembers+=n;
       DrainClose();
@@ -1120,6 +1133,7 @@ namespace Nemerle.Compiler
             else Settle();
           }
           accepted=rEnds[first].Contains(source.Length);
+          when(accepted && prepared.Native) FinalizeFeasibility();
         }
         result.Complete=true; result.Accepted=accepted;
       }
