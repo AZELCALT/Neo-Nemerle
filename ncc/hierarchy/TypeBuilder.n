@@ -1777,11 +1777,9 @@ public partial class TypeBuilder : TypeInfo
       //  Message.Debug ($"finalize $this");
       try
       {
-        // ok, seemed like this way MS.NET was a little bit more stable
-        // _ = type_builder.CreateType ();
-        // but this also seems to work:
-        //system_type = type_builder.CreateType(); // VladD2: This is not work for some cases!
-        _ = type_builder.CreateType ();
+        when (TyManager.ClrEmitter.TryCreateRuntimeType(type_builder,
+          fun () { this.CreateSystemType() }) == null)
+          Nemerle.Imperative.Return();
       }
       catch
       {
@@ -3093,6 +3091,7 @@ public partial class TypeBuilder : TypeInfo
 
   public override CanAccess(source : TypeInfo) : bool
   {
+    (!Manager.Options.FileModules || _declaringType == null || _declaringType.CanAccess(source)) && (
     IsPublic
       || (IsInternal && source is TypeBuilder)
       || (IsProtected
@@ -3112,7 +3111,7 @@ public partial class TypeBuilder : TypeInfo
           }
           else
             false
-    )
+    ))
   }
 
   mutable _conditions : list[string] = [];

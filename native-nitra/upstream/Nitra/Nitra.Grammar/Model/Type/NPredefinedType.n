@@ -1,0 +1,10 @@
+﻿namespace Nitra.Model
+{
+  public enum NPredefinedType
+  {
+    | Void = 0
+    | Ast
+    | Int
+    | String
+  }
+}

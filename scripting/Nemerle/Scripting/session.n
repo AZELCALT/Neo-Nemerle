@@ -1,0 +1,235 @@
+using Nemerle.Imperative;
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Nemerle.Scripting.cache;
+using System.Collections.Generic;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.host;
+
+public sealed class SubmissionResult
+{
+  public Compilation : CompilationResult;
+  public Evaluation : EvaluationResult;
+  public Success : bool { get { Compilation.Success && Evaluation != null && Evaluation.Kind != ScriptResultKind.Error } }
+  public this(compilation : CompilationResult, evaluation : EvaluationResult)
+  { Compilation = compilation; Evaluation = evaluation; }
+}
+
+public sealed class ScriptHistoryEntry
+{
+  public Source : ScriptSource;
+  public ConfigurationFingerprint : string;
+  public DependencyFingerprint : string;
+  public this(source : ScriptSource, configuration : string, dependencies : string)
+  { Source = source; ConfigurationFingerprint = configuration; DependencyFingerprint = dependencies; }
+}
+
+public sealed class ScriptSession : IDisposable
+{
+  host : ScriptHost;
+  definition : ScriptDefinition;
+  inputs : ScriptInputs;
+  gate : object = object();
+  history : List[ScriptSource] = List();
+  records : List[ScriptHistoryEntry] = List();
+  importedArtifacts : Dictionary[string, CompiledScript] = Dictionary();
+  importedInstances : Dictionary[CompiledScript, EvaluationResult] = Dictionary();
+  artifacts : List[CompiledScript] = List();
+  instances : List[EvaluationResult] = List();
+  directory : string;
+  mutable disposed : bool = false;
+  public this(host : ScriptHost, definition : ScriptDefinition, inputs : ScriptInputs)
+  {
+    this.host = host; this.definition = definition.Snapshot(); this.inputs = inputs;
+    directory = Path.Combine(Path.GetTempPath(), "nemerle-session-" + Guid.NewGuid().ToString("N"));
+    _ = Directory.CreateDirectory(directory);
+  }
+  public HistoryEntries : array[ScriptHistoryEntry] { get { lock (gate) { records.ToArray() } } }
+  public History : array[ScriptSource] { get { lock (gate) { history.ToArray() } } }
+  public Submit(source : ScriptSource) : SubmissionResult { SubmitConfigured(source, CancellationToken.None) }
+  SubmitConfigured(source : ScriptSource, cancellation : CancellationToken, expectedDependencies : string = null) : SubmissionResult
+  {
+    lock (gate)
+    {
+      when (disposed) throw ObjectDisposedException("ScriptSession");
+      def config = definition.Snapshot(); config.ChildDefinition = definition.Snapshot();
+      def candidates : Dictionary[string, CompiledScript] = Dictionary(importedArtifacts);
+      def values = ScriptInputs();
+      foreach (pair in inputs.Properties) values.Properties.Add(pair.Key, pair.Value);
+      values.Receivers.AddRange(inputs.Receivers); values.BaseArguments.AddRange(inputs.BaseArguments);
+      config.GeneratedTypeName = "Submission_" + Guid.NewGuid().ToString("N");
+      for (mutable i = 0; i < artifacts.Count; i++)
+      {
+        def previous = artifacts[i];
+        foreach (reference in previous.Definition.References) unless (config.References.Contains(reference)) config.References.Add(reference);
+        foreach (reference in previous.Definition.RuntimeReferences) unless (config.RuntimeReferences.Contains(reference)) config.RuntimeReferences.Add(reference);
+        foreach (reference in previous.Definition.NativeReferences) unless (config.NativeReferences.Contains(reference)) config.NativeReferences.Add(reference);
+        foreach (request in previous.Definition.Packages)
+          unless (config.Packages.Exists(p => p.Id == request.Id && p.Version == request.Version)) config.Packages.Add(request);
+        foreach (repository in previous.Definition.Repositories) unless (config.Repositories.Contains(repository)) config.Repositories.Add(repository);
+        foreach (binding in previous.ImportedScripts)
+          unless (config.ImportScripts.Contains(binding.Script.Source.Path)) config.ImportScripts.Add(binding.Script.Source.Path);
+        foreach (pair in previous.Aliases) config.PreviousTypeNames[pair.Key] = pair.Value;
+        foreach (import in previous.Imports) unless (config.Imports.Contains(import)) config.Imports.Add(import);
+        def name = "__submission" + i;
+        config.Properties.Add(name, previous.ScriptType);
+        values.Properties.Add(name, instances[i].Instance);
+        config.SharedAssemblies.Add(previous.Assembly);
+        config.References.Add(Path.Combine(directory, previous.Assembly.GetName().Name + ".dll"));
+        foreach (type in previous.ScriptType.GetNestedTypes(System.Reflection.BindingFlags.Public))
+        {
+          def name = type.Name.Split('`')[0];
+          config.PreviousTypeNames[name] = type.FullName.Replace('+', '.').Split('`')[0];
+        }
+        def filename = Path.GetFileName(history[i].Path);
+        def extension = previous.Definition.FileExtension;
+        def owner = if (filename.EndsWith(extension, StringComparison.Ordinal))
+          filename.Substring(0, filename.Length - extension.Length) else Path.GetFileNameWithoutExtension(filename);
+        config.PreviousTypeNames[owner] = previous.ScriptType.FullName;
+        foreach (pair in previous.Members)
+        {
+          unless (Array.Exists(previous.ScriptType.GetNestedTypes(System.Reflection.BindingFlags.Public), type => type.Name.Split('`')[0] == pair.Value))
+          {
+            config.PreviousNames[pair.Key] = name + "." + pair.Value;
+            def dot = pair.Key.IndexOf('.');
+            config.PreviousNames[pair.Key.Substring(dot + 1)] = name + "." + pair.Value;
+          }
+        }
+        when (instances[i].Kind == ScriptResultKind.Value)
+        {
+          def resultName = "res" + i;
+          config.Properties.Add(resultName, instances[i].ValueType);
+          values.Properties.Add(resultName, instances[i].Value);
+        }
+      }
+      def compilation = host.CompileConfigured(source, config, cancellation, candidates);
+      if (!compilation.Success) SubmissionResult(compilation, null)
+      else
+      {
+        when (expectedDependencies != null && expectedDependencies != compilation.Script.Definition.DependencyFingerprint)
+          return SubmissionResult(CompilationResult(null, array[ScriptDiagnostic(source.Path, 1, 1, "REPL history dependencies changed", true)]), null);
+        cancellation.ThrowIfCancellationRequested();
+        def fingerprint = ScriptFingerprint.Create(source, compilation.Script.Definition, "1");
+        foreach (pair in candidates)
+          foreach (previous in importedArtifacts.Values)
+            when (previous.Source.Path == pair.Value.Source.Path && !Object.ReferenceEquals(previous, pair.Value))
+              return SubmissionResult(CompilationResult(null, array[ScriptDiagnostic(source.Path, 1, 1, "Imported script changed during this session; reset before replacing: " + previous.Source.Path, true)]), null);
+        def candidateInstances : Dictionary[CompiledScript, EvaluationResult] = Dictionary(importedInstances);
+        def evaluation = host.EvaluateGraph(compilation.Script, values, candidateInstances);
+        when (evaluation.Kind != ScriptResultKind.Error)
+        {
+          File.WriteAllBytes(Path.Combine(directory, compilation.Script.Assembly.GetName().Name + ".dll"), compilation.Script.Image);
+          importedInstances.Clear(); foreach (pair in candidateInstances) importedInstances.Add(pair.Key, pair.Value);
+          importedArtifacts.Clear(); foreach (pair in candidates) importedArtifacts.Add(pair.Key, pair.Value);
+          artifacts.Add(compilation.Script); instances.Add(evaluation); history.Add(source);
+          records.Add(ScriptHistoryEntry(source, fingerprint, compilation.Script.Definition.DependencyFingerprint));
+        }
+        SubmissionResult(compilation, evaluation)
+      }
+    }
+  }
+  public SubmitAsync(source : ScriptSource, cancellation : CancellationToken) : Task[SubmissionResult]
+  {
+    Task.Run(() => { cancellation.ThrowIfCancellationRequested(); SubmitConfigured(source, cancellation) }, cancellation)
+  }
+  public SaveHistory(path : string) : void
+  {
+    lock (gate)
+    {
+      when (disposed) throw ObjectDisposedException("ScriptSession");
+      def full = Path.GetFullPath(path);
+      def pending = full + ".pending-" + Guid.NewGuid().ToString("N");
+      try
+      {
+        using (writer = BinaryWriter(File.Create(pending)))
+        {
+          writer.Write("Nemerle.ReplHistory"); writer.Write(2 : int);
+          writer.Write(ScriptFingerprint.Create(ScriptSource("", Path.Combine(Path.GetTempPath(), "nemerle-history.n")), definition, "1"));
+          writer.Write(history.Count);
+          foreach (entry in records)
+          { writer.Write(entry.Source.Path); writer.Write(entry.Source.Text); writer.Write(entry.ConfigurationFingerprint); writer.Write(entry.DependencyFingerprint); }
+        }
+        File.Move(pending, full, true);
+      }
+      finally { when (File.Exists(pending)) File.Delete(pending); }
+    }
+  }
+  public ReadHistory(path : string) : array[ScriptSource] { Array.ConvertAll(ReadHistoryEntries(path), entry => entry.Source) }
+  public ReadHistoryEntries(path : string) : array[ScriptHistoryEntry]
+  { ReadHistoryEntriesConfigured(path, false) }
+  ReadHistoryEntriesConfigured(path : string, validateConfiguration : bool) : array[ScriptHistoryEntry]
+  {
+    lock (gate)
+    {
+      when (disposed) throw ObjectDisposedException("ScriptSession");
+      using (reader = BinaryReader(File.OpenRead(path)))
+      {
+        when (reader.BaseStream.Length > 268435456) throw InvalidDataException("History is too large");
+        unless (reader.ReadString() == "Nemerle.ReplHistory") throw InvalidDataException("Unsupported REPL history");
+        def version = reader.ReadInt32();
+        unless (version == 1 || version == 2) throw InvalidDataException("Unsupported REPL history version");
+        def savedConfiguration = reader.ReadString();
+        when (validateConfiguration && savedConfiguration != ScriptFingerprint.Create(ScriptSource("", Path.Combine(Path.GetTempPath(), "nemerle-history.n")), definition, "1"))
+          throw InvalidDataException("REPL history configuration changed");
+        def count = reader.ReadInt32();
+        when (count < 0 || count > 100000) throw InvalidDataException("Invalid history count");
+        def sources : List[ScriptHistoryEntry] = List();
+        repeat (count)
+        {
+          def name = reader.ReadString(); def source = ScriptSource(reader.ReadString(), name);
+          def configuration = if (version == 2) reader.ReadString() else "";
+          def dependencies = if (version == 2) reader.ReadString() else null;
+          sources.Add(ScriptHistoryEntry(source, configuration, dependencies));
+        }
+        unless (reader.BaseStream.Position == reader.BaseStream.Length) throw InvalidDataException("Unexpected history data");
+        sources.ToArray()
+      }
+    }
+  }
+  public ReplayHistory(path : string) : array[SubmissionResult]
+  {
+    lock (gate)
+    {
+      def entries = ReadHistoryEntriesConfigured(path, true); Reset();
+      def results : List[SubmissionResult] = List(); mutable failed = false;
+      foreach (entry in entries)
+        unless (failed)
+        { def result = SubmitConfigured(entry.Source, CancellationToken.None, entry.DependencyFingerprint); results.Add(result); failed = !result.Success; }
+      results.ToArray()
+    }
+  }
+  public Replay(sources : array[ScriptSource]) : array[SubmissionResult]
+  {
+    lock (gate)
+    {
+      Reset();
+      def results : List[SubmissionResult] = List();
+      mutable failed = false;
+      foreach (source in sources)
+        unless (failed) { def result = Submit(source); results.Add(result); failed = !result.Success; }
+      results.ToArray()
+    }
+  }
+  public Reset() : void
+  {
+    lock (gate)
+    {
+      when (disposed) throw ObjectDisposedException("ScriptSession");
+      history.Clear(); records.Clear(); artifacts.Clear(); instances.Clear(); importedArtifacts.Clear(); importedInstances.Clear();
+      foreach (file in Directory.GetFiles(directory)) File.Delete(file);
+    }
+  }
+  public Dispose() : void
+  {
+    lock (gate)
+    {
+      unless (disposed)
+      {
+        history.Clear(); records.Clear(); artifacts.Clear(); instances.Clear(); importedArtifacts.Clear(); importedInstances.Clear();
+        Directory.Delete(directory, true); disposed = true;
+      }
+    }
+  }
+}

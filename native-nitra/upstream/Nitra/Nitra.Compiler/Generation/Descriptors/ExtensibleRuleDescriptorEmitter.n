@@ -1,0 +1,68 @@
+﻿using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  [Record]
+  internal sealed class ExtensibleRuleDescriptorEmitter : RuleDescriptorEmitter[ExtensibleRuleSymbol]
+  {
+    protected override BaseType  : PExpr  { get <[ Nitra.ExtensibleRuleDescriptor ]> }
+    protected override ClassName : string { get "_N_ExtensibleRuleDescriptor_#" }
+
+    public override DefineDescriptor() : void
+    {
+      base.DefineDescriptor();
+      DefineIsStartRuleProperty();
+
+      def isDynamicExtensibleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.Options.IsDynamicSyntaxExtentionPoint, t => <[ $(t : bool) ]>);
+      DescriptorTb.DefineConditional(<[ decl: public override IsDynamicExtensible : bool { get { $isDynamicExtensibleExpr } } ]>);
+
+      def createParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol =>
+          <[
+            Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Owner.Environment.GetParseTreeType(ruleSymbol) : typed)](
+                startPos,
+                endPos,
+                parseResult,
+                "0",
+                this,
+                grammar)
+          ]>);
+      DescriptorTb.DefineConditional(<[ decl:
+        public override CreateParseTree(startPos : int, endPos : int, parseResult : Nitra.ParseResult, grammar : Nitra.CompositeGrammar) : Nitra.ParseTree
+        {
+          IgnoreParams();
+          $createParseTreeExpr
+        }
+      ]>);
+
+      def createMissingParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol => <[ $(Owner.Environment.GetParseTreeType(ruleSymbol) : typed).AmbiguousOrMissingNode(parseResult, pos) ]>);
+      DescriptorTb.DefineConditional(<[ decl:
+        public override CreateMissingParseTree(parseResult : Nitra.ParseResult, pos : int) : Nitra.ParseTree
+        {
+          IgnoreParams();
+          $createMissingParseTreeExpr
+        }
+      ]>);
+
+      def createAmbiguousParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol => <[ $(Owner.Environment.GetParseTreeType(ruleSymbol) : typed).AmbiguousOrMissingNode(ambiguities :> array[$(Owner.Environment.GetParseTreeType(ruleSymbol) : typed)], ambiguityType) ]>);
+      DescriptorTb.DefineConditional(<[ decl:
+        public override CreateAmbiguousParseTree(ambiguities : array[Nitra.ParseTree], ambiguityType :  Nitra.ParseTreeAmbiguityType) : Nitra.ParseTree
+        {
+          IgnoreParams();
+          $createAmbiguousParseTreeExpr
+        }
+      ]>);
+    }
+    
+  }
+}

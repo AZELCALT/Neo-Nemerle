@@ -1,0 +1,13 @@
+﻿namespace Nitra.Declarations
+{
+  abstract declaration Alias
+  {
+    symbol
+    {
+      Kind  = "alias";
+      Scope = Replacement.Scope;
+
+      in Replacement : IRef;
+    }
+  }
+}

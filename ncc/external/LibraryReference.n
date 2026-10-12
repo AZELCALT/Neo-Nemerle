@@ -115,10 +115,9 @@ namespace Nemerle.Compiler
     {
       def currentAssemblyName = Path.GetFileNameWithoutExtension(this.Manager.Options.OutputFileName);
       def customAttributes = _library.GetCustomAttributes(typeof(InternalsVisibleToAttribute), false);
-      def snKey() : SR.StrongNameKeyPair
+      def publicKey() : array[byte]
       {
-        using (keyFile = File.Open(this.Manager.Options.StrongAssemblyKeyName, FileMode.Open, FileAccess.Read))
-          SR.StrongNameKeyPair(keyFile)
+        Nemerle.Platform.ClrEmission.ReadPublicKey(this.Manager.Options.StrongAssemblyKeyName)
       }
       def toHexString(bytes : array[byte]) : string
       {
@@ -142,14 +141,14 @@ namespace Nemerle.Compiler
         match (parts)
         {
           | [asmName] when currentAssemblyName == asmName => true;
-          | [asmName, pKey] when string.IsNullOrEmpty(this.Manager.Options.StrongAssemblyKeyName)
+          | [asmName, pKey] when !string.IsNullOrEmpty(this.Manager.Options.StrongAssemblyKeyName)
                                  && currentAssemblyName == asmName
             =>
-            match(pKey.ToLower().SplitToList(array[',']))
+            match(pKey.ToLower().SplitToList(array['=']))
             {
-              | ["publickey", key] when toHexString(snKey().PublicKey).ToLower() == key.ToLower() => true;
+              | ["publickey", key] when toHexString(publicKey()).ToLower() == key.ToLower() => true;
               | ["publickeytoken", key]
-                 when toHexString(generatePublicKeyToken(snKey().PublicKey)).ToLower() == key.ToLower()
+                 when toHexString(generatePublicKeyToken(publicKey())).ToLower() == key.ToLower()
                   => true;
               | _ => false
             }

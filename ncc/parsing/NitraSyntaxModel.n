@@ -1,0 +1,168 @@
+// Experimental declaration/recognition model; no Nitra runtime dependency.
+using System;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+namespace Nemerle.Compiler
+{
+  public sealed class NitraExpression
+  {
+    public mutable Id : int;
+    public mutable Kind : string;
+    public mutable Text : string;
+    public mutable Min : int;
+    public mutable Max : int = -1;
+    public mutable Capture : string;
+    public mutable Binding : string;
+    public mutable Strong : bool;
+    public mutable NativePrefix : bool;
+    public Children : SCG.List[NitraExpression] = SCG.List();
+    public this(kind : string, text : string) { Kind=kind; Text=text; }
+  }
+  public sealed class NitraDeclaration
+  {
+    public mutable Kind : string;
+    public mutable Name : string = "";
+    public mutable Scope : string = "";
+    public mutable File : string;
+    public mutable Start : int;
+    public mutable End : int;
+    public mutable Text : string;
+    public Attributes : SCG.List[string] = SCG.List();
+    public Children : SCG.List[NitraDeclaration] = SCG.List();
+  }
+  public sealed class NitraRule
+  {
+    public mutable Name : string;
+    public mutable Scope : string;
+    public mutable Kind : string;
+    public mutable Base : string;
+    public mutable Module : NitraModule;
+    public mutable Declaration : NitraDeclaration;
+    public mutable ExplicitSpaces : bool;
+    public mutable SuppressTrailingSpaces : bool;
+    public mutable StartRule : bool;
+    // Generated native graphs carry explicit, already-normalized bindings.
+    public mutable NativeBindings : bool;
+    public Alternatives : SCG.List[NitraAlternative] = SCG.List();
+    public Precedences : SCG.List[string] = SCG.List();
+    public Orders : SCG.List[string] = SCG.List();
+    public Key : string { get { Scope+"."+Name+(if(Kind=="alias") "@"+Declaration.Start.ToString() else "") } }
+  }
+  public sealed class NitraAlternative
+  {
+    public mutable Name : string;
+    public mutable Expression : NitraExpression;
+    public mutable Precedence : string = "0";
+    public mutable Right : bool;
+    public mutable NativePostfix : bool;
+    public mutable NativeStrong : bool;
+    public mutable ExplicitSpaces : bool;
+    public mutable SuppressTrailingSpaces : bool;
+    public mutable Declaration : NitraDeclaration;
+    public mutable Scope : string;
+  }
+  public sealed class NitraModule
+  {
+    public mutable Name : string;
+    public mutable Declaration : NitraDeclaration;
+    public mutable ExplicitSpaces : bool;
+    public Rules : SCG.List[NitraRule] = SCG.List();
+    public Imports : SCG.Dictionary[string,string] = SCG.Dictionary();
+    public KeywordPatterns : SCG.List[NitraExpression] = SCG.List();
+    public KeywordFollowers : SCG.List[string] = SCG.List();
+  }
+  public sealed class NitraDocument
+  {
+    public mutable File : string;
+    public mutable Source : string;
+    public mutable SurfaceValidated : bool;
+    public mutable Surface : NitraRecognitionResult;
+    public Declarations : SCG.List[NitraDeclaration] = SCG.List();
+    public Modules : SCG.List[NitraModule] = SCG.List();
+    public InactiveConstructs : SCG.List[NitraInactiveConstruct] = SCG.List();
+    public Diagnostics : SCG.List[GrammarDiagnostic] = SCG.List();
+    public Success : bool { get { Diagnostics.Count==0 } }
+    public ToJson() : string
+    {
+      def b=StringBuilder("{\"experimental\":true,\"surfaceValidated\":"+(if(SurfaceValidated) "true" else "false")+",\"file\":"+GrammarJson.Quote(File)+",\"declarations\":[");
+      mutable first=true; def pending=SCG.Stack.[NitraDeclaration]();
+      for(mutable i=Declarations.Count-1;i>=0;--i) pending.Push(Declarations[i]);
+      while(pending.Count>0)
+      {
+        def d=pending.Pop(); unless(first) _=b.Append(','); first=false;
+        _=b.Append("{\"kind\":"+GrammarJson.Quote(d.Kind)+",\"name\":"+GrammarJson.Quote(d.Name)+",\"scope\":"+GrammarJson.Quote(d.Scope)+",\"start\":"+d.Start.ToString()+",\"end\":"+d.End.ToString()+",\"text\":"+GrammarJson.Quote(d.Text)+",\"attributes\":[");
+        mutable af=true; foreach(a in d.Attributes) { unless(af) _=b.Append(','); af=false; _=b.Append(GrammarJson.Quote(a)); }
+        _=b.Append("]}"); for(mutable i=d.Children.Count-1;i>=0;--i) pending.Push(d.Children[i]);
+      }
+      _=b.Append("],\"inactiveConstructs\":["); first=true;
+      foreach(c in InactiveConstructs)
+      {
+        unless(first) _=b.Append(','); first=false;
+        _=b.Append("{\"kind\":"+GrammarJson.Quote(c.Kind)+",\"active\":false,\"start\":"+c.Start.ToString()+",\"end\":"+c.End.ToString()+",\"text\":"+GrammarJson.Quote(c.Text)+"}");
+      }
+      _=b.Append("],\"diagnostics\":["); first=true;
+      foreach(d in Diagnostics) { unless(first) _=b.Append(','); first=false; _=b.Append("{\"offset\":"+d.Offset.ToString()+",\"message\":"+GrammarJson.Quote(d.Message)+"}"); }
+      _=b.Append("]}"); b.ToString()
+    }
+  }
+  internal sealed class NitraLex
+  {
+    public Tokens : SCG.List[GLexeme] = SCG.List();
+    public mutable Index : int;
+    public mutable PreviousEnd : int;
+    public Source : string;
+    public File : string;
+    public this(text : string, file : string)
+    {
+      Source=text; File=file;
+      def reader=GReader(text,file,if(text.Length>0 && text[0]=='\uFEFF') 1 else 0,text.Length);
+      while(!reader.Is("<eof>"))
+      {
+        def t=reader.Take();
+        when(!t.Quoted && t.Text.Length>0 && StartCharacter(t.Text[0]))
+        {
+          while(reader.Pos<text.Length && PartCharacter(text[reader.Pos])) ++reader.Pos;
+          t.End=reader.Pos; t.Text=text.Substring(t.Start,t.End-t.Start); t.Value=t.Text;
+        }
+        unless(t.Text=="<eof>" || !t.Quoted && t.Text=="\uFEFF") Tokens.Add(t);
+      }
+      def end=GLexeme(); end.Text="<eof>"; end.Start=text.Length; end.End=text.Length; Tokens.Add(end);
+    }
+    private StartCharacter(c : char) : bool
+    { char.IsLetter(c) || c=='_' || c=='\uFFFE' || char.GetUnicodeCategory(c)==System.Globalization.UnicodeCategory.LetterNumber }
+    private PartCharacter(c : char) : bool
+    {
+      def category=char.GetUnicodeCategory(c);
+      StartCharacter(c) || char.IsDigit(c) || category==System.Globalization.UnicodeCategory.ConnectorPunctuation
+      || category==System.Globalization.UnicodeCategory.NonSpacingMark || category==System.Globalization.UnicodeCategory.SpacingCombiningMark
+      || category==System.Globalization.UnicodeCategory.Format
+    }
+    public Peek() : GLexeme { Tokens[Index] }
+    public Is(s : string) : bool { Peek().Text==s }
+    public Ahead(n : int) : string { if(Index+n<Tokens.Count) Tokens[Index+n].Text else "<eof>" }
+    public Take() : GLexeme { def t=Peek(); when(Index<Tokens.Count-1) ++Index; PreviousEnd=t.End; t }
+    public Eat(s : string) : bool { if(Is(s)) { _=Take(); true } else false }
+    public Need(s : string) : void { unless(Eat(s)) Fail("expected '"+s+"', got '"+Peek().Text+"'"); }
+    public Fail(s : string) : void { throw ArgumentException(File+"@"+Peek().Start.ToString()+": "+s); }
+    public Identifier() : bool
+    { def t=Peek(); !t.Quoted && t.Text.Length>0 && StartCharacter(t.Text[0]) }
+    public Name() : string
+    {
+      _=Eat("@"); unless(Identifier()) Fail("expected identifier"); mutable name=Take().Text;
+      while(Is(".") && Ahead(1)!=".")
+      { _=Take(); _=Eat("@"); unless(Identifier()) Fail("expected qualified identifier"); name=name+"."+Take().Text; }
+      name
+    }
+    public Group(open : string, close : string) : void
+    {
+      Need(open); mutable depth=1;
+      while(depth>0)
+      {
+        def t=Take(); when(t.Text=="<eof>") Fail("unclosed "+open);
+        unless(t.Quoted) { when(t.Text==open) ++depth; when(t.Text==close) --depth; }
+      }
+    }
+  }
+}

@@ -1,0 +1,183 @@
+using Nemerle.Imperative;
+using System;
+using System.IO;
+using System.Text;
+using System.Reflection;
+using System.Collections.Generic;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.host;
+using Nemerle.Scripting.cache;
+using Nemerle.Scripting.dependencies;
+using Nemerle.Scripting.session;
+using Nemerle.Scripting.facilities;
+
+public class ScriptRunner
+{
+  static Diagnostics(compilation : CompilationResult) : void
+  {
+    foreach (diagnostic in compilation.Diagnostics)
+      Console.Error.WriteLine("{0}:{1}:{2}: {3}: {4}", diagnostic.File, diagnostic.Line, diagnostic.Column,
+                              if (diagnostic.IsError) "error" else "warning", diagnostic.Message);
+  }
+  static Result(evaluation : EvaluationResult) : int
+  {
+    if (evaluation.Kind == ScriptResultKind.Error) { Console.Error.WriteLine(evaluation.Error); 1 }
+    else { when (evaluation.Kind == ScriptResultKind.Value && evaluation.Value != null) Console.WriteLine(evaluation.Value); 0 }
+  }
+  static Repl(host : ScriptHost, definition : ScriptDefinition, inputs : ScriptInputs, historyPath : string) : int
+  {
+    using (session = ScriptSession(host, definition, inputs))
+    {
+      mutable recalled : array[ScriptSource] = array[];
+      when (historyPath != null && File.Exists(historyPath)) recalled = session.ReadHistory(historyPath);
+      def submit(source : ScriptSource) : void
+      {
+        def submission = session.Submit(source); Diagnostics(submission.Compilation);
+        when (submission.Evaluation != null) _ = Result(submission.Evaluation);
+        when (submission.Success && historyPath != null)
+        { session.SaveHistory(historyPath); recalled = session.History; }
+      }
+      mutable done = false;
+      mutable multiline = false;
+      mutable automatic = false;
+      def buffer = StringBuilder();
+      while (!done)
+      {
+        unless (Console.IsInputRedirected) Console.Write(if (multiline) "... " else ">>> ");
+        def line = Console.ReadLine();
+        if (line == null) done = true;
+        else if (multiline)
+        {
+          if (line == ":end")
+          { multiline = false; automatic = false; submit(ScriptSource(buffer.ToString(), "submission" + session.History.Length + ".n")); _ = buffer.Clear(); }
+          else
+          {
+            _ = buffer.AppendLine(line);
+            when (automatic)
+            {
+              def source = ScriptSource(buffer.ToString(), "submission" + session.History.Length + ".n");
+              unless (host.ClassifyInput(source, definition) == ScriptInputCompleteness.Incomplete)
+              { multiline = false; automatic = false; submit(source); _ = buffer.Clear(); }
+            }
+          }
+        }
+        else if (line == ":quit") done = true;
+        else if (line == ":begin") multiline = true;
+        else if (line == ":reset") session.Reset();
+        else if (line == ":history")
+          for (mutable i = 0; i < recalled.Length; i++) Console.WriteLine("{0}: {1}", i, recalled[i].Text.TrimEnd());
+        else if (line == ":replay")
+        {
+          def results = if (historyPath != null && File.Exists(historyPath)) session.ReplayHistory(historyPath) else session.Replay(recalled);
+          foreach (submission in results) { Diagnostics(submission.Compilation); when (submission.Evaluation != null) _ = Result(submission.Evaluation); }
+          when (results.Length == recalled.Length && Array.TrueForAll(results, result => result.Success))
+          { when (historyPath != null) session.SaveHistory(historyPath); recalled = session.History; }
+        }
+        else if (line.StartsWith(":recall "))
+        {
+          mutable index = 0;
+          if (Int32.TryParse(line.Substring(8), out index) && index >= 0 && index < recalled.Length)
+            Console.WriteLine(recalled[index].Text);
+          else Console.Error.WriteLine("Unknown history entry");
+        }
+        else if (line.StartsWith(":")) Console.Error.WriteLine("Commands: :begin/:end, :history, :recall N, :replay, :reset, :quit");
+        else unless (String.IsNullOrWhiteSpace(line))
+        {
+          def source = ScriptSource(line + "\n", "submission" + session.History.Length + ".n");
+          if (host.ClassifyInput(source, definition) == ScriptInputCompleteness.Incomplete)
+          { multiline = true; automatic = true; _ = buffer.AppendLine(line); }
+          else submit(source);
+        }
+      }
+      when (multiline) { Console.Error.WriteLine("Unfinished multiline submission; use :end"); return(1); }
+      0
+    }
+  }
+  public static Main(arguments : array[string]) : int
+  {
+    try
+    {
+      when (arguments.Length == 0)
+      {
+        Console.Error.WriteLine("Usage: nscript run source.n [options] [-- arguments] | compile source.n output.dll [options] | run-compiled output.dll [-- arguments] | repl [options]");
+        return(2);
+      }
+      def definition = ScriptDefinition(); definition.Properties.Add("args", typeof(array[string]));
+      def references = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "references");
+      when (Directory.Exists(references)) definition.TargetReferenceDirectory = references;
+      def settings = ScriptHostOptions();
+      mutable cacheDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nemerle", "scripting");
+      mutable historyPath : string = null;
+      mutable useCache = true;
+      mutable offline = false;
+      mutable updateLock = false;
+      def positions : List[string] = List();
+      def scriptArguments : List[string] = List();
+      mutable afterDelimiter = false;
+      for (mutable i = 0; i < arguments.Length; i++)
+      {
+        def argument = arguments[i];
+        if (afterDelimiter) scriptArguments.Add(argument);
+        else if (argument == "--") afterDelimiter = true;
+        else match (argument)
+        {
+          | "--offline" => offline = true;
+          | "--update-lock" => updateLock = true;
+          | "--no-cache" => useCache = false;
+          | "--cache-dir" | "--history" | "--repository" | "--target-framework" | "--runtime" =>
+            i = i + 1; when (i >= arguments.Length) throw ArgumentException("Missing value for " + argument);
+            match (argument)
+            {
+              | "--cache-dir" => cacheDirectory = Path.GetFullPath(arguments[i]);
+              | "--history" => historyPath = Path.GetFullPath(arguments[i]);
+              | "--repository" => definition.Repositories.Add(arguments[i]);
+              | "--target-framework" => definition.TargetFramework = arguments[i];
+              | _ => definition.RuntimeIdentifier = arguments[i];
+            }
+          | "--package" =>
+            when (i + 2 >= arguments.Length) throw ArgumentException("--package requires ID and exact version");
+            definition.Packages.Add(PackageRequest(arguments[i + 1], arguments[i + 2], ScriptDiagnostic("command line", 1, 1, "", false))); i = i + 2;
+          | _ => positions.Add(argument);
+        }
+      }
+      when (useCache) settings.Cache = FileScriptArtifactCache(Path.Combine(cacheDirectory, "compiled"), 268435456 : long);
+      def adapter = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Nemerle.Scripting.NuGet.dll");
+      when (File.Exists(adapter))
+      {
+        def type = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true);
+        def resolver = Activator.CreateInstance(type, array[Path.Combine(cacheDirectory, "packages") : object, definition.Repositories.ToArray() : object]);
+        type.GetProperty("Offline").SetValue(resolver, offline); type.GetProperty("UpdateLock").SetValue(resolver, updateLock);
+        settings.Resolver = resolver :> IScriptDependencyResolver;
+      }
+      def host = ScriptHost(settings);
+      def inputs = ScriptInputs(); inputs.Properties.Add("args", scriptArguments.ToArray());
+      when (positions.Count == 0) throw ArgumentException("Missing command");
+      when (positions[0] == "repl")
+      {
+        unless (positions.Count == 1) throw ArgumentException("Unexpected REPL argument");
+        def history = if (historyPath == null) Path.Combine(cacheDirectory, "repl.history") else historyPath;
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(history));
+        return(Repl(host, definition, inputs, history));
+      }
+      when (positions.Count < 2) throw ArgumentException("Missing source or artifact");
+      mutable script : CompiledScript = null;
+      if (positions[0] == "run-compiled") script = host.Load(positions[1], definition);
+      else
+      {
+        unless (positions[0] == "run" || positions[0] == "compile") throw ArgumentException("Unknown script command");
+        def compilation = host.Compile(ScriptSource(File.ReadAllText(positions[1]), Path.GetFullPath(positions[1])), definition);
+        Diagnostics(compilation); unless (compilation.Success) return(1); script = compilation.Script;
+        when (positions[0] == "compile")
+        {
+          unless (positions.Count == 3) throw ArgumentException("compile requires an output path");
+          host.Save(script, positions[2]); return(0);
+        }
+      }
+      // Preserve the original runner's positional argument form as well as --.
+      for (mutable i = 2; i < positions.Count; i++) scriptArguments.Add(positions[i]);
+      inputs.Properties["args"] = scriptArguments.ToArray();
+      Result(host.Evaluate(script, inputs))
+    }
+    catch { | error => Console.Error.WriteLine(error); 1 }
+  }
+}

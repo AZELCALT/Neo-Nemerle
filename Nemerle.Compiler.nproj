@@ -118,10 +118,17 @@
     <Reference Include="mscorlib" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="Nemerle" Condition="'$(UseBootstrapRuntime)' == 'true'">
+      <HintPath>$(Nemerle)/Nemerle.dll</HintPath>
+    </Reference>
+    <Reference Include="Nemerle.Platform">
+      <HintPath>$(OutputPath)/Nemerle.Platform.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="Nemerle.nproj">
+    <ProjectReference Include="Nemerle.nproj" Condition="'$(UseBootstrapRuntime)' != 'true'">
       <Name>Nemerle</Name>
       <Project>{0c558e35-7df9-4a68-9015-b316dd59c0cb}</Project>
       <Private>True</Private>

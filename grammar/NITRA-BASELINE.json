@@ -1,0 +1,10 @@
+{
+  "commit": "b287b8a42237fac4d993444e7e3af9240b601503",
+  "source": "https://github.com/JetBrains/Nitra",
+  "files": {
+    "Nitra/Nitra.Runtime/Core.nitra": "f57ad59474d586c78eead2e0bf523ff6d7130307c7cc95764cdbc4a89ee18de3",
+    "Nitra/Nitra.Runtime/CStyleComments.nitra": "89a8376941e804aca3be4072dd3de2f3ab74e32131afaf9b7b2f02cda0ac86d7",
+    "Nitra/Nitra.Grammar/NitraLiterals.nitra": "467a0ef82111da4da043330b3a9595b69b0fbbc567d2213ecfc923437947a8e3",
+    "Nitra/Nitra.Grammar/NitraSyntax.nitra": "22ab8bbaf4928f57a3c92271bbd978501cd8e6e27d97eef7ab974fa455c9bac5"
+  }
+}

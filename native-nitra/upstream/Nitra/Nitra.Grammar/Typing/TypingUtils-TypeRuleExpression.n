@@ -1,0 +1,227 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Runtime;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  public partial module TypingUtils
+  {
+    internal TypeRuleExpression(options : RuleDefinitionOptions, context : Context, rule : Rule) : Rule.Sequence
+    {
+      def insertWhitespaceRules() : List[Rule]
+      {
+        def keywordContext = context.TryGetContext.[KeywordRegexContext]();
+        def moduleContext  = context.GetContext.[SyntaxModuleBodyContext]();
+        def makeCall(loc, sSymbol) { Rule.Call(loc, sSymbol.Type, sSymbol.Name, RuleRef.Some(loc, true, sSymbol), BindingPowerInfo.Zero); }
+        def getSpaceRule(loc) { moduleContext.GetSpaceRule(context, "s", loc) }
+        def tryAddSpaceRule(rule, loc)
+        {
+          match (getSpaceRule(loc))
+          {
+            | None          => (rule, None())
+            | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+          }
+        }
+        def transform(_ : Rule) : Rule * option[Rule]
+        {
+          | Repeat              as rule when rule.IsOptimizedList => tryAddSpaceRule(rule, rule.Location.FromEnd())
+          | Repeat              as rule => (Rule.Repeat(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule)), None())
+          | RepeatWithSeparator as rule => (Rule.RepeatWithSeparator(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule), transformToSequence(rule.Separator), rule.HangingSeparator), None())
+          | Not                 as rule => (Rule.Not(rule, transformToSequence(rule.Rule)), None())
+          | And                 as rule => (Rule.And(rule, transformToSequence(rule.Rule)), None())
+          | Sequence            as rule =>
+            def buffer = List();
+            foreach (r in rule.Rules)
+              transformToBuffer(r, buffer);
+            (Rule.Sequence(rule, buffer.ToNList()), None())
+
+          | String              as rule =>
+            def loc = rule.Location.FromEnd();
+            if (keywordContext?.FindRule(rule.Str) is VSome(sym))
+              (Rule.String(rule.Location, rule.FieldName, rule.Str, true, rule.SpanClass ?? (context.Project :> NitraProject).KeywordSpanClassSymbolOpt.WithDefault(null)), Some(makeCall(loc, sym)))
+            else
+              tryAddSpaceRule(rule, loc)
+
+          | Call                as rule =>
+            def calleeOptions =
+              if (rule.RuleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
+                ruleSymbol.Options
+              else
+                RuleDefinitionOptions();
+
+            // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+            if (calleeOptions.IsSuppressTrailingSpaces)
+              (rule, None())
+            // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+            else if (calleeOptions.IsExplicitSpaces)
+              tryAddSpaceRule(rule, rule.Location.FromEnd())
+            // Whitespace rule is inserted after all 'regex' rules
+            else if (rule.RuleRef is RuleRef.Some(RegularRuleSymbol as ruleSymbol))
+            {
+              def loc = rule.Location.FromEnd();
+              if (keywordContext?.FindRule(ruleSymbol) is VSome(sym))
+                (Rule.Call(rule.Location, rule.Type, rule.FieldName, rule.RuleRef, rule.BindingPower, rule.SpanClass ?? (context.Project :> NitraProject).KeywordSpanClassSymbolOpt.WithDefault(null)), Some(makeCall(loc, sym)))
+              else
+                tryAddSpaceRule(rule, loc);
+            }
+            else
+              (rule, None());
+        }
+        and transformToSequence(rule : Rule) : Rule
+        {
+          match (transform(rule))
+          {
+            | (rule, Some(s)) => Rule.Sequence(rule, [rule, s])
+            | (rule, None)    => rule
+          }
+        }
+        and transformToBuffer(rule : Rule, buffer : List[Rule]) : void
+        {
+          match (transform(rule))
+          {
+            | (rule, Some(s)) => buffer.Add(rule); buffer.Add(s);
+            | (rule, None)    => buffer.Add(rule);
+          }
+        }
+
+        def buffer = List();
+        when (options.IsStart)
+        {
+          def loc = rule.Location.FromStart();
+          when (getSpaceRule(loc) is Some(sSymbol))
+            buffer.Add(makeCall(loc, sSymbol));
+        }
+        match (rule)
+        {
+          | Sequence(rules) => foreach (r in rules) transformToBuffer(r, buffer);
+          | _               => transformToBuffer(rule, buffer);
+        }
+        buffer
+      }
+      def createUniqueFieldNames(rules : IEnumerable[Rule]) : list[Rule]
+      {
+        def fieldNameUniqueness  = Dictionary();
+        def plainParseTreeFields = List();
+        foreach (rule in rules)
+        {
+          def fieldName =
+            if (!string.IsNullOrEmpty(rule.FieldName))
+              Utils.ToPascalCase(rule.FieldName)
+            else if (rule.Type is RuleType.Void)
+              "_"
+            else
+              "Node";
+          plainParseTreeFields.Add(fieldName, rule);
+          fieldNameUniqueness[fieldName] = !fieldNameUniqueness.ContainsKey(fieldName);
+        }
+        def fieldNameCounters = Dictionary();
+        def finalRules = List();
+        foreach ((fieldName, fieldRule) in plainParseTreeFields)
+        {
+          def indexedFieldName =
+            if (fieldNameUniqueness[fieldName])
+              fieldName
+            else
+            {
+              mutable counter;
+              _ = fieldNameCounters.TryGetValue(fieldName, out counter);
+              counter += 1;
+              fieldNameCounters[fieldName] = counter;
+              if (char.IsDigit(fieldName, fieldName.Length - 1))
+                fieldName + "_" + counter.ToString()
+              else
+                fieldName + counter.ToString()
+            }
+          finalRules.Add(fieldRule.UpdateFieldName(indexedFieldName));
+        }
+        finalRules.ToNList();
+      }
+
+      def rules =
+        if (options.IsExplicitSpaces)
+          match (rule)
+          {
+            | Sequence(rules) => rules
+            | _               => [rule]
+          }
+        else
+          insertWhitespaceRules();
+
+      Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames(rules))
+    }
+
+    public TryInferOperatorType(symbol : ParsedExtensionRuleSymbol) : void
+    {
+      def isArgument(rule : Rule) : bool
+      {
+        | Call(Some(argSymbol is RuleDefSymbol), _) => !(argSymbol.Type is RuleType.Void || argSymbol.IsToken)
+        | _ => false
+      }
+      mutable arity = 0;
+
+      foreach (rule in symbol.Rule.Rules)
+      {
+        when (isArgument(rule))
+          arity++;
+      }
+
+      def rulesWithoutVoid = symbol.Rule.Rules.FilterToArray(rule => !(rule.Type is RuleType.Void));
+      def end = rulesWithoutVoid.Length - 1;
+      mutable firstIsArg;
+      mutable lastIsArg;
+      mutable infix;
+      mutable prevIsArg;
+      foreach (rule in rulesWithoutVoid with i)
+      {
+        def currIsArg = isArgument(rule);
+        if (i == 0) // first
+        {
+          infix = currIsArg;
+          prevIsArg = currIsArg;
+          firstIsArg = currIsArg;
+        }
+        else if (i == end)
+        {
+          lastIsArg = currIsArg;
+          unless (lastIsArg)
+            infix = false;
+          when (prevIsArg)
+            infix = false; // no separator!
+        }
+        else when (infix)
+        {
+          when (prevIsArg && currIsArg)
+            infix = false; // no separator!
+
+          prevIsArg = currIsArg;
+        }
+      }
+
+      mutable newOptions = symbol.Options;
+
+      when (infix)
+        newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Infix);
+      unless (firstIsArg)
+        newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Prefix);
+      unless (lastIsArg)
+        newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Postfix);
+      when (arity > 0)
+        newOptions = newOptions.SetArity(null, arity);
+
+      when (symbol.Options : object != newOptions)
+        symbol.SetOptions(newOptions);
+    }
+  }
+}

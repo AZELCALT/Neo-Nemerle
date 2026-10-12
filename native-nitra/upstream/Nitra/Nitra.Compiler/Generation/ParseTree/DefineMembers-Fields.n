@@ -1,0 +1,160 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using Nitra.Internal;
+using Nitra.Model;
+using Nitra.Typing;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class RuleParseTreeEmitter
+  {
+    protected DefineParseTreeCtorAndFields(fields : SCG.List[FieldInfo], _nodeTb : TypeBuilder) : void
+    {
+      def traverse(ruleType : RuleType, obj : PExpr) : ChemicalRuleType * PExpr
+      {
+        match (ruleType)
+        {
+          | Void         => assert3(false)
+          | Ref(symbol)  => (ChemicalRuleType.Root(symbol),    obj)
+          | Chars(Some)  => (ChemicalRuleType.StaticString(), <[ () ]>)
+          | Chars(None)  => (ChemicalRuleType.String(),       <[ this.GetText($obj) ]>)
+          | Option(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemType, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
+            if (itemType is ChemicalRuleType.StaticString)
+              (ChemicalRuleType.Bool(), <[ $obj.HasValue ]>)
+            else
+            {
+              def expr =
+              <[
+                match ($obj)
+                {
+                  | Nitra.OptionParseTree(HasValue = true, Value = $(itemVariable : usesite)) => Some($itemExpr)
+                  | _ => None()
+                }
+              ]>;
+              (ChemicalRuleType.Option(itemType), expr)
+            }
+
+          | List(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemType, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
+            if (itemType is ChemicalRuleType.StaticString)
+              (ChemicalRuleType.Int(), <[ $obj.Count ]>)
+            else
+            {
+              def expr =
+              <[
+                def items = System.Collections.Generic.List();
+                foreach ($(itemVariable : usesite) in $obj)
+                  items.Add($itemExpr);
+                Nemerle.Collections.NList.ToList(items);
+              ]>;
+              (ChemicalRuleType.List(itemType), expr)
+            }
+
+          | Tuple(types) =>
+            def memberTypes  = SCG.List();
+            def exprs        = SCG.List();
+
+            foreach(t in types with i)
+            {
+              def (memberType, memberExpr) = traverse(t, <[ $obj.$("Item" + (i + 1).ToString() : usesite) ]>);
+              unless (memberType is ChemicalRuleType.StaticString)
+              {
+                memberTypes.Add(memberType);
+                exprs.Add(memberExpr);
+              }
+            }
+
+            match (memberTypes.Count)
+            {
+              | 0 => (ChemicalRuleType.StaticString(),               <[ () ]>)
+              | 1 => (memberTypes[0],                                exprs[0])
+              | _ => (ChemicalRuleType.Tuple(memberTypes.NToList()), <[ (..$exprs) ]>)
+            }
+        }
+      }
+
+      foreach (field in fields)
+      {
+        _nodeTb.DefineConditional(<[ decl:
+          public new abstract $(field.Name : usesite) : $(field.Type : typed) { get; }
+        ]>);
+
+        match (field.Rule.Type)
+        {
+          | Ref | Chars(Some) => ()
+          | ruleType =>
+            def (propertyType, expr) = traverse(ruleType, <[ this.$(field.Name : usesite) ]>);
+            unless (propertyType is ChemicalRuleType.StaticString)
+              _nodeTb.DefineConditional(<[ decl:
+                public $(field.Name + "Data" : usesite) : $(Environment.GetParseTreeType(propertyType) : typed)
+                {
+                  [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
+                  get { unchecked ($expr) }
+                }
+              ]>);
+        }
+      }
+    }
+
+    protected DefineAmbiguousOrMissingCtorAndFields(fields : SCG.List[FieldInfo], _nodeTb : TypeBuilder) : void
+    {
+      def makeMissingValue(ruleType : RuleType) : PExpr
+      {
+        | Void           => assert(false)
+        | Chars          => <[ Nitra.NSpan(pos) ]>
+        | List           => <[ Nitra.EmptyListParseTree(Nitra.Location(sourceProvider, pos)) ]>
+        | Option         => <[ Nitra.OptionParseTree.None(Nitra.Location(sourceProvider, pos)) ]>
+        | Tuple(members) => <[ Nitra.ConcreteSequenceParseTree(Nitra.Location(sourceProvider, pos), ..$(members.Map(makeMissingValue))) ]>
+        | Ref(symbol)    => <[ $(Environment.GetParseTreeType(symbol) : typed).AmbiguousOrMissingNode(sourceProvider, pos) ]>
+      }
+
+      def ctorBody = SCG.List();
+      ctorBody.Add(<[ assert(sourceProvider != null); ]>);
+      ctorBody.Add(<[ this.sourceProvider = sourceProvider; ]>);
+      ctorBody.Add(<[ this.pos            = pos; ]>);
+
+      foreach (field in fields)
+      {
+        def backingFieldName = Util.tmpname(field.Name);
+        _nodeTb.Define(<[ decl:
+          private $(backingFieldName : usesite) : $(field.Type : typed)
+        ]>);
+        _nodeTb.Define(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get
+            {
+              if (IsAmbiguous)
+                this.ambiguities[0].$(field.Name : usesite)
+              else
+                this.$(backingFieldName : usesite)
+            }
+          }
+        ]>);
+        ctorBody.Add(<[ this.$(backingFieldName : usesite) = $(makeMissingValue(field.Rule.Type)) ]>);
+      }
+
+      _nodeTb.Define(<[ decl:
+        public this(sourceProvider : Nitra.Runtime.ISourceSnapshotProvider, pos : int)
+        {
+          ..$ctorBody
+        }
+      ]>);
+    }
+  }
+}

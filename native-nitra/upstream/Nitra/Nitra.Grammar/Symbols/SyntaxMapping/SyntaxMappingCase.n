@@ -1,0 +1,19 @@
+﻿using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+
+namespace Nitra.Typing
+{
+  [Record]
+  public sealed class SyntaxMappingCase : Located
+  {
+    public override Location : Location          { get; }
+    public          Pattern  : ParseTreePattern  { get; }
+    public          Expr     : SyntaxMappingExpr { get; }
+  }
+}

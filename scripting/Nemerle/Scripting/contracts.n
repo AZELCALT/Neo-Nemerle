@@ -1,0 +1,212 @@
+using Nemerle.Imperative;
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using Nemerle.Scripting.cache;
+using Nemerle.Scripting.dependencies;
+using Nemerle.Scripting.facilities;
+
+public sealed class ScriptSource
+{
+  public Text : string;
+  public Path : string;
+  public this(text : string, path : string) { Text = text; Path = path; }
+}
+
+public sealed class ScriptDefinition
+{
+  internal PreviousTypeNames : Dictionary[string, string] = Dictionary();
+  internal PreviousNames : Dictionary[string, string] = Dictionary();
+  internal mutable ChildDefinition : ScriptDefinition = null;
+  internal mutable GeneratedTypeName : string = null;
+  public Properties : Dictionary[string, Type] = Dictionary();
+  public ReceiverTypes : List[Type] = List();
+  public ImportScripts : List[string] = List();
+  public CompilerOptions : List[string] = List();
+  public Interfaces : List[Type] = List();
+  public SourceFragments : List[ScriptSourceFragment] = List();
+  public Preludes : List[ScriptSource] = List();
+  public mutable DisplayName : string = null;
+  public mutable FilePathPattern : string = null;
+  public mutable FileLocationProperty : string = null;
+  public mutable CaptureResult : bool = true;
+  public mutable ResultField : string = null;
+  public mutable ResultType : Type = null;
+  public mutable ShareImportedInstances : bool = true;
+  internal ImportBindings : List[ScriptImportBinding] = List();
+  internal OpenImportedNames : List[string] = List();
+  public Imports : List[string] = List();
+  public Aliases : Dictionary[string, string] = Dictionary();
+  public References : List[string] = List();
+  public RuntimeReferences : List[string] = List();
+  public NativeReferences : List[string] = List();
+  public Packages : List[PackageRequest] = List();
+  public Repositories : List[string] = List();
+  public mutable Id : string = "default";
+  public mutable Version : string = "1";
+  public mutable FileExtension : string = ".n";
+  public mutable TargetFramework : string = "net10.0";
+  public mutable RuntimeIdentifier : string = System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier;
+  public mutable DependencyFingerprint : string = "";
+  public SharedAssemblies : List[Assembly] = List();
+  public mutable BaseType : Type = typeof(object);
+  public BaseArgumentTypes : List[Type] = List();
+  public mutable Cacheable : bool = true;
+  public mutable Debug : bool = false;
+  public mutable TargetReferenceDirectory : string = null;
+  public Snapshot() : ScriptDefinition
+  {
+    def copy = ScriptDefinition();
+    copy.GeneratedTypeName = GeneratedTypeName; copy.ChildDefinition = ChildDefinition;
+    copy.ImportScripts.AddRange(ImportScripts); copy.CompilerOptions.AddRange(CompilerOptions);
+    copy.Interfaces.AddRange(Interfaces); copy.SourceFragments.AddRange(SourceFragments); copy.Preludes.AddRange(Preludes);
+    copy.DisplayName = DisplayName; copy.FilePathPattern = FilePathPattern; copy.FileLocationProperty = FileLocationProperty;
+    copy.CaptureResult = CaptureResult; copy.ResultField = ResultField; copy.ResultType = ResultType;
+    copy.ShareImportedInstances = ShareImportedInstances; copy.ImportBindings.AddRange(ImportBindings); copy.OpenImportedNames.AddRange(OpenImportedNames);
+    foreach (pair in PreviousTypeNames) copy.PreviousTypeNames.Add(pair.Key, pair.Value);
+    foreach (pair in PreviousNames) copy.PreviousNames.Add(pair.Key, pair.Value);
+    foreach (pair in Properties) copy.Properties.Add(pair.Key, pair.Value);
+    foreach (pair in Aliases) copy.Aliases.Add(pair.Key, pair.Value);
+    copy.ReceiverTypes.AddRange(ReceiverTypes); copy.Imports.AddRange(Imports);
+    copy.RuntimeReferences.AddRange(RuntimeReferences); copy.NativeReferences.AddRange(NativeReferences);
+    copy.Packages.AddRange(Packages); copy.Repositories.AddRange(Repositories);
+    copy.Id = Id; copy.Version = Version; copy.FileExtension = FileExtension;
+    copy.TargetFramework = TargetFramework; copy.RuntimeIdentifier = RuntimeIdentifier; copy.DependencyFingerprint = DependencyFingerprint;
+    copy.References.AddRange(References); copy.SharedAssemblies.AddRange(SharedAssemblies);
+    copy.BaseArgumentTypes.AddRange(BaseArgumentTypes);
+    copy.Cacheable = Cacheable;
+    copy.BaseType = BaseType; copy.Debug = Debug; copy.TargetReferenceDirectory = TargetReferenceDirectory;
+    copy
+  }
+}
+
+public sealed class ScriptInputs
+{
+  public Properties : Dictionary[string, object] = Dictionary();
+  public Receivers : List[object] = List();
+  public BaseArguments : List[object] = List();
+  public Snapshot() : ScriptInputs
+  {
+    def result = ScriptInputs(); foreach (pair in Properties) result.Properties.Add(pair.Key, pair.Value);
+    result.Receivers.AddRange(Receivers); result.BaseArguments.AddRange(BaseArguments); result
+  }
+}
+
+public sealed class ScriptDiagnostic
+{
+  public File : string;
+  public Line : int;
+  public Column : int;
+  public Message : string;
+  public IsError : bool;
+  public this(file : string, line : int, column : int, message : string, error : bool)
+  { File = file; Line = line; Column = column; Message = message; IsError = error; }
+}
+
+public enum ScriptResultKind { | Value | Void | Error }
+
+public sealed class EvaluationResult
+{
+  public Kind : ScriptResultKind;
+  public Value : object;
+  public ValueType : Type;
+  public Error : Exception;
+  public Instance : object;
+  exports : Dictionary[string, string];
+  public this(kind : ScriptResultKind, value : object, type : Type, error : Exception,
+              instance : object, exports : Dictionary[string, string])
+  { Kind = kind; Value = value; ValueType = type; Error = error; Instance = instance; this.exports = exports; }
+  public GetFunction(name : string, delegateType : Type) : Delegate
+  {
+    GetFunction(name, delegateType, array[] : array[Type])
+  }
+  public GetFunction(name : string, delegateType : Type, genericArguments : array[Type]) : Delegate
+  {
+    when (genericArguments == null) throw ArgumentNullException("genericArguments");
+    unless (exports.ContainsKey(name)) throw ArgumentException("Unknown or private script function: " + name);
+    unless (typeof(Delegate).IsAssignableFrom(delegateType)) throw ArgumentException("Expected a delegate type");
+    // CLR delegate binding performs signature checks and binds this instance.
+    unless (Instance != null) throw InvalidOperationException("Script construction did not produce an instance");
+    def parameters = delegateType.GetMethod("Invoke").GetParameters();
+    def types = Array.ConvertAll(parameters, p => p.ParameterType);
+    mutable method : MethodInfo = null;
+    foreach (candidate in Instance.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+      when (candidate.Name == exports[name])
+      {
+        mutable closed = candidate;
+        if (candidate.IsGenericMethodDefinition)
+        {
+          unless (candidate.GetGenericArguments().Length == genericArguments.Length) continue;
+          try { closed = candidate.MakeGenericMethod(genericArguments); }
+          catch { | _ is ArgumentException => continue; }
+        }
+        else when (genericArguments.Length != 0) continue;
+        def signature = closed.GetParameters();
+        mutable signatureMatches = signature.Length == types.Length;
+        when (signatureMatches)
+          for (mutable i = 0; i < types.Length; i++) signatureMatches = signatureMatches && signature[i].ParameterType == types[i];
+        when (signatureMatches)
+        {
+          when (method != null) throw AmbiguousMatchException("Multiple script overloads match the delegate signature");
+          method = closed;
+        }
+      }
+    when (method == null) throw ArgumentException("No script overload signatureMatches the delegate signature or generic constraints");
+    if (method.IsStatic) Delegate.CreateDelegate(delegateType, method, true)
+    else Delegate.CreateDelegate(delegateType, Instance, method, true)
+  }
+}
+
+public sealed class CompiledScript
+{
+  public mutable Source : ScriptSource;
+  public ImportedScripts : List[ScriptImportBinding] = List();
+  public Definition : ScriptDefinition;
+  public Assembly : Assembly;
+  public ScriptType : Type;
+  public Image : array[byte];
+  public Symbols : array[byte];
+  public Diagnostics : List[ScriptDiagnostic] = List();
+  public Imports : List[string] = List();
+  public Aliases : Dictionary[string, string] = Dictionary();
+  public Members : Dictionary[string, string] = Dictionary();
+  public Exports : Dictionary[string, string];
+  public PropertyNames : array[string];
+  public EvaluationMethod : string;
+  public this(definition : ScriptDefinition, assembly : Assembly, scriptType : Type,
+              image : array[byte], symbols : array[byte], exports : Dictionary[string, string],
+              propertyNames : array[string], evaluationMethod : string)
+  { Definition = definition; Assembly = assembly; ScriptType = scriptType; Image = image;
+    Symbols = symbols; Exports = exports; PropertyNames = propertyNames; EvaluationMethod = evaluationMethod; }
+}
+
+public sealed class CompilationResult
+{
+  public Script : CompiledScript;
+  public Diagnostics : array[ScriptDiagnostic];
+  public Success : bool { get { Script != null } }
+  public this(script : CompiledScript, diagnostics : array[ScriptDiagnostic])
+  { Script = script; Diagnostics = diagnostics; }
+}
+
+public sealed class ScriptHostOptions
+{
+  public mutable Cache : IScriptArtifactCache = null;
+  public mutable Resolver : IScriptDependencyResolver = null;
+  public mutable DefinitionSelector : Nemerle.Scripting.definitions.IScriptDefinitionSelector = null;
+  public Refiners : List[IScriptConfigurationRefiner] = List();
+  public CompilationRefiners : List[IScriptCompilationRefiner] = List();
+  public EvaluationRefiners : List[IScriptEvaluationRefiner] = List();
+  public mutable ExecutionWrapper : IScriptExecutionWrapper = null;
+  public mutable SourceResolver : IScriptSourceResolver = null;
+  public mutable ImportedInputProvider : IScriptImportedInputProvider = null;
+  public mutable ConfigurationVersion : string = "1";
+  public Snapshot() : ScriptHostOptions
+  {
+    def result = ScriptHostOptions(); result.Cache = Cache; result.Resolver = Resolver;
+    result.DefinitionSelector = DefinitionSelector; result.ConfigurationVersion = ConfigurationVersion;
+    result.SourceResolver = SourceResolver; result.ImportedInputProvider = ImportedInputProvider; result.ExecutionWrapper = ExecutionWrapper;
+    result.CompilationRefiners.AddRange(CompilationRefiners); result.EvaluationRefiners.AddRange(EvaluationRefiners);
+    result.Refiners.AddRange(Refiners); result
+  }
+}

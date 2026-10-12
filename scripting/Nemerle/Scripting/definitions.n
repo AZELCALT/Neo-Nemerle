@@ -1,0 +1,38 @@
+using System;
+using System.Collections.Generic;
+using Nemerle.Scripting.contracts;
+
+public interface IScriptDefinitionSelector
+{
+  Select(source : ScriptSource) : ScriptDefinition;
+}
+public sealed class ScriptDefinitionRegistry : IScriptDefinitionSelector
+{
+  definitions : List[ScriptDefinition] = List();
+  fallback : ScriptDefinition;
+  public this(fallback : ScriptDefinition) { this.fallback = fallback.Snapshot(); }
+  public Register(extension : string, definition : ScriptDefinition) : void
+  {
+    unless (extension.StartsWith(".") && extension.Length > 1) throw ArgumentException("Expected a file extension");
+    def copy = definition.Snapshot(); copy.FileExtension = extension;
+    _ = definitions.RemoveAll(d => d.FileExtension == extension && d.FilePathPattern == copy.FilePathPattern); definitions.Add(copy);
+  }
+  public Register(definition : ScriptDefinition) : void
+  { Register(definition.FileExtension, definition); }
+  public Select(source : ScriptSource) : ScriptDefinition
+  {
+    mutable result = fallback;
+    mutable length = 0;
+    foreach (definition in definitions)
+      when (source.Path.EndsWith(definition.FileExtension, StringComparison.Ordinal)
+            && (definition.FilePathPattern == null || System.Text.RegularExpressions.Regex.IsMatch(source.Path, definition.FilePathPattern)))
+      {
+        def candidate = definition.FileExtension.Length;
+        if (candidate > length || (candidate == length && result.FilePathPattern == null && definition.FilePathPattern != null))
+        { result = definition; length = candidate; }
+        else when (candidate == length && result.FilePathPattern != null && definition.FilePathPattern != null)
+          throw ArgumentException("Multiple script definitions match: " + source.Path);
+      }
+    result.Snapshot()
+  }
+}

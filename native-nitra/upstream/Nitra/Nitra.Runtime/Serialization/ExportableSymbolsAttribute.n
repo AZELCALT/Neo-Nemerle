@@ -1,0 +1,10 @@
+﻿using System;
+
+namespace Nitra.Serialization
+{
+  [Record, AttributeUsageAttribute(AttributeTargets.Assembly)]
+  public sealed class ExportableSymbolsAttribute : Attribute
+  {
+    public SymbolTypes : array[Type] { get }
+  }
+}

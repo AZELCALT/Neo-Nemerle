@@ -37,8 +37,10 @@ using PT = Nemerle.Compiler.Parsetree;
 using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
 using SRI = System.Runtime.InteropServices;
+#if !MODERN_CLR
 using SS = System.Security;
 using SSP = System.Security.Permissions;
+#endif
 using SCG = System.Collections.Generic;
 using Nemerle.Compiler.Typedtree;
 
@@ -161,6 +163,7 @@ namespace Nemerle.Compiler
       This means that the compiler must instantiate a security attribute at compile time and
       retrieve a serializable permission object to store somewhere in the metadata.
     */
+#if !MODERN_CLR
     internal GetPermissionSets (attrs : SCG.IEnumerable [GlobalEnv * PT.PExpr])
     : list [SSP.SecurityAction * SS.PermissionSet]
     {
@@ -187,6 +190,7 @@ namespace Nemerle.Compiler
     {
       GetPermissionSets(attrs.Map(attr => (env, attr)));
     }
+#endif
 
     internal MakeEmittedAttribute (attr_type : System.Type, value : string) : SR.Emit.CustomAttributeBuilder
     {
@@ -422,8 +426,20 @@ namespace Nemerle.Compiler
       // A security attribute must be imported from an external assembly,
       // so using LibraryReference.ExternalTypeInfo is good enought here.
       //
-      ti is LibraryReference.ExternalTypeInfo
-      && typeof(SSP.SecurityAttribute).IsAssignableFrom ((ti :> LibraryReference.ExternalTypeInfo).SystemType)
+      if (ti is LibraryReference.ExternalTypeInfo)
+      {
+        mutable current = (ti :> LibraryReference.ExternalTypeInfo).SystemType;
+        mutable found = false;
+        while (current != null && !found)
+        {
+          found = current.FullName == "System.Security.Permissions.SecurityAttribute";
+          unless (found) current = current.BaseType;
+        }
+        when (found && !Nemerle.Platform.ClrAssemblySession.LegacySecurityAvailable)
+          Message.FatalError("Declarative security attributes are not supported by the CoreCLR backend");
+        found
+      }
+      else false
     }
 
     private compile_expr(env : GlobalEnv, expr : PT.PExpr, typer : Typer, mutable expected : TypeVar = null) : object * FixedType
@@ -599,7 +615,7 @@ namespace Nemerle.Compiler
     {
       def (ctor_info, ctor_params, prop_infos, prop_values, field_infos, field_values) = pre_compile (env, ti, attr, parms);
 
-      def attrBuilder = SR.Emit.CustomAttributeBuilder(
+      def attrBuilder = Manager.Hierarchy.ClrEmitter.CreateAttribute(
         ctor_info,
         ctor_params.Reverse().ToArray(),
         prop_infos.Reverse().ToArray(),
@@ -607,6 +623,8 @@ namespace Nemerle.Compiler
         field_infos.Reverse().ToArray(),
         field_values.Reverse().ToArray());
       def shouldEmit = if(attr.IsConditional) attr.EvalConditions(env) else true;
+      when (shouldEmit && ti != null)
+        Manager.Hierarchy.ClrEmitter.RegisterAttribute(ti.GetTypeBuilder(), ctor_info);
       (attrBuilder, shouldEmit)
     }
 
@@ -624,10 +642,10 @@ namespace Nemerle.Compiler
 
   public partial class TypesManager
   {
-    static read_keypair (loc : Location, name : string) : SR.StrongNameKeyPair
+    private ConfigureSigning (loc : Location, assembly : SR.AssemblyName, name : string) : void
     {
       try {
-        SR.StrongNameKeyPair(File.Open(name, FileMode.Open, FileAccess.Read))
+        ClrEmitter.ConfigureSigning(assembly, name)
       }
       catch {
         | _ is DirectoryNotFoundException =>
@@ -788,10 +806,9 @@ namespace Nemerle.Compiler
       /* create an assembly name and set its properties according to defined
          global assembly attributes */
       def an = SR.AssemblyName ();
-      an.CodeBase = string.Concat("file:///", Directory.GetCurrentDirectory());
 
       when (Manager.Options.StrongAssemblyKeyName != null) {
-        an.KeyPair = read_keypair (Location.Default, Manager.Options.StrongAssemblyKeyName);
+        ConfigureSigning(Location.Default, an, Manager.Options.StrongAssemblyKeyName);
       }
 
       foreach ((env, attr) in assembly_attributes)
@@ -811,10 +828,10 @@ namespace Nemerle.Compiler
         else if (tc.Equals (InternalType.AssemblyKeyFileAttribute_tc))
              {
                def key = take_string (parms);
-               if (an.KeyPair != null)
+               if (ClrEmitter.HasSigningKey)
                  Message.Warning (attr.Location, "AssemblyKeyFile attribute will be ignored, as key file was already specified")
                else
-                 when (key != "") an.KeyPair = read_keypair (attr.Location, key);
+                 when (key != "") ConfigureSigning(attr.Location, an, key);
              }
              else when (tc.Equals (InternalType.AssemblyCultureAttribute_tc))
                     an.CultureInfo = SY.Globalization.CultureInfo (take_string (parms));

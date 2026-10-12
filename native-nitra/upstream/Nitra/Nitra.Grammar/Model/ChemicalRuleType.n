@@ -1,0 +1,42 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Typing
+{
+  public variant ChemicalRuleType
+  {
+    | Void
+    | Root  { Symbol : SyntaxRuleSymbol }
+    | Tuple { members : list[ChemicalRuleType] }
+    | StaticString
+    | String
+    | Bool
+    | Option { item : ChemicalRuleType }
+    | Int
+    | List   { item : ChemicalRuleType }
+
+    public override ToString() : string
+    {
+      match (this)
+      {
+        | Void           => "VOID"
+        | Root(s)        => s.FullName
+        | Tuple(members) => $<#(..$(members; ", "))#>
+        | StaticString   => "STATIC STRING"
+        | String         => "STRING"
+        | Bool           => "BOOL"
+        | Option(item)   => $"Option[$item]"
+        | Int            => "INT"
+        | List(item)     => $"List[$item]"
+      }
+    }
+  }
+}

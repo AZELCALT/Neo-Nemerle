@@ -1,0 +1,17 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Grammar
+{
+  public variant Precedence
+  {
+    | Value { IsLeftMost : bool; BindingPower : int; IsRightAssociative : bool; }
+    | None
+  }
+}

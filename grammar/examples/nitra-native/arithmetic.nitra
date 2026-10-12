@@ -1,0 +1,17 @@
+// Native Nitra declaration syntax, consumed by the experimental side parser.
+syntax module Arithmetic
+{
+  using Nitra.Core;
+  [StartRule] syntax Start = Expression;
+  syntax Expression
+  {
+    precedence Add:
+    | Add = Expression "+" Expression;
+    precedence Multiply:
+    | Multiply = Expression "*" Expression;
+    precedence 0:
+    | Number = Digits;
+    | Group = "(" Expression ")";
+  }
+  regex Digits = ['0'..'9']+;
+}

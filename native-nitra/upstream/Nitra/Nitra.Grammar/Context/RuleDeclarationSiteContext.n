@@ -1,0 +1,46 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing
+{
+  public sealed class RuleDeclarationSiteContext : Context
+  {
+    public DeclarationSite : IRuleDeclarationSite { get; }
+
+    public this(parent : Context, declarationSite : IRuleDeclarationSite)
+    {
+      base(parent);
+      DeclarationSite = declarationSite;
+    }
+
+    public override BindMany[T](path : list[Location]) : BindingResult[T]
+    {
+      | [name] => BindMany(name)
+      | _      => Parent.BindMany(path)
+    }
+
+    public override BindMany[T](name : Location) : BindingResult[T]
+    {
+      // we don't want to bind local ExtensionRuleSymbols by its short name
+      match (DeclarationSite.Node.BindMany(name).Filter((s : T) => !(s is ExtensionRuleSymbol)))
+      {
+        | []         => Parent.BindMany(name)
+        | candidates => BindingUtils.MakeBindingResult(name, candidates);
+      }
+    }
+
+    public override ToString() : string
+    {
+      DeclarationSite.Description + " " + DeclarationSite.Name
+    }
+  }
+}

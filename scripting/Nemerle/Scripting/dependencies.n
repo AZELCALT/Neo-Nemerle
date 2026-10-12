@@ -1,0 +1,214 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Threading;
+using Nemerle.Compiler;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.facilities;
+
+public sealed class PackageRequest
+{
+  public Id : string;
+  public Version : string;
+  public Location : ScriptDiagnostic;
+  public this(id : string, version : string, location : ScriptDiagnostic)
+  { Id = id; Version = version; Location = location; }
+}
+public sealed class AssemblyRequest
+{
+  public Path : string;
+  public Location : ScriptDiagnostic;
+  public this(path : string, location : ScriptDiagnostic) { Path = path; Location = location; }
+}
+public sealed class FileSystemScriptResolver
+{
+  public Resolve(data : ScriptCollectedData) : ScriptResolution
+  {
+    def result = ScriptResolution();
+    def fingerprints : List[string] = List();
+    foreach (request in data.Assemblies)
+    {
+      def path = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(data.Source.Path)), request.Path));
+      try
+      {
+        _ = System.Reflection.AssemblyName.GetAssemblyName(path);
+        result.CompilationReferences.Add(path); result.RuntimeReferences.Add(path);
+        fingerprints.Add(Nemerle.Platform.ClrScriptSupport.Digest(File.ReadAllBytes(path)));
+      }
+      catch { | error => throw ScriptDependencyException(ScriptDiagnostic(request.Location.File, request.Location.Line, request.Location.Column, error.Message, true)); }
+    }
+    when (fingerprints.Count > 0)
+      result.LockFingerprint = Nemerle.Platform.ClrScriptSupport.Digest(System.Text.Encoding.UTF8.GetBytes(String.Join("|", fingerprints.ToArray())));
+    result
+  }
+}
+public sealed class ScriptCollectedData
+{
+  public Source : ScriptSource;
+  public mutable OriginalSource : ScriptSource;
+  public ScriptImports : List[AssemblyRequest] = List();
+  public CompilerOptions : List[string] = List();
+  public Annotations : List[ScriptAnnotation] = List();
+  public Assemblies : List[AssemblyRequest] = List();
+  public Packages : List[PackageRequest] = List();
+  public Repositories : List[string] = List();
+  public Imports : List[string] = List();
+  internal UsingDirectives : List[ScriptUsingDirective] = List();
+  public Aliases : Dictionary[string, string] = Dictionary();
+  public this(source : ScriptSource) { Source = source; OriginalSource = source; }
+}
+public sealed class ScriptResolution
+{
+  public CompilationReferences : List[string] = List();
+  public RuntimeReferences : List[string] = List();
+  public NativeReferences : List[string] = List();
+  public mutable LockFingerprint : string = "";
+}
+public interface IScriptDependencyResolver
+{
+  Resolve(data : ScriptCollectedData, definition : ScriptDefinition, cancellation : CancellationToken) : ScriptResolution;
+}
+public interface IScriptConfigurationRefiner
+{
+  Version : string { get; }
+  BeforeParsing(source : ScriptSource, definition : ScriptDefinition) : ScriptDefinition;
+  OnDependencies(data : ScriptCollectedData, definition : ScriptDefinition) : ScriptDefinition;
+}
+public sealed class ScriptDependencyException : Exception
+{
+  public Diagnostic : ScriptDiagnostic;
+  public this(diagnostic : ScriptDiagnostic) { base(diagnostic.Message); Diagnostic = diagnostic; }
+}
+
+// Collect literal metadata using the compiler lexer, never attribute construction.
+public static class ScriptMetadata
+{
+  public Collect(source : ScriptSource, manager : ManagerClass) : ScriptCollectedData
+  { Collect(source, manager, array[] : array[string]) }
+  public Collect(source : ScriptSource, manager : ManagerClass, annotationNames : array[string]) : ScriptCollectedData
+  {
+    def data = ScriptCollectedData(source);
+    def characters = source.Text.ToCharArray();
+    def lexer = LexerString(manager, source.Text, Location(Location.GetFileIndex(Path.GetFullPath(source.Path)), 1, 1));
+    lexer.Keywords = LexerBase.BaseKeywords;
+    def offset(location : Location) : int
+    {
+      mutable index = 0;
+      for (mutable line = 1; line < location.Line; line++) index = source.Text.IndexOf('\n', index) + 1;
+      index + location.Column - 1
+    }
+    def fail(token : Token, message : string) : void
+    {
+      throw ScriptDependencyException(ScriptDiagnostic(source.Path, token.Location.Line, token.Location.Column, message, true));
+    }
+    mutable braces = 0;
+    mutable rounds = 0;
+    mutable done = false;
+    while (!done)
+    {
+      def token = lexer.GetToken();
+      match (token)
+      {
+        | Token.EndOfFile => done = true;
+        | Token.BeginBrace => braces++;
+        | Token.EndBrace => braces--;
+        | Token.BeginRound => rounds++;
+        | Token.EndRound => rounds--;
+        | Token.BeginSquare when braces == 0 && rounds == 0 =>
+          def group : List[Token] = List();
+          mutable depth = 1;
+          mutable last = token;
+          while (depth > 0)
+          {
+            last = lexer.GetToken();
+            match (last)
+            {
+              | Token.BeginSquare => depth++;
+              | Token.EndSquare => depth--;
+              | Token.EndOfFile => fail(token, "Unterminated script attribute");
+              | _ => ();
+            }
+            unless (last is Token.WhiteSpace || last is Token.NewLine || last is Token.Comment || last is Token.Indent) group.Add(last);
+          }
+          when (group.Count >= 4)
+            match ((group[0], group[1], group[2]))
+            {
+              | (Token.Identifier("assembly"), Token.Operator(":"), Token.Identifier(name)) when name == "DependsOn" || name == "Repository" || name == "Import" || name == "CompilerOptions" || Array.IndexOf(annotationNames, name) >= 0 =>
+                unless (group[3] is Token.BeginRound) fail(token, "Expected literal dependency arguments");
+                def arguments : List[string] = List();
+                mutable index = 4;
+                mutable expectValue = true;
+                while (index < group.Count && !(group[index] is Token.EndRound))
+                {
+                  match (group[index])
+                  {
+                    | Token.StringLiteral(value, _) when expectValue => arguments.Add(value); expectValue = false;
+                    | Token.Comma when !expectValue => expectValue = true;
+                    | _ => fail(group[index], "Dependency attributes accept literal strings only");
+                  }
+                  index++;
+                }
+                unless (index == group.Count - 2 && group[index] is Token.EndRound && (!expectValue || arguments.Count == 0))
+                  fail(token, "Invalid dependency attribute");
+                def location = ScriptDiagnostic(source.Path, token.Location.Line, token.Location.Column, "", false);
+                data.Annotations.Add(ScriptAnnotation(name, arguments.ToArray(), location));
+                if (name == "Import")
+                {
+                  unless (arguments.Count > 0) fail(token, "Import requires source paths");
+                  foreach (path in arguments) data.ScriptImports.Add(AssemblyRequest(path, location));
+                }
+                else if (name == "CompilerOptions") data.CompilerOptions.AddRange(arguments);
+                else if (name == "Repository")
+                {
+                  unless (arguments.Count == 1) fail(token, "Repository requires one feed URL or directory");
+                  data.Repositories.Add(arguments[0]);
+                }
+                else when (name == "DependsOn")
+                {
+                  unless (arguments.Count == 1 || arguments.Count == 2) fail(token, "DependsOn requires an assembly path or package ID and exact version");
+                  if (arguments.Count == 1) data.Assemblies.Add(AssemblyRequest(arguments[0], location));
+                  else data.Packages.Add(PackageRequest(arguments[0], arguments[1], location));
+                }
+                for (mutable i = offset(token.Location); i <= offset(last.Location); i++)
+                  unless (characters[i] == '\n' || characters[i] == '\r') characters[i] = ' ';
+              | _ => ();
+            }
+        | Token.Keyword("using") when braces == 0 && rounds == 0 =>
+          def parts : List[string] = List();
+          mutable ordinary = true;
+          mutable alias : string = null;
+          mutable ended = false;
+          mutable lastUsing = token;
+          while (!ended)
+          {
+            def next = lexer.GetToken();
+            lastUsing = next;
+            match (next)
+            {
+              | Token.Semicolon | Token.EndOfFile => ended = true;
+              | Token.Identifier(part) => parts.Add(part);
+              | Token.Operator("=") when parts.Count == 1 && alias == null => alias = parts[0]; parts.Clear();
+              | Token.Operator(".") | Token.WhiteSpace | Token.NewLine | Token.Comment => ();
+              | _ => ordinary = false;
+            }
+          }
+          when (ordinary && parts.Count > 0)
+          {
+            data.UsingDirectives.Add(ScriptUsingDirective(String.Join(".", parts.ToArray()), alias, offset(token.Location), offset(lastUsing.Location) - offset(token.Location) + 1));
+            if (alias == null) data.Imports.Add(String.Join(".", parts.ToArray()));
+            else data.Aliases[alias] = String.Join(".", parts.ToArray());
+          }
+        | _ => ();
+      }
+    }
+    ScriptCollectedDataWithSource(data, ScriptSource(string(characters), source.Path))
+  }
+  static ScriptCollectedDataWithSource(data : ScriptCollectedData, source : ScriptSource) : ScriptCollectedData
+  {
+    def result = ScriptCollectedData(source); result.OriginalSource = data.OriginalSource;
+    result.ScriptImports.AddRange(data.ScriptImports); result.CompilerOptions.AddRange(data.CompilerOptions); result.Annotations.AddRange(data.Annotations); result.UsingDirectives.AddRange(data.UsingDirectives);
+    result.Assemblies.AddRange(data.Assemblies); result.Packages.AddRange(data.Packages); result.Repositories.AddRange(data.Repositories); result.Imports.AddRange(data.Imports);
+    foreach (pair in data.Aliases) result.Aliases.Add(pair.Key, pair.Value);
+    result
+  }
+}

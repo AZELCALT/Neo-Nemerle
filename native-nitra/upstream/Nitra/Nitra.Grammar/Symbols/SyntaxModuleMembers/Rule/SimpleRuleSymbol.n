@@ -1,0 +1,118 @@
+﻿using Nemerle;
+
+using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Typing.RuleMethod;
+
+using System;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  public enum SimpleRuleKind
+  {
+    | Normal
+    | Token
+    | Void
+  }
+
+  [Record, ExportableSymbol]
+  public abstract class SimpleRuleSymbol : SyntaxRuleSymbol, IRuleDeclarationSite
+  {
+    public abstract Kind        : SimpleRuleKind { get; }
+    public override Description : string
+    {
+      get
+      {
+        match (Kind)
+        {
+          | Normal => "simple rule"
+          | Token  => "token rule"
+          | Void   => "void rule"
+        }
+      }
+    }
+  }
+
+  [Record, ChemicalSymbol]
+  public abstract class BaseSimpleRuleSymbol : SimpleRuleSymbol
+  {
+    public override IdInGrammar         : int        { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+  }
+
+  public sealed class ParsedSimpleRuleSymbol : BaseSimpleRuleSymbol
+  {
+    public this(node : G.SimpleRule, declarationSite : IRuleDeclarationSite)
+    {
+      base(node.Name);
+
+      _node            = node;
+      DeclarationSite = declarationSite;
+    }
+
+    private _node                        : G.SimpleRule;
+
+    public override Kind                : SimpleRuleKind              { get SimpleRuleKind.Normal }
+    public override DeclarationSite     : IRuleDeclarationSite        { get; }
+    public override Type                : RuleType                    { [Memoize] get { RuleType.Ref(this) } }
+    public override Options             : RuleDefinitionOptions       { [Memoize] get { _node.RuleAttributes.Options(DeclarationSite.GetDefaultRuleDefinitionOptions()) } }
+    public override Rule                : Rule.Sequence               {           get { _node.TypedRule } }
+    public override LastLocation        : option[Location]            { [Memoize] get { Some(_node.RuleBody.GetLastLocation()) } }
+    public override SyntaxMappings      : list[SyntaxMappingSymbol]   {           get { _syntaxMappings } }
+
+    private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+    internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+    {
+      _syntaxMappings ::= symbol;
+    }
+  }
+
+  public sealed class ParsedTokenRuleSymbol : BaseSimpleRuleSymbol
+  {
+    public this(node : G.SimpleRule, declarationSite : IRuleDeclarationSite)
+    {
+      base(node.Name);
+
+      _node            = node;
+      DeclarationSite = declarationSite;
+    }
+
+    private _node                        : G.SimpleRule;
+
+    public override Kind                : SimpleRuleKind              { get SimpleRuleKind.Token }
+    public override DeclarationSite     : IRuleDeclarationSite        { get; }
+    public override Type                : RuleType                    { [Memoize] get { RuleType.Ref(this) } }
+    public override Options             : RuleDefinitionOptions       { [Memoize] get { _node.RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule()) } }
+    public override Rule                : Rule.Sequence               {           get { _node.TypedRule } }
+    public override LastLocation        : option[Location]            { [Memoize] get { Some(_node.RuleBody.GetLastLocation()) } }
+    public override SyntaxMappings      : list[SyntaxMappingSymbol]   {           get { _syntaxMappings } }
+
+    private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+    internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+    {
+      _syntaxMappings ::= symbol;
+    }
+  }
+
+  public sealed class ParsedVoidRuleSymbol : BaseSimpleRuleSymbol
+  {
+    public this(node : G.SimpleRule, declarationSite : IRuleDeclarationSite)
+    {
+      base(node.Name);
+      _node = node;
+      DeclarationSite = declarationSite;
+    }
+
+    private _node                        : G.SimpleRule;
+
+    public override Kind                : SimpleRuleKind               {           get SimpleRuleKind.Void }
+    public override DeclarationSite     : IRuleDeclarationSite         {           get; }
+    public override Type                : RuleType                     {           get { RuleType.Void() } }
+    public override Options             : RuleDefinitionOptions        { [Memoize] get { _node.RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule()) } }
+    public override Rule                : Rule.Sequence                {           get { _node.TypedRule } }
+    public override SyntaxMappings      : list[SyntaxMappingSymbol]    {           get { [] } }
+  }
+}

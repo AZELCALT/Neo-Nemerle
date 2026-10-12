@@ -680,7 +680,7 @@ namespace Nemerle.Compiler
                   | SR.BindingFlags.Instance
                   | SR.BindingFlags.DeclaredOnly;
 
-        def member_array = system_type.GetMembers (flags);
+        def member_array = Nemerle.Platform.ClrMetadata.GetSupportedMembers(system_type, flags);
 
         //Message.Debug ($"{collect_members, '$name' in $this len=$(member_array.Length)");
         mutable collected_now = [];

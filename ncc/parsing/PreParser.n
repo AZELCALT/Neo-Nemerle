@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.
  *
@@ -79,11 +79,20 @@ namespace Nemerle.Compiler
     mutable doc_comments : Map [Location, string];
 
     public this (lex : LexerBase) {
-      this (lex, lex.Manager.CoreEnv);
+      this (lex, if (lex.Manager.Options.FileModules)
+                   lex.Manager.FileModuleRegistry.Environment(lex.Location.FileIndex)
+                 else if (lex.Manager.Options.Script != null) GlobalEnv(lex.Manager.CoreEnv.EnterIntoNamespace([lex.Manager.Options.Script.TypeName]), ["mask"])
+                 else lex.Manager.CoreEnv);
     }
 
     public this (lex : LexerBase, env : GlobalEnv) {
       Env = env;
+      when (lex.Manager.Options.Script != null && lex.Manager.Options.Script.DefaultImports != null)
+        foreach (name in lex.Manager.Options.Script.DefaultImports)
+          Env = Env.AddOpenNamespace(NList.FromArray(name.Split('.')), lex.Location);
+      when (lex.Manager.Options.Script != null)
+        foreach (pair in lex.Manager.Options.Script.PreviousTypeNames)
+          Env = Env.AddNamespaceAlias(pair.Key, NList.FromArray(pair.Value.Split('.')), lex.Location);
       lex.Keywords = Env.Keywords;
       lexer = lex;
     }
@@ -247,9 +256,11 @@ namespace Nemerle.Compiler
 
         | Token.EndRound | Token.EndSquare | Token.EndQuote | Token.EndBrace =>
           push_back (tok);
+          when (lexer.Manager.Options.Script != null) lexer.Manager.Options.Script.InvalidInput = true;
           throw PreParserException (tok.Location, $"unexpected closing bracket `$(tok)'");
 
         | Token.EndOfFile =>
+          when (lexer.Manager.Options.Script != null) lexer.Manager.Options.Script.IncompleteInput = true;
           throw PreParserException (tok.Location, "unexpected end of file");
 
         | Token.Comment (comment) when doc_comments != null =>
@@ -564,6 +575,8 @@ namespace Nemerle.Compiler
           | Token.Keyword ("using") => parse_using_directive (tok); loop ()
 
           | Token.Keyword ("namespace") =>
+            when (lexer.Manager.Options.FileModules)
+              Message.Error(tok.Location, "namespace declarations are not allowed in file-module mode; use mask");
             finish_current (current_begin);
 
             def prevNsEnv = currentNsEnv;

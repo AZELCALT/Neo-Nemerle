@@ -1,0 +1,199 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using Nitra.Serialization;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal sealed class ExternalSymbolEmitter
+  {
+    public Environment        : EmitterEnvironment { get; }
+    public TargetSymbolType   : TypeBuilder        { get; }
+    public ExternalSymbolType : TypeBuilder        { get; }
+
+    private _manualReadWrite  : bool;
+    private _serializationEmitter : SerializationCompiler;
+
+    public this (environment : EmitterEnvironment, symbolType : TypeBuilder, externalSymbolType : option[TypeBuilder], serializationEmitter : SerializationCompiler)
+    {
+      Environment           = environment;
+      TargetSymbolType      = symbolType;
+      _serializationEmitter = serializationEmitter;
+      match (externalSymbolType)
+      {
+        | None =>
+          ExternalSymbolType = TargetSymbolType.GlobalEnv.Define(<[ decl:
+            public sealed class $("External" + symbolType.Name : usesite) : $(symbolType.GetMemType() : typed), Nitra.Serialization.IImportableSymbol
+            {
+            }
+          ]>);
+          ExternalSymbolType.DisableImplicitConstructor();
+          _manualReadWrite = false;
+
+        | Some(tb) =>
+          ExternalSymbolType = tb;
+          _manualReadWrite = true;
+      }
+    }
+
+    public DefineMembers() : void
+    {
+      TargetSymbolType.DefineConditional(<[ decl:
+        SymbolTypeId : string implements Nitra.Serialization.ISymbol.SymbolTypeId
+        {
+          get { $(TargetSymbolType.FullName : string) }
+        }
+      ]>);
+
+      def symbolProperties = SymbolEmitterUtils.GetSymbolProperties(TargetSymbolType);
+      def symbolType       = TargetSymbolType.GetMemType();
+
+      unless (_manualReadWrite)
+      {
+        def serializeCode = SCG.List();
+        serializeCode.Add(<[ IgnoreParams() ]>);
+
+        def members = SCG.List();
+        foreach (p when !p.IsExternal in symbolProperties)
+        {
+          def m = p.Property;
+          members.Add(RecordMemberInfo(m, _serializationEmitter.EnqueueType(symbolType.TypeOfMember(m).Fix())));
+        }
+
+        _serializationEmitter.Formatter.WriteRecordMembers(serializeCode, members, () => <[ this ]>, (expr, _) => expr);
+
+        TargetSymbolType.DefineConditional(<[ decl:
+          Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization.IMetadataWriter) : void implements Nitra.Serialization.IExportableSymbol.Serialize
+          {
+            ..$serializeCode
+          }
+        ]>);
+      }
+
+      foreach (prop in symbolProperties)
+        DefineSymbolProperty(prop);
+
+      ExternalSymbolType.Define(<[ decl:
+        public override Description : string { get { $(SymbolEmitterUtils.MakeDescriptionText(ExternalSymbolType.Name) : string) } }
+      ]>);
+
+      ExternalSymbolType.DefineConditional(<[ decl:
+        public static CreateSymbols(metadataReader : Nitra.Serialization.IMetadataReader, reader : System.IO.BinaryReader) : void
+        {
+          def location   = metadataReader.SymbolLocation;
+          def assemblyId = metadataReader.AssemblyId;
+          def loop()
+          {
+            def symbolId = reader.ReadInt32();
+            when (symbolId > 0)
+            {
+              def nodeId   = reader.ReadInt32();
+              if (nodeId == 0)
+              {
+                def name     = reader.ReadString();
+                def symbol   = $(ExternalSymbolType.GetMemType() : typed)(location, name, assemblyId);
+                metadataReader.Register(symbolId, symbol);
+              }
+              else
+              {
+                def node     = metadataReader.GetNode(nodeId);
+                def symbol   = $(ExternalSymbolType.GetMemType() : typed)(location, node.PartName, assemblyId);
+                node.SetSymbol(symbol, location);
+                metadataReader.Register(symbolId, symbol);
+              }
+              loop();
+            }
+          }
+          loop();
+        }
+      ]>);
+
+      unless (_manualReadWrite)
+      {
+        def deserializeCode = SCG.List();
+        deserializeCode.Add(<[ IgnoreParams() ]>);
+
+        def members = SCG.List();
+        foreach (p when !p.IsExternal in symbolProperties)
+        {
+          def m = p.OverriddenProperty;
+          members.Add(RecordMemberInfo(m, _serializationEmitter.EnqueueType(symbolType.TypeOfMember(m).Fix())));
+        }
+
+        _serializationEmitter.Formatter.ReadRecordMembers(deserializeCode, members, (expr, info) => <[ this.$(info.OriginalName : usesite) = $expr ]>);
+
+        def readExternal = symbolProperties.MapFiltered(_.IsExternal,
+          p => <[ this.$(p.Property.Name : usesite) = reader.ReadPropertyValue(project, this, $(p.Property.Name : string)) ]>);
+
+        ExternalSymbolType.DefineConditional(<[ decl:
+          Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization.IMetadataReader) : void implements Nitra.Serialization.IImportableSymbol.Deserialize
+          {
+            ..$deserializeCode;
+          }
+        ]>);
+        ExternalSymbolType.DefineConditional(<[ decl:
+          ReadExternalProperties(project : Nitra.ProjectSystem.Project, reader : Nitra.Serialization.IExternalSymbolPropertyReader) : void implements Nitra.Serialization.IImportableSymbol.ReadExternalProperties
+          {
+            IgnoreParams();
+            ..$readExternal;
+          }
+        ]>);
+      }
+
+      foreach (ctor when !ctor.IsStatic in TargetSymbolType.GetConstructors())
+        match (ctor.GetParameters())
+        {
+          | [p1, p2] when p1.Type.Equals(Environment.LocationTypeVar) && p2.Type.Equals(Environment.StringTypeVar) =>
+            ExternalSymbolType.Define(<[ decl:
+              public this(definition : Nitra.Location, name : string, assemblyId : byte)
+              {
+                base(definition, name);
+                AssemblyId = assemblyId;
+              }
+            ]>);
+            break;
+
+          | [p1] when p1.Type.Equals(Environment.StringTypeVar) =>
+            ExternalSymbolType.Define(<[ decl:
+              public this(definition : Nitra.Location, name : string, assemblyId : byte)
+              {
+                base(name);
+                AssemblyId = assemblyId;
+                _definition = definition;
+              }
+            ]>);
+            ExternalSymbolType.Define(<[ decl: private          _definition   : Nitra.Location                                 ]>);
+            ExternalSymbolType.Define(<[ decl: public  override Locations     : list[Nitra.Location] { get { [_definition] } } ]>);
+            ExternalSymbolType.Define(<[ decl: public  override FirstLocation : Nitra.Location       { get {  _definition  } } ]>);
+            break;
+
+          | _ => ()
+        }
+    }
+
+    public Emit() : void
+    {
+      ExternalSymbolType.Compile();
+    }
+
+    private DefineSymbolProperty(property : SymbolProperty) : void
+    {
+      property.OverriddenProperty = ExternalSymbolType.DefineAndReturn(<[ decl:
+        public override $(property.Property.Name : usesite) : $(property.Property.GetMemType() : typed)
+        {
+          get;
+          private set;
+        }
+      ]>) :> IProperty;
+    }
+  }
+}

@@ -1,0 +1,10 @@
+﻿namespace Nitra.Declarations
+{
+  public interface IAstVisitor
+  {
+    Visit(ast : IAst) : void;
+    Visit(reference : Reference) : void;
+    Visit(name : Name) : void;
+    Visit(r : IRef) : void;
+  }
+}

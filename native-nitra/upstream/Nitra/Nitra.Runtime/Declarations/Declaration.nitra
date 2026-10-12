@@ -1,0 +1,17 @@
+﻿namespace Nitra.Declarations
+{
+  abstract declaration Declaration : ScopedAst
+  {
+    symbol
+    {
+      out FullName      : string    = this.Name;
+      out Kind          : string    = "something";
+      out SpanClass     : SpanClass = Language.DefaultSpanClass;
+      out Scope         : Scope     = EmptyScope.Instance;
+      out DeclaredInOpt : ValueOption[DeclarationSymbol] = VNone();
+    }
+
+    Name               : Nitra.Declarations.Name; // TODO: Fix binding
+    out Symbol         : DeclarationSymbol;
+  }
+}

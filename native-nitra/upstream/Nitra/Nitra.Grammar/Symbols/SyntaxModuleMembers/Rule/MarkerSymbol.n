@@ -1,0 +1,27 @@
+﻿using Nitra.Model;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  [Record, ExportableSymbol]
+  public abstract class MarkerSymbol : RuleSymbol
+  {
+    public override Description : string { get { "marker" } }
+  }
+
+  [Record]
+  public sealed class ParsedMarkerSymbol : MarkerSymbol
+  {
+    public override DeclarationSite : IRuleDeclarationSite { get; }
+  }
+}

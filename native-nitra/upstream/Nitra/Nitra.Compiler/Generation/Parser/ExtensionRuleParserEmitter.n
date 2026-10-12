@@ -1,0 +1,71 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Model;
+using Nitra.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal sealed class ExtensionRuleParserEmitter : RuleParserEmitter
+  {
+    public Rule : Rule.Sequence { get; }
+    private _sequence : SequenceCompileInfo.Root;
+
+    public this(owner : SyntaxModuleEmitter, rs : ExtensionRuleSymbol)
+    {
+      base(owner, rs);
+      Rule = rs.Rule;
+      _sequence = rs.Sequence;
+    }
+
+    [RecordIgnore] private mutable _parserTb : TypeBuilder;
+
+    public override DefineParser() : void
+    {
+      assert(_parserTb == null);
+      def baseClass = if ((this.RuleSymbol :> ExtensionRuleSymbol).ExtensionType is ExtensionRuleSymbol.ExtensionRuleType.Prefix)
+        <[ Nitra.Internal.PrefixRuleParser ]>;
+      else
+        <[ Nitra.Internal.PostfixRuleParser ]>;
+
+      _parserTb = Owner.GrammarImplTB.DefineNestedType(<[decl:
+        public class $(RuleSymbol.DecorateRuleClassName() : global) : $baseClass
+        {
+          public this(grammar : Nitra.CompositeGrammar, ruleIdBuilder : Nitra.Internal.RuleIdBuilder, parserData : Nitra.Internal.ExtensibleRuleParserData)
+          {
+            base(grammar, ruleIdBuilder, parserData, $(RuleSymbol.GetRuleDescriptorRef()));
+          }
+        }
+      ]>);
+    }
+
+    public override DefineParserMethods() : void
+    {
+      assert(_parserTb != null);
+      DefineParse(_parserTb, _sequence);
+      DefineInit(_parserTb, _sequence);
+      DefineReflection(_parserTb, _sequence);
+      DefineIsVoid(_parserTb, _sequence);
+    }
+
+    [Memoize]
+    public override CreateConstant(name : string, value : int) : string
+    {
+      Util.CreateConstant(_parserTb, name, value)
+    }
+
+    public override Emit() : void
+    {
+      assert(_parserTb != null);
+      _parserTb.Compile();
+    }
+  }
+}

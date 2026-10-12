@@ -1,0 +1,12 @@
+﻿using System;
+
+namespace Nitra
+{
+  [Flags]
+  public enum PrettyPrintOptions
+  {
+    | None         = 0
+    | DebugIndent  = 1
+    | MissingNodes = 2
+  }
+}

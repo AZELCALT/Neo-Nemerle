@@ -77,7 +77,7 @@ namespace Nemerle.Compiler
 
     static MS_NET_RUNTIME_TYPE : System.Type = typeof (object).Assembly.GetType ("System.RuntimeType");
     static MONO_RUNTIME_TYPE   : System.Type = typeof (object).Assembly.GetType ("System.MonoType");
-    static RUNTIME_TYPE        : System.Type = MONO_RUNTIME_TYPE ?? MS_NET_RUNTIME_TYPE;
+    static RUNTIME_TYPE        : System.Type = typeof(object).GetType();
 
     static IsRunningOnMono : bool = typeof (object).Assembly.GetType ("Mono.Runtime") != null;
     
@@ -238,10 +238,7 @@ namespace Nemerle.Compiler
     #region HACKS FOR MS.NET BUGS
     static GetHackishConstructor (_from_type : System.Type, ctr : ConstructorInfo) : ConstructorInfo 
     {
-      def curtok = match(ctr) {
-        | ctr is ConstructorBuilder => ctr.GetToken().Token
-        | _ => ctr.MetadataToken;
-      }
+      def curtok = Nemerle.Platform.ClrEmission.GetMemberToken(ctr);
 
       res: {
         foreach (c in _from_type.GetConstructors (BindingFlags.NonPublic | BindingFlags.Public |
@@ -255,10 +252,7 @@ namespace Nemerle.Compiler
 
     static GetHackishMethod (_from_type : System.Type, meth : MethodInfo) : MethodInfo 
     {
-      def curtok = match(meth) {
-        | meth is Emit.MethodBuilder => meth.GetToken().Token
-        | _ => meth.MetadataToken;
-      }
+      def curtok = Nemerle.Platform.ClrEmission.GetMemberToken(meth);
 
       res: {
         foreach (m in _from_type.GetMethods (BindingFlags.NonPublic | BindingFlags.Public |
@@ -272,10 +266,7 @@ namespace Nemerle.Compiler
 
     static GetHackishField (_from_type : System.Type, fld : FieldInfo) : FieldInfo 
     {
-      def curtok = match(fld) {
-        | fld is Emit.FieldBuilder => fld.GetToken().Token
-        | _ => fld.MetadataToken;
-      }
+      def curtok = Nemerle.Platform.ClrEmission.GetMemberToken(fld);
 
       res: {
         foreach (f in _from_type.GetFields (BindingFlags.NonPublic | BindingFlags.Public |
@@ -323,19 +314,16 @@ namespace Nemerle.Compiler
 
     static FrameworkGetField (t : System.Type, mutable m : FieldInfo) : FieldInfo
     {
-      // use hack only on .NET
-      if (!IsRunningOnMono)
-        if(t.GetType().Equals (MS_NET_RUNTIME_TYPE))
+      // Runtime types need reflection lookup; builder types need Emit lookup.
+      if (Nemerle.Platform.ClrEmission.IsRuntimeType(t))
           GetHackishField (t, m);
-        else {
+      else {
           def td = t.GetGenericTypeDefinition ();
-          when (td.GetType().Equals (MS_NET_RUNTIME_TYPE))
+          when (Nemerle.Platform.ClrEmission.IsRuntimeType(td))
             m = GetHackishField (td, m);
 
           TypeBuilder.GetField (t, m)
-        }
-      else 
-        TypeBuilder.GetField (t, m)
+      }
     }
 
     static GetConstructorInfo (_from_type : System.Type, meth : IMethod) : ConstructorInfo
@@ -1468,7 +1456,12 @@ namespace Nemerle.Compiler
         | Tuple (vals) =>
           emit_exprs (vals);
           def ctor = InternalType.GetTupleType (vals.Length).Ctor;
-          _ilg.Emit (OpCodes.Newobj, GetConstructorInfo (expr.GetSystemType (), ctor));
+          def tupleType = expr.GetSystemType();
+          def factory = Manager.Hierarchy.ClrEmitter.GetConstructorFactory(_module_builder, tupleType, ctor.GetConstructorInfo());
+          if (factory == null)
+            _ilg.Emit (OpCodes.Newobj, GetConstructorInfo (tupleType, ctor));
+          else
+            _ilg.Emit (OpCodes.Call, factory);
           
 
         | TupleIndexer (obj, pos, len) =>
@@ -2530,7 +2523,12 @@ namespace Nemerle.Compiler
 
       public Emit (opcode : OpCode)                              : void { Emited(opcode); _ilg.Emit(opcode)            }
       public Emit (opcode : OpCode, arg       : byte)            : void { Emited(opcode); _ilg.Emit(opcode, arg)       }
-      public Emit (opcode : OpCode, con       : ConstructorInfo) : void { Emited(opcode); _ilg.Emit(opcode, con)       }
+      public Emit (opcode : OpCode, con       : ConstructorInfo) : void
+      {
+        Emited(opcode);
+        try { _ilg.Emit(opcode, con) }
+        catch { | e is ArgumentException => throw InvalidOperationException($"Cannot emit constructor $con on $(con.DeclaringType.AssemblyQualifiedName)", e); }
+      }
       public Emit (opcode : OpCode, arg       : double )         : void { Emited(opcode); _ilg.Emit(opcode, arg)       }
       public Emit (opcode : OpCode, field     : FieldInfo )      : void { Emited(opcode); _ilg.Emit(opcode, field)     }
       public Emit (opcode : OpCode, arg       : float)           : void { Emited(opcode); _ilg.Emit(opcode, arg)       }

@@ -51,6 +51,8 @@ namespace Nemerle.Compiler
   {
     public NameTree : NamespaceTree;
 
+    private clr_libraries : Nemerle.Platform.ClrLibrarySession = Nemerle.Platform.ClrLibrarySession();
+
     internal ReferencedAssemblies : SCG.List[LibraryReference] = SCG.List();
 
     // a little hack to prevent AddBuildins() calling in ExternalTypeInfo
@@ -63,6 +65,8 @@ namespace Nemerle.Compiler
     {
       this.NameTree = man.NameTree;
       Manager = man;
+      when (man.Options.SharedAssemblies != null)
+        foreach (assembly in man.Options.SharedAssemblies) clr_libraries.ShareAssembly(assembly);
 
       def assembly_dir(t) { DirectoryOfCodebase(getAssemblyLocation(t.Assembly)); }
 
@@ -221,12 +225,12 @@ namespace Nemerle.Compiler
       path
     }
 
-    protected virtual assemblyLoad (name : string) : SR.Assembly { SR.Assembly.Load (name) }
-    protected virtual assemblyLoad (name : SR.AssemblyName) : SR.Assembly { SR.Assembly.Load (name) }
+    protected virtual assemblyLoad (name : string) : SR.Assembly { Nemerle.Platform.ClrAssemblyLoader.Load(name) }
+    protected virtual assemblyLoad (name : SR.AssemblyName) : SR.Assembly { Nemerle.Platform.ClrAssemblyLoader.Load(name) }
 
     protected virtual assemblyLoadFrom (path : string) : SR.Assembly
     {
-      try { SR.Assembly.LoadFrom (path) }
+      try { clr_libraries.LoadReference(path) }
       catch // Somebody gave us a 32-bit reference on 64-bit system or vice-versa.
       { | _ is System.BadImageFormatException =>
           assemblyLoad (SR.AssemblyName.GetAssemblyName (path).FullName);
@@ -235,12 +239,12 @@ namespace Nemerle.Compiler
 
     public virtual getAssemblyLocation (assembly : SR.Assembly) : string
     {
-      System.Uri(assembly.CodeBase).LocalPath
+      Nemerle.Platform.ClrAssemblyLoader.GetLocation(assembly)
     }
 
     public virtual getAssemblyLocation (assembly : SR.AssemblyName) : string
     {
-      System.Uri(assembly.CodeBase).LocalPath
+      Nemerle.Platform.ClrAssemblyLoader.GetLocation(assembly)
     }
 
     /* -- PRIVATE METHODS -------------------------------------------------- */
@@ -300,7 +304,7 @@ namespace Nemerle.Compiler
           if (assembly == null)
           {
             #pragma warning disable 618 // Obsolete
-            Assembly.LoadWithPartialName(name);
+            Nemerle.Platform.ClrAssemblyLoader.FindBySimpleName(name);
             #pragma warning restore 618
           }
           else
@@ -339,7 +343,7 @@ namespace Nemerle.Compiler
               assert(!type.Equals(loadedType));
               def getAssemblyPath(type : Type) : string
               {
-                Uri(type.Assembly.CodeBase).LocalPath
+                type.Assembly.Location
               }
 
               Message.Error($"The macro `$macro_name' implement the IMacro interface from '$(getAssemblyPath(type))' but the compiler use this interface from '$(getAssemblyPath(loadedType))'.");
@@ -586,7 +590,7 @@ namespace Nemerle.Compiler
       {
         | NamespaceTree.TypeInfoCache.Cached(tc) => tc
         | NamespaceTree.TypeInfoCache.No => lib.ConstructTypeInfo (t, node);
-        | _ => Util.ice ("not loaded internal type... " + t.Assembly.CodeBase + ":" + t.TypeFullName ())
+        | _ => Util.ice ("not loaded internal type... " + t.Assembly.Location + ":" + t.TypeFullName ())
       }
     }
 

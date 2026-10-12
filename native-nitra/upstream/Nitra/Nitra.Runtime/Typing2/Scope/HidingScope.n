@@ -1,0 +1,127 @@
+﻿using Nitra.Serialization2;
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+
+namespace Nitra.Declarations
+{
+  [StructuralEquality]
+  public sealed class HidingScope : Scope
+  {
+    public Hidden : Scope { get; }
+    public Scope  : Scope { get; }
+
+    internal this(hidden : Scope, scope  : Scope)
+    {
+      Hidden = hidden;
+      Scope  = scope;
+    }
+
+    public override AllSymbols : Seq[DeclarationSymbol]
+    {
+      get
+      {
+        def enumerated = HashSet();
+        def result = List();
+        foreach (symbol in this.Scope.AllSymbols)
+        {
+          _ = enumerated.Add(symbol);
+          result.Add(symbol);
+        }
+        foreach (symbol in this.Hidden.AllSymbols)
+        {
+          unless (enumerated.Contains(symbol))
+            result.Add(symbol);
+        }
+          
+        result.OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+      }
+    }
+    
+    public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+    {
+      def result       = this.Scope.Bind(isMatch);
+      def resultHidden = this.Hidden.Bind(isMatch);
+      
+      if (result.IsEmpty)
+        resultHidden
+      else if (resultHidden.IsEmpty)
+        result
+      else
+        BindResult.Hiding(result, resultHidden)
+    }
+
+    public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+    {
+      def result       = this.Scope.Bind(reference);
+      def resultHidden = this.Hidden.Bind(reference);
+      
+      if (result.IsEmpty)
+        resultHidden
+      else if (resultHidden.IsEmpty)
+        result
+      else
+        BindResult.Hiding(result, resultHidden)
+    }
+    
+    public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
+    {
+      def id            = nodeToIdMap.GetObjectId(this);
+      def idScope       = nodeToIdMap.GetObjectId(this.Scope);
+      def idHidingScope = nodeToIdMap.GetObjectId(this.Hidden);
+
+      nodes.Add($<#Obj_$id [label="HidingScope"]#>);
+      edges.Add($<#Obj_$id -> Obj_$idScope#>);
+      edges.Add($<#Obj_$id -> Obj_$idHidingScope  [color=darkgray]#>);
+
+      this.Scope.ToDot(nodeToIdMap, nodes, edges);
+      this.Hidden.ToDot(nodeToIdMap, nodes, edges);
+    }
+    
+    public override ToString() : string
+    {
+      <#HidingScope#>
+    }
+
+    public override HideWith(scope : Scope) : Scope
+    {
+      if (this.Scope.Equals(scope))
+        this
+      else
+        base.HideWith(scope)
+    }
+
+    public override UnionWith(scope : Scope) : Scope
+    {
+      // hide(h1, s) + hide(h2, s) -> hide(h1 + h2, s)
+      if (scope is HidingScope(Hidden = otherHidden, Scope = otherScope) when this.Scope.Equals(otherScope))
+        Hidden.UnionWith(otherHidden).HideWith(Scope)
+      else
+        base.UnionWith(scope)
+    }
+
+    public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(Hidden, writer);
+      metadataWriter.WriteObject(Scope, writer);
+    }
+
+    public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def hidden = metadataReader.ReadObject(reader);
+      def scope  = metadataReader.ReadObject(reader);
+      HidingScope(hidden, scope)
+    }
+  }
+}

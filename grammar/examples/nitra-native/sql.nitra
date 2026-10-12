@@ -1,0 +1,16 @@
+// A deliberately small SQL-shaped recognizer; no database operations execute.
+syntax module Sql
+{
+  using Nitra.Core;
+  keyword regex IdentifierBody rule S;
+  [StartRule]
+  syntax Query = "SELECT" (Identifier; ",")+ "FROM" Identifier
+                 ("WHERE" Identifier "=" Value)? ";";
+  token Identifier = IdentifierBody;
+  regex Digits = ['0'..'9']+;
+  token Value
+  {
+    | Number = Digits;
+    | Quoted = "'" (!"'" Any)* "'";
+  }
+}

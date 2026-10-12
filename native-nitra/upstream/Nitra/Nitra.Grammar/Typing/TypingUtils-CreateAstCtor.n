@@ -1,0 +1,45 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Runtime;
+using Nitra.Declarations;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  public partial module TypingUtils
+  {
+    internal CreateAstCtor(loc : ILocated, astSymbol : AstSymbol, mappingFields : Seq[SyntaxMappingField], errorLoc : Location, compilerMessages : ICompilerMessages) : SyntaxMappingExpr.AstCtor
+    {
+      def initializedProperties = Dictionary();
+      foreach (mappingField in mappingFields)
+      {
+        def property = mappingField.Property;
+        if (initializedProperties.ContainsKey(property))
+        {
+          using (messages = compilerMessages.RootError(mappingField, $"Duplicated assignment of field '$(property.Name)'."))
+            messages.Hint(initializedProperties[property], "First assigned here.");
+        }
+        else
+          initializedProperties.Add(property, mappingField);
+      }
+
+      foreach (StructuralPropertySymbol as property in astSymbol.AllProperties)
+      {
+        unless (initializedProperties.ContainsKey(property))
+          compilerMessages.Error(errorLoc, $"Assignment of field '$(property.Name)' is required.");
+      }
+
+      SyntaxMappingExpr.AstCtor(loc, astSymbol, mappingFields.NToList())
+    }
+  }
+}

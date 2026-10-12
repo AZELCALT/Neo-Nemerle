@@ -1,0 +1,14 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Typing;
+
+using System;
+using System.IO;
+
+namespace Nitra.Serialization
+{
+  public interface IImportableSymbol : ISymbol
+  {
+    Deserialize(reader : BinaryReader, metadataReader : IMetadataReader) : void;
+    ReadExternalProperties(project : Project, reader : IExternalSymbolPropertyReader) : void;
+  }
+}

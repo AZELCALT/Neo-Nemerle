@@ -280,7 +280,11 @@ public abstract class MemberInfo
         isCurrentOrNested(memberTypeInfo, currentTypeInfo.DeclaringType)
     }
 
-    if (IsPublic)
+    if (currentTypeInfo is TypeBuilder && (currentTypeInfo :> TypeBuilder).Manager.Options.FileModules
+        && this is IMember && (this :> IMember).DeclaringType != null
+        && !(this :> IMember).DeclaringType.CanAccess(currentTypeInfo))
+      false
+    else if (IsPublic)
       true
     else if (IsInternal && 
     		(memberTypeInfo is TypeBuilder ||

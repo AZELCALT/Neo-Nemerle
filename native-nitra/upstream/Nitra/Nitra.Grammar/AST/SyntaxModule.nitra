@@ -1,0 +1,42 @@
+﻿using DotNet;
+using Nitra.Declarations;
+using Nemerle.Collections;
+
+namespace Nitra.Ast
+{
+  declaration SyntaxModule : Container, NamespaceMemberDeclaration
+  {
+    symbol
+    {
+      Kind      = "syntax module";
+      SpanClass = NitraLang.ModuleSpanClass; // NitraLang.SyntaxModuleSpanClass;
+      Scope     = MemberTable;
+
+      table ExtendsTable;
+      in Literals : Map[string, string];
+      in Language : LanguageSymbol;
+    }
+
+  stage 1:
+    out LanguageRef : Ref[LanguageSymbol] = Language.Ref.Resolve();
+
+    Language.Scope = Scope;
+    Symbol.Language = LanguageRef.Symbol;
+
+    Usings.LiteralsIn        = Map();
+    Usings.CurrentScope      = Scope;
+    Usings.OpeningIn         = EmptyScope.Instance;
+    Usings.UsingAliasesScope = TableScope("aliases");
+
+    Members.LiteralsIn = Usings.LiteralsOut;
+    Members.ExportedLiteralsIn = Map();
+    Members.Parent = Symbol;
+    Members.ScopeIn = AstUtils.MakeMembersScope(Scope, Usings.OpeningOut, Usings.UsingAliasesScope)
+                              .HideWith(Symbol.MemberTable);  // TODO: need check
+    Symbol.Literals = Members.ExportedLiteralsOut;
+
+    Language : QualifiedReference;
+    Usings   : SyntaxModuleUsingDirective*;
+    Members  : SyntaxModuleMember*;
+  }
+}

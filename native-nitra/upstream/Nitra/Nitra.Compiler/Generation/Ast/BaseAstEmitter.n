@@ -1,0 +1,369 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class BaseAstEmitter
+  {
+    public abstract TypeCompiler : NTypeCompiler      { get }
+    public abstract Environment  : EmitterEnvironment { get }
+
+    protected static CreateTypeBuilder(env : GlobalEnv, ownerEmitter : AstEmitter, decl : ClassMember.TypeDeclaration) : TypeBuilder
+    {
+      if (ownerEmitter != null)
+      {
+        decl.td.modifiers.Modifiers |= NemerleModifiers.New;
+        ownerEmitter.DefineNestedType(decl)
+      }
+      else
+        env.Define(decl);
+    }
+
+    protected DefineInterfaceDependentProperty(propertySymbol : DependentPropertySymbol, tb : TypeBuilder, isOverride : bool) : void
+    {
+      def propertyType = TypeCompiler.CompileDependentPropertyType(propertySymbol);
+      def attribute    = MakePropertyAttribute(propertySymbol);
+      def mods         = AttributesAndModifiers(if (isOverride) NemerleModifiers.New else NemerleModifiers.None, [attribute]);
+      tb.Define(<[ decl: ..$mods $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; set; } ]>);
+      unless (isOverride)
+        tb.Define(<[ decl: $(GetIsEvaluatedPropertyName(propertySymbol) : usesite) : bool { get; } ]>);
+    }
+
+    protected DefineDependentProperty(tb : TypeBuilder, symbol : DependentPropertySymbol, bit : BitField, mask : int, modifiers : NemerleModifiers, acceptVisitorBody : SCG.List[PExpr], overrideSetter : bool = true) : void
+    {
+      def propertyType     = TypeCompiler.CompileDependentPropertyType(symbol);
+      def backingFieldName = Util.tmpname(symbol.Name);
+      Util.locate(symbol.FirstLocation.NLocation(),
+      {
+        tb.Define(<[ decl:
+          [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+        ]>);
+
+        def mods          = AttributesAndModifiers(modifiers, [MakePropertyAttribute(symbol, mask)]);
+        tb.Define(<[ decl:
+          ..$mods $(symbol.Name : usesite) : $(propertyType : typed)
+          {
+            get
+            {
+              unless($(bit.Read()))
+                $(MakeAccessAssertion(symbol));
+              this.$(backingFieldName : usesite)
+            }
+            set
+            {
+              unless ($(bit.Read()))
+              {
+                this.$(backingFieldName : usesite) = value;
+                $(bit.Set());
+              }
+            }
+          }
+        ]>);
+
+        def isEvaluatedName = GetIsEvaluatedPropertyName(symbol);
+        def isEvaluatedMods = AttributesAndModifiers(modifiers, []);
+        tb.Define(<[ decl:
+          ..$isEvaluatedMods $(isEvaluatedName : usesite) : bool
+          {
+            get { $(bit.Read()) }
+          }
+        ]>);
+
+        when (acceptVisitorBody : object != null && propertyType.TryRequire(Environment.IRefTypeVar))
+          acceptVisitorBody.Add(<[ when ($(bit.Read())) visitor.Visit(this.$(backingFieldName : usesite)); ]>);
+
+        when (overrideSetter)
+          DefineDependenPropertyOverrideSetter(tb, symbol);
+      });
+    }
+
+    protected DefineDependenPropertyOverrideSetter(tb : TypeBuilder, property : DependentPropertySymbol) : void
+    {
+      when (property.OverrideProperty is SymbolRef.Some(originalProperty))
+      {
+        def originalType   = TypeCompiler.CompileDependentPropertyType(originalProperty :> DependentPropertySymbol);
+        def overriddenType = TypeCompiler.CompileDependentPropertyType(property);
+
+        def setterName = "set_" + property.Name;
+        def decl = <[ decl:
+          $(Util.tmpname(setterName) : usesite)(value : $(originalType : typed)) : void
+          {
+            this.$(property.Name : usesite) = value :> $(overriddenType : typed)
+          }
+        ]>;
+
+        decl.implemented = [<[ $(Environment.Project.GetNemerleType(originalProperty.PropertyContainer) : typed).$(setterName : usesite) ]>];
+
+        foreach (container in property.PropertyContainer.GetAncestors())
+        {
+          when (container.LookupProperty(property.Name) is VSome(candidateProperty)             when candidateProperty.PropertyContainer : object == container)
+          when (candidateProperty.OverrideProperty is SymbolRef.Some(candidateOriginalProperty) when originalProperty : object == candidateOriginalProperty)
+            decl.implemented ::= <[ $(Environment.Project.GetNemerleType(container) : typed).$(setterName : usesite) ]>;
+        }
+
+        tb.Define(decl)
+      }
+    }
+
+    protected static GetIsEvaluatedPropertyName(propertySymbol : PropertySymbol) : string
+    {
+      "Is" + propertySymbol.Name + "Evaluated"
+    }
+
+    protected static MakeAccessAssertion(propertySymbol : DependentPropertySymbol) : PExpr
+    {
+      def assertMessage = $"Property '$(propertySymbol.FullName)' is not set'";
+      <[ assert(false, $(assertMessage : string)); ]>
+    }
+
+    protected static MakePropertyAttribute(propertySymbol : PropertySymbol, mask : int = 0) : PExpr
+    {
+      def (isIn, isOut) =
+        if (propertySymbol is DependentPropertySymbol(Direction = direction))
+          (<[ $(direction == DependentPropertyDirection.In) ]>, <[ $(direction == DependentPropertyDirection.Out) ]>)
+        else
+          (<[ false ]>, <[ false ]>);
+
+      <[ Nitra.Internal.PropertyAttribute($(propertySymbol.FullName : string), $(mask : int), $isIn, $isOut) ]>
+    }
+
+    protected virtual GetDependentEvaluationModifiers() : AttributesAndModifiers
+    {
+      AttributesAndModifiers(NemerleAttributes.Public %| NemerleAttributes.Override, [])
+    }
+
+    protected DefineResetPropertiesMethod(tb : TypeBuilder, ambiguousTb : TypeBuilder) : void
+    {
+      assert(tb != null || ambiguousTb != null);
+
+      def makeBody(tb : TypeBuilder) : PExpr
+      {
+        def fields = tb.GetBitFieldManager().GetFields();
+        if (fields.Length > 0)
+        {
+          def body = SCG.List();
+          foreach (field in fields)
+            body.Add(<[ this.$(field : usesite) = 0 ]>);
+          <[ { ..$body } ]>
+        }
+        else null
+      }
+
+      def defineAmbiguousMethod(body)
+      {
+        ambiguousTb.Define(<[ decl:
+          ..$(GetDependentEvaluationModifiers()) ResetProperties() : void
+          {
+            if (this.IsAmbiguous)
+              Nitra.Internal.AstUtils.ResetAmbiguitiesProperties(this)
+            else
+              $body
+          }
+        ]>)
+      }
+
+      if (tb != null)
+      {
+        def body = makeBody(tb);
+        when (body != null)
+          tb.Define(<[ decl: ..$(GetDependentEvaluationModifiers()) ResetProperties() : void $body ]>);
+
+        when (ambiguousTb != null)
+          defineAmbiguousMethod(<[ base.ResetProperties() ]>);
+      }
+      else
+        defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ () ]>);
+    }
+
+    protected DefineIsAllPropertiesEvaluatedProperty(tb : TypeBuilder, ambiguousTb : TypeBuilder) : void
+    {
+      assert(tb != null || ambiguousTb != null);
+
+      def makeBody(tb : TypeBuilder) : PExpr
+      {
+        def fieldManager = tb.GetBitFieldManager();
+        def fields       = fieldManager.GetFields();
+        if (fields.Length > 0)
+        {
+          mutable acc = <[ true ]>;
+
+          def lastIndex = fields.Length - 1;
+          foreach (field in fields with index)
+            acc =
+              if (index == lastIndex)
+                <[ $acc && (this.$(field : usesite) == $(fieldManager.LastFieldMask)) ]>
+              else
+                <[ $acc && (this.$(field : usesite) == $(BitFieldManager.FullFieldMask)) ]>;
+
+          acc
+        }
+        else null
+      }
+
+      def defineAmbiguousMethod(body)
+      {
+        ambiguousTb.Define(<[ decl: 
+          ..$(GetDependentEvaluationModifiers()) IsAllPropertiesEvaluated : bool
+          {
+            get
+            {
+              if (this.IsAmbiguous)
+                Ambiguities[0].IsAllPropertiesEvaluated
+              else
+                $body
+            }
+          }
+        ]>)
+      }
+
+      if (tb != null)
+      {
+        def body = makeBody(tb);
+        when (body != null)
+          tb.Define(<[ decl: ..$(GetDependentEvaluationModifiers()) IsAllPropertiesEvaluated : bool { get { $body } } ]>);
+
+        when (ambiguousTb != null)
+          defineAmbiguousMethod(<[ base.IsAllPropertiesEvaluated ]>)
+      }
+      else
+        defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ true ]>)
+    }
+
+    protected DefinePropertiesEvalState(tb : TypeBuilder, ambiguousTb : TypeBuilder) : void
+    {
+      assert(tb != null || ambiguousTb != null);
+
+      def makeBody(tb : TypeBuilder) : PExpr
+      {
+        def fields = tb.GetBitFieldManager().GetFields();
+        if (fields.Length > 0)
+          <[ this.$(fields[0] : usesite) ]>
+        else
+          null
+      }
+
+      def defineAmbiguousMethod(body)
+      {
+        ambiguousTb.Define(<[ decl: 
+          ..$(GetDependentEvaluationModifiers()) PropertiesEvalState : int
+          {
+            get
+            {
+              if (this.IsAmbiguous)
+                Ambiguities[0].PropertiesEvalState
+              else
+                $body
+            }
+          }
+        ]>)
+      }
+
+      if (tb != null)
+      {
+        def body = makeBody(tb);
+        when (body != null)
+          tb.Define(<[ decl: ..$(GetDependentEvaluationModifiers()) PropertiesEvalState : int { get { $body } } ]>);
+
+        when (ambiguousTb != null)
+          defineAmbiguousMethod(<[ base.PropertiesEvalState ]>)
+      }
+      else
+        defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ 0 ]>)
+    }
+
+    protected static GenerateHasValueCheck(path : DependencyPath, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
+    {
+      mutable bitField;
+      match (path)
+      {
+        | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => dependentProperties[symbol].Read()
+        | DeclaredProperty(obj, DependentPropertySymbol as symbol, _) with isEvaluatedName = GetIsEvaluatedPropertyName(symbol)
+        | DependentProperty(obj, _, isEvaluatedName) => CallIsPropertyEvaluated(CompilePath(obj), isEvaluatedName)
+        | _ => <[ true ]>
+      }
+    }
+
+    protected static GenerateHasValueCheck(properties : SCG.List[DependencyPath], dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
+    {
+      def debug = ManagerClass.Instance.Options.IsConstantDefined("DEBUG_EVAL_DEPENDENT_PROPERTIES");
+      def makeKey(obj : DependencyPath) : DependencyPath * bool
+      {
+        | DeclaredProperty(This as path, DependentPropertySymbol as symbol,    _) => (path, dependentProperties.ContainsKey(symbol))
+        | DeclaredProperty(        path, DependentPropertySymbol,           mask) => (path, mask != 0)
+        | DependentProperty(path, _, _) => (path, false)
+        | _ => assert(false)
+      }
+      def getBitField(obj : DependencyPath) : BitField
+      {
+        | DeclaredProperty(_, DependentPropertySymbol as symbol, _) => dependentProperties[symbol]
+        | _ => assert(false)
+      }
+      def getMask(obj : DependencyPath) : int
+      {
+        | DeclaredProperty(_, _, mask) => mask
+        | _ => assert(false)
+      }
+      def getIsEvaluatedName(obj : DependencyPath) : string
+      {
+        | DeclaredProperty(_, DependentPropertySymbol as symbol, _) => GetIsEvaluatedPropertyName(symbol)
+        | DependentProperty(_, _, isEvaluatedName) => isEvaluatedName
+        | _ => assert(false)
+      }
+
+      mutable acc;
+      foreach (g in properties.Where(_.IsDependent).GroupBy(makeKey))
+      {
+        match (g.Key)
+        {
+          | (DependencyPath.This, true) when !debug => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.Select(getBitField)));
+          | (path, true) when !debug && g.Count() > 1 =>
+            mutable mask;
+            foreach (item in g)
+              mask |= getMask(item);
+            PExprUtils.CombineAnd(ref acc, <[ unchecked($(CompilePath(path)).PropertiesEvalState & $(mask : int) == $(mask : int) ) ]>);
+
+          | (path, _) =>
+            foreach (item in g)
+              PExprUtils.CombineAnd(ref acc, CallIsPropertyEvaluated(CompilePath(path), getIsEvaluatedName(item)));
+        }
+      }
+
+      acc ?? <[ true ]>
+    }
+
+    private static CallIsPropertyEvaluated(obj : PExpr, isEvaluatedName : string) : PExpr
+    {
+      <[ $obj.$(isEvaluatedName : usesite) ]>
+    }
+
+    public static CompilePath(path : DependencyPath) : PExpr
+    {
+      | This           => <[ this ]>
+      | Variable(name) => <[ $(name : usesite) ]>
+      | DeclaredProperty(path, symbol, _) with name = symbol.Name
+      | DependentProperty(path, name, _)
+      | SimpleProperty(path, name) => <[ $(CompilePath(path)).$(name : usesite) ]>
+    }
+
+    protected static TryAddStageCheck(path : DependencyPath, expr : PExpr) : PExpr
+    {
+      if (path is DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage, /*Direction = DependentPropertyDirection.Out*/), _) when propertyStage > 0)
+        <[ when (context.Stage >= $(propertyStage : int)) $expr ]>
+      else
+        expr
+    }
+  }
+}

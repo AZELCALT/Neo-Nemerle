@@ -500,7 +500,7 @@ namespace Nemerle.Utility
     {
       mutable firstTime = true;
       
-      Assert(true);
+      Assert(true, null, null);
       
       foreach (elem in seq)
       {
@@ -533,7 +533,7 @@ namespace Nemerle.Utility
     {
       mutable firstTime = true;
       
-      Assert(true);
+      Assert(true, null, null);
       
       foreach (elem in seq)
       {
@@ -566,7 +566,7 @@ namespace Nemerle.Utility
     )
       : void
     {
-      Assert(true);
+      Assert(true, null, null);
       mutable firstTime = true;
       
       foreach (elem in seq)

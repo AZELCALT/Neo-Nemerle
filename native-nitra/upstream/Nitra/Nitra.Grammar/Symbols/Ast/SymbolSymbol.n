@@ -1,0 +1,147 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Serialization;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+
+using G = NitraSyntaxParseTree;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Typing
+{
+  [Record, ExportableSymbol]
+  public abstract class SymbolSymbol : PropertyContainerSymbol, INamespaceMember
+  {
+    public override Description  : string             { get { "symbol" } }
+    public abstract Declaration  : AstSymbol          { get; }
+    public abstract Parents      : list[SymbolSymbol] { get; }
+    public override GetParents() : Seq[PropertyContainerSymbol] { Parents }
+
+    public AllBaseSymbols : Seq[SymbolSymbol]
+    {
+      get { TypeInheritance(); _allBaseSymbols }
+    }
+
+    public override AllProperties : Seq[PropertySymbol]
+    {
+      get { TypeInheritance(); _allProperties.Values }
+    }
+
+    public override IsSubtypeOf(other : PropertyContainerSymbol) : bool
+    {
+      | SymbolSymbol as other =>
+        TypeInheritance();
+        this == other || _allBaseSymbols.Contains(other)
+
+      | _ => false
+    }
+
+    [RecordIgnore] private mutable _allBaseSymbols : SCG.HashSet[SymbolSymbol];
+    [RecordIgnore] private mutable _allProperties  : SCG.Dictionary[string, PropertySymbol];
+
+    public TypeInheritance() : void
+    {
+      when (_allBaseSymbols : object == null)
+      {
+        _allBaseSymbols = SCG.HashSet();
+        _allProperties  = SCG.Dictionary(StringComparer.Ordinal);
+
+        foreach (s when _allBaseSymbols.Add(s) in Parents)
+          _allBaseSymbols.UnionWith(s.AllBaseSymbols);
+
+        CollectInheritedProperties(_allBaseSymbols, _allProperties);
+        CollectDeclaredProperties(_allProperties);
+      }
+    }
+
+    public override GetAncestors() : Seq[PropertyContainerSymbol]
+    {
+      AllBaseSymbols
+    }
+
+    public override LookupProperty(name : string) : ValueOption[PropertySymbol]
+    {
+      TypeInheritance();
+
+      mutable p;
+      if (_allProperties.TryGetValue(name, out p))
+        VSome(p)
+      else
+        VNone()
+    }
+  }
+
+  public sealed class ParsedAbstractSymbolSymbol : SymbolSymbol, IDependentStatementContainer
+  {
+    public this(astSymbol : AstSymbol, parents : list[SymbolSymbol])
+    {
+      base (astSymbol.FirstLocation, astSymbol.Name + "Symbol");
+      Declaration  = astSymbol;
+      Parents      = parents;
+      _statements  = SCG.List();
+      _initializedOutProperties = [];
+    }
+
+    private         _statements               : SCG.List[DependentStatement];
+    private mutable _initializedOutProperties : list[DependentPropertySymbol];
+    private mutable _propertyDependency       : PropertyDependencyData;
+
+    public override Declaration              : AstSymbol                     { get; }
+    public override Parents                  : list[SymbolSymbol]            { get; }
+    public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+    public override IsAbstract               : bool                          { get { true } }
+    public override PropertyDependency       : PropertyDependencyData        { get { assert(_propertyDependency != null); _propertyDependency } }
+
+    public AddStatement(statement : DependentStatement) : void { AddStatementImpl(statement, _statements, ref _initializedOutProperties); }
+    public GetStatements() : Seq[DependentStatement] { _statements }
+    public override SetPropertyDependency(graph : PropertyDependencyData) : void { assert(graph != null); _propertyDependency = graph; }
+  }
+
+  public sealed class ParsedSimpleSymbolSymbol : SymbolSymbol, IDependentStatementContainer
+  {
+    public this(astSymbol : AstSymbol, parents : list[SymbolSymbol])
+    {
+      base (astSymbol.FirstLocation, astSymbol.Name + "Symbol");
+      Declaration  = astSymbol;
+      Parents      = parents;
+      _statements  = SCG.List();
+      _initializedOutProperties = [];
+      _builtInMethods = SCG.Dictionary(StringComparer.Ordinal);
+    }
+
+    private         _statements               : SCG.List[DependentStatement];
+    private mutable _initializedOutProperties : list[DependentPropertySymbol];
+    private         _builtInMethods           : SCG.Dictionary[string, Identifier * PExpr];
+    private static  _builtInMethodNames       : SCG.HashSet[string] = SCG.HashSet(
+      array["CanMerge", "IsSameIdentity", "AfterStage", "ToString", "GetHashCode", "Equals", "DecomposeType", "MakeHint"],
+      StringComparer.Ordinal);
+
+    public override Declaration              : AstSymbol                     { get; }
+    public override Parents                  : list[SymbolSymbol]            { get; }
+    public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+    public override IsAbstract               : bool                          { get { false } }
+    public override PropertyDependency       : PropertyDependencyData        { get { PropertyDependencyData.Empty } }
+    public          BuiltInMethods           : SCG.Dictionary[string, Identifier * PExpr].ValueCollection { get { _builtInMethods.Values } }
+
+    public AddStatement(statement : DependentStatement) : void
+    {
+      | DependentStatement.Assign(Path = [Identifier(Value = name) as identifier], Expression = expr) when _builtInMethodNames.Contains(name) =>
+        mutable existingStatement;
+        if (_builtInMethods.TryGetValue(name, out existingStatement))
+          Node.Project.Error(statement, $"Duplicate implementation of '$name' method.")
+        else
+          _builtInMethods.Add(name, (identifier, expr));
+
+      | _ => AddStatementImpl(statement, _statements, ref _initializedOutProperties);
+    }
+
+    public GetStatements() : Seq[DependentStatement] { _statements }
+  }
+}

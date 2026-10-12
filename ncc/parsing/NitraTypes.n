@@ -1,0 +1,112 @@
+// Compiler-local adaptation of Nitra's structural unification and bounded
+// type-variable model. Language-defined subtyping remains a callback.
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle.Imperative;
+namespace Nemerle.Compiler
+{
+  public class NitraSemanticType
+  {
+    public Constructor : object;
+    public Arguments : array[NitraSemanticType];
+    public this(constructor : object, arguments : array[NitraSemanticType])
+    {
+      when(constructor==null) throw ArgumentNullException("constructor");
+      Constructor=constructor; Arguments=if(arguments==null) array[] else arguments.Clone() :> array[NitraSemanticType];
+      foreach(a in Arguments) when(a==null) throw ArgumentException("null type argument");
+    }
+  }
+  public sealed class NitraTypeVariable : NitraSemanticType
+  {
+    internal mutable Binding : NitraSemanticType;
+    public Upper : NitraSemanticType;
+    public Lower : NitraSemanticType;
+    public this(upper : NitraSemanticType, lower : NitraSemanticType)
+    { base(object(),null); Upper=upper; Lower=lower; }
+  }
+  public sealed class NitraTypeSolver
+  {
+    subtype : Func[NitraSemanticType,NitraSemanticType,bool];
+    public this(isSubtype : Func[NitraSemanticType,NitraSemanticType,bool])
+    { when(isSubtype==null) throw ArgumentNullException("isSubtype"); subtype=isSubtype; }
+    public Resolve(type : NitraSemanticType) : NitraSemanticType
+    {
+      when(type==null) throw ArgumentNullException("type");
+      def seen=SCG.HashSet.[NitraSemanticType](); mutable current=type;
+      while(current is NitraTypeVariable)
+      {
+        unless(seen.Add(current)) throw ArgumentException("cyclic type-variable binding");
+        def v=current :> NitraTypeVariable; when(v.Binding==null) return current; current=v.Binding;
+      }
+      current
+    }
+    private Subtype(left : NitraSemanticType, right : NitraSemanticType) : bool
+    { left : object == right : object || subtype.Invoke(left,right) }
+    public Unify(left : NitraSemanticType, right : NitraSemanticType) : bool { Transaction(left,right,false) }
+    public TryUnify(left : NitraSemanticType, right : NitraSemanticType) : bool { Transaction(left,right,true) }
+    public Require(type : NitraSemanticType, upper : NitraSemanticType) : bool
+    { Unify(type,if(Resolve(upper) is NitraTypeVariable) upper else NitraTypeVariable(upper,null)) }
+    public TryRequire(type : NitraSemanticType, upper : NitraSemanticType) : bool
+    { TryUnify(type,if(Resolve(upper) is NitraTypeVariable) upper else NitraTypeVariable(upper,null)) }
+    public Provide(type : NitraSemanticType, lower : NitraSemanticType) : bool
+    { Unify(type,if(Resolve(lower) is NitraTypeVariable) lower else NitraTypeVariable(null,lower)) }
+    public TryProvide(type : NitraSemanticType, lower : NitraSemanticType) : bool
+    { TryUnify(type,if(Resolve(lower) is NitraTypeVariable) lower else NitraTypeVariable(null,lower)) }
+    private Transaction(left : NitraSemanticType, right : NitraSemanticType, speculative : bool) : bool
+    {
+      def changes=SCG.Dictionary.[NitraTypeVariable,NitraSemanticType](); mutable commit=false;
+      try { def accepted=Match(left,right,changes,0); commit=accepted && !speculative; accepted }
+      finally { unless(commit) foreach(pair in changes) pair.Key.Binding=pair.Value; }
+    }
+    private Occurs(variable : NitraTypeVariable, type : NitraSemanticType) : bool
+    {
+      def pending=SCG.Stack.[NitraSemanticType](); def seen=SCG.HashSet.[NitraSemanticType](); pending.Push(type);
+      while(pending.Count>0)
+      {
+        def t=Resolve(pending.Pop()); when(t : object == variable : object) return true;
+        when(seen.Add(t)) foreach(a in t.Arguments) pending.Push(a);
+      }
+      false
+    }
+    private Bind(v : NitraTypeVariable, type : NitraSemanticType, changes : SCG.Dictionary[NitraTypeVariable,NitraSemanticType]) : bool
+    {
+      when(Occurs(v,type)) return false;
+      unless(changes.ContainsKey(v)) changes.Add(v,v.Binding); v.Binding=type; true
+    }
+    private Match(left : NitraSemanticType, right : NitraSemanticType,
+                  changes : SCG.Dictionary[NitraTypeVariable,NitraSemanticType], depth : int) : bool
+    {
+      when(depth>512) throw ArgumentException("type constraint depth limit exceeded (512)");
+      def a=Resolve(left); def b=Resolve(right); when(a : object == b : object) return true;
+      if(a is NitraTypeVariable && b is NitraTypeVariable)
+      {
+        def av=a :> NitraTypeVariable; def bv=b :> NitraTypeVariable;
+        mutable upper=av.Upper; mutable lower=av.Lower;
+        if(upper==null) upper=bv.Upper;
+        else when(bv.Upper!=null)
+        { if(Subtype(bv.Upper,upper)) upper=bv.Upper; else unless(Subtype(upper,bv.Upper)) return false; }
+        if(lower==null) lower=bv.Lower;
+        else when(bv.Lower!=null)
+        { if(Subtype(lower,bv.Lower)) lower=bv.Lower; else unless(Subtype(bv.Lower,lower)) return false; }
+        when(upper!=null && lower!=null && !Subtype(lower,upper)) return false;
+        def merged=NitraTypeVariable(upper,lower);
+        Bind(av,merged,changes) && Bind(bv,merged,changes)
+      }
+      else if(a is NitraTypeVariable || b is NitraTypeVariable)
+      {
+        def v=(if(a is NitraTypeVariable) a else b) :> NitraTypeVariable;
+        def t=if(a is NitraTypeVariable) b else a;
+        unless(Bind(v,t,changes)) return false;
+        when(v.Upper!=null && !Subtype(t,v.Upper) && !Match(t,v.Upper,changes,depth+1)) return false;
+        when(v.Lower!=null && !Subtype(v.Lower,t) && !Match(t,v.Lower,changes,depth+1)) return false;
+        true
+      }
+      else
+      {
+        unless(a.Constructor : object == b.Constructor : object && a.Arguments.Length==b.Arguments.Length) return false;
+        for(mutable i=0;i<a.Arguments.Length;++i) unless(Match(a.Arguments[i],b.Arguments[i],changes,depth+1)) return false;
+        true
+      }
+    }
+  }
+}

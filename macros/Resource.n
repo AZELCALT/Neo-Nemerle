@@ -8,7 +8,11 @@ using System.IO.File;
 using System.IO.Path;
 using System.IO.Directory;
 using DictionaryEntry = System.Collections.DictionaryEntry;
+#if MODERN_CLR
+using ResXReader = Nemerle.Platform.ClrResXReader;
+#else
 using ResXReader = System.Resources.ResXResourceReader;
+#endif
 
 namespace Nemerle.Macro
 {
@@ -23,12 +27,17 @@ namespace Nemerle.Macro
     public Build(path : string, typer : Typer) : void
     {
       def types = Hashtable();
-      def getType(name)
+      def getType(name : string) : FixedType
       {
-        when (!types.ContainsKey(name))
-          types.Add(name, typer.Manager.Lookup(name).GetMemType());
+        if (name.EndsWith("[]"))
+          FixedType.Array(getType(name.Substring(0, name.Length - 2)), 1)
+        else
+        {
+          when (!types.ContainsKey(name))
+            types.Add(name, typer.Manager.Lookup(name).GetMemType());
 
-        types[name];
+          types[name];
+        }
       }
       def projDir = GetDirectoryName(typer.Manager.Options.ProjectPath);
       def className = GetFileNameWithoutExtension(path);
@@ -102,7 +111,7 @@ namespace Nemerle.Macro
 
             foreach(d :> DictionaryEntry in reader)
             {
-              def typeName = d.Value.GetType().FullName;
+              def typeName = if (d.Value == null) "System.Object" else d.Value.GetType().FullName;
               def key = d.Key.ToString();
               def typedDype = <[ $(getType(typeName) : typed) ]>;
 

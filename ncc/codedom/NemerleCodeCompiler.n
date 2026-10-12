@@ -77,7 +77,7 @@ namespace Nemerle.Compiler
                                                       i.ToString () + ".n");
         using (f = FileStream (fileNames [i], FileMode.OpenOrCreate))
         {
-          def s = StreamWriter (f, Encoding.UTF8);
+          def s = StreamWriter (f, Encoding.UTF8, 1024, false);
           when (e.ReferencedAssemblies != null) {
             foreach (str in e.ReferencedAssemblies) {
               when (!assemblies.Contains (str))
@@ -220,7 +220,7 @@ namespace Nemerle.Compiler
         fileNames [i] = GetTempFileNameWithExtension (
           options.TempFiles, i.ToString () + ".n");
         using (f = FileStream (fileNames [i], FileMode.OpenOrCreate)) {
-          def s = StreamWriter (f);
+          def s = StreamWriter (f, UTF8Encoding(false), 1024, false);
           s.Write (source);
           s.Close ();
         }

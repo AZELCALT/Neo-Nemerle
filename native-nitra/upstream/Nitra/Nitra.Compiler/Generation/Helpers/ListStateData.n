@@ -1,0 +1,62 @@
+﻿using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal sealed class ListStateData
+  {
+    private _variableEmitter : IVariableEmitter;
+    private _sequenceLevel    : int;
+    private _useCounter      : bool;
+
+    private this(variableEmitter : IVariableEmitter, sequenceLevel : int, useCounter : bool)
+    {
+      _variableEmitter = variableEmitter;
+      _useCounter      = useCounter;
+      _sequenceLevel   = sequenceLevel;
+    }
+
+    public this(variableEmitter : IVariableEmitter, subrule : SubruleCompileInfo.List)
+    {
+      this(variableEmitter, subrule.SequenceLevel, subrule.UseCounter)
+    }
+
+    public this(variableEmitter : IVariableEmitter, subrule : SubruleCompileInfo.ListWithSeparator)
+    {
+      this(variableEmitter, subrule.SequenceLevel, subrule.UseCounter)
+    }
+
+    public Init() : PExpr
+    {
+      if (_useCounter) <[ $(Counter)  = 0 ]> else <[ {} ]>
+    }
+
+    public Inc() : PExpr
+    {
+      if (_useCounter) <[ ++ $(Counter)   ]> else <[ {} ]>
+    }
+
+    //public Dec() : PExpr
+    //{
+    //  if (_useCounter) <[ -- $(Counter)   ]> else <[ {} ]>
+    //}
+
+    public Counter         : PExpr { get { <[ $(_variableEmitter.CreateVariable($"counter$_sequenceLevel")      : global) ]> } }
+    public ListEndPos      : PExpr { get { <[ $(_variableEmitter.CreateVariable($"listEndPos$_sequenceLevel")   : global) ]> } }
+    public ListStartPos    : PExpr { get { <[ $(_variableEmitter.CreateVariable($"listStartPos$_sequenceLevel") : global) ]> } }
+    public BodyEndPos      : PExpr { get { <[ $(_variableEmitter.CreateVariable($"bodyEndPos$_sequenceLevel")   : global) ]> } }
+    public SeparatorEndPos : PExpr { get { <[ $(_variableEmitter.CreateVariable($"separatorEndPos$_sequenceLevel") : global) ]> } }
+
+    //public TryGetCounter() : IEnumerable[PExpr] { when (_useCounter) yield Counter }
+  }
+}

@@ -1,0 +1,71 @@
+﻿using Nitra;
+using Nitra.Declarations;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Immutable;
+
+using System.Diagnostics;
+using SCG = System.Collections.Generic;
+
+namespace DotNet
+{
+  public class TopSubstScope : Scope
+  {
+    private _typeInfo : GenericTypeSymbol;
+    private _args     : ImmutableArray[TypeSymbol];
+
+    public this(typeInfo : GenericTypeSymbol, _scope : Scope, args : ImmutableArray[TypeSymbol])
+    {
+      _typeInfo = typeInfo;
+      _args     = args;
+    }
+
+    // TODO: add type subst
+    public override AllSymbols : Seq[DeclarationSymbol] { get { _typeInfo.Scope.AllSymbols } } 
+    
+    public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+    {
+      _typeInfo.Scope.Bind.[TSymbol](reference)
+    }
+
+    public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+    {
+      _typeInfo.Scope.Bind.[TSymbol](isMatch)
+    }
+    
+    public override ToDot(nodeToIdMap : SCG.Dictionary[object, int], nodes : SCG.List[string], edges : SCG.List[string]) : void
+    {
+      def id      = nodeToIdMap.GetObjectId(this);
+      def idScope = nodeToIdMap.GetObjectId(this._typeInfo.Scope);
+
+      nodes.Add($<#Obj_$id [label="TopSubstScope $id"]#>);
+      edges.Add($<#Obj_$id -> Obj_$idScope#>);
+
+      this._typeInfo.Scope.ToDot(nodeToIdMap, nodes, edges);
+    }
+
+    public override Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(_typeInfo, writer);
+      metadataWriter.WriteObjects(_args, writer);
+    }
+
+    protected static Read(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : GenericTypeSymbol * array[TypeSymbol]
+    {
+      def typeInfo = metadataReader.ReadObject(reader);
+      def args     = metadataReader.ReadObjects(reader);
+      (typeInfo, args)
+    }
+    
+    public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : this
+    {
+      def (typeInfo, args) = Read(reader, metadataReader);
+      TopSubstScope(typeInfo, null, ImmutableArray.Create(args))
+    }
+  }
+}

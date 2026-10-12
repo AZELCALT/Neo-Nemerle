@@ -187,6 +187,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
 
   public CanAccess (source : TypeInfo) : bool
   {
+    (!Manager.Options.FileModules || declaring_type.CanAccess(source)) && (
     IsPublic
     || IsInternal && source is TypeBuilder
     || ({
@@ -194,7 +195,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
       for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
         result = tc.Equals (declaring_type) || IsProtected && tc.IsDerivedFrom(declaring_type);
       result
-    })
+    }))
   }
 
   public OverloadName : string
@@ -501,6 +502,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
 public partial class FieldBuilder : MemberBuilder, IField
 {
   mutable field_builder : SRE.FieldBuilder;
+  mutable scriptInferring : bool = false;
   [Accessor (flags = WantSetter)]
   mutable const_value : Literal;
   mutable has_been_assigned = false;
@@ -516,16 +518,49 @@ public partial class FieldBuilder : MemberBuilder, IField
 
     // check if field's type is valid
     match (fieldAst.ty) {
+      | <[ _ ]> when par.Manager.Options.Script != null
+          && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name) => ()
       | <[ _ ]> => Message.Error ("type inference for fields is available only when assigning literal value to them")
       | _ => ()
     }
 
-    ty = par.BindFixedType (fieldAst.ty);
+    ty = if (par.Manager.Options.Script != null && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name))
+      par.Manager.InternalType.Object else par.BindFixedType (fieldAst.ty);
 
     when (ty.Equals (InternalType.Void))
       Message.Error ($"$this has void type, which is not allowed");
 
     ty.CheckAccessibility (this, accessibility);
+  }
+
+  internal InferScriptType(typer : Typer) : void
+  {
+    def script = DeclaringType.Manager.Options.Script;
+    when (script != null && DeclaringType.FullName == script.TypeName && script.InferredInitializers.ContainsKey(Name) && !script.TypedInitializers.ContainsKey(Name))
+    {
+      when (scriptInferring) Message.FatalError(Ast.Location, "Recursive script binding needs a type annotation: " + Name);
+      scriptInferring = true;
+      try
+      {
+        def typed = typer.TypeExpr(script.InferredInitializers[Name]);
+        ty = typed.Type.DeepFix();
+        // Cached initializer trees also enter speculative overload checks.
+        // Resolve their expression types before those solver states expire.
+        ExprWalker().Walk(typed, info =>
+        {
+          match (info.Node)
+          {
+            | e is TExpr => when (e.ty != null) e.Type = e.Type.DeepFix();
+            | _ => ()
+          }
+        });
+        script.TypedInitializers[Name] = typed;
+        Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
+
+        when (ty.Equals(DeclaringType.Manager.InternalType.Void)) Message.Error(Ast.Location, "Script binding cannot have void type");
+      }
+      finally { scriptInferring = false; }
+    }
   }
 
   public override MemberKind : MemberKinds {  get { MemberKinds.Field } }

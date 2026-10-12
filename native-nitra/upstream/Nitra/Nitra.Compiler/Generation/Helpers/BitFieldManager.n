@@ -1,0 +1,56 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  public sealed class BitFieldManager
+  {
+    _tb                    : TypeBuilder;
+    _fields                : SCG.List[string];
+    mutable _bitsAllocated : int;
+
+    public this(tb : TypeBuilder)
+    {
+      _tb     = tb;
+      _fields = SCG.List();
+    }
+
+    public static BitFieldSize = 32;
+
+    public BitsAllocated : int { get { _bitsAllocated } }
+
+    public Allocate() : BitField
+    {
+      when (unchecked((_bitsAllocated % BitFieldSize) == 0))
+      {
+        def newField = Util.tmpname("bitField");
+        _fields.Add(newField);
+        _tb.Define(<[ decl: [RecordIgnore, Nemerle.Extensions.EqualsIgnore] private mutable $(newField : usesite) : int ]>);
+      }
+      def index     = _bitsAllocated;
+      def fieldName = _fields.Last();
+      def mask      = unchecked(1 << (index % BitFieldSize));
+      _bitsAllocated += 1;
+      BitField(fieldName, mask, _fields.Count == 1)
+    }
+
+    public static FullFieldMask = 0xFFFFFFFF;
+
+    public LastFieldMask : int
+    {
+      get { unchecked((FullFieldMask >> (BitFieldSize - (_bitsAllocated % BitFieldSize))) :> int) }
+    }
+
+    public GetFields() : array[string]
+    {
+      _fields.ToArray()
+    }
+  }
+}

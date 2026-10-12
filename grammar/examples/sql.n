@@ -1,0 +1,29 @@
+grammar Sql {
+  statement query form { "SELECT" ...projection... "FROM" ...table... ...filter...? ";" }
+  syntax module Queries {
+    form query;
+    semantic kind projection { | Columns = (Identifier; ",")+; | All = "*"; }
+    semantic kind table { | Table = Name=Identifier; }
+    semantic kind filter { | Where = "WHERE" Condition; }
+    regex Identifier = ['a'..'z', 'A'..'Z', '_'] ['a'..'z', 'A'..'Z', '_', '0'..'9']*;
+    regex Number = ['0'..'9']+;
+    token String = "'" ("''" | !"'" Any)* "'";
+    token IgnoreToken {
+      | LineComment = "--" (!"\n" Any)*;
+      | BlockComment = "/*" (!"*/" Any)* "*/";
+    }
+    syntax Value { | Name = Identifier; | Number = Number; | Text = String; }
+    syntax Condition {
+      | Compare = Left=Value ("=" | ">" | "<") Right=Value;
+      | Parenthesized = "(" Condition ")";
+      precedence And:
+      | And = Condition "AND" Condition;
+    }
+  }
+}
+space Sql {
+  SELECT id, name FROM players WHERE score > 10;
+  -- A brace } and an end keyword in a comment are not a boundary.
+  SELECT * FROM players WHERE name = 'end }';
+  SELECT name FROM players /* } */ WHERE name = 'O''Brien';
+}

@@ -1,0 +1,64 @@
+﻿using Nitra.ProjectSystem;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  public class OpenNamespaceOrTypeContext : Context, INemerleEnvironmentContext
+  {
+    public OpenPath      : G.QualifiedReference  { get; }
+    public OpenSymbol    : SymbolRef[Symbol]     { get; }
+    public IsAlreadyOpen : bool                  { get; }
+
+    public this(parent : Context, path : G.QualifiedReference)
+    {
+      base(parent);
+      OpenPath   = path;
+      def scopeContext = GetParent.[EnteredScopeContext]();
+      (OpenSymbol, IsAlreadyOpen) = match (scopeContext.TryBind(path))
+      {
+        | SymbolRef.Some(symbol) as result =>
+          def checkAlreadyOpen(_ : OpenNamespaceOrTypeContext)
+          {
+            | null => (result, false)
+            | OpenNamespaceOrTypeContext(OpenSymbol = SymbolRef.Some(other)) as context when symbol : object == other =>
+              using (rootMsg = Project.RootWarning(path, $"Symbol '$(symbol.FullName)' is already open (see related messages)"))
+                rootMsg.Hint(context.OpenPath, "Previous definition.");
+              (SymbolRef.None(result.Location, true), true)
+
+            | context => checkAlreadyOpen(context.TryGetParent.[OpenNamespaceOrTypeContext]())
+          }
+          checkAlreadyOpen(parent.TryGetContext.[OpenNamespaceOrTypeContext]())
+
+        | SymbolRef.None as result =>
+          // FIXME: we can't determine if that namespace actualy does not exists
+          (result, false)
+      }
+    }
+
+    [Memoize]
+    GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
+    {
+      def parentEnv = Parent.GetNemerleEnvironment();
+      if (IsAlreadyOpen)
+        parentEnv
+      else
+        parentEnv.AddOpenNamespace(OpenPath.Parts(), OpenPath.NLocation())
+    }
+
+    public override ToString() : string
+    {
+      OpenSymbol.Map(sym => "using " + sym.FullName) ?? "using <Error>"
+    }
+  }
+}

@@ -1,0 +1,231 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Model;
+using Nitra.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class RuleParserEmitter : IConstantEmitter
+  {
+    public Owner : SyntaxModuleEmitter { get; }
+    public RuleSymbol : RuleDefSymbol { get; }
+    public Environment : EmitterEnvironment { get { Owner.Environment } }
+    public this(owner : SyntaxModuleEmitter, ruleSymbol : RuleDefSymbol)
+    {
+      Owner          = owner;
+      RuleSymbol     = ruleSymbol;
+    }
+
+    private mutable _callCounter : int = 0;
+    private _simpleCalls : List[SimpleRuleSymbol * string] = List();
+
+    [Memoize]
+    public MakeParserName(ruleSymbol : SimpleRuleSymbol) : string
+    {
+      Owner.CallRule(ruleSymbol);
+      def name = $"_parser_$(_callCounter)_$(ruleSymbol.Name)";
+      _simpleCalls.Add((ruleSymbol, name));
+      ++_callCounter;
+      name
+    }
+
+    private _extensibleCalls : List[ExtensibleRuleSymbol * BindingPowerInfo * string] = List();
+
+    [Memoize]
+    public MakeParserName(ruleSymbol : ExtensibleRuleSymbol, bindingPower : BindingPowerInfo) : string
+    {
+      Owner.CallRule(ruleSymbol);
+      def name = $"_parser_$(_callCounter)_$(ruleSymbol.Name)";
+      _extensibleCalls.Add((ruleSymbol, bindingPower, name));
+      ++_callCounter;
+      name
+    }
+
+    public abstract DefineParser() : void;
+
+    public abstract DefineParserMethods() : void;
+
+    public abstract Emit() : void;
+
+    protected DefineImplementation(member : ClassMember) : void
+    {
+      if (Owner.Environment.IsDebug)
+        Owner.GrammarImplTB.DefineConditional(member)
+      else
+        Owner.GrammarImplTB.Define(member)
+    }
+
+    protected DefineReflection(tb : TypeBuilder, rootSequence : SequenceCompileInfo.Root) : void
+    {
+      def sequenceFieldCases = List();
+      def sequenceFields = List();
+      def reflectSequence(sequence : SequenceCompileInfo) : PExpr
+      {
+        def type =
+          match (sequence)
+          {
+            | SequenceCompileInfo.Root                       => <[ Nitra.Runtime.Reflection.SequenceInfo.Root                       ]>
+            | SequenceCompileInfo.ListItem                   => <[ Nitra.Runtime.Reflection.SequenceInfo.ListItem                   ]>
+            | SequenceCompileInfo.Option                     => <[ Nitra.Runtime.Reflection.SequenceInfo.Option                     ]>
+            | SequenceCompileInfo.ListWithSeparatorItem      => <[ Nitra.Runtime.Reflection.SequenceInfo.ListWithSeparatorItem      ]>
+            | SequenceCompileInfo.ListWithSeparatorSeparator => <[ Nitra.Runtime.Reflection.SequenceInfo.ListWithSeparatorSeparator ]>
+            | SequenceCompileInfo.Predicate                  => <[ Nitra.Runtime.Reflection.SequenceInfo.Predicate ]>
+          };
+        def subrules = List();
+        foreach (subrule in sequence.Subrules)
+        {
+          def (subruleType, args) =
+            match (subrule)
+            {
+              | SubruleCompileInfo.Empty                                                 => (<[ Nitra.Runtime.Reflection.SubruleInfo.Empty             ]>, [])
+              | SubruleCompileInfo.List                                             as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.List              ]>, [reflectSequence(x.Item), if (x.IsNormal) <[ this.$(x.Item.ParseFunctionName : global)]> else <[ null ]>, <[ $(x.MinCount) ]>, if (x.MaxCount is Some(max)) <[ $(max) ]> else <[ null ]>, <[ $(x.IsOptimizedList) ]>, <[ $(x.IsDynamicSyntaxExtentionPoint) ]>])
+              | SubruleCompileInfo.ListWithSeparator                                as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.ListWithSeparator ]>, [reflectSequence(x.Item), <[ this.$(x.Item.ParseFunctionName : global)]>, reflectSequence(x.Separator), <[ this.$(x.Separator.ParseFunctionName : global)]>, <[ $(x.MinCount) ]>, if (x.MaxCount is Some(max)) <[ $(max) ]> else <[ null ]>, <[ $(x.HangingSeparator) ]>])
+              | SubruleCompileInfo.Option                                           as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.Option            ]>, [reflectSequence(x.Rule), <[ this.$(x.Rule.ParseFunctionName : global)]>])
+              | SubruleCompileInfo.SimpleCall                                       as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.SimpleCall        ]>, [<[ $(MakeParserName(x.Symbol) : global) ]>])
+              | SubruleCompileInfo.ExtensibleCall                                   as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.ExtensibleCall    ]>, [<[ $(MakeParserName(x.Symbol, x.BindingPower) : global) ]>])
+              | SubruleCompileInfo.RegularCall as x with rule = x.SrcRule :> Rule.Call   => (<[ Nitra.Runtime.Reflection.SubruleInfo.RegularCall       ]>, [x.Symbol.GetRuleDescriptorRef(), if (rule.SpanClass != null) Environment.MakeSpanClassRef(rule.SpanClass) else <[ null ]>, <[ $(x.Symbol.FirstCharUpperBound) ]>, <[ $(x.Symbol.FirstCharLowerBound) ]>, <[ $(x.Symbol.CanParseEmptyString) ]>, CalcLiterals(x.Symbol)])
+              | SubruleCompileInfo.TokenString as x with rule = x.SrcRule :> Rule.String => (<[ Nitra.Runtime.Reflection.SubruleInfo.TokenString       ]>, [<[ $(x.String) ]>, <[ $(rule.IsKeyToken) ]>, if (rule.SpanClass != null) Environment.MakeSpanClassRef(rule.SpanClass) else <[ null ]>])
+              | SubruleCompileInfo.Marker(sym)                                           => (<[ Nitra.Runtime.Reflection.SubruleInfo.Marker            ]>, [<[ $(sym.FullName : string) ]>])
+            };
+          def headPredicate =
+            if (subrule.HeadPredicates.Length == 0)
+              <[ null ]>
+            else
+            {
+              def name              = Util.tmpname("HeadPredicate");
+              def fail              = PExprLabel(this.Environment.Manager, "childFail");
+              def headPredicateCode = ParseMethodEmitter(this, tb, rootSequence).CompilePredicate(subrule.HeadPredicates, fail.Goto());
+              tb.DefineConditional(<[decl:
+                [Nemerle.Diagnostics.CompileStatistic("Reflection:HeadPredicate")]
+                private $(name : global)(mutable curTextPos : int, text : string, parseResult : ParseResult) : bool
+                {
+                  mutable newPos; _ = newPos;
+                  mutable tmpSize; _ = tmpSize;
+                  mutable parseState; _= parseState;
+                  predicateResult:
+                  {
+                    $headPredicateCode;
+                    predicateResult(true);
+                    $(fail.Label());
+                    false;
+                  }
+                }]>);
+              <[ $(name : global) ]>
+            };
+          def headPredicates = <[ array[..$(subrule.HeadPredicates.Map(p => reflectSequence(p)))] ]>;
+          def isVoid = subrule.SrcRule.Type is RuleType.Void;
+          def args =
+            <[ $(subrule.Offset) ]>              :: //Offset
+            <[ $(subrule.ToString()) ]>          :: //Description
+            <[ $(subrule.State) ]>               :: //State
+            <[ $(isVoid) ]>                      :: //IsVoid
+            headPredicate                        :: //HeadPredicate
+            headPredicates                       :: //HeadPredicates
+            args;
+          subrules.Add(<[ $subruleType(..$args) ]>);
+        }
+        def additionalArgs = if (sequence is SequenceCompileInfo.Predicate(isAnd)) [<[ $isAnd ]>] else [];
+        def sequenceFieldName = $"sequenceInfo$(sequenceFields.Count)";
+        sequenceFields.Add((sequenceFieldName, type));
+        def isVoid = sequence.SrcRule.Type is RuleType.Void;
+        def getRuleName(seq : SequenceCompileInfo)
+        {
+          | Root as seq => seq.Symbol.Name
+          | _          => getRuleName(seq.Owner.Owner);
+        }
+        sequenceFieldCases.Add(<[case: | _ when ruleId == $(sequence.RuleIdFieldName : global) => $(sequenceFieldName : global) ]>);
+        <[
+          $(sequenceFieldName : global) = $type(this, $(sequence.RuleIdFieldName : global), $(sequence.Size), $(getRuleName(sequence)), $(sequence.ToString()), $isVoid, array[..$subrules], ..$additionalArgs);
+          $(sequenceFieldName : global);
+        ]>
+      }
+      def reflection = reflectSequence(rootSequence);
+      sequenceFieldCases.Add(<[case: | _ => assert(false) ]>);
+
+      foreach ((subruleInfoName, type) in sequenceFields)
+        tb.DefineConditional(<[decl: private mutable $(subruleInfoName : global) : $type ]>);
+
+      tb.DefineConditional(<[decl:
+        [Nemerle.Diagnostics.CompileStatistic("Reflection:Reflection")]
+        public override Reflection(ruleId : int) : Nitra.Runtime.Reflection.SequenceInfo
+        {
+          when ($(sequenceFields[sequenceFields.Count - 1][0] : global) == null)
+            _ = $reflection;
+
+          match (ruleId)
+          {
+            ..$sequenceFieldCases
+          }
+        }]>);
+    }
+
+    private static CalcLiterals(symbol : RegularRuleSymbol) : PExpr
+    {
+      def result = List();
+      def loop(rule : RegularRule) : void
+      {
+        | RegularRule.Choice as choice                                       => foreach (r in choice.rules) loop(r);
+        | RegularRule.Call(Some(symbol))                                     => loop(symbol.Rule);
+        | RegularRule.Chars(StringOpt=Some(str)) when str.All(char.IsLetter) => result.Add(str);
+        | _ => ()
+      }
+      
+      loop(symbol.Rule);
+      def ordered = result.OrderBy(x => x).Select(x => <[ $(x : string) ]>).NToList();
+      <[ [..$ordered] ]>
+    }
+    
+    protected DefineInit(tb : TypeBuilder, sequence : SequenceCompileInfo.Root) : void
+    {
+      def inits = List();
+      inits.Add(<[ _ = ruleIdBuilder ]>);
+      foreach (sequence in sequence.NestedSequencies)
+      {
+        tb.DefineConditional(<[decl: public mutable $(sequence.RuleIdFieldName : global) : int; ]>);
+        inits.Add(<[ $(sequence.RuleIdFieldName : global) = ruleIdBuilder.NewRuleId(this); ]>);
+      }
+
+      foreach ((ruleSymbol, name) in _simpleCalls)
+      {
+        tb.DefineConditional(<[decl: private mutable $(name : global) : Nitra.Internal.SimpleRuleParser; ]>);
+        inits.Add(<[ $(name : global) = Grammar.GetSimpleRuleParser($(ruleSymbol.GetRuleDescriptorRef())); ]>);
+      }
+      foreach ((ruleSymbol, bp, name) in _extensibleCalls)
+      {
+        tb.DefineConditional(<[decl: private mutable $(name : global) : Nitra.Internal.ExtensibleRuleParser; ]>);
+        inits.Add(<[ $(name : global) = Grammar.GetExtensibleRuleParser($(ruleSymbol.GetRuleDescriptorRef()), $(bp.Name)); ]>);
+      }
+
+      tb.DefineConditional(<[decl:
+        [Nemerle.Diagnostics.CompileStatistic("Reflection:Init")]
+        public override Init(ruleIdBuilder : Nitra.Internal.RuleIdBuilder) : void
+        {
+          ..$inits
+        }
+      ]>);
+    }
+
+    protected DefineParse(tb : TypeBuilder, sequence : SequenceCompileInfo.Root) : void
+    {
+      ParseMethodEmitter(this, tb, sequence).Emit();
+    }
+
+    protected DefineIsVoid(tb : TypeBuilder, sequence : SequenceCompileInfo.Root) : void
+    {
+      def startState = sequence.Symbol.Type is RuleType.Void;
+      tb.DefineConditional(<[ decl: public override IsVoid      : bool { get $(startState : bool) } ]>);
+      tb.DefineConditional(<[ decl: public override IsTokenRule : bool { get { $(sequence.Symbol.Options.IsTokenRule) } } ]>);
+    }
+
+    public abstract CreateConstant(name : string, value : int) : string;
+  }
+}

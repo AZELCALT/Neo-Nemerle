@@ -1,0 +1,190 @@
+﻿using Nitra.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using Nitra.Model;
+
+namespace Nitra.Compiler
+{
+  internal partial class ParseMethodEmitter : MethodEmitter
+  {
+    public CompileFunction(sequence : SequenceCompileInfo) : void
+    {
+      def function = match (sequence)
+      {
+        | SequenceCompileInfo.Root(Symbol = ExtensionRuleSymbol) =>
+          <[decl:
+            [Nemerle.Diagnostics.CompileStatistic("Parse:ExtensionRule")]
+            public override Parse(mutable curTextPos : int, text : string, resultRef : ref int, parseResult : Nitra.ParseResult) : int
+            {
+              unchecked { $(CompileFunctionBody(sequence)) }
+            }
+          ]>
+        | SequenceCompileInfo.Root(Symbol = SimpleRuleSymbol) =>
+          <[decl:
+            [Nemerle.Diagnostics.CompileStatistic("Parse:SimpleRule")]
+            public override Parse(mutable curTextPos : int, text : string, parseResult : Nitra.ParseResult) : int
+            {
+              unchecked { $(CompileFunctionBody(sequence))}
+            }
+          ]>
+        | SequenceCompileInfo.Root => assert3(false)
+        | _ =>
+          def name = FunctionName(sequence);
+          <[decl:
+            [Nemerle.Diagnostics.CompileStatistic("Parse:SubSequence")]
+            private $(name : global)(mutable curTextPos : int, text : string, parseResult : Nitra.ParseResult) : int
+            {
+              unchecked { $(CompileFunctionBody(sequence)) }
+            }
+          ]>;
+      }
+      TypeBuilder.DefineConditional(function);
+      when (IsDynamicSyntaxExtenderHandler(sequence))
+      {
+        TypeBuilder.DefineConditional(<[decl:
+          public override GrammarChangeHandler(rawTreePtr : int, startPos : int, endPos : int, parseResult : IParseResult, grammar : CompositeGrammar) : CompositeGrammar
+          {
+            $(DynamicSyntaxExtenderHandler(sequence))(rawTreePtr, startPos, endPos, this, parseResult, grammar);
+          }
+        ]>)
+      }
+    }
+
+    public CompileFunctionBody(sequence : SequenceCompileInfo) : PExpr
+    {
+      when (Owner.Environment.IsIdeMode)
+        return <[ IgnoreParams(); assert(false); ]>;
+
+      def code = SCG.List();
+      def endLabel = Environment.MakeLabel("EndParse");
+      def setResultRef = if (sequence is SequenceCompileInfo.Root(Symbol = ExtensionRuleSymbol))
+        <[ resultRef = $(RawTreePtr(sequence).Var); ]>
+      else
+        <[ {} ]>;
+      def checkMemoize(sequence : SequenceCompileInfo, okCode : PExpr, failCode : PExpr) : PExpr
+      {
+        <[
+          $(RawTreePtr(sequence).Var) = parseResult.TryGetRawTree($CurTextPos, $(sequence.RuleIdFieldName : global));
+          when ($(RawTreePtr(sequence).Var) > 0)
+          {
+            parseState = $(RawTreePtr(sequence).Get(sequence.HeaderState));
+            if (parseState == Nitra.ParseResult.RawTreeParsedState)
+            {
+              $CurTextPos += parseResult.RawSize($(RawTreePtr(sequence).Var), $(sequence.SizesStart), $(sequence.SizesEnd));
+              $okCode;
+            }
+            else
+            {
+              $failCode
+            }
+          }
+        ]>
+      }
+      def memoizeSimpleFailCode(sequence : SequenceCompileInfo)
+      {
+        <[
+          $CurTextPos = -1;
+          def maxFailPos = $(RawTreePtr(sequence).GetSize(sequence.NonMarkerSubrules.Last()));
+          when (maxFailPos > parseResult.MaxFailPos)
+            parseResult.MaxFailPos = maxFailPos;
+          $(endLabel.Goto());
+        ]>
+      }
+      def memoizeCode = if (sequence is SequenceCompileInfo.Root as sequence)
+      {
+        if (sequence.Symbol is SimpleRuleSymbol)
+          checkMemoize(sequence, endLabel.Goto(), memoizeSimpleFailCode(sequence))
+        else
+          <[
+            $(RawTreePtr(sequence).Var) = 0;
+            when (resultRef > 0)
+            {
+              $(RawTreePtr(sequence).Var) = resultRef;
+              parseState = parseResult.rawTree[resultRef + Nitra.Internal.ExtensibleRuleParser.RawTreeOfs.State];
+              when (parseState == Nitra.ParseResult.RawTreeParsedState)
+              {
+                return $CurTextPos + parseResult.RawSize($(RawTreePtr(sequence).Var), $(sequence.SizesStart), $(sequence.SizesEnd));
+              }
+              $(endLabel.Goto());
+            }
+          ]>;
+      }
+      else
+        checkMemoize(sequence, endLabel.Goto(), memoizeSimpleFailCode(sequence));
+      code.Add(<[
+        IgnoreParams();
+        mutable tmpSize    : int; _ = tmpSize;
+        mutable parseState : int; _ = parseState;
+        mutable newPos     : int; _ = newPos;
+        mutable $(RawTreePtr(sequence).Var) = int.MinValue;
+        mutable $(RawTreeStart(sequence));
+      ]>);
+      foreach (subrule in sequence.NonMarkerSubrules)
+        code.Add(<[ mutable $(ParsedSize(subrule).Var); ]>);
+      code.Add(<[ _ = $(sequence.ToString()) ]>);
+      code.Add(memoizeCode);
+      //code.AddRange(_fields.Map(subrule => <[ _ = $(subrule.Print()) ]>));
+
+      code.Add(<[ $(RawTreeStart(sequence)) = $CurTextPos; ]>);
+      NoneRecursiveCompileSequence(code, sequence);
+
+      //parse ok
+      code.Add(OkLabel(sequence));
+      def allocateCode = match (sequence)
+      {
+        | SequenceCompileInfo.Predicate
+        | SequenceCompileInfo.Root(Symbol = Nitra.Typing.ExtensionRuleSymbol) =>
+          <[
+            $(RawTreePtr(sequence).Var) = parseResult.Allocate($(sequence.Size), $(sequence.RuleIdFieldName : global));
+          ]>
+
+        | _ =>
+          <[
+            assert(parseResult.TryGetRawTree($(RawTreeStart(sequence)), $(sequence.RuleIdFieldName : global)) == 0);
+            $(RawTreePtr(sequence).Var) = parseResult.Allocate($(sequence.Size), $(sequence.RuleIdFieldName : global));
+            $(RawTreePtr(sequence).Set(sequence.HeaderNext, <[ parseResult.memoize[$(RawTreeStart(sequence))] ]>));
+            parseResult.memoize[$(RawTreeStart(sequence))] = $(RawTreePtr(sequence).Var);
+          ]>
+      }
+      code.Add(allocateCode);
+      code.Add(RawTreePtr(sequence).Set(sequence.HeaderState, <[ Nitra.ParseResult.RawTreeParsedState ]>));// правило полностью разобрано.
+      foreach (subrule in sequence.NonMarkerSubrules)
+        code.Add(<[ $(RawTreePtr(sequence).Set(subrule, ParsedSize(subrule).Var)) ]>);
+      code.Add(setResultRef);
+      code.Add(endLabel.Goto());
+
+      //parse fail
+      code.Add(FailLabel(sequence));
+      code.Add(<[ when ($(RawTreePtr(sequence).Var) > 0) // АСТ создано
+                  {
+                    $(RawTreePtr(sequence).Set(sequence.HeaderState, <[ parseState ]>));
+                    $(RawTreePtr(sequence).Set(sequence.NonMarkerSubrules.Last(), <[ parseResult.MaxFailPos ]>));
+                    $setResultRef;
+                  }
+      ]>);
+      code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
+
+      def debugCode = if (sequence is SequenceCompileInfo.Root(Symbol = SyntaxRuleSymbol(LastLocation = Some(loc))) when Owner.Environment.IsDebug)
+      {
+        def debugCode = <[ () ]>;
+        debugCode.Location = loc.NLocation();
+        debugCode;
+      }
+      else
+        <[ {} ]>;
+
+      code.Add(<[ $(endLabel.Label()); $debugCode; $CurTextPos; ]>);
+
+      code.FlattenPExpr();
+    }
+  }
+}

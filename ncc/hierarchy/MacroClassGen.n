@@ -71,7 +71,7 @@ namespace Nemerle.Compiler
         [CallTransform] for transforming supported call parameters to
           description taken by [Run] method
      */
-    internal GenerateMacroClass (Manager : ManagerClass, decl : TopDeclaration.Macro, ns_node : NamespaceTree.Node) : void
+    internal GenerateMacroClass (Manager : ManagerClass, decl : TopDeclaration.Macro, ns_node : NamespaceTree.Node, parent : TypeBuilder = null) : void
     {
       def loc    = decl.Location;
       def header = decl.header;
@@ -602,18 +602,19 @@ namespace Nemerle.Compiler
         attrs.custom_attrs ::= <[ Nemerle.Internal.MacroInfo($(name : string), $(syntactical : bool), 
           array[..$paramNames], array[..$paramTypes], array[..$paramDefaultValues], array[..$isParamArrays], 
           $(grammarString : string)) ]>;
-        attrs.mods |= NemerleModifiers.Macro %| NemerleModifiers.Public %| 
-                      NemerleModifiers.Sealed;
+        attrs.mods |= NemerleModifiers.Macro %| NemerleModifiers.Sealed;
+        when (parent == null) attrs.mods |= NemerleModifiers.Public;
 
         def paramsmap = mapparams (header.Parameters, 0, Map ());
         def (keys, rules, positions) = analyze_syntax (synt, paramsmap);
                       
         def macro_class_name = header.PName.NewName(convert_to_valid_type_name (retname) + "Macro");
-        def td = 
-          env.Define (Util.locate(loc, <[ decl:
-            ..$attrs class $(macro_class_name : name) : IMacro 
+        def macroDeclaration = Util.locate(loc, <[ decl:
+            ..$attrs class $(macro_class_name : name) : IMacro
             {
-            }]>));
+            }]>);
+        def td = if (parent == null) env.Define(macroDeclaration)
+                 else parent.DefineNestedType(macroDeclaration : ClassMember.TypeDeclaration);
         
         td.Define(<[decl: static mutable my_usage : MacroUsageAttribute; ]>);
         td.Define(<[decl: static keywords : list [string]; ]>);

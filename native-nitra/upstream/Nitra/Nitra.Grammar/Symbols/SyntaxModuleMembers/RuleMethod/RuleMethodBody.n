@@ -1,0 +1,21 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing.RuleMethod
+{
+  [Record]
+  public sealed class RuleMethodBody : Located
+  {
+    public override Location : Location { get; }
+    public          Expr     : PExpr    { get; }
+
+    public override ToString() : string { $"{ $Expr }" }
+  }
+}

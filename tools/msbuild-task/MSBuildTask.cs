@@ -293,7 +293,7 @@ namespace Nemerle.Tools.MSBuildTask
 
             public static Location Parse(int tagPos, string text)
             {
-                if (text == null || tagPos >= text.Length)
+                if (text == null || tagPos <= 0 || tagPos >= text.Length)
                     return new Location();
 
                 var m = _msgRx.Match(text); // Try new (MS) format.
@@ -327,6 +327,7 @@ namespace Nemerle.Tools.MSBuildTask
                     var dir = str.StartsWith(":") ? "" : Path.GetDirectoryName(str);
                     // Find first location separator (it's a end of path)
                     var locIndex = str.IndexOf(':', dir.Length);
+                    if (locIndex < 0) return new Location();
                     var path = (locIndex <= 0) ? dir : str.Substring(0, locIndex);
                     var locStr = str.Substring(locIndex);
                     var parts = locStr.Trim().Trim(':').Split(':');

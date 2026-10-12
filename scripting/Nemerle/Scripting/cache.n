@@ -1,0 +1,123 @@
+using Nemerle.Imperative;
+using System;
+using System.IO;
+using System.Reflection;
+using System.Collections.Generic;
+using Nemerle.Platform;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.host;
+
+public interface IScriptArtifactCache
+{
+  GetPath(key : string) : string;
+  Invalidate(key : string) : void;
+  Publish(key : string, script : CompiledScript, host : ScriptHost) : void;
+}
+
+public sealed class FileScriptArtifactCache : IScriptArtifactCache
+{
+  directory : string;
+  limit : long;
+  gate : object = object();
+  public this(directory : string, maximumBytes : long)
+  {
+    when (maximumBytes <= 0) throw ArgumentOutOfRangeException("maximumBytes");
+    this.directory = Path.GetFullPath(directory); limit = maximumBytes;
+  }
+  public GetPath(key : string) : string
+  {
+    def path = Path.Combine(directory, key, "script.dll");
+    if (File.Exists(path) && File.Exists(path + ".script")) path else null
+  }
+  public Invalidate(key : string) : void
+  {
+    lock (gate)
+    {
+      def path = Path.Combine(directory, key);
+      when (Directory.Exists(path)) Directory.Delete(path, true);
+    }
+  }
+  public Publish(key : string, script : CompiledScript, host : ScriptHost) : void
+  {
+    lock (gate)
+    {
+      _ = Directory.CreateDirectory(directory);
+      def temporary = Path.Combine(directory, ".pending-" + Guid.NewGuid().ToString("N"));
+      _ = Directory.CreateDirectory(temporary);
+      try
+      {
+        host.Save(script, Path.Combine(temporary, "script.dll"));
+        mutable payload : long = 0;
+        foreach (file in DirectoryInfo(temporary).GetFiles("*", SearchOption.AllDirectories)) payload = payload + file.Length;
+        when (payload > limit) return();
+        def destination = Path.Combine(directory, key);
+        try { Directory.Move(temporary, destination); }
+        catch { | error is IOException => unless (Directory.Exists(destination)) throw error; }
+        mutable bytes : long = 0;
+        def entries : List[DirectoryInfo] = List();
+        foreach (entry in Directory.GetDirectories(directory))
+          unless (Path.GetFileName(entry).StartsWith("."))
+          {
+            def info = DirectoryInfo(entry); entries.Add(info);
+            foreach (file in info.GetFiles("*", SearchOption.AllDirectories)) bytes = bytes + file.Length;
+          }
+        entries.Sort((a, b) => a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc));
+        foreach (entry in entries)
+          when (bytes > limit && entry.FullName != destination)
+          {
+            foreach (file in entry.GetFiles("*", SearchOption.AllDirectories)) bytes = bytes - file.Length;
+            try { entry.Delete(true); } catch { | _ is IOException => (); }
+          }
+      }
+      finally { when (Directory.Exists(temporary)) Directory.Delete(temporary, true); }
+    }
+  }
+}
+
+public static class ScriptFingerprint
+{
+  public Create(source : ScriptSource, definition : ScriptDefinition, version : string) : string
+  {
+    using (stream = MemoryStream())
+    {
+      using (writer = BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+      {
+        writer.Write("Nemerle.ScriptCache.3"); writer.Write(definition.Id); writer.Write(definition.Version); writer.Write(definition.FileExtension); writer.Write(version ?? "");
+        writer.Write(Path.GetFullPath(source.Path)); writer.Write(source.Text); writer.Write(definition.Debug); writer.Write(definition.TargetFramework); writer.Write(definition.RuntimeIdentifier); writer.Write(definition.DependencyFingerprint);
+        def assembly(type : Type) : void
+        {
+          writer.Write(type.AssemblyQualifiedName);
+          writer.Write(type.Assembly.ManifestModule.ModuleVersionId.ToString());
+          when (type.Assembly.Location != "") writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(type.Assembly.Location)));
+        }
+        foreach (pair in definition.Properties) { writer.Write(pair.Key); assembly(pair.Value); }
+        writer.Write(definition.DisplayName ?? ""); writer.Write(definition.FilePathPattern ?? ""); writer.Write(definition.FileLocationProperty ?? "");
+        writer.Write(definition.CaptureResult); writer.Write(definition.ResultField ?? ""); writer.Write(definition.ShareImportedInstances);
+        when (definition.ResultType != null) assembly(definition.ResultType);
+        foreach (type in definition.Interfaces) assembly(type);
+        foreach (path in definition.ImportScripts) writer.Write(path);
+        foreach (option in definition.CompilerOptions) writer.Write(option);
+        foreach (fragment in definition.SourceFragments) { writer.Write(fragment.Start); writer.Write(fragment.Length); }
+        foreach (prelude in definition.Preludes) { writer.Write(prelude.Path); writer.Write(prelude.Text); }
+        foreach (name in definition.OpenImportedNames) writer.Write(name);
+        foreach (type in definition.ReceiverTypes) assembly(type);
+        assembly(definition.BaseType); foreach (type in definition.BaseArgumentTypes) assembly(type);
+        foreach (pair in definition.Aliases) { writer.Write(pair.Key); writer.Write(pair.Value); }
+        foreach (name in definition.Imports) writer.Write(name);
+        foreach (pair in definition.PreviousTypeNames) { writer.Write(pair.Key); writer.Write(pair.Value); }
+        foreach (pair in definition.PreviousNames) { writer.Write(pair.Key); writer.Write(pair.Value); }
+        foreach (reference in definition.References) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
+        foreach (reference in definition.RuntimeReferences) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
+        foreach (reference in definition.NativeReferences) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
+        foreach (shared in definition.SharedAssemblies) writer.Write(shared.ManifestModule.ModuleVersionId.ToString());
+        foreach (type in array[typeof(Nemerle.Compiler.ManagerClass), typeof(ClrScriptSupport), typeof(ScriptHost), typeof(object)]) assembly(type);
+        when (definition.TargetReferenceDirectory != null)
+        {
+          def paths = Directory.GetFiles(definition.TargetReferenceDirectory, "*.dll"); Array.Sort(paths);
+          foreach (path in paths) { writer.Write(Path.GetFileName(path)); writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(path))); }
+        }
+      }
+      ClrScriptSupport.Digest(stream.ToArray())
+    }
+  }
+}

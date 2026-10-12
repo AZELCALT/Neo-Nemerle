@@ -1,0 +1,28 @@
+﻿//TODO: remove suffix 'Lang': plain name 'Nitra' conflicts with top namespace Nitra and breaks binding
+
+language NitraLang
+{
+  span class Ast               { ForegroundColor=Sienna;          }
+  span class Language          { ForegroundColor=DarkCyan;        }
+  span class Module            { ForegroundColor=DarkCyan;        }
+  span class SyntaxModule      { ForegroundColor=DarkCyan;        }
+  span class Rule              { ForegroundColor=SteelBlue;       }
+  span class Alias             { ForegroundColor=Purple;          }
+  span class RegexRule         { ForegroundColor=Olive;           }
+  span class Style             { ForegroundColor=DarkBlue;        }
+  span class SpanClass         { ForegroundColor=DarkOliveGreen;  }
+  span class Marker            { ForegroundColor=LightGray;       }
+  span class Property          { ForegroundColor=BlueViolet;      }
+  span class DependentProperty { ForegroundColor=CornflowerBlue;  }
+
+  extension = .nitra;
+
+  company     = NitraTeam;
+  description = Nitra plugin for Visual Studio;
+  authors     = Vlad Chistyakov, Stanislav Matveev;
+  copyright   = Jet Brains;
+  license url = http://opensource.org/licenses/BSD-3-Clause;
+  // require license acceptance;
+
+  syntax module NitraSyntax start rule Start;
+}

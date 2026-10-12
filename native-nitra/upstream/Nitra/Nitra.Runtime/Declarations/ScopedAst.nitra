@@ -1,0 +1,7 @@
+﻿namespace Nitra.Declarations
+{
+  abstract ast ScopedAst
+  {
+    in ContainingTable : TableScope;
+  }
+}

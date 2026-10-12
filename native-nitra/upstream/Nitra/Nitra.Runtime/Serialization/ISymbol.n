@@ -1,0 +1,16 @@
+﻿using Nitra.Typing;
+
+using System;
+using System.IO;
+
+namespace Nitra.Serialization
+{
+  public interface ISymbol
+  {
+    AssemblyId   : byte          { get; }
+    SymbolTypeId : string        { get; }
+    Name         : string        { get; }
+    Node         : HierarchyNode { get; }
+    Description  : string        { get; }
+  }
+}

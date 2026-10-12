@@ -87,7 +87,7 @@ namespace Nemerle.Compiler
       try 
       {
         using (file   = FileStream(filePath, FileMode.Open, FileAccess.Read))
-        using (stream = StreamReader(file, UTF8Encoding(true, true)))
+        using (stream = StreamReader(file, UTF8Encoding(true, true), true, 1024, false))
         {
           def index =
             if (checkDuplicatedFiles)

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.
  *
@@ -26,6 +26,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+using Nemerle.Imperative;
 using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
@@ -75,6 +76,7 @@ namespace Nemerle.Compiler
     public mutable Hierarchy : TypesManager;
     protected internal mutable LibrariesManager : LibraryReferenceManager;
     public mutable NameTree : NamespaceTree;
+    public FileModuleRegistry : FileModuleRegistry { get; private set; }
     public mutable CoreEnv : GlobalEnv;
     public mutable MacrosRegistry : MacroRegistry;
     public mutable Options : CompilationOptions;
@@ -535,6 +537,7 @@ namespace Nemerle.Compiler
         NameTree = NamespaceTree (this);
       else
         NameTree.Init ();
+      FileModuleRegistry = FileModuleRegistry(this);
       when (shouldCreate (MacrosRegistry))
         MacrosRegistry = MacroRegistry (this);
       when (shouldCreate(LibrariesManager))
@@ -648,12 +651,88 @@ namespace Nemerle.Compiler
     /**
      * Run passes of the compiler.
      */
+    // Parse-only classification for hosts: no typechecking, macro expansion or IL emission.
+    public ClassifyScriptInput() : int
+    {
+      unless (Options.Script != null) throw System.ArgumentException("A script configuration is required");
+      Instance = this;
+      InitCompiler(); LoadExternalLibraries(); Hierarchy = TypesManager(this);
+      try
+      {
+        foreach (source in Options.Sources)
+        {
+          def lex = LexerString(this, source.GetText(), Location(source.FileIndex, 1, 1)); lex.Keywords = LexerBase.BaseKeywords;
+          mutable ended = false;
+          while (!ended)
+          {
+            def token = lex.GetToken();
+            match (token)
+            {
+              | Token.EndOfFile => ended = true;
+              | Token.WhiteSpace | Token.NewLine | Token.Comment | Token.Indent => ();
+              | _ => Options.Script.LastInputToken = token;
+            }
+          }
+          _ = Parser.Parse(source);
+        }
+      }
+      catch { | _ => when (!Options.Script.IncompleteInput) Options.Script.InvalidInput = true; }
+      if (Options.Script.InvalidInput) 2
+      else if (Options.Script.IncompleteInput) 1
+      else if (Message.SeenError) 2 else 0
+    }
+
+    // Host entry point for source recognition, without hierarchy building or IL emission.
+    public ParseGrammarSources() : GrammarParseResult
+    {
+      def previous = Instance;
+      try
+      {
+        Instance = this; InitCompiler(); LoadExternalLibraries(); Hierarchy = TypesManager(this);
+        when (Options.FileModules) FileModuleRegistry.IndexSources();
+        GrammarParsing.ParseSources(this, Options.Sources, Options.SourceRoot ?? Options.ProjectPath)
+      }
+      finally { Instance = previous; }
+    }
+
     public Run () : void
     {
       Instance = this;
 
       try
       {
+        when (Options.NitraSources != null && (Options.ExperimentalNitraSyntax || Options.ExperimentalGrammarIR || Options.ParseGrammarSpaces))
+          Message.FatalError("Native grammar compilation cannot be combined with declaration inspection, archive or recognition-only modes.");
+        when (Options.ExperimentalNitraSyntax)
+        {
+          when (Options.ExperimentalGrammarIR || Options.ParseGrammarSpaces || Options.CompileToMemory)
+            Message.FatalError("Nitra declaration inspection cannot be combined with archive, space recognition or in-memory compilation.");
+          foreach (file in Options.Sources)
+          {
+            def document = NitraSyntax.Read(file.GetText(), Location.GetFileName(file.FileIndex), true);
+            System.Console.Out.WriteLine(document.ToJson());
+            foreach (diagnostic in document.Diagnostics)
+              Message.Error(diagnostic.File + "@" + diagnostic.Offset.ToString() + ": " + diagnostic.Message);
+          }
+          Message.MaybeBailout();
+          return;
+        }
+
+        when (Options.ExperimentalGrammarIR)
+        {
+          when (Options.ParseGrammarSpaces || Options.CompileToMemory)
+            Message.FatalError("Experimental grammar archive mode cannot be combined with recognition or in-memory compilation.");
+          unless (System.String.Equals(System.IO.Path.GetExtension(Options.OutputFileName), ".dll", System.StringComparison.OrdinalIgnoreCase))
+            Message.FatalError("Experimental grammar archive mode requires an explicit .dll output path.");
+          def archive = GrammarArchives.Collect(Options.Sources, Options.SourceRoot ?? Options.ProjectPath);
+          foreach (diagnostic in archive.Diagnostics)
+            Message.Error(diagnostic.File + "@" + diagnostic.Offset.ToString() + ": " + diagnostic.Message);
+          Message.MaybeBailout();
+          GrammarArchives.WriteDll(archive, Options.OutputFileName, Options.StrongAssemblyKeyName, Options.EmitDebug);
+          System.Console.Out.WriteLine("Experimental compiler archive emitted; source behavior is inactive: " + Options.OutputFileName);
+          return;
+        }
+
         InitCompiler ();
 
         try
@@ -666,6 +745,17 @@ namespace Nemerle.Compiler
 
           Hierarchy = TypesManager (this);
 
+          when (Options.FileModules) FileModuleRegistry.IndexSources();
+          Message.MaybeBailout();
+          when (Options.ParseGrammarSpaces)
+          {
+            def parsed = GrammarParsing.ParseSources(this, Options.Sources, Options.SourceRoot ?? Options.ProjectPath);
+            System.Console.Out.WriteLine(parsed.ToJson());
+            foreach (diagnostic in parsed.Diagnostics)
+              Message.Error(diagnostic.File + "@" + diagnostic.Offset.ToString() + ": " + diagnostic.Message);
+            Message.MaybeBailout();
+            return;
+          }
           def parseResults = Options.Sources.Map(Parser.Parse);
 
           Message.MaybeBailout();    // we have detected multiple files already
@@ -695,6 +785,7 @@ namespace Nemerle.Compiler
         ProgressBar (10);
 
         Hierarchy.EmitAuxDecls ();
+        Hierarchy.CompleteClrTypes();
 
         when (Message.SeenError)
           NameTree.CheckReferencedNamespaces ();
@@ -704,6 +795,7 @@ namespace Nemerle.Compiler
         NameTree.CheckReferencedNamespaces ();
 
         Hierarchy.EmitDecls ();
+        Hierarchy.CompleteClrTypes();
         Message.MaybeBailout();
 
         NameTree.FinishMacroContextClass ();

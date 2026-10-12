@@ -1,0 +1,29 @@
+grammar Mini {
+  statement program form { "begin" ...operation...* "end" }
+  syntax module Statements {
+    form program;
+    semantic kind operation {
+      | Assign = Name=Identifier "=" Value=Expr ";";
+      | If = "if" "(" Condition=Expr ")" "then" operation* "fi";
+      | Foreign = Space;
+    }
+    regex Identifier = ['a'..'z', 'A'..'Z', '_']+;
+    regex Digits = ['0'..'9']+;
+    syntax Expr {
+      | Number = Digits;
+      | Name = Identifier;
+      | Call = Identifier "(" (Expr; ",")* ")";
+      | Parenthesized = "(" Expr ")";
+      precedence Additive:
+      | Add = Expr "+" Expr;
+    }
+  }
+}
+space Mini {
+  begin
+    value = 1 + 2;
+    if (ready) then
+      value = calculate(3, 4);
+    fi
+  end
+}

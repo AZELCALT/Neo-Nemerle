@@ -584,7 +584,7 @@ namespace Nemerle.Compiler
       def pname       = newdecl.PName;
       def ns_node     = parent_node.Path ([pname.Id]);
       def new_gparms  = newdecl.TypeParametersCount;
-      def existing    =
+      def initial_existing =
         match (ns_node.Value)
         {
           | TypeInfoCache.Cached (existing) => [existing]
@@ -603,6 +603,11 @@ namespace Nemerle.Compiler
             
           | _ => []
         };
+
+      def existing =
+        if (Manager.Options.FileModules && Manager.FileModuleRegistry.ModulePrefix(ns_node.FullName) != null)
+          initial_existing.Filter(t => t is TypeBuilder)
+        else initial_existing;
 
       mutable builder = null;
       mutable all     = existing.FoldLeft([], 

@@ -28,6 +28,7 @@
 
 using SCG = System.Collections.Generic;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Assertions;
 using Nemerle.Utility;
@@ -365,6 +366,36 @@ namespace Nemerle.Compiler
         //file = topstream.Location.File;
       }
 
+      when (lex.Manager.Options.Script != null)
+        return ParseScript(lex, topstream);
+
+      when (lex.Manager.Options.FileModules)
+      {
+        def fileEnv = lex.Manager.FileModuleRegistry.Environment(lex.Location.FileIndex);
+        def fileParser = MainParser(fileEnv);
+        def members : SCG.List[ClassMember] = SCG.List();
+        while (topstream != null)
+        {
+          fileParser.eat_assembly_attributes(topstream);
+          match (topstream.Child)
+          {
+            | Token.Using(newEnv, _, _) => fileParser.env = newEnv;
+            | Token.Namespace => () // already diagnosed by the preparser
+            | null => ()
+            | _ =>
+              def next = topstream.Next;
+              topstream.Next = null;
+              try { members.AddRange(fileParser.ParseClassMembers(topstream, "module")); }
+              finally { topstream.Next = next; }
+          }
+          topstream = topstream.Next :> Token.LooseGroup;
+        }
+        foreach (member when !(member is ClassMember.TypeDeclaration) in members)
+          when (member.modifiers != null) member.modifiers.mods |= NemerleModifiers.Static;
+        def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
+        return [declaration];
+      }
+
       def parser = MainParser (lex.Manager.CoreEnv);
       def iter()
       {
@@ -412,6 +443,329 @@ namespace Nemerle.Compiler
       res
     }
     
+    static ParseScript(lex : LexerBase, mutable groups : Token.LooseGroup) : list[TopDeclaration]
+    {
+      def manager = lex.Manager;
+      def data = manager.Options.Script;
+      manager.MacrosRegistry.RegisterMacro(ScriptResultMacro());
+      manager.MacrosRegistry.RegisterMacro(ScriptInitializerMacro());
+      mutable scriptEnv = GlobalEnv(manager.CoreEnv.EnterIntoNamespace([data.TypeName]), ["mask"]);
+      when (data.DefaultImports != null)
+        foreach (name in data.DefaultImports)
+          scriptEnv = scriptEnv.AddOpenNamespace(NList.FromArray(name.Split('.')), lex.Location);
+      foreach (pair in data.PreviousTypeNames)
+        scriptEnv = scriptEnv.AddNamespaceAlias(pair.Key, NList.FromArray(pair.Value.Split('.')), lex.Location);
+      foreach (prelude in data.PreludeSources)
+      {
+        def preludeLexer = LexerString(manager, prelude.Item2, Location(Location.GetFileIndex(prelude.Item1), 1, 1));
+        def preludeGroups = PreParser(preludeLexer, scriptEnv).ParseTopLevel().Child :> Token.LooseGroup;
+        when (preludeGroups != null)
+        {
+          mutable tail = preludeGroups;
+          while (tail.Next != null) tail = tail.Next :> Token.LooseGroup;
+          tail.Next = groups; groups = preludeGroups;
+        }
+      }
+      def parser = MainParser(scriptEnv);
+      def members : SCG.List[ClassMember] = SCG.List();
+      def expressions : SCG.List[PExpr] = SCG.List();
+      def backingFields : SCG.List[ClassMember] = SCG.List();
+      def scopes : SCG.Dictionary[ClassMember, string] = SCG.Dictionary();
+      def sourceNames : SCG.Dictionary[ClassMember, string] = SCG.Dictionary();
+      def names = data.Names;
+      def owners = data.Owners;
+      def privateNames = data.PrivateNames;
+      def encoded(path : string) : string
+      {
+        data.Prefix + System.BitConverter.ToString(System.Text.Encoding.UTF8.GetBytes(path)).Replace("-", "")
+      }
+      def initializer(field : ClassMember.Field) : PExpr
+      {
+        if (field.Initializer != null) field.Initializer
+        else
+        {
+          mutable value = null;
+          foreach (attribute in field.modifiers.CustomAttributes)
+            match (attribute)
+            {
+              | PExpr.Call(fn, [argument]) =>
+                match (Util.QidOfExpr(fn))
+                {
+                  | Some((parts, _)) when parts.ToString(".") == "Nemerle.InternalMacros.StaticInitializer" => value = argument;
+                  | _ => ();
+                }
+              | _ => ();
+            }
+          value
+        }
+      }
+      def typeGroups(ms : list[ClassMember]) : list[ClassMember]
+      {
+        def result : SCG.List[ClassMember] = SCG.List();
+        foreach (m in ms)
+          match (m)
+          {
+            | ClassMember.TypeDeclaration(td) when data.Masks.Contains(td) =>
+              def children = typeGroups(td.GetMembers());
+              unless (children.IsEmpty)
+              {
+                def group = TopDeclaration.Class(td.Location, td.name, td.modifiers, td.typarms, [], children);
+                foreach (child in children) child._definedIn = group;
+                result.Add(ClassMember.TypeDeclaration(m.Location, m.name, m.modifiers, group));
+              }
+            | ClassMember.TypeDeclaration => result.Add(m);
+            | _ => ();
+          }
+        result.NToList()
+      }
+      def add(ms : list[ClassMember], prefix : string, visible : bool) : void
+      {
+        foreach (member in ms)
+        {
+          match (member)
+          {
+            | ClassMember.TypeDeclaration(td) when data.Masks.Contains(td) =>
+              def maskName = member.name.GetName().Id;
+              def path = if (prefix == "") maskName else prefix + "." + maskName;
+              add(td.GetMembers(), path,
+                visible && (member.modifiers.mods & NemerleModifiers.Private) == NemerleModifiers.None);
+              when (prefix == "")
+                foreach (group in typeGroups([member]))
+                {
+                  def name = group.name.GetName().Id;
+                  names[name] = name; owners[name] = ""; scopes[group] = ""; sourceNames[group] = name; members.Add(group);
+                }
+            | ClassMember.TypeDeclaration when prefix != "" => ();
+            | _ =>
+              def id = member.name.GetName().Id;
+              def qualified = if (prefix == "") id else prefix + "." + id;
+              def emitted = if (prefix == "") id else encoded(qualified);
+              names[qualified] = emitted;
+              owners[qualified] = prefix;
+              when (!visible || (member.modifiers.mods & NemerleModifiers.Private) != NemerleModifiers.None)
+                _ = privateNames.Add(qualified);
+              def actual = match (member)
+              {
+                | ClassMember.Property as p => ClassMember.Property(p.Location,
+                    Splicable.Name(Name.NameInCurrentColor(emitted, p.Location, parser.env)),
+                    p.modifiers, p.returnType, p.parameters, p.getter, p.setter, p.initializer) : ClassMember;
+                | _ => member;
+              };
+              scopes[actual] = prefix; sourceNames[actual] = id;
+              members.Add(actual);
+              match (actual)
+              {
+                | ClassMember.Field as field when field.Initializer != null && (field.modifiers.mods & NemerleModifiers.Static) == NemerleModifiers.None =>
+                  def target = PExpr.Ref(field.Location, Name.NameInCurrentColor(emitted, field.Location, parser.env));
+                  expressions.Add(<[ $target = $(field.Initializer) ]>);
+                  field.Initializer = null;
+                  _ = data.RelocatedInitializers.Add(emitted);
+                | ClassMember.Property as property =>
+                  def field = TryExpandAutoproperty(property);
+                  when (field != null)
+                  {
+                    backingFields.Add(field);
+                    def value = initializer(field);
+                    when (value != null && (field.modifiers.mods & NemerleModifiers.Static) == NemerleModifiers.None)
+                    {
+                      def target = PExpr.Ref(field.Location, field.name.GetName());
+                      expressions.Add(<[ $target = $value ]>);
+                      field.Initializer = null;
+                      _ = data.RelocatedInitializers.Add(field.name.GetName().Id);
+                    }
+                    property.initializer = None();
+                  }
+                | _ => ();
+              }
+          }
+        }
+      }
+      def addExpression(expression : PExpr) : void
+      {
+        def binding(pattern : PExpr, value : PExpr, mutableBinding : bool) : void
+        {
+          mutable ty = <[ _ ]>;
+          mutable identifier = pattern;
+          match (pattern)
+          {
+            | PExpr.TypeEnforcement(name, annotation) => identifier = name; ty = annotation;
+            | _ => ();
+          }
+          match (identifier)
+          {
+            | PExpr.Ref(name) =>
+              def mods = AttributesAndModifiers(NemerleModifiers.Public |
+                (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
+              when (value != null)
+                match (ty) { | <[ _ ]> => data.InferredInitializers[name.Id] = value; | _ => (); }
+              def initializer = if (data.InferredInitializers.ContainsKey(name.Id))
+                <[ Nemerle.Compiler.__script_binding_value($(name.Id : string)) ]> else value;
+              when (initializer != null) initializer.Location = value.Location;
+              def field = ClassMember.Field(expression.Location, Splicable.Name(name), mods, ty, initializer);
+              add([field], "", true);
+            | PExpr.Tuple as tuple
+            | PExpr.Call as tuple
+            | PExpr.ListLiteral as tuple
+            | PExpr.As as tuple
+            | PExpr.Is as tuple
+            | PExpr.Where as tuple =>
+              def assignments : SCG.List[PExpr] = SCG.List();
+              def collect(part : PExpr) : void
+              {
+                match (part)
+                {
+                  | PExpr.Tuple(parts) => foreach (part in parts) collect(part);
+                  | PExpr.TypeEnforcement(part, _) | PExpr.Is(part, _) => collect(part);
+                  | PExpr.Call(_, arguments) => foreach (part in arguments) collect(part);
+                  | PExpr.ListLiteral(elements) => foreach (part in elements) collect(part);
+                  | PExpr.As(part, name) => collect(part); collect(PExpr.Ref(part.Location, name.GetName()));
+                  | PExpr.Where(_, fields) => collect(fields);
+                  | PExpr.Assign(_, part) => collect(part);
+                  | PExpr.Literal | PExpr.Member => ();
+                  | PExpr.Ref(name) =>
+                    def mods = AttributesAndModifiers(NemerleModifiers.Public |
+                      (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
+                    def read = PExpr.Ref(part.Location, name);
+                    data.InferredInitializers[name.Id] = <[ { def $pattern = $value; $read } ]>;
+                    add([ClassMember.Field(part.Location, Splicable.Name(name), mods, <[ _ ]>, null)], "", true);
+                    assignments.Add(<[ this.$(name.Id : usesite) = $read ]>);
+                  | PExpr.Wildcard => ();
+                  | _ => Message.Error(part.Location, "Unsupported top-level script binding pattern");
+                }
+              }
+              collect(tuple);
+              expressions.Add(if (mutableBinding) <[ { mutable $pattern = $value; ..$(assignments.NToList()) } ]>
+                else <[ { def $pattern = $value; ..$(assignments.NToList()) } ]>);
+            | _ => expressions.Add(expression);
+          }
+        }
+        match (expression)
+        {
+          | PExpr.Define(pattern, value) => binding(pattern, value, false);
+          | PExpr.DefMutable(name, value) => binding(name, value, true);
+          | _ => expressions.Add(expression);
+        }
+      }
+      def isMember(token : Token) : bool
+      {
+        match (token)
+        {
+          | Token.Keyword(key) =>
+            ["public", "private", "internal", "protected", "static", "mutable", "virtual", "override",
+             "class", "variant", "interface", "struct", "enum", "delegate", "mask", "macro", "module", "abstract", "sealed"].Contains(key);
+          | Token.SquareGroup => true;
+          | Token.Identifier("type") => true;
+          | Token.Identifier =>
+            match (token.Next)
+            {
+              | Token.Operator(":") => true;
+              | Token.RoundGroup as round => round.Next is Token.Operator(":") || round.Next is Token.BracesGroup;
+              | Token.SquareGroup as typeParameters =>
+                match (typeParameters.Next)
+                {
+                  | Token.RoundGroup as round => round.Next is Token.Operator(":") || round.Next is Token.BracesGroup;
+                  | _ => false;
+                }
+              | _ => false;
+            }
+          | _ => false;
+        }
+      }
+      while (groups != null)
+      {
+        parser.eat_assembly_attributes(groups);
+        def next = groups.Next :> Token.LooseGroup;
+        groups.Next = null;
+        try
+        {
+          match (groups.Child)
+          {
+            | Token.Using(newEnv, _, _) => parser.env = GlobalEnv(newEnv, ["mask"]);
+            | Token.Namespace => Message.Error(groups.Location, "Namespaces are not allowed in scripts; use file qualification and masks");
+            | null => ();
+            | token when isMember(token) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
+            | _ => foreach (expression in parser.parse_expr_sequence(groups)) addExpression(expression);
+          }
+        }
+        finally { groups.Next = next; }
+        groups = next;
+      }
+      // Only compiler-generated scaffolding is parsed from text. User source is
+      // parsed once above and retained as AST nodes with its original locations.
+      mutable skeleton;
+      manager.Options.Script = null;
+      try { skeleton = MainParser.Parse(LexerString(manager, data.Template, Location(Location.GetFileIndex(data.TypeName + ".generated.n"), 1, 1))); }
+      finally { manager.Options.Script = data; }
+      def td = skeleton.Head :> TopDeclaration.Class;
+      def finalMembers : SCG.List[ClassMember] = SCG.List();
+      finalMembers.AddRange(td.decls);
+      finalMembers.AddRange(backingFields);
+      foreach (member in members)
+      {
+        def scope = scopes[member];
+        def id = sourceNames[member];
+        def key = if (scope == "") id else scope + "." + id;
+        def name = Splicable.Name(Name.NameInCurrentColor(names[key], member.Location, parser.env));
+        when (privateNames.Contains(key))
+          member.modifiers.mods = (member.modifiers.mods & ~NemerleModifiers.AccessModifiers) | NemerleModifiers.Private;
+        when ((member.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
+          member.modifiers.mods |= NemerleModifiers.Public;
+        unless (privateNames.Contains(key)) data.Members[data.FileName + "." + key] = names[key];
+        match (member)
+        {
+          | ClassMember.Function as fn =>
+            def header = PFunHeader(fn.header.Location, fn.header.TypeParameters, name, fn.header.ReturnType, fn.header.Parameters);
+            def copy = ClassMember.Function(fn.Location, name, fn.modifiers, header, fn.implemented, fn.body);
+            copy.ReturnValueModifiers = fn.ReturnValueModifiers;
+            copy.IsExtension = fn.IsExtension;
+            copy.Body = fn.Body;
+            data.FunctionScopes[names[key]] = scope;
+            finalMembers.Add(copy);
+            when (!privateNames.Contains(key) && (member.modifiers.mods & NemerleModifiers.Public) != NemerleModifiers.None) data.Exports[data.FileName + "." + key] = names[key];
+          | ClassMember.Field as field =>
+            def copy = ClassMember.Field(field.Location, name, field.modifiers, field.ty, field.Initializer);
+            finalMembers.Add(copy);
+          | ClassMember.Property as property =>
+            def accessor(fn : option[ClassMember.Function], prefix : string) : option[ClassMember.Function]
+            {
+              fn.Map(f =>
+              {
+                def n = Splicable.Name(Name.NameInCurrentColor(prefix + names[key], f.Location, parser.env));
+                def h = PFunHeader(f.header.Location, f.header.TypeParameters, n, f.header.ReturnType, f.header.Parameters);
+                def copy = ClassMember.Function(f.Location, n, f.modifiers, h, f.implemented, f.body);
+                copy.ReturnValueModifiers = f.ReturnValueModifiers;
+                copy
+              })
+            }
+            def copy = ClassMember.Property(property.Location, name, property.modifiers, property.returnType,
+                                            property.parameters, accessor(property.getter, "get_"), accessor(property.setter, "set_"), property.initializer);
+            copy.ParsedImplemented = property.ParsedImplemented;
+            data.FunctionScopes["get_" + names[key]] = scope;
+            data.FunctionScopes["set_" + names[key]] = scope;
+            finalMembers.Add(copy);
+          | ClassMember.TypeDeclaration => finalMembers.Add(member);
+          | _ => finalMembers.Add(member);
+        }
+      }
+      def body = PExpr.Sequence(lex.Location, expressions.NToList());
+      def capture = <[ Nemerle.Compiler.__capture_script_result($body) ]>;
+      def resultName = data.Prefix + "result";
+      def resultField = <[ decl: private mutable $(resultName : usesite) : array[object]; ]>;
+      finalMembers.Add(resultField);
+      foreach (member in finalMembers)
+        match (member)
+        {
+          | ClassMember.Function as constructor when constructor.name.GetName().Id == ".ctor" =>
+            constructor.Body = <[ $(constructor.Body); $capture ]>;
+          | _ => ();
+        }
+      def evaluate = <[ decl: public $(data.Prefix + "evaluate" : usesite)() : array[object] { this.$(resultName : usesite) } ]>;
+      finalMembers.Add(evaluate);
+      def result = TopDeclaration.Class(td.Location, td.name, td.modifiers, td.typarms, td.t_extends, finalMembers.NToList());
+      foreach (member in finalMembers) member._definedIn = result;
+      [result]
+    }
+
     static IsTopLevel (tok : Token.LooseGroup) : bool
     {
       def testToken(_tok)
@@ -465,6 +819,7 @@ namespace Nemerle.Compiler
         last_tok
       }
       else {
+        when (env.Manager.Options.Script != null && env.Manager.Options.Script.LastInputToken != null && last_tok.Location.Equals(env.Manager.Options.Script.LastInputToken.Location)) env.Manager.Options.Script.IncompleteInput = true;
         Error (last_tok, "unexpected end of token sequence");
         Token.EndOfGroup (last_tok.Location)
       }
@@ -689,6 +1044,12 @@ namespace Nemerle.Compiler
 
     static Error(tok : Token, msg : string) : void
     {
+      def script = ManagerClass.Instance.Options.Script;
+      when (script != null)
+      {
+        when (tok is Token.EndOfGroup && script.LastInputToken != null && tok.Location.Equals(script.LastInputToken.Location)) script.IncompleteInput = true;
+        unless (script.IncompleteInput) script.InvalidInput = true;
+      }
       Message.Error(tok.Location, "parse error near " + tok.ToString (true) + ": " + msg)
     }
 
@@ -965,7 +1326,10 @@ namespace Nemerle.Compiler
                   def old_value_of_in_variant = in_variant;
                   when (key == "variant")
                     in_variant = true;
-                  members = ParseClassMembers(children, key);
+                  def previousEnv = env;
+                  when (key == "mask") env = env.EnterIntoNamespace([name.GetName().Id]);
+                  try { members = ParseClassMembers(children, key); }
+                  finally { env = previousEnv; }
                   _ = members.RemoveAll(_ is ClassMember.TypeDeclaration (TopDeclaration.Delegate(null)));
                   in_variant = old_value_of_in_variant
               }
@@ -985,10 +1349,15 @@ namespace Nemerle.Compiler
               mods.mods |= NemerleModifiers.Struct;
               TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
 
-            | "module" =>
+            | "module" | "mask" =>
+              when (key == "mask" && Manager.Options.Script == null) FileModuleRegistry.ApplyDefaults(members2);
+              when (key == "mask" && Manager.Options.Script != null)
+                foreach (member in members2)
+                  when ((member.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
+                    member.modifiers.mods |= NemerleModifiers.Public;
               mods.mods |= NemerleModifiers.Static;
               foreach (m when !(m is ClassMember.TypeDeclaration) in members)
-                when (m.modifiers != null)
+                when (m.modifiers != null && (key != "mask" || Manager.Options.Script == null))
                   m.modifiers.mods |= NemerleModifiers.Static;
               TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
 
@@ -1003,6 +1372,9 @@ namespace Nemerle.Compiler
             | "enum" => TopDeclaration.Enum (locAll, name, mods, typarms, t_extends, members2)
             | _ => Util.ice ()
           };
+
+        when (key == "mask" && Manager.Options.Script != null)
+          _ = Manager.Options.Script.Masks.Add(td);
 
         InitBodyLocations(td, bodyBracesGroup);
 
@@ -1045,6 +1417,7 @@ namespace Nemerle.Compiler
             match (key)
             {
               | "class" | "struct" | "module" | "interface" | "enum" | "variant" => processType(key)
+              | "mask" when Manager.Options.FileModules || Manager.Options.Script != null => processType(key)
               | "delegate" =>
                 def h = parse_fun_header (null);
                 def td = TopDeclaration.Delegate(startLocation + h.Location, h.ParsedSplicableName, mods, h.ParsedTypeParameters, h);
@@ -2095,7 +2468,10 @@ namespace Nemerle.Compiler
               | "override"  => add_and_loop(NemerleModifiers.Override)
               | "virtual"   => add_and_loop(NemerleModifiers.Virtual)
               | "volatile"  => add_and_loop(NemerleModifiers.Volatile)
-              | "partial"   => add_and_loop(NemerleModifiers.Partial)
+              | "partial"   =>
+                when (Manager.Options.FileModules)
+                  Message.Error(tok.Location, "partial declarations are not allowed in file-module mode");
+                add_and_loop(NemerleModifiers.Partial)
               | "extern"    => add_and_loop(NemerleModifiers.Extern)
               | _           => acc
             }

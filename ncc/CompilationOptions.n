@@ -40,6 +40,12 @@ namespace Nemerle.Compiler
     public mutable OutputPath : string;
     public mutable ProjectPath : string;
     public mutable RootNamespace : string;
+    public mutable FileModules : bool;
+    public mutable Script : ScriptCompilationData;
+    public mutable NitraSources : NitraSourceConfiguration;
+    public mutable SharedAssemblies : array[System.Reflection.Assembly];
+    public mutable SourceRoot : string;
+    public mutable TargetReferenceDirectory : string;
     public mutable XmlDocOutputFileName : string;
     public mutable DumpTypedTree : bool;
     public mutable PrintExpressionsType : bool;
@@ -80,6 +86,9 @@ namespace Nemerle.Compiler
     public mutable LibraryPaths : list[string];
     public mutable MacrosToLoad : list [string];
     public mutable Sources : list [ISource];
+    public mutable ParseGrammarSpaces : bool;
+    public mutable ExperimentalGrammarIR : bool;
+    public mutable ExperimentalNitraSyntax : bool;
     public mutable TryStartDebugger : bool;
 
     public mutable Platform : string;
@@ -125,6 +134,12 @@ namespace Nemerle.Compiler
       XmlDocOutputFileName = null;
       DumpTypedTree = false;
       PrintExpressionsType = false;
+      FileModules = false;
+      Script = null;
+      NitraSources = null;
+      SharedAssemblies = null;
+      SourceRoot = null;
+      TargetReferenceDirectory = null;
       TargetIsLibrary = false;
       TargetIsSet = false;
       TargetIsWinexe = false;
@@ -145,6 +160,9 @@ namespace Nemerle.Compiler
       PersistentLibraries = false;
       DumpDecisionTree = false;
       IndentationSyntax = false;
+      ParseGrammarSpaces = false;
+      ExperimentalGrammarIR = false;
+      ExperimentalNitraSyntax = false;
       DoPrintStats = false;
       LexerStoreComments = false;
       Optimize = null;
@@ -365,6 +383,38 @@ namespace Nemerle.Compiler
                                aliases = ["-i"],
                                help = "Turn on indentation-based syntax (similar to Python)",
                                handler = fun () { this.IndentationSyntax = true; }),
+
+        Getopt.CliOption.Flag (name = "-parse-grammar-spaces",
+                       help = "Parse experimental grammar/space source and write JSON without emitting an assembly",
+                       handler = fun () { this.ParseGrammarSpaces = true; }),
+
+        Getopt.CliOption.Flag (name = "-experimental-nitra-source",
+                       aliases = [],
+                       help = "Compile native grammar declarations and space expressions (experimental)",
+                       handler = fun () { this.NitraSources = NitraSourceConfiguration(true); }),
+
+        Getopt.CliOption.Flag (name = "-experimental-nitra-syntax",
+                       aliases = [],
+                       help = "Inspect experimental native Nitra declarations without executing or compiling them",
+                       handler = fun () { this.ExperimentalNitraSyntax = true; }),
+
+        Getopt.CliOption.Flag (name = "-experimental-grammar-ir",
+                       aliases = [],
+                       help = "Archive opaque experimental blocks in a DLL; does not compile or execute source",
+                       handler = fun () { this.ExperimentalGrammarIR = true; }),
+
+        Getopt.CliOption.Flag (name = "-file-modules",
+                       aliases = [],
+                       help = "Use independent file modules and mask groups",
+                       handler = fun () { this.FileModules = true; }),
+
+        Getopt.CliOption.String (name = "-target-references",
+                       help = "directory containing target CLR reference assemblies",
+                       handler = fun (s) { this.TargetReferenceDirectory = s; }),
+        Getopt.CliOption.String (name = "-source-root",
+                       aliases = [],
+                       help = "Root directory for file module identities",
+                       handler = fun (s) { this.SourceRoot = s; }),
 
         Getopt.CliOption.String (name = "-out",
                        aliases = ["-o"],

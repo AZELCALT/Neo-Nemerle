@@ -1,0 +1,8 @@
+﻿namespace Nitra.Declarations
+{
+  ast Reference
+  {
+    in  Scope : Scope;
+    out Ref   : Ref[DeclarationSymbol] = Bind(Scope);
+  }
+}

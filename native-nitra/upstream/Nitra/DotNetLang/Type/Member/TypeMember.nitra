@@ -1,0 +1,28 @@
+﻿using Nemerle.Collections;
+
+using Nitra;
+using Nitra.Declarations;
+using Nitra.Internal;
+
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace DotNet
+{
+  ast NestedTypeTag {}
+
+  abstract declaration TypeMember : BindableAst
+  {
+    symbol
+    {
+      in DeclaredIn : GenericContainerTypeSymbol;
+
+      FullName = DeclaredIn.FullName + "." + this.Name;
+      DeclaredInOpt = if (DeclaredIn == null) VNone() else VSome(DeclaredIn);
+    }
+    in DeclaredIn : GenericContainerTypeSymbol;
+
+    Symbol.DeclaredIn = DeclaredIn;
+    ContainingTable   = DeclaredIn.MemberTable;
+  }
+}

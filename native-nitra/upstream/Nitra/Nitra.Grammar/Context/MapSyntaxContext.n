@@ -1,0 +1,63 @@
+﻿using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing
+{
+  public sealed class MapSyntaxContext : SimpleNameContext[SyntaxMappingParameterSymbol]
+  {
+    public this(parent : Context)
+    {
+      base(parent);
+      _symbolMap = Map();
+    }
+
+    private mutable _symbolMap : Map[string, SyntaxMappingParameterSymbol];
+
+    public override SymbolMap : Map[string, SyntaxMappingParameterSymbol]
+    {
+      get { _symbolMap }
+    }
+
+    private mutable _returnType : AstType;
+
+    public ReturnType : AstType
+    {
+      get { assert(_returnType : object != null); _returnType }
+    }
+
+    public Initialize(parameters : list[SyntaxMappingParameterSymbol], returnType : AstType) : void
+    {
+      assert(_symbolMap.IsEmpty);
+      assert(_returnType : object == null);
+
+      foreach (p in parameters)
+      {
+        if (_symbolMap.Find(p.Name) is Some(existingParameter))
+          using (root = this.RootError(p.FirstLocation, $"Redefinition of AST mapping parameter '$(p.Name)'"))
+            root.Hint(existingParameter.FirstLocation, "previous definition");
+        else
+          _symbolMap = _symbolMap.Add(p.Name, p)
+      }
+
+      _returnType = returnType;
+    }
+  }
+
+  public sealed class MapSyntaxEnteredScopeContext : EnteredScopeContext
+  {
+    public this(parent : Context)
+    {
+      base(parent)
+    }
+
+    public override CurrentSymbols : list[Symbol] { get { [] } }
+  }
+}

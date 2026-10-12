@@ -1,0 +1,276 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+using Nitra.ProjectSystem;
+
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  public class EmitterEnvironment
+  {
+    public Manager                   : ManagerClass              { get; }
+    public Project                   : NitraProject              { get; }
+    public Root                      : HierarchyNode             { get { Project.RootNamespace.Node } }
+    public DefaultTypeCompiler       : NTypeCompiler             { get; }
+    public AstListTypeCompiler       : NTypeCompiler             { get; }
+    public AstOptionTypeCompiler     : NTypeCompiler             { get; }
+
+    public IsDebug                   : bool                      { get; }
+    public EnableOptimization        : bool                      { get { !IsDebug } }
+    public IsIdeMode                 : bool                      { get { Manager.IsIntelliSenseMode } }
+    public OptionTypeInfo            : TypeInfo                  { get; }
+    public ListTypeInfo              : TypeInfo                  { get; }
+    public ParseTreeTypeInfo         : TypeInfo                  { get; }
+    public ParseTreeTypeVar          : FixedType                 { get; }
+    public AstTypeInfo               : TypeInfo                  { get; }
+    public AstTypeVar                : FixedType                 { get; }
+    public ParsedValueTypeInfo       : TypeInfo                  { get; }
+    public ListParseTreeTypeInfo     : TypeInfo                  { get; }
+    public OptionParseTreeTypeInfo   : TypeInfo                  { get; }
+    public SequenceParseTreeTypeInfo : Dictionary[int, TypeInfo] { get; }
+    public NSpanTypeInfo             : TypeInfo                  { get; }
+    public NSpanTypeVar              : FixedType                 { get; }
+    public LocationTypeInfo          : TypeInfo                  { get; }
+    public LocationTypeVar           : FixedType                 { get; }
+    public CollectorTypeInfo         : TypeInfo                  { get; }
+    public CollectorTypeVar          : FixedType                 { get; }
+    public FileTypeInfo              : TypeInfo                  { get; }
+    public FileTypeVar               : FixedType                 { get; }
+    public SymbolTypeInfo            : TypeInfo                  { get; }
+    public SymbolTypeVar             : FixedType                 { get; }
+    public ScopeTypeInfo             : TypeInfo                  { get; }
+    public ScopeTypeVar              : FixedType                 { get; }
+    public IExportableSymbolTypeInfo : TypeInfo                  { get; }
+    public IExportableSymbolTypeVar  : FixedType                 { get; }
+    public Int32TypeInfo             : TypeInfo                  { get; }
+    public Int32TypeVar              : FixedType                 { get; }
+    public StringTypeInfo            : TypeInfo                  { get; }
+    public StringTypeVar             : FixedType                 { get; }
+    public BooleanTypeInfo           : TypeInfo                  { get; }
+    public BooleanTypeVar            : FixedType                 { get; }
+    public PropertyAttributeTypeInfo : TypeInfo                  { get; }
+    public DependentPropertyAttributeTypeInfo : TypeInfo         { get; }
+    public SymbolBaseTypeInfo        : TypeInfo                  { get; }
+    public SymbolBaseTypeVar         : FixedType                 { get; }
+    public IRefTypeInfo              : TypeInfo                  { get; }
+    public IRefTypeVar               : FixedType                 { get; }
+
+    public this(project : NitraProject)
+    {
+      Manager                   = project.Manager;
+      Project                   = project;
+      IsDebug                   = Manager.Options.IsConstantDefined("DEBUG") || Manager.Options.IsConstantDefined("PARSER_DEBUG");
+      OptionTypeInfo            = Manager.LookupTypeInfo("Nemerle.Core.option", 1);
+      ListTypeInfo              = Manager.LookupTypeInfo("Nemerle.Core.list", 1);
+      ParseTreeTypeInfo         = Manager.LookupTypeInfo("Nitra.ParseTree", 0);
+      ParseTreeTypeVar          = FixedType.Class(ParseTreeTypeInfo, []);
+      AstTypeInfo               = Manager.LookupTypeInfo("Nitra.Declarations.IAst", 0);
+      AstTypeVar                = FixedType.Class(AstTypeInfo, []);
+      ParsedValueTypeInfo       = Manager.LookupTypeInfo("Nitra.ParsedValue");
+      ListParseTreeTypeInfo     = Manager.LookupTypeInfo("Nitra.ListParseTree", 1);
+      OptionParseTreeTypeInfo   = Manager.LookupTypeInfo("Nitra.OptionParseTree", 1);
+      SequenceParseTreeTypeInfo = Dictionary();
+      for (mutable i = 2; i <= 10; ++i)
+        SequenceParseTreeTypeInfo[i] = Manager.LookupTypeInfo("Nitra.SequenceParseTree", i);
+      NSpanTypeInfo             = Manager.LookupTypeInfo("Nitra.NSpan", 0);
+      NSpanTypeVar              = FixedType.Class(NSpanTypeInfo, []);
+      LocationTypeInfo          = Manager.LookupTypeInfo("Nitra.Location", 0);
+      LocationTypeVar           = FixedType.Class(LocationTypeInfo, []);
+      CollectorTypeInfo         = Manager.LookupTypeInfo("Nitra.Staging.ICollector", 0);
+      CollectorTypeVar          = FixedType.Class(CollectorTypeInfo, []);
+      FileTypeInfo              = Manager.LookupTypeInfo("Nitra.ProjectSystem.File", 0);
+      FileTypeVar               = FixedType.Class(FileTypeInfo, []);
+      SymbolTypeInfo            = Manager.LookupTypeInfo("Nitra.Typing.Symbol", 0);
+      SymbolTypeVar             = FixedType.Class(SymbolTypeInfo, []);
+      ScopeTypeInfo             = Manager.LookupTypeInfo("Nitra.Declarations.Scope", 0);
+      ScopeTypeVar              = FixedType.Class(ScopeTypeInfo, []);
+      IExportableSymbolTypeInfo = Manager.LookupTypeInfo("Nitra.Serialization.IExportableSymbol", 0);
+      IExportableSymbolTypeVar  = FixedType.Class(IExportableSymbolTypeInfo, []);
+      Int32TypeInfo             = Manager.LookupTypeInfo("System.Int32", 0);
+      Int32TypeVar              = FixedType.Class(Int32TypeInfo, []);
+      StringTypeInfo            = Manager.LookupTypeInfo("System.String", 0);
+      StringTypeVar             = FixedType.Class(StringTypeInfo, []);
+      BooleanTypeInfo           = Manager.LookupTypeInfo("System.Boolean", 0);
+      BooleanTypeVar            = FixedType.Class(BooleanTypeInfo, []);
+      DefaultTypeCompiler       = DefaultNTypeCompiler(this);
+      AstListTypeCompiler       = AstListNTypeCompiler(DefaultTypeCompiler);
+      AstOptionTypeCompiler     = AstOptionNTypeCompiler(DefaultTypeCompiler);
+      PropertyAttributeTypeInfo = Manager.LookupTypeInfo("Nitra.Internal.PropertyAttribute", 0);
+      DependentPropertyAttributeTypeInfo = Manager.LookupTypeInfo("Nitra.Internal.DependentPropertyAttribute", 0);
+      SymbolBaseTypeInfo        = Manager.LookupTypeInfo("Nitra.Declarations.SymbolBase", 0);
+      SymbolBaseTypeVar         = FixedType.Class(SymbolBaseTypeInfo, []);
+      IRefTypeInfo              = Manager.LookupTypeInfo("Nitra.Declarations.IRef", 0);
+      IRefTypeVar               = FixedType.Class(IRefTypeInfo, []);
+    }
+
+    public NamespaceOfSymbol(symbol : Symbol) : GlobalEnv
+    {
+      Manager.CoreEnv.EnterIntoNamespace(symbol.Node.Parent.FullNameParts);
+    }
+
+    [Memoize]
+    public GetParseTreeType(symbol : RuleSymbol) : FixedType
+    {
+      assert(symbol is SyntaxRuleSymbol(Type = RuleType.Ref));
+      def nsParts       = symbol.DeclaringModule.Node.Parent.FullNameParts;
+      def moduleName    = symbol.DeclaringModule.Name + "ParseTree";
+      def parseTreeName = moduleName :: symbol.ParseTreeModuleRelativeName;
+      BindFixedType(nsParts.Append(parseTreeName))
+    }
+
+    [Memoize]
+    public GetAstType(symbol : AstSymbol) : FixedType
+    {
+      BindFixedType(symbol.Node.FullNameParts)
+    }
+
+    [Memoize]
+    public GetSymbolClass(symbol : SymbolSymbol) : FixedType
+    {
+      BindFixedType(symbol.Node.FullNameParts)
+    }
+    
+    [Memoize]
+    public GetLanguageType(symbol : LanguageSymbol) : FixedType
+    {
+      def nsName = symbol.Node.Parent.FullNameParts;
+      BindFixedType(nsName.Append([Util.MakeLanguageName(symbol)]))
+    }
+
+    public GetAstType(astType : AstType) : PExpr
+    {
+      | Ast        (symbol) => <[ $(GetAstType(symbol) : typed) ]>
+      | Option     (symbol) => <[ $(GetAstType(symbol) : typed).IAstOption ]>
+      | List       (symbol)
+      | OptionList (symbol) => <[ $(GetAstType(symbol) : typed).IAstList ]>
+      | Void                => <[ void ]>
+    }
+
+    public GetParseTreeType(ruleType : RuleType) : FixedType
+    {
+      match (ruleType)
+      {
+        | Void         => FixedType.Void()
+        | Chars        => NSpanTypeVar
+        | Ref(symbol)  => GetParseTreeType(symbol)
+        | List(ty)     => FixedType.Class(ListParseTreeTypeInfo, [GetParseTreeType(ty)])
+        | Option(ty)   => FixedType.Class(OptionParseTreeTypeInfo, [GetParseTreeType(ty)])
+        | Tuple(types) =>
+          def len = types.Length;
+          mutable typeInfo;
+          if (SequenceParseTreeTypeInfo.TryGetValue(len, out typeInfo))
+            FixedType.Class(typeInfo, types.Map(GetParseTreeType(_)))
+          else
+            Message.FatalError($"Sequence of size '$len' is not supported");
+      }
+    }
+
+    [Memoize]
+    internal LookupPropertySymbol(prop : IProperty) : PropertyLookupResult
+    {
+      def mods = prop.GetModifiers();
+      def env  = prop.DeclaringType.GlobalEnv;
+
+      when (mods.FindAttributeWithArgs(PropertyAttributeTypeInfo, env) is Some((_, [<[ $(fullName : string) ]>, <[ $(mask : int) ]>, <[ $(_isIn) ]>, <[ $_isOut ]> ])))
+      {
+        def result = Root.BindMany.[PropertySymbol](fullName.SplitToList('.'));
+        return match (result)
+        {
+          | [one] => PropertyLookupResult.DeclaredProperty(one, mask)
+          | _     => PropertyLookupResult.None()
+        }
+      }
+
+      when (mods.FindAttributeWithArgs(DependentPropertyAttributeTypeInfo, env) is Some((_, [<[ $(isEvaluatedName : string) ]>])))
+        return PropertyLookupResult.DependentProperty(isEvaluatedName);
+
+      def internalType = prop.DeclaringType.Manager.InternalType;
+
+      when (prop.Name == "Value" &&
+        (prop.DeclaringType.Equals(internalType.Nemerle_option_tc) ||
+         prop.DeclaringType.Equals(internalType.Generic_Nullable_tc) ||
+         prop.DeclaringType.FullName == "Nemerle.Core.ValueOption"))
+        return PropertyLookupResult.DependentProperty("HasValue");
+
+      PropertyLookupResult.None()
+    }
+
+    internal GetParseTreeType(ruleType : ChemicalRuleType) : FixedType
+    {
+      | Void         => FixedType.Void()
+      | Root(symbol) => GetParseTreeType(symbol)
+      | Tuple(types) => FixedType.Tuple(types.Map(GetParseTreeType(_)))
+      | StaticString => StringTypeVar
+      | String       => StringTypeVar
+      | Bool         => BooleanTypeVar
+      | Option(item) => FixedType.Class(OptionTypeInfo, [GetParseTreeType(item)])
+      | Int          => Int32TypeVar
+      | List(item)   => FixedType.Class(ListTypeInfo, [GetParseTreeType(item)])
+    }
+
+    public GetAmbiguousAstType(astSymbol : AstSymbol) : PExpr
+    {
+      <[ $(GetAstType(astSymbol) : typed).$(AstEmitter.AmbiguousOrMissingAstName : usesite) ]>
+    }
+
+    [Memoize]
+    public MakeSubruleOffsetName(subrule : SubruleCompileInfo) : string
+    {
+      $"<# $(subrule)  offset $(subrule.Offset) #>"
+    }
+
+    [Memoize]
+    public MakeSequenceHeaderOffsetName(sequenceHeader : SequenceHeaderCompileInfo) : string
+    {
+      def title = match (sequenceHeader)
+      {
+        | Id    => "Id"
+        | Next  => "Next"
+        | State => "State"
+      };
+      $"<# $(title)  offset $(sequenceHeader.Offset) #>"
+    }
+
+    public MakeSpanClassRef(spanClass : SpanClassSymbol) : PExpr
+    {
+      assert2(spanClass != null);
+
+      <[ $(GetLanguageType(spanClass.DeclaringLanguage) : typed).$(Util.MakeSpanClassName(spanClass) : usesite) ]>
+    }
+
+    public MakeStyleRef(style : StyleSymbol) : PExpr
+    {
+      assert2(style != null);
+
+      <[ $(GetLanguageType(style.DeclaringLanguage) : typed).$(Util.MakeStyleName(style) : usesite) ]>
+    }
+
+    private BindFixedType(typeName : list[string]) : FixedType
+    {
+      match (Manager.CoreEnv.LookupType(typeName))
+      {
+        | Some(ty) => FixedType.Class(ty, [])
+        | None     => assert3(false)
+      }
+    }
+  }
+
+  public variant PropertyLookupResult
+  {
+    | DeclaredProperty  { Symbol : PropertySymbol; Mask : int; }
+    | DependentProperty { IsEvaluatedName : string; }
+    | None
+
+    public IsSome : bool { get { !(this is None) } }
+  }
+}

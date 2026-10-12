@@ -1,0 +1,79 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Internal;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Declarations
+{
+  public partial class Reference : AstBase
+  {
+    public this(location : Location, Id : int)
+    {
+      def loc =
+        if (location.IsTextAvailable)
+          location
+        else
+          Location.MakeFake(StringIndex.GetText(Id));
+      this(loc);
+      this.Id = Id;
+    }
+    
+    public this(location : Location, text : string)
+    {
+      def id = StringIndex.GetId(text);
+      def loc =
+        if (location.IsTextAvailable)
+          location
+        else
+          Location.MakeFake(text);
+      this(loc, id);
+    }
+    
+    public this(located : Located)
+    {
+      this(located.Location, located.GetText())
+    }
+
+    public virtual  Id   : int    { get; protected set; }
+    public          Text : string { get { StringIndex.GetText(Id) } }
+    
+    public Bind[TSymbol](scope : Scope) : Ref[TSymbol]
+      where TSymbol : DeclarationSymbol
+    {
+      def bindResult = scope.Bind.[TSymbol](this);
+      Ref.[TSymbol].CreateBind(this.Location, bindResult)
+    }
+
+    public override ToString() : string { Text }
+    public override ToXaml()   : string { AstUtils.XmlEscape(Text) }
+
+    new public sealed partial class AmbiguousOrMissing : Reference, IAmbiguousAst
+    {
+      public override Id : int
+      {
+        get
+        {
+          if (IsAmbiguous)
+            Ambiguities[0].Id
+          else
+          {
+            mutable id = base.Id;
+            when (id == StringIndex.InvalidId)
+            {
+              id = StringIndex.GetId("#Missing");
+              base.Id = id;
+            }
+            id
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.
  *
@@ -82,6 +82,24 @@ namespace Nemerle.InternalMacros
   macro StaticInitializer (t : TypeBuilder, f : FieldBuilder, val)
   {
     def is_static = f.Attributes %&& NemerleModifiers.Static;
+    // Script lowering moves instance initializers into source order after the
+    // supplied constructor inputs. Keep the earlier inference macro, but do not
+    // also insert the ordinary pre-constructor initializer.
+    mutable relocated = false;
+    // Older bootstrap compilers have no Script option. Only this compatibility
+    // test uses reflection; initialization and script lowering remain Nemerle.
+    def option = t.Manager.Options.GetType().GetField("Script");
+    when (!is_static && option != null)
+    {
+      def script = option.GetValue(t.Manager.Options);
+      when (script != null && (script.GetType().GetField("TypeName").GetValue(script) :> string) == t.FullName)
+      {
+        def fields = script.GetType().GetField("RelocatedInitializers").GetValue(script) :> System.Collections.Generic.HashSet[string];
+        relocated = fields.Contains(f.Name);
+      }
+    }
+    unless (relocated)
+    {
     f.HasBeenAssigned = false; // marks as assigned without triggering obsolete warning
 
     // for constant fields we fold the expression and try to create
@@ -186,6 +204,7 @@ namespace Nemerle.InternalMacros
         // inject intializers into static ctor
         | _ => when (is_static) mems.Iter (inject)
       }
+    }
     }
   }
   

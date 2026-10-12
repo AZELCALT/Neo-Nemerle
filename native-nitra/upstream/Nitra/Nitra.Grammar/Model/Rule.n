@@ -1,0 +1,227 @@
+﻿using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace Nitra.Model
+{
+  public variant PrecedenceReference
+  {
+    | Zero
+    | Name { symbol : SymbolRef[PrecedenceSymbol] }
+  }
+
+  [Record, StructuralEquality]
+  public class BindingPowerInfo
+  {
+    public Symbol : PrecedenceReference;
+    public IsStrong : bool;
+
+    public IsZero : bool { get { !IsStrong && Symbol is PrecedenceReference.Zero } }
+
+    public Name : string
+    {
+      get
+      {
+        (if (IsStrong) "+" else "") + (if (Symbol is Name(symbol)) symbol.ToString() else "0")
+      }
+    }
+
+    public override ToString() : string
+    {
+      Name
+    }
+    public static Zero : BindingPowerInfo = BindingPowerInfo(PrecedenceReference.Zero(), false);
+  }
+
+  [Record, StructuralEquality]
+  public variant Rule : Nitra.Located
+  {
+    [EqualsIgnore]
+    public override Location  : Location { get; }
+    public          Type      : RuleType;
+    public          FieldName : string;
+
+    | Sequence                { Rules     : list[Rule]; }
+    | Call
+      {
+        RuleRef : RuleRef;
+        BindingPower : BindingPowerInfo;
+        [RecordIgnore, EqualsIgnore] public SpanClass : SpanClassSymbol { get; }
+
+        public this(loc : Nitra.Location, type : RuleType, fieldName : string, ruleRef : RuleRef, bindingPower : BindingPowerInfo, spanClass : SpanClassSymbol)
+        {
+          this(loc, type, fieldName, ruleRef, bindingPower);
+          this.SpanClass = spanClass;
+        }
+      }
+    | Repeat                  {
+                                MinCount  : int;     MaxCount     : option[int]; Rule : Rule;
+                                public IsOptimizedList : bool { get { this.Type is RuleType.Chars } }
+                                public IsDynamicSyntaxExtentionPoint : bool { get { this.Rule is Rule.Call(RuleRef = RuleRef.Some(Symbol = RuleDefSymbol(Options = RuleDefinitionOptions(IsDynamicSyntaxExtentionPoint = true)))) } }
+                              }
+    | RepeatWithSeparator     { MinCount  : int;     MaxCount     : option[int]; Rule : Rule; Separator : Rule; HangingSeparator : bool; }
+    //| Choice                  { rules    : list[RegularRule]; }
+    //| Chars                   {
+    //                            chars : list[RangeSet];
+    //                            public IsString : bool { get { chars.ForAll(_.IsSingleChar) } }
+    //                          }
+    | String
+      {
+        Str       : string;
+        /// This token is important in a error recovery.
+        [RecordIgnore, EqualsIgnore] public IsKeyToken : bool { get; internal set; }
+        /// This token can be parsed by the rule used to parse an identifier. All keywords IsKeyToken.
+        [RecordIgnore, EqualsIgnore] public IsKeyword : bool { get; internal set; }
+        [RecordIgnore, EqualsIgnore] public SpanClass : SpanClassSymbol { get; }
+
+        public this(loc : Nitra.Location, fieldName : string, str : string)
+        {
+          this(loc, RuleType.Chars(Some(str)), fieldName, str);
+        }
+
+        public this(loc : Nitra.Location, fieldName : string, str : string, isKeyword : bool, spanClass : SpanClassSymbol)
+        {
+          this(loc, RuleType.Chars(Some(str)), fieldName, str);
+          this.IsKeyword  = isKeyword;
+          this.IsKeyToken = isKeyword;
+          this.SpanClass  = spanClass;
+        }
+      }
+    | Not                     { Rule      : Rule; }
+    | And                     { Rule      : Rule; }
+
+    public this(originalRule : Rule)
+    {
+      this.Location  = originalRule.Location;
+      this.Type      = originalRule.Type;
+      this.FieldName = originalRule.FieldName;
+    }
+
+    public UpdateFieldName(newFieldName : string) : Rule
+    {
+      if (FieldName == newFieldName)
+        this
+      else match (this)
+      {
+        | Sequence(rules)                     => Rule.Sequence(Location, Type, newFieldName, rules)
+        | Call(ruleRef, bindingPower) as rule => Rule.Call(Location, Type, newFieldName, ruleRef, bindingPower, rule.SpanClass)
+        | Repeat(minCount, maxCount, rule)    => Rule.Repeat(Location, Type, newFieldName, minCount, maxCount, rule)
+        | RepeatWithSeparator(minCount, maxCount, rule, separator, hangingSeparator) => Rule.RepeatWithSeparator(Location, Type, newFieldName, minCount, maxCount, rule, separator, hangingSeparator)
+        | String(Str = str, IsKeyToken = isKeyToken, SpanClass = spanClass) => Rule.String(Location, newFieldName, str, isKeyToken, spanClass)
+        | Not(rule)     => Rule.Not(Location, Type, newFieldName, rule)
+        | And(rule)     => Rule.And(Location, Type, newFieldName, rule)
+        //| Choice(rules) => Rule.Choice(Location, Type, newFieldName, rules)
+        //| Chars(chars)  => Rule.Chars(Location, Type, newFieldName, chars)
+      }
+    }
+
+    public Priority : int
+    {
+      get
+      {
+        match (this)
+        {
+          //| Chars                       => 5
+          | String                      => 5
+          | Call                        => 5
+          | Repeat                      => 4
+          | RepeatWithSeparator         => 4
+          | Not                         => 3
+          | And                         => 3
+          | Sequence                    => 2
+          //| Choice                      => 1
+        }
+      }
+    }
+
+    public override ToString() : string
+    {
+      def p(rule : Rule)
+      {
+        if (rule.Priority <= this.Priority)
+          $"($rule)"
+        else
+          rule.ToString()
+      }
+
+      def makeCallText(name, fieldName)
+      {
+        if (string.IsNullOrEmpty(fieldName))
+          name.ToString()
+        else
+          fieldName
+      }
+      match (this)
+      {
+        | Sequence(rules)                                      => $<#..$(rules; " "; p)#>
+        | Call as call when call.BindingPower.IsZero           => makeCallText(call.RuleRef, FieldName)
+        | Call(name, bp)                                       => $<#$(makeCallText(name, FieldName)) : $bp#>
+        | Repeat(0, None, rule)                                => $"$(p(rule))*"
+        | Repeat(1, None, rule)                                => $"$(p(rule))+"
+        | Repeat(min, None, rule)                              => $"$(p(rule)){$min,}"
+        | Repeat(0, Some(1), rule)                             => $"$(p(rule))?"
+        | Repeat(min, Some(max), rule) when min == max         => $"$(p(rule)){$min}"
+        | Repeat(min, Some(max), rule)                         => $"$(p(rule)){$min, $max}"
+        | RepeatWithSeparator(0, None, rule, separator, false) => $"($(p(rule)); $(p(separator)))*"
+        | RepeatWithSeparator(0, None, rule, separator, true)  => $"($(p(rule)); $(p(separator)); ?)*"
+        | RepeatWithSeparator(1, None, rule, separator, false) => $"($(p(rule)); $(p(separator)))+"
+        | RepeatWithSeparator(1, None, rule, separator, true)  => $"($(p(rule)); $(p(separator)); ?)+"
+        | RepeatWithSeparator                                  => assert(false);
+        | String(str)                                          => $<#'$str'#>
+        | Not(rule)                                            => $"!$(p(rule))"
+        | And(rule)                                            => $"&$(p(rule))"
+        //| Choice(rules)                                        => $<#..$(rules; " | ")#>
+        //| Chars as stringRule when stringRule.IsString         =>
+        //  def buffer = StringBuilder();
+        //  _ = buffer.Append("''");
+        //  foreach (rangeSet in stringRule.chars)
+        //    _ = buffer.Append(Utils.EscapeStringChar(rangeSet.Ranges.Head.from));
+        //  _ = buffer.Append("''");
+        //  buffer.ToString()
+        //
+        //| Chars([rangeSet])                                    => $"[$rangeSet]"
+        //| Chars(rangeSets)                                     =>
+        //  def buffer = StringBuilder();
+        //  _ = buffer.Append('(');
+        //  foreach (rangeSet in rangeSets with index)
+        //  {
+        //    when (index > 0)
+        //      _ = buffer.Append(" | ");
+        //    _ = buffer.AppendRangeSet(rangeSet)
+        //  }
+        //  _ = buffer.Append(')');
+        //  buffer.ToString()
+      }
+    }
+
+    public SubRules : list[Rule]
+    {
+      get
+      {
+        match (this)
+        {
+          | Rule.Sequence(rules) => rules
+          | _ => [this]
+        }
+      }
+    }
+
+    public static ReferenceEqualityComparer : IEqualityComparer[Rule] = RuleReferenceEqualityComparer();
+
+    private sealed class RuleReferenceEqualityComparer : EqualityComparer[Rule]
+    {
+      public override Equals(x : Rule, y : Rule) : bool { ReferenceEquals(x, y) }
+      public override GetHashCode(obj : Rule) : int { if (ReferenceEquals(obj, null)) 0 else obj.GetHashCode() }
+    }
+  }
+}

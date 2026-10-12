@@ -56,10 +56,10 @@ namespace Nemerle.Compiler
         
         match (t) {
           | TopDeclaration.Macro as t =>
-            when (parent != null)
-              Message.Error (decl.Location, "macro declarations are allowed only at top level, "
-                             "move it outside the class definition");
-            MacroClasses.GenerateMacroClass (Manager, t, ns_node)
+            def fileScope = Manager.Options.FileModules && parent != null && parent.IsModule;
+            when (parent != null && !fileScope)
+              Message.Error (decl.Location, "macro declarations are allowed only at top level or in a file mask");
+            MacroClasses.GenerateMacroClass (Manager, t, ns_node, if (fileScope) parent else null)
           
           | TopDeclaration.Delegate (header) as td =>
             match (td.TryGetEnv())

@@ -1,0 +1,17 @@
+namespace Nemerle.Compiler
+{
+  public partial class TypesManager
+  {
+    internal ClrEmitter : Nemerle.Platform.ClrEmission = Nemerle.Platform.ClrEmission();
+
+    internal CompleteClrTypes() : void
+    {
+      try { ClrEmitter.CompletePendingTypes() }
+      catch
+      {
+        | error is System.InvalidOperationException =>
+          Message.FatalError(error.Message);
+      }
+    }
+  }
+}

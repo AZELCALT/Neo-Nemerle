@@ -104,6 +104,7 @@ namespace Nemerle.Compiler
 
           def walker = ExprWalker();
           mutable casts = int.MaxValue;
+          mutable scriptScope = int.MaxValue;
 
           foreach (overload in overloads)
           {
@@ -131,12 +132,13 @@ namespace Nemerle.Compiler
                   }
                 }
                 walker.Walk(resExpr, walk);
-                if (newCasts < casts)
+                if (overload.ScriptScope < scriptScope || (overload.ScriptScope == scriptScope && newCasts < casts))
                 {
+                  scriptScope = overload.ScriptScope;
                   casts = newCasts;
                   ok = [overload];
                 }
-                else when (newCasts == casts)
+                else when (overload.ScriptScope == scriptScope && newCasts == casts)
                   ok ::= overload;
               }
 #if DEBUG_OVERLOADS
@@ -487,8 +489,8 @@ namespace Nemerle.Compiler
       def f2 = o2.FormalTypes;
       // Message.Debug($"$o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");
 
-      System.Diagnostics.Debug.Assert(f1 != null && f2 != null);
-      System.Diagnostics.Debug.Assert(f1.Length == f2.Length);
+      System.Diagnostics.Debug.Assert(f1 != null && f2 != null, null, null);
+      System.Diagnostics.Debug.Assert(f1.Length == f2.Length, null, null);
       Util.cassert (f1 != null && f2 != null);
       Util.cassert (f1.Length == f2.Length, 
                     $"$o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");

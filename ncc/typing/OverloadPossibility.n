@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2005-2008 The University of Wroclaw.
  * All rights reserved.
  *
@@ -50,6 +50,7 @@ namespace Nemerle.Compiler
     local_context : LocalContext;
     mutable generic_specifier : list [TypeVar];
     public mutable IsBaseCall : bool;
+    public mutable ScriptScope : int;
     public mutable VarArgs : bool;
     public mutable ExtensionMethodObject : TExpr;
     public mutable IsConstantObject : bool;
@@ -378,7 +379,7 @@ namespace Nemerle.Compiler
 
       def Manager = overloads.Head.Manager;
 
-      def res = overloads.RevFilter( 
+      mutable res = overloads.RevFilter( 
         fun (o : OverloadPossibility)
         {
           def o = o;
@@ -411,6 +412,16 @@ namespace Nemerle.Compiler
           !was_error
         });
       
+      // Non-callable receiver members are selected by lexical receiver scope.
+      // Calls keep every scope until argument applicability is established in
+      // ResolveOverload, so an outer applicable method remains available.
+      when (!res.IsEmpty && res.ForAll(o => !(o.Member is IMethod)))
+      {
+        mutable nearest = int.MaxValue;
+        foreach (o in res) nearest = System.Math.Min(nearest, o.ScriptScope);
+        res = res.Filter(o => o.ScriptScope == nearest);
+      }
+
       match (res) 
       {
         | [] | null =>

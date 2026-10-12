@@ -1,0 +1,227 @@
+using System;
+using System.IO;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+
+namespace Nemerle.Compiler
+{
+  internal sealed class GDeclarations
+  {
+    reader : GReader;
+    grammar : GDefinition;
+    result : GrammarParseResult;
+    private mutable explicitSpaces : bool;
+    private mutable startRule : bool;
+    public this(reader : GReader, grammar : GDefinition, result : GrammarParseResult)
+    { this.reader=reader; this.grammar=grammar; this.result=result; }
+    public Parse() : void { Members(""); }
+    private Members(moduleName : string) : void
+    {
+      while (!reader.Is("<eof>") && !reader.Is("}"))
+      {
+        if (reader.Eat("using"))
+        {
+          def a=reader.Name(); def name=if(reader.Eat("=")) reader.Name() else a;
+          grammar.Imports[moduleName+":"+a]=name; reader.Need(";");
+        }
+        else if (reader.Eat("statement"))
+        {
+          def name=reader.Name(); reader.Need("form"); reader.Need("{");
+          def seq=GExpr("seq",null);
+          while (!reader.Eat("}"))
+          {
+            if(reader.Eat("..."))
+            {
+              def slot=reader.Name(); reader.Need("...");
+              seq.Items.Add(Postfix(GExpr("slot",slot)));
+            }
+            else
+            {
+              def t=reader.Take(); unless(t.Quoted) reader.Fail("forms accept quoted literals or ...kind... slots");
+              seq.Items.Add(GExpr("literal",t.Value));
+            }
+          }
+          when(grammar.Forms.ContainsKey(name)) reader.Fail("duplicate form: "+name);
+          grammar.Forms.Add(name,seq);
+        }
+        else if(reader.Eat("form"))
+        { when(moduleName=="") reader.Fail("form binding requires a syntax module"); when(grammar.Bindings.ContainsKey(moduleName)) reader.Fail("duplicate module form binding: "+moduleName); grammar.Bindings[moduleName]=reader.Name(); reader.Need(";"); }
+        else if(reader.Is("syntax"))
+        {
+          _=reader.Take();
+          if(reader.Eat("module"))
+          {
+            def name=reader.Name(); reader.Need("{"); Members(name); reader.Need("}");
+          }
+          else Rule(moduleName,"syntax",false);
+        }
+        else if(reader.Eat("semantic"))
+        { reader.Need("kind"); Rule(moduleName,"semantic",false); }
+        else if(reader.Eat("regex")) Rule(moduleName,"regex",false);
+        else if(reader.Eat("token")) Rule(moduleName,"token",false);
+        else if(reader.Eat("void")) Rule(moduleName,"void",false);
+        else if(reader.Eat("extend"))
+        {
+          def kind=reader.Take().Text;
+          when(kind=="semantic") { reader.Need("kind"); }
+          unless(kind=="syntax" || kind=="semantic" || kind=="token") reader.Fail("unsupported extension kind: "+kind);
+          Rule(moduleName,kind,true);
+        }
+        else if(reader.Eat("["))
+        {
+          while (!reader.Eat("]"))
+          {
+            def attr=reader.Name();
+            when(attr=="ExplicitSpaces") explicitSpaces=true;
+            when(attr=="StartRule") startRule=true;
+            unless(attr=="StartRule" || attr=="ExplicitSpaces") reader.Fail("unsupported Nitra attribute: "+attr);
+            unless(reader.Is("]")) reader.Need(",");
+          }
+        }
+        else reader.Fail("unsupported grammar declaration: "+reader.Peek().Text);
+      }
+    }
+    private Rule(moduleName : string, kind : string, extension : bool) : void
+    {
+      def offset=reader.Peek().Start; def name=reader.Name();
+      def rule=GRule(name,grammar,moduleName,kind); rule.Offset=offset;
+      rule.Lexical=explicitSpaces || kind=="regex" || kind=="token" || kind=="void";
+      rule.StartRule=startRule; explicitSpaces=false; startRule=false;
+      if(reader.Eat("="))
+      {
+        def a=GAlternative(); a.Owner=rule; a.Name=name; a.Expr=Expression(); rule.Alternatives.Add(a);
+        Actions(); reader.Need(";");
+      }
+      else
+      {
+        reader.Need("{"); mutable precedence="0";
+        while (!reader.Eat("}"))
+        {
+          when(reader.Is("<eof>")) reader.Fail("unterminated rule");
+          if(reader.Eat("precedence"))
+          {
+            precedence=reader.Take().Text;
+            unless(grammar.Precedences.Contains(precedence)) grammar.Precedences.Add(precedence);
+            when(reader.Eat("order"))
+            {
+              mutable left=reader.Name();
+              while(reader.Eat("<"))
+              { def right=reader.Name(); grammar.Orders.Add(left+"<"+right); left=right; }
+            }
+            reader.Need(":");
+          }
+          else
+          {
+            reader.Need("|"); def a=GAlternative(); a.Owner=rule; a.Name=reader.Name(); a.Precedence=precedence;
+            a.Expr=if(reader.Eat("=")) Sequence() else GExpr("ref",a.Name);
+            when(reader.Eat("right")) { reader.Need("-"); reader.Need("associative"); a.Right=true; }
+            when(reader.Eat("left")) { reader.Need("-"); reader.Need("associative"); }
+            Actions(); _=reader.Eat(";"); rule.Alternatives.Add(a);
+          }
+        }
+        _=reader.Eat(";");
+      }
+      if(extension) grammar.Extensions.Add(rule);
+      else
+      {
+        foreach(r in grammar.Rules) when(r.Module==moduleName && r.Name==name) reader.Fail("duplicate rule: "+name);
+        grammar.Rules.Add(rule);
+      }
+    }
+    private Actions() : void
+    {
+      when(reader.Is("{"))
+      {
+        def block=reader.Block(); def a=GrammarAction(); a.File=reader.File; a.Start=block.Start; a.End=block.End; a.Text=block.Text;
+        result.Actions.Add(a);
+      }
+    }
+    private Expression() : GExpr
+    {
+      def first=Sequence();
+      if(reader.Eat("|"))
+      {
+        def alt=GExpr("alt",null); alt.Items.Add(first); alt.Items.Add(Sequence());
+        while(reader.Eat("|")) alt.Items.Add(Sequence()); alt
+      }
+      else first
+    }
+    private Sequence() : GExpr
+    {
+      def seq=GExpr("seq",null);
+      while(!reader.Is("<eof>") && !reader.Is(";") && !reader.Is("}") && !reader.Is("{") && !reader.Is("|")
+         && !reader.Is(")") && !reader.Is("right") && !reader.Is("left") && !reader.Is("precedence"))
+        seq.Items.Add(Term());
+      when(seq.Items.Count==0) reader.Fail("empty rule sequence; use an explicit empty literal");
+      seq
+    }
+    private Term() : GExpr
+    {
+      if(reader.Is("!") || reader.Is("&"))
+      {
+        // The consumed token is recovered from its original character.
+        def op=reader.Take().Text;
+        def e=GExpr(if(op=="!") "not" else "and",null); e.Items.Add(Term()); e
+      }
+      else
+      {
+        mutable e;
+        if(reader.Eat("("))
+        {
+          e=Expression();
+          when(reader.Eat(";"))
+          {
+            def separator=Expression(); def repeated=GExpr("separated",null);
+            repeated.Items.Add(e); repeated.Items.Add(separator); repeated.Min=0;
+            when(reader.Eat(";")) { reader.Need("?"); repeated.Text="trailing"; }
+            e=repeated;
+          }
+          reader.Need(")");
+        }
+        else if(reader.Eat("["))
+        {
+          e=GExpr("chars",null); def b=System.Text.StringBuilder();
+          while(!reader.Eat("]"))
+          {
+            def lo=reader.Take(); unless(lo.Quoted && lo.Value.Length==1) reader.Fail("character class requires quoted characters");
+            mutable hi=lo.Value[0];
+            when(reader.Eat(".."))
+            { def t=reader.Take(); unless(t.Quoted && t.Value.Length==1) reader.Fail("invalid range end"); hi=t.Value[0]; }
+            when(hi<lo.Value[0]) reader.Fail("reversed character range");
+            _=b.Append(lo.Value[0]); _=b.Append(hi);
+            unless(reader.Is("]")) reader.Need(",");
+          }
+          e.Text=b.ToString();
+        }
+        else
+        {
+          def t=reader.Peek();
+          if(t.Quoted) { _=reader.Take(); e=GExpr("literal",t.Value); }
+          else
+          {
+            def name=reader.Name();
+            if(reader.Eat("="))
+            { e=GExpr("capture",name); e.Items.Add(Term()); return e; }
+            else e=GExpr("ref",name);
+            when(reader.Eat("^"))
+            { def qualified=GExpr("binding",reader.Name()); qualified.Items.Add(e); e=qualified; }
+          }
+        }
+        Postfix(e)
+      }
+    }
+    private Postfix(e : GExpr) : GExpr
+    {
+      if(reader.Is("?") || reader.Is("*") || reader.Is("+"))
+      {
+        def op=reader.Take().Text;
+        if(e.Kind=="separated") { e.Min=if(op=="+") 1 else 0; e.Max=if(op=="?") 1 else -1; e }
+        else
+        { def rep=GExpr("repeat",null); rep.Min=if(op=="+") 1 else 0; rep.Max=if(op=="?") 1 else -1; rep.Items.Add(e); rep }
+      }
+      else e
+    }
+  }
+}

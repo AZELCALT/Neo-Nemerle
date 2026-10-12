@@ -1,0 +1,8 @@
+﻿namespace Nitra.Declarations
+{
+  abstract ast BindableAst
+  {
+  stage 1:
+    in Scope : Scope;
+  }
+}

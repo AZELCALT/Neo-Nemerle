@@ -1,0 +1,50 @@
+﻿using DotNet;
+
+using Nitra;
+using Nitra.Declarations;
+
+using Nemerle.Collections;
+
+namespace Nitra.Ast
+{
+  abstract ast SyntaxModuleUsingDirective : ScopedAst
+  {
+  stage 1:
+    inout Literals          : Map[string, string];
+    in    UsingAliasesScope : TableScope;
+    in    CurrentScope      : Scope;
+    inout Opening           : Scope;
+  }
+
+  declaration SyntaxModuleUsingAliasDirective : SyntaxModuleUsingDirective, Alias
+  {
+    symbol
+    {
+      Kind      = "alias";
+      SpanClass = DotNetLang.AliasSpanClass;
+    }
+
+    ContainingTable           = UsingAliasesScope;
+    NamespaceOrTypeName.Scope = CurrentScope;
+    Symbol.Replacement        = NamespaceOrTypeName.Ref;
+
+    NamespaceOrTypeName : QualifiedReference;
+  }
+
+  ast SyntaxModuleUsingOpenDirective : SyntaxModuleUsingDirective
+  {
+  stage 1:
+    out Ref : Ref[DeclarationSymbol];
+
+    LiteralsOut               = AstUtils.TryGetLiterals(NamespaceOrTypeName.Ref, LiteralsIn);
+    ContainingTable           = null;
+    NamespaceOrTypeName.Scope = CurrentScope;
+    OpeningOut                = OpeningIn.UnionWith(Ref.Scope);
+    Ref						  = NamespaceOrTypeName.Ref.ResolveAsIgnoreAmbiguities();
+
+    //unless (NamespaceOrTypeName.Ref.Symbol is NamespaceSymbol || NamespaceOrTypeName.Ref.Symbol is SyntaxModuleSymbol || NamespaceOrTypeName.Ref.Symbol is TopGenericContainerType)
+    //  Error(context, "Using directive can open only namespace or syntax module.");
+
+    NamespaceOrTypeName : QualifiedReference;
+  }
+}

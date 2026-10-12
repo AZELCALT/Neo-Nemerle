@@ -194,7 +194,7 @@ namespace Nemerle.Compiler
 
     public SpecialConstraints : GenericParameterAttributes { get { special } }
 
-    internal SetConstraints(special : GenericParameterAttributes, subtype : list[FixedType]) : void
+    internal SetConstraints(special : GenericParameterAttributes, mutable subtype : list[FixedType]) : void
     {
       when (special %&& GenericParameterAttributes.NotNullableValueTypeConstraint
         && special %&& GenericParameterAttributes.ReferenceTypeConstraint
@@ -202,6 +202,18 @@ namespace Nemerle.Compiler
         Message.Error ("`struct' generic constraint cannot be used together with `class'");
 
       this.special = special;
+
+      // A struct constraint contributes ValueType. An Enum constraint is more
+      // specific and already inherits it; retain Enum as the single CLR base
+      // constraint when importing or cloning modern enum-constrained APIs.
+      when(subtype.Exists(t => match(t) {
+        | FixedType.Class(tc, _) => tc.Equals(InternalType.Enum_tc)
+        | _ => false
+      }))
+        subtype = subtype.Filter(t => match(t) {
+          | FixedType.Class(tc, _) => !tc.Equals(InternalType.ValueType_tc)
+          | _ => true
+        });
 
       def check_class_constraints(lst)
       {

@@ -1,0 +1,1736 @@
+// Experimental static recognition. Operations/positions share source observations;
+// endpoint constraints do not enumerate AST candidates or invoke user code.
+using System;
+using System.Globalization;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+namespace Nemerle.Compiler
+{
+  internal sealed class NitraOperation
+  {
+    public mutable Id : int;
+    public mutable Interface : NitraOperation;
+    public mutable Family : NitraCandidateFamily;
+    public mutable SharedPrefix : bool;
+    public mutable FirstGuard : NitraOperation;
+    public mutable Kind : string;
+    public mutable Text : string;
+    public mutable Label : string;
+    public mutable RuleKind : string;
+    public mutable Min : int;
+    public mutable Max : int = -1;
+    public mutable FastCandidate : bool;
+    public mutable Fast : bool;
+    public mutable Nullable : bool;
+    public mutable AllEnds : bool;
+    public mutable OpaqueValue : bool;
+    public mutable GreedyCall : bool;
+    public Parents : SCG.List[NitraOperation] = SCG.List();
+    public Children : SCG.List[NitraOperation] = SCG.List();
+  }
+  /// Shared recognition interface at a source position. Ends remain alternatives
+  /// of a structural constraint, never separate candidate trees.
+  public sealed class NitraRegion
+  {
+    public mutable Id : int;
+    public mutable Operation : int;
+    public mutable Sample : int;
+    public mutable Kind : string;
+    public mutable Label : string;
+    public mutable Start : int;
+    public Ends : SCG.List[int] = SCG.List();
+    public Children : SCG.List[int] = SCG.List();
+  }
+  public sealed class NitraRecognitionResult
+  {
+    internal mutable NodeBatches : int;
+    internal mutable NodePartitions : int;
+    internal mutable NodeEffects : int;
+    internal mutable ConsumerLinks : int;
+    internal mutable DuplicateLinks : int;
+    internal mutable WorkDeliveries : int;
+    internal mutable Evidence : NitraEvidence;
+    public mutable Source : string;
+    public mutable Rule : string;
+    public mutable Root : int;
+    public mutable Accepted : bool;
+    public mutable Complete : bool;
+    public mutable Furthest : int;
+    public mutable Evaluations : int;
+    public mutable Observations : int;
+    public mutable SampleCreations : int;
+    public mutable SampleReuse : int;
+    public mutable PrefixSamples : int;
+    public mutable PrefixReuse : int;
+    public mutable FamilyEliminations : int;
+    public mutable ContinuationAdvances : int;
+    public mutable DuplicateTransitionsAvoided : int;
+    public mutable PrefixReplays : int;
+    public mutable DispatchBuilds : int;
+    internal mutable UnindexedSampleVisits : int;
+    internal mutable UnindexedSettlements : int;
+    internal mutable ComponentBuilds : int;
+    internal mutable ComponentEdgeVisits : int;
+    internal mutable ComponentMerges : int;
+    internal mutable SettlementPasses : int;
+    internal mutable FamilyDiscoveries : int;
+    internal mutable ReductionCacheHits : int;
+    internal mutable PoolEndpointFacts : int;
+    internal mutable PoolStartChecks : int;
+    internal mutable PoolDependencyFacts : int;
+    internal mutable PoolEvidenceSteps : int;
+    internal mutable PoolLaneCreations : int;
+    internal mutable PoolLaneResumes : int;
+    internal mutable PoolTransitionHits : int;
+    internal mutable PoolPooledSteps : int;
+    internal mutable GuardChecks : int;
+    internal mutable PooledGuardChecks : int;
+    internal mutable GuardLexicalCacheHits : int;
+    internal mutable PartialReductions : int;
+    internal mutable CarriedCandidateSets : int;
+    internal mutable IdentityReductions : int;
+    internal mutable ReductionBatches : int;
+    internal mutable ReductionPartitions : int;
+    internal mutable CandidatesTested : int;
+    internal mutable FilterObservations : int;
+    internal mutable CandidatesEliminated : int;
+    internal mutable EvidenceTimestamp : long;
+    public MatchedProductions : SCG.List[string] = SCG.List();
+    public Regions : SCG.List[NitraRegion] = SCG.List();
+    public Diagnostics : SCG.List[string] = SCG.List();
+    public ToJson() : string
+    {
+      def b=StringBuilder("{\"experimental\":true,\"accepted\":"+(if(Accepted) "true" else "false")+",\"complete\":"+(if(Complete) "true" else "false")+",\"root\":"+Root.ToString()+",\"furthest\":"+Furthest.ToString()+",\"regions\":[");
+      mutable first=true;
+      foreach(r in Regions)
+      {
+        unless(first) _=b.Append(','); first=false;
+        _=b.Append("{\"id\":"+r.Id.ToString()+",\"operation\":"+r.Operation.ToString()+",\"kind\":"+GrammarJson.Quote(r.Kind)+",\"label\":"+GrammarJson.Quote(r.Label)+",\"start\":"+r.Start.ToString()+",\"ends\":[");
+        mutable ef=true; foreach(e in r.Ends) { unless(ef) _=b.Append(','); ef=false; _=b.Append(e); }
+        _=b.Append("],\"children\":["); ef=true; foreach(c in r.Children) { unless(ef) _=b.Append(','); ef=false; _=b.Append(c); } _=b.Append("]}");
+      }
+      _=b.Append("],\"samples\":"+SampleCreations.ToString()+",\"sampleReuse\":"+SampleReuse.ToString()+",\"prefixSamples\":"+PrefixSamples.ToString()+",\"prefixReuse\":"+PrefixReuse.ToString()+",\"familyEliminations\":"+FamilyEliminations.ToString()+",\"continuationAdvances\":"+ContinuationAdvances.ToString()+",\"duplicateTransitionsAvoided\":"+DuplicateTransitionsAvoided.ToString()+",\"prefixReplays\":"+PrefixReplays.ToString()+",\"diagnostics\":["); first=true; foreach(d in Diagnostics) { unless(first) _=b.Append(','); first=false; _=b.Append(GrammarJson.Quote(d)); }
+      _=b.Append("]}"); b.ToString()
+    }
+  }
+  public sealed class NitraPreparedGrammar
+  {
+    internal Entries : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+    internal mutable Ready : bool;
+    internal mutable LegacyRecognition : bool;
+    // Historical guard-batch harness only; production uses evidence lanes.
+    internal mutable GuardBatchCompatibility : bool;
+    internal mutable MaximumFilterWorkers : int = Math.Max(1,Environment.ProcessorCount-1);
+    // Offline crossover for the current membership lookup; see nitra-pool-crossover.json.
+    internal mutable MinimumFilterCandidates : int = 32;
+    internal mutable MinimumNodeWork : int = int.MaxValue;
+    internal FirstAscii : array[array[bool]] = array(128);
+    internal Operations : SCG.List[NitraOperation] = SCG.List();
+    public Modules : SCG.List[string] = SCG.List();
+    public StartRules : SCG.List[string] = SCG.List();
+    internal this() {}
+    public Recognize(rule : string, source : string) : NitraRecognitionResult
+    { Recognize(rule,source,false) }
+    internal Recognize(rule : string, source : string, retain : bool) : NitraRecognitionResult
+    { Recognize(rule,source,retain,true) }
+    internal Recognize(rule : string, source : string, retain : bool, detailed : bool) : NitraRecognitionResult
+    {
+      when(source==null) throw ArgumentNullException("source");
+      unless(Entries.ContainsKey(rule)) throw ArgumentException("unknown prepared rule: "+rule);
+      NitraRecognizer(this,source).Run(Entries[rule],rule,retain,detailed)
+    }
+  }
+  internal sealed class NitraPreparation
+  {
+    result : NitraPreparedGrammar = NitraPreparedGrammar();
+    available : SCG.Dictionary[string,NitraModule] = SCG.Dictionary();
+    modules : SCG.Dictionary[string,NitraModule] = SCG.Dictionary();
+    rules : SCG.Dictionary[string,NitraRule] = SCG.Dictionary();
+    orders : SCG.Dictionary[string,SCG.List[string]] = SCG.Dictionary();
+    alternatives : SCG.Dictionary[string,SCG.List[NitraAlternative]] = SCG.Dictionary();
+    entries : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+    ranks : SCG.Dictionary[string,int] = SCG.Dictionary();
+    primitives : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+    shared : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+    private mutable aliasesActive : SCG.HashSet[string] = SCG.HashSet();
+    keywordCache : SCG.Dictionary[string,string] = SCG.Dictionary();
+    public this(documents : SCG.IEnumerable[NitraDocument], selected : SCG.IEnumerable[string])
+    {
+      foreach(d in documents)
+      {
+        unless(d.Success) throw ArgumentException("cannot prepare invalid declaration document: "+d.File);
+        foreach(m in d.Modules)
+        { when(available.ContainsKey(m.Name)) throw ArgumentException("duplicate syntax module: "+m.Name); available.Add(m.Name,m); }
+      }
+      def include(name : string) : void
+      {
+        unless(available.ContainsKey(name)) throw ArgumentException("unknown selected syntax module: "+name);
+        unless(modules.ContainsKey(name))
+        {
+          def m=available[name]; modules.Add(name,m); result.Modules.Add(name);
+          foreach(i in m.Imports.Values) { def imported=ModuleName(i,m); when(imported!=null) include(imported); }
+        }
+      }
+      foreach(name in selected) include(name);
+      when(modules.Count==0) throw ArgumentException("select at least one syntax module");
+      foreach(m in modules.Values) foreach(r in m.Rules) when(r.Base==null)
+      {
+        when(rules.ContainsKey(r.Key)) throw ArgumentException("duplicate rule: "+r.Key);
+        rules.Add(r.Key,r); alternatives[r.Key]=SCG.List(r.Alternatives); orders[r.Key]=SCG.List(r.Orders);
+      }
+      foreach(m in modules.Values) foreach(r in m.Rules) when(r.Base!=null)
+      {
+        def target=Resolve(r.Base,r.Scope,m);
+        when(target==null) throw ArgumentException("unknown extension target: "+r.Base);
+        unless(target.Kind==r.Kind) throw ArgumentException("extension kind mismatch: "+r.Base);
+        alternatives[target.Key].AddRange(r.Alternatives); orders[target.Key].AddRange(r.Orders);
+      }
+      foreach(r in rules.Values) Rank(r);
+    }
+    private Op(kind : string, text : string) : NitraOperation
+    {
+      def key=kind+":"+text;
+      def primitive=kind=="literal" || kind=="range" || kind=="category" || kind=="empty";
+      when(primitive && primitives.ContainsKey(key)) return primitives[key];
+      def o=NitraOperation(); o.Id=result.Operations.Count; o.Kind=kind; o.Text=text; o.Label=text; result.Operations.Add(o);
+      when(primitive) primitives.Add(key,o); o
+    }
+    private Join(left : NitraOperation, right : NitraOperation) : NitraOperation
+    { if(right==null) left else { def o=Op("seq",null); o.Children.Add(left); o.Children.Add(right); Intern(o) } }
+    private Intern(o : NitraOperation) : NitraOperation
+    {
+      // Production identity stays on variants; equivalent structural requirements
+      // share one operation even when contributed by different productions.
+      when(o.Kind=="rule" || o.Kind=="longest" || o.Kind=="variant" || o.Kind=="deferred") return o;
+      def key=StringBuilder();
+      foreach(value in array[o.Kind,o.Text,o.RuleKind])
+      { _=key.Append(if(value==null) -1 else value.Length); _=key.Append(':'); _=key.Append(value); }
+      _=key.Append(":"+o.Min.ToString()+":"+o.Max.ToString()+":"+o.AllEnds.ToString()+":"+o.OpaqueValue.ToString()+":"+o.GreedyCall.ToString());
+      foreach(c in o.Children) _=key.Append(":"+c.Id.ToString());
+      def name=key.ToString();
+      if(shared.ContainsKey(name)) shared[name] else { shared.Add(name,o); o }
+    }
+    private ModuleName(name : string, mod : NitraModule) : string
+    {
+      mutable ns=mod.Name;
+      while(ns.Length>0)
+      {
+        def dot=ns.LastIndexOf('.'); ns=if(dot<0) "" else ns.Substring(0,dot);
+        def key=if(ns=="") name else ns+"."+name;
+        when(available.ContainsKey(key)) return key;
+      }
+      null
+    }
+    private Resolve(name : string, scope : string, mod : NitraModule) : NitraRule
+    {
+      mutable position=int.MaxValue; mutable scopeLength=0;
+      foreach(r in rules.Values) when(r.Kind!="alias" && scope.StartsWith(r.Key+".",StringComparison.Ordinal) && r.Key.Length>scopeLength)
+      { position=r.Declaration.Start; scopeLength=r.Key.Length; }
+      mutable current=scope;
+      while(current.Length>0)
+      {
+        mutable alias : NitraRule=null;
+        foreach(r in rules.Values) when(r.Kind=="alias" && r.Scope==current && r.Name==name && r.Declaration.Start<=position && (alias==null || alias.Declaration.Start<r.Declaration.Start)) alias=r;
+        when(alias!=null) return alias;
+        def key=current+"."+name; when(rules.ContainsKey(key)) return rules[key];
+        def dot=current.LastIndexOf('.'); current=if(dot<0) "" else current.Substring(0,dot);
+      }
+      when(rules.ContainsKey(name)) return rules[name];
+      def candidates=SCG.HashSet.[NitraRule]();
+      foreach(i in mod.Imports)
+      {
+        def target=ModuleName(i.Value,mod) ?? i.Value;
+        def lookup=if(i.Key!=target && name.StartsWith(i.Key+".",StringComparison.Ordinal)) target+name.Substring(i.Key.Length) else target+"."+name;
+        when(rules.ContainsKey(lookup)) _=candidates.Add(rules[lookup]);
+      }
+      when(candidates.Count>1) throw ArgumentException("ambiguous rule: "+name+" in "+scope);
+      foreach(c in candidates) return c;
+      null
+    }
+    private Rank(r : NitraRule) : void
+    {
+      def groups=SCG.List.[string](); def edges=SCG.List.[string](); mutable previous : string=null; mutable previousScope : string=null;
+      foreach(a in alternatives[r.Key])
+      {
+        def dot=a.Scope.LastIndexOf('.'); def parent=a.Scope.Substring(0,dot);
+        when(previousScope!=parent) previous=null; previousScope=parent;
+        def p=a.Precedence;
+        if(p=="0") previous=null;
+        else unless(groups.Contains(p)) { groups.Add(p); when(previous!=null && !r.NativeBindings) edges.Add(previous+"<"+p); previous=p; }
+      }
+      edges.AddRange(orders[r.Key]);
+      foreach(e in edges) foreach(p in e.Split(array['<'])) unless(groups.Contains(p)) groups.Add(p);
+      mutable level=1;
+      while(groups.Count>0)
+      {
+        mutable chosen : string=null;
+        foreach(p in groups)
+        {
+          mutable ready=true;
+          foreach(e in edges) { def s=e.Split(array['<']); when(s[1]==p && groups.Contains(s[0])) ready=false; }
+          when(ready && chosen==null) chosen=p;
+        }
+        when(chosen==null) throw ArgumentException("cyclic precedence: "+r.Key);
+        mutable rank=level;
+        when(r.NativeBindings)
+        {
+          rank=if(chosen=="0") 0 else 1;
+          foreach(e in edges)
+          {
+            def s=e.Split(array['<']);
+            when(s[1]==chosen) rank=Math.Max(rank,ranks[r.Key+":"+s[0]]+1);
+          }
+        }
+        ranks[r.Key+":"+chosen]=rank; ++level; _=groups.Remove(chosen);
+      }
+      ranks[r.Key+":0"]=0;
+    }
+    private RankOf(r : NitraRule, name : string) : int
+    { def k=r.Key+":"+name; unless(ranks.ContainsKey(k)) throw ArgumentException("unknown precedence "+name+" on "+r.Key); ranks[k] }
+    public Prepare() : NitraPreparedGrammar
+    {
+      foreach(r in rules.Values)
+      {
+        result.Entries[r.Key]=Entry(r,0);
+        when(r.StartRule) result.StartRules.Add(r.Key);
+      }
+      def known=SCG.Dictionary.[int,bool](); def active=SCG.HashSet.[int]();
+      def regular(o : NitraOperation) : bool
+      {
+        when(known.ContainsKey(o.Id)) return known[o.Id];
+        when(active.Contains(o.Id)) return false;
+        when(o.Kind=="deferred" || (o.Kind=="rule" || o.Kind=="longest") && !o.FastCandidate) return false;
+        _=active.Add(o.Id); mutable yes=true; foreach(c in o.Children) unless(regular(c)) yes=false;
+        _=active.Remove(o.Id); known[o.Id]=yes; yes
+      }
+      def visible(o : NitraOperation) : bool
+      {
+        when(o.Kind=="rule" || o.Kind=="longest" || o.Kind=="deferred") return false;
+        when(o.Kind=="capture" || o.Kind=="call") return true;
+        mutable found=false; foreach(c in o.Children) when(visible(c)) found=true; found
+      }
+      foreach(o in result.Operations) o.Fast=regular(o) && !visible(o);
+      mutable changed=true;
+      while(changed)
+      {
+        changed=false;
+        foreach(o in result.Operations) unless(o.Nullable)
+        {
+          mutable yes=false;
+          match(o.Kind)
+          {
+            | "empty" | "not" | "and" | "deferred" => yes=true;
+            | "literal" => yes=o.Text.Length==0;
+            | "repeat" | "separated" => yes=o.Min==0 || o.Children[0].Nullable;
+            | "seq" => yes=true; foreach(c in o.Children) unless(c.Nullable) yes=false;
+            | "subtract" => yes=o.Children[0].Nullable;
+            | _ => foreach(c in o.Children) when(c.Nullable) yes=true;
+          }
+          when(yes) { o.Nullable=true; changed=true; }
+        }
+      }
+      // Compile common sequence prefixes into recognition interfaces. Original
+      // sequence children stay intact for captures and native field consumers.
+      // Keys retain child operation identities: unlike structural samples, a
+      // prefix cannot erase different capture views supplied by its consumers.
+      def prefixes=SCG.Dictionary.[string,NitraOperation]();
+      def originalOperations=SCG.List(result.Operations);
+      foreach(o in originalOperations) when(o.Kind=="seq" && o.Children.Count>2)
+      {
+        mutable prefix=o.Children[0];
+        for(mutable i=1;i<o.Children.Count;++i)
+        {
+          def child=o.Children[i]; def key=prefix.Id.ToString()+":"+child.Id.ToString();
+          if(prefixes.ContainsKey(key)) prefix=prefixes[key];
+          else
+          {
+            def joined=Op("seq",null); joined.SharedPrefix=true;
+            joined.Children.Add(prefix); joined.Children.Add(child);
+            joined.Nullable=prefix.Nullable && child.Nullable;
+            joined.Fast=regular(joined) && !visible(joined); joined.Interface=joined;
+            prefixes.Add(key,joined); prefix=joined;
+          }
+        }
+        o.Interface=prefix;
+      }
+      foreach(o in result.Operations) foreach(c in o.Children) c.Parents.Add(o);
+      // Identity wrappers retain production/capture views, not separate discovery
+      // histories. Binding/lexical differences remain in the compiled children.
+      def resolving=SCG.HashSet.[int]();
+      def structural(o : NitraOperation) : NitraOperation
+      {
+        when(o.Interface!=null) return o.Interface;
+        unless(resolving.Add(o.Id)) return o;
+        o.Interface=if(o.Children.Count==1 && (o.Kind=="rule" || o.Kind=="variant" || o.Kind=="capture" || o.Kind=="call")) structural(o.Children[0]) else o;
+        _=resolving.Remove(o.Id); o.Interface
+      }
+      foreach(o in result.Operations) _=structural(o);
+      // A known leading lexical interface can eliminate a family before its
+      // sample opens. Only test necessity; never choose an uncertain endpoint.
+      def guarded=SCG.HashSet.[int](); def guarding=SCG.HashSet.[int]();
+      def guard(original : NitraOperation) : NitraOperation
+      {
+        def o=original.Interface;
+        when(guarded.Contains(o.Id)) return o.FirstGuard;
+        unless(guarding.Add(o.Id)) return null;
+        o.FirstGuard=if(o.Fast || o.Kind=="literal" || o.Kind=="class" || o.Kind=="empty") o
+                     else if(o.Kind=="seq" && o.Children.Count>0) guard(o.Children[0]) else null;
+        _=guarding.Remove(o.Id); _=guarded.Add(o.Id); o.FirstGuard
+      }
+      foreach(o in result.Operations) _=guard(o);
+      foreach(o in result.Operations)
+        when(o.Interface==o && !o.Fast && (o.Kind=="seq" || o.Kind=="rule" || o.Kind=="alt" || o.Kind=="longest")) o.Family=NitraCandidateFamily(o);
+      result.Ready=true;
+      result
+    }
+    private Entry(r : NitraRule, minimum : int) : NitraOperation { Entry(r,minimum,false) }
+    private Entry(r : NitraRule, minimum : int, raw : bool) : NitraOperation
+    {
+      def key=r.Key+":"+minimum.ToString()+(if(raw) ":language" else ""); when(entries.ContainsKey(key)) return entries[key];
+      def previous=aliasesActive; aliasesActive=SCG.HashSet();
+      try { BuildEntry(r,minimum,raw,key) }
+      finally { aliasesActive=previous; }
+    }
+    private BuildEntry(r : NitraRule, minimum : int, raw : bool, key : string) : NitraOperation
+    {
+      def o=Op(if(raw) "alt" else if(r.Kind=="regex" || r.Kind=="token" || r.Kind=="void") "longest" else "rule",r.Key); o.RuleKind=r.Kind; o.FastCandidate=r.Kind!="syntax"; entries.Add(key,o);
+      foreach(a in alternatives[r.Key])
+      {
+        def rank=RankOf(r,a.Precedence);
+        def allowed=if(r.NativeBindings) !a.NativePostfix || rank*2+(if(a.NativeStrong) 1 else 0)>minimum
+                    else rank==0 || rank>=minimum;
+        when(allowed)
+        {
+          def origin=if(a.Declaration==null) r.Module else ModuleAt(a.Scope,r.Module);
+          def body=Compile(a.Expression,a.Scope,origin,!a.ExplicitSpaces,r,rank,a.Right,false);
+          def wrapped=Op("variant",a.Name); wrapped.RuleKind=r.Kind; wrapped.Label=a.Scope; wrapped.Children.Add(body); o.Children.Add(wrapped);
+        }
+      }
+      when(r.Declaration.Attributes.Contains("DynamicSyntaxExtender") || r.Declaration.Attributes.Contains("DynamicSyntaxExtentionPoint"))
+      { o.Kind="deferred"; o.Text="dynamic grammar execution required: "+r.Key; }
+      when(r.StartRule && !r.ExplicitSpaces)
+      {
+        def space=Resolve("s",r.Scope,r.Module);
+        when(space!=null) { def prefix=Join(Entry(space,0),o); entries[key]=prefix; return prefix; }
+      }
+      o
+    }
+    private ModuleAt(scope : string, fallback : NitraModule) : NitraModule
+    {
+      mutable best=fallback; mutable length=0;
+      foreach(m in modules.Values) when(scope.StartsWith(m.Name+".",StringComparison.Ordinal) && m.Name.Length>length) { best=m; length=m.Name.Length; }
+      best
+    }
+    private Space(mod : NitraModule, scope : string, keyword : string) : NitraOperation
+    {
+      def r=Resolve(keyword ?? "s",scope,mod); if(r==null) null else Entry(r,0)
+    }
+    private Keyword(mod : NitraModule, scope : string, text : string) : string
+    {
+      def key=mod.Name+":"+text; when(keywordCache.ContainsKey(key)) return keywordCache[key];
+      mutable follower : string=null;
+      for(mutable i=0;i<mod.KeywordPatterns.Count;++i)
+      {
+        def pattern=Compile(mod.KeywordPatterns[i],scope,mod,false,null,0,false,false);
+        def check=NitraRecognizer(result,text).Run(pattern,"<keyword>");
+        when(check.Diagnostics.Count>0) throw ArgumentException(check.Diagnostics[0]);
+        when(check.Accepted) follower=mod.KeywordFollowers[i];
+      }
+      keywordCache[key]=follower; follower
+    }
+    private RegexKeyword(rule : NitraRule, mod : NitraModule, scope : string) : string
+    {
+      def key=mod.Name+":@regex:"+rule.Key; when(keywordCache.ContainsKey(key)) return keywordCache[key];
+      keywordCache[key]=null;
+      def find(e : NitraExpression, context : string) : string
+      {
+        match(e.Kind)
+        {
+          | "literal" => Keyword(mod,scope,e.Text)
+          | "call" => def target=Resolve(e.Text,context,rule.Module); if(target==null || target.Kind!="regex") null else RegexKeyword(target,mod,scope)
+          | "seq" when(e.Children.Count==1) => find(e.Children[0],context)
+          | "alt" =>
+            mutable name : string=null; mutable first=true; mutable same=true;
+            foreach(c in e.Children) { def next=find(c,context); if(first) { name=next; first=false; } else when(next!=name) same=false; }
+            if(same) name else null
+          | _ => null
+        }
+      }
+      mutable name : string=null; mutable first=true; mutable same=true;
+      foreach(a in alternatives[rule.Key]) { def next=find(a.Expression,a.Scope); if(first) { name=next; first=false; } else when(next!=name) same=false; }
+      def value=if(same) name else null; keywordCache[key]=value; value
+    }
+    private LeadingSelf(e : NitraExpression, scope : string, mod : NitraModule, owner : NitraRule, seen : SCG.HashSet[string]) : bool
+    {
+      if((e.Kind=="capture" || e.Kind=="seq") && e.Children.Count>0) LeadingSelf(e.Children[0],scope,mod,owner,seen)
+      else if(e.Kind=="call")
+      {
+        def target=Resolve(e.Text,scope,mod);
+        if(target==owner) true
+        else if(target!=null && target.Kind=="alias" && seen.Add(target.Key))
+        { def a=target.Alternatives[0]; LeadingSelf(a.Expression,a.Scope,target.Module,owner,seen) }
+        else false
+      }
+      else false
+    }
+    private Compile(e : NitraExpression, scope : string, mod : NitraModule, spaces : bool,
+                    owner : NitraRule, rank : int, right : bool, strong : bool) : NitraOperation
+    {
+      when(e==null) throw ArgumentException("missing rule expression in "+scope);
+      if(e.Kind=="call")
+      {
+        def target=Resolve(e.Text,scope,mod); when(target==null) throw ArgumentException("unknown rule "+e.Text+" in "+scope);
+        when(target.Kind=="alias")
+        {
+          unless(aliasesActive.Add(target.Key)) throw ArgumentException("cyclic rule alias: "+target.Key);
+          try
+          {
+            def a=target.Alternatives[0]; def alias=Op("call",target.Key);
+            alias.Children.Add(Compile(a.Expression,a.Scope,target.Module,spaces,owner,rank,right,strong)); return Intern(alias);
+          }
+          finally { _=aliasesActive.Remove(target.Key); }
+        }
+        def self=target==owner;
+        def minimum=if(target.NativeBindings && e.NativePrefix)
+                      RankOf(target,e.Binding)*2+(if(e.Strong) 1 else -1)
+                    else if(target.NativeBindings && e.Binding!=null) RankOf(target,e.Binding)*2+(if(e.Strong) 1 else 0)
+                    else if(e.Binding!=null) RankOf(target,e.Binding)+(if(e.Strong) 1 else 0)
+                    else if(self && rank>0) rank+(if(strong) 1 else 0) else 0;
+        def call=Op("call",target.Key); call.RuleKind=target.Kind;
+        // Native regex fields are spans and void rules have no fields. Their
+        // internal regex alternatives do not create native tree ambiguity.
+        call.OpaqueValue=target.NativeBindings && (target.Kind=="regex" || target.Kind=="void");
+        call.GreedyCall=target.NativeBindings && !e.NativePrefix;
+        call.Children.Add(Entry(target,minimum,target.Kind=="regex" && (owner==null || owner.Kind=="regex")));
+        if(spaces && !target.SuppressTrailingSpaces && target.Kind!="marker" && (target.ExplicitSpaces || target.Kind=="regex"))
+          Join(Intern(call),Space(mod,scope,if(target.Kind=="regex") RegexKeyword(target,mod,scope) else null))
+        else Intern(call)
+      }
+      else
+      {
+        def o=Op(e.Kind,e.Text); o.Min=e.Min; o.Max=e.Max; o.AllEnds=owner==null || owner.Kind=="regex";
+        if(e.Kind=="literal" && spaces) Join(o,Space(mod,scope,Keyword(mod,scope,e.Text)))
+        else
+        {
+          for(mutable i=0;i<e.Children.Count;++i)
+          {
+            // Default associativity only changes recursive operands. Explicit ^
+            // bindings retain their own weak/strong setting.
+            def nextStrong=if(e.Kind=="seq" && owner!=null && e.Children.Count>0 && LeadingSelf(e.Children[0],scope,mod,owner,SCG.HashSet())) (if(right) i==0 else i>0) else strong;
+            o.Children.Add(Compile(e.Children[i],scope,mod,spaces,owner,rank,right,nextStrong));
+          }
+          Intern(o)
+        }
+      }
+    }
+  }
+  // A sample is recognition evidence, not a production tree. Identity wrappers
+  // subscribe to one prepared structural interface at one source position.
+  internal sealed class NitraDependencyComponent
+  {
+    public mutable Start : int;
+    public mutable Removed : bool;
+    public mutable Barrier : bool;
+    public Members : SCG.HashSet[int] = SCG.HashSet();
+    public Outgoing : SCG.HashSet[NitraDependencyComponent] = SCG.HashSet();
+    public Incoming : SCG.HashSet[NitraDependencyComponent] = SCG.HashSet();
+  }
+  internal sealed class NitraRecognizer
+  {
+    private readyComponents : SCG.Queue[NitraDependencyComponent] = SCG.Queue();
+    private mutable openSamples : int;
+    private mutable componentsReady : bool;
+    internal mutable UnindexedSampleVisits : int;
+    internal mutable UnindexedSettlements : int;
+    internal mutable ComponentBuilds : int;
+    internal mutable ComponentEdgeVisits : int;
+    internal mutable ComponentMerges : int;
+    internal mutable SettlementPasses : int;
+    private AddComponent(s : NitraSample) : void
+    {
+      def c=NitraDependencyComponent(); c.Start=s.Start; _=c.Members.Add(s.Id); s.Component=c;
+      def kind=s.Operation.Kind;
+      c.Barrier=kind=="not" || kind=="subtract" || kind=="longest" || (kind=="repeat" || kind=="separated") && !s.Operation.AllEnds;
+      readyComponents.Enqueue(c);
+    }
+    private Reach(start : NitraDependencyComponent, backwards : bool) : SCG.HashSet[NitraDependencyComponent]
+    {
+      def found=SCG.HashSet.[NitraDependencyComponent](); def pending=SCG.Stack.[NitraDependencyComponent](); pending.Push(start);
+      while(pending.Count>0)
+      {
+        def c=pending.Pop(); when(found.Add(c))
+          foreach(next in (if(backwards) c.Incoming else c.Outgoing))
+          { ++ComponentEdgeVisits; when(!next.Removed && next.Start==start.Start) pending.Push(next); }
+      }
+      found
+    }
+    private Depend(owner : NitraSample, child : NitraSample) : void
+    {
+      def parent=owner.Component; def target=child.Component;
+      when(parent==target || !parent.Outgoing.Add(target)) return;
+      _=target.Incoming.Add(parent); ++ComponentEdgeVisits;
+      // Recognition never consumes source backwards. Components at different
+      // positions cannot form a cycle and need no reachability search.
+      when(parent.Start<target.Start || target.Outgoing.Count==0) return;
+      when(parent.Start>target.Start) throw ArgumentException("backward recognition dependency");
+      def forward=Reach(target,false); unless(forward.Contains(parent)) return;
+      def backward=Reach(parent,true); forward.IntersectWith(backward);
+      mutable merged=parent;
+      foreach(c in forward) when(c.Members.Count>merged.Members.Count) merged=c;
+      def incoming=SCG.HashSet.[NitraDependencyComponent](); def outgoing=SCG.HashSet.[NitraDependencyComponent]();
+      foreach(c in forward)
+      {
+        foreach(n in c.Incoming) unless(forward.Contains(n)) _=incoming.Add(n);
+        foreach(n in c.Outgoing) unless(forward.Contains(n)) _=outgoing.Add(n);
+      }
+      foreach(c in forward)
+      {
+        foreach(n in c.Incoming) _=n.Outgoing.Remove(c);
+        foreach(n in c.Outgoing) _=n.Incoming.Remove(c);
+      }
+      foreach(c in forward)
+      {
+        merged.Barrier=merged.Barrier || c.Barrier;
+        unless(c==merged)
+        { foreach(id in c.Members) { _=merged.Members.Add(id); samples[id].Component=merged; } c.Removed=true; c.Members.Clear(); }
+      }
+      merged.Incoming.Clear(); merged.Outgoing.Clear();
+      foreach(n in incoming) { _=merged.Incoming.Add(n); _=n.Outgoing.Add(merged); }
+      foreach(n in outgoing) { _=merged.Outgoing.Add(n); _=n.Incoming.Add(merged); }
+      ++ComponentMerges; when(merged.Outgoing.Count==0) readyComponents.Enqueue(merged);
+    }
+    private RemoveComponentMember(s : NitraSample) : void
+    {
+      --openSamples; def c=s.Component; when(c==null) return; _=c.Members.Remove(s.Id);
+      when(c.Members.Count==0)
+      {
+        c.Removed=true;
+        foreach(parent in c.Incoming)
+        { _=parent.Outgoing.Remove(c); when(parent.Outgoing.Count==0) readyComponents.Enqueue(parent); }
+        foreach(child in c.Outgoing) _=child.Incoming.Remove(c);
+        c.Incoming.Clear(); c.Outgoing.Clear();
+      }
+    }
+    prepared : NitraPreparedGrammar;
+    source : string;
+    result : NitraRecognitionResult = NitraRecognitionResult();
+    samples : NitraNodeStore = NitraNodeStore();
+    memo : SCG.Dictionary[long,int] = SCG.Dictionary();
+    queue : SCG.Queue[NitraNodeWork] = SCG.Queue();
+    private links : NitraTable[NitraConsumerLink] = NitraTable();
+    private linkIndex : SCG.Dictionary[int*NitraNodeWork,int] = SCG.Dictionary();
+    private contexts : SCG.List[NitraFamilyContext] = SCG.List();
+    private mutable guardScratch : NitraGuardEvaluator;
+    private MergeGuard(lexicalResults : SCG.Dictionary[long,SCG.HashSet[int]], tables : SCG.Dictionary[char,array[bool]], observations : int, evaluations : int, dispatch : int) : void
+    {
+      result.Observations+=observations; result.Evaluations+=evaluations; result.DispatchBuilds+=dispatch;
+      when(result.Evaluations>5000000) throw ArgumentException("recognition convergence limit exceeded (5000000)");
+      when(lexicalResults!=null) foreach(pair in lexicalResults)
+      {
+        unless(lexical.ContainsKey(pair.Key)) lexical[pair.Key]=pair.Value;
+        def operation=prepared.Operations[(pair.Key/4294967296L) :> int];
+        when(operation.Kind=="variant" && pair.Value.Count>0) _=matchedProductions.Add(operation.Label);
+      }
+      when(tables!=null) foreach(pair in tables)
+      {
+        unless(firstSets.ContainsKey(pair.Key)) firstSets[pair.Key]=pair.Value;
+        when((pair.Key :> int)<128) lock(prepared.FirstAscii) when(prepared.FirstAscii[pair.Key :> int]==null) prepared.FirstAscii[pair.Key :> int]=pair.Value;
+      }
+    }
+    private ProbeGuard(operation : NitraOperation, p : int) : bool
+    {
+      def op=operation.Interface ?? operation; mutable bits : array[bool]=null;
+      when(p<source.Length)
+      {
+        def ch=source[p]; if(firstSets.ContainsKey(ch)) bits=firstSets[ch];
+        else when((ch :> int)<128) lock(prepared.FirstAscii) bits=prepared.FirstAscii[ch :> int];
+      }
+      def cached=if(op.FirstGuard!=null && lexical.ContainsKey(Key(op.FirstGuard.Id,p))) lexical[Key(op.FirstGuard.Id,p)] else null;
+      def answer=NitraGuardChecks.Probe(prepared,source,p,op,cached,bits,guardScratch); guardScratch=answer.Scratch;
+      ++result.GuardChecks; result.GuardLexicalCacheHits+=answer.CacheHits;
+      MergeGuard(answer.LexicalResults,answer.FirstTables,answer.Observations,answer.Evaluations,answer.DispatchBuilds);
+      ++timestamp; result.EvidenceTimestamp=timestamp;
+      when(answer.Passed) _=validated.Add(Key(op.Id,p)); answer.Passed
+    }
+    private candidateSets : SCG.Dictionary[string,NitraCandidateSet] = SCG.Dictionary();
+    private validated : SCG.HashSet[long] = SCG.HashSet();
+    private InternSet(family : int, values : SCG.IEnumerable[int]) : NitraCandidateSet
+    {
+      def ordered=SCG.List.[int](values); ordered.Sort(); def signature=StringBuilder(); _=signature.Append(family); _=signature.Append(':');
+      mutable previous= -1;
+      foreach(id in ordered) when(id!=previous) { _=signature.Append(id); _=signature.Append(','); previous=id; }
+      def key=signature.ToString(); when(candidateSets.ContainsKey(key)) return candidateSets[key];
+      def set=NitraCandidateSet(); set.Id=candidateSets.Count; set.Version=set.Id+1; set.Members.UnionWith(ordered); candidateSets.Add(key,set); set
+    }
+    private nodeBatches : SCG.List[NitraTransitionBatch] = SCG.List();
+    private nodeWake : NitraNodeWake = NitraNodeWake();
+    lexical : SCG.Dictionary[long,SCG.HashSet[int]] = SCG.Dictionary();
+    lexicalActive : SCG.HashSet[long] = SCG.HashSet();
+    firstSets : SCG.Dictionary[char,array[bool]] = SCG.Dictionary();
+    matchedProductions : SCG.HashSet[string] = SCG.HashSet();
+    private projected : SCG.Dictionary[long,SCG.HashSet[int]] = SCG.Dictionary();
+    private reductions : SCG.Dictionary[int*int*string,NitraReductionEntry] = SCG.Dictionary();
+    private mutable oldestReduction : NitraReductionEntry;
+    private mutable newestReduction : NitraReductionEntry;
+    private batches : SCG.List[NitraReductionBatch] = SCG.List();
+    private static mutable nextSession : long;
+    private session : long = System.Threading.Interlocked.Increment(ref nextSession);
+    private mutable timestamp : long;
+    private TouchReduction(entry : NitraReductionEntry) : void
+    {
+      when(entry==newestReduction) return;
+      when(entry.Previous!=null) entry.Previous.Next=entry.Next;
+      when(entry.Next!=null) entry.Next.Previous=entry.Previous;
+      when(oldestReduction==entry) oldestReduction=entry.Next;
+      entry.Previous=newestReduction; entry.Next=null;
+      if(newestReduction!=null) newestReduction.Next=entry; else oldestReduction=entry;
+      newestReduction=entry;
+    }
+    private Project(o : NitraOperation, p : int, end : int) : bool
+    {
+      def key=Key(o.Id,p);
+      unless(projected.ContainsKey(key)) projected[key]=SCG.HashSet();
+      when(o.Kind=="variant") _=matchedProductions.Add(o.Label);
+      projected[key].Add(end)
+    }
+    private MarkFamily(context : NitraFamilyContext, node : NitraFamilyNode, end : int) : void
+    {
+      foreach(mark in node.Marks)
+      {
+        if(mark.Begin==0) _=Project(mark.Operation,context.Owner.Start,end);
+        else if(mark.Begin==node.Parent)
+        {
+          when(context.Incoming.ContainsKey((node.Id,end)))
+            foreach(first in context.Incoming[(node.Id,end)]) _=Project(mark.Operation,first,end);
+        }
+        else
+        {
+        def positions=SCG.HashSet.[int](); _=positions.Add(end); mutable cursor=node;
+        while(cursor.Id!=mark.Begin && positions.Count>0)
+        {
+          def previous=SCG.HashSet.[int]();
+          foreach(p in positions) when(context.Incoming.ContainsKey((cursor.Id,p))) previous.UnionWith(context.Incoming[(cursor.Id,p)]);
+          positions.Clear(); positions.UnionWith(previous);
+          cursor=context.Family.Nodes[cursor.Parent];
+        }
+        foreach(p in positions) _=Project(mark.Operation,p,end);
+        }
+      }
+    }
+    private AdvanceFamily(context : NitraFamilyContext, node : NitraFamilyNode, first : int, end : int) : void
+    {
+      def key=(node.Id,end);
+      unless(context.Incoming.ContainsKey(key)) context.Incoming[key]=SCG.HashSet();
+      unless(context.Incoming[key].Add(first)) return;
+      def parent=context.Family.Nodes[node.Parent];
+      def edge=parent.Edges.FindIndex(fun(e) { e.Target==node; });
+      when(!prepared.GuardBatchCompatibility)
+      {
+        def set=context.PoolEdges[(parent.Id,first,edge)];
+        unless(context.PoolSets.ContainsKey(key)) context.PoolSets[key]=set;
+        VisitFamily(context,node,end); return;
+      }
+      def set=context.EdgeSets[(parent.Id,first,edge)];
+      unless(context.Sets.ContainsKey((node.Id,end))) context.Sets[(node.Id,end)]=set;
+      VisitFamily(context,node,end);
+    }
+    private VisitFamily(context : NitraFamilyContext, node : NitraFamilyNode, p : int) : void
+    {
+      when(!prepared.GuardBatchCompatibility) { VisitPool(context,node,p); return; }
+      MarkFamily(context,node,p);
+      when(node.Terminal && node.Terminals.Exists(fun(id) { context.Sets[(node.Id,p)].Members.Contains(id); })) Candidate(context.Owner,p);
+      def key=(node.Id,p);
+      unless(context.Visited.Add(key))
+      {
+        // A new prefix connection can extend source provenance. Replay only
+        // already-established graph edges, never source recognition or filters.
+        when(context.Outgoing.ContainsKey(key)) foreach((target,end) in context.Outgoing[key])
+          VisitFamily(context,context.Family.Nodes[target],end);
+        return;
+      }
+      ++result.ContinuationAdvances;
+      when(node.Members.Count==0) return;
+      def incoming=context.Sets[key]; mutable single= -1; mutable activeEdges=0; mutable liveCount=0;
+      for(mutable i=0;i<node.Edges.Count;++i)
+      {
+        mutable count=0; foreach(id in node.Edges[i].Candidates) when(incoming.Members.Contains(id)) ++count;
+        when(count>0) { single=i; liveCount=count; ++activeEdges; }
+      }
+      when(activeEdges==1)
+      {
+        ++result.IdentityReductions; def edge=node.Edges[single];
+        if(ProbeGuard(edge.Operation,p))
+        {
+          if(liveCount==incoming.Members.Count) context.EdgeSets[(node.Id,p,single)]=incoming;
+          else
+          { def live=SCG.List.[int](); foreach(id in edge.Candidates) when(incoming.Members.Contains(id)) live.Add(id); context.EdgeSets[(node.Id,p,single)]=InternSet(context.Owner.Operation.Id,live); }
+          ++result.CarriedCandidateSets; ConnectFamily(context,node,p,edge);
+        }
+        else
+        {
+          def left=SCG.HashSet.[int](incoming.Members); left.ExceptWith(edge.Candidates);
+          context.Sets[key]=InternSet(context.Owner.Operation.Id,left); result.CandidatesEliminated+=liveCount; result.FamilyEliminations+=liveCount;
+        }
+        return;
+      }
+      when(activeEdges==0) return;
+      def batch=NitraReductionBatch(); batch.Context=context; batch.Node=node; batch.Position=p; batch.Wake=nodeWake;
+      batch.Grammar=prepared; batch.Source=source; batch.Set=context.Sets[key];
+      when(p<source.Length)
+      {
+        def ch=source[p];
+        if(firstSets.ContainsKey(ch)) batch.FirstBits=firstSets[ch];
+        else when((ch :> int)<128) lock(prepared.FirstAscii) batch.FirstBits=prepared.FirstAscii[ch :> int];
+      }
+      ++timestamp; batch.Session=session; batch.Timestamp=timestamp; batch.Version=batch.Timestamp; context.Versions[key]=batch.Version;
+      def groups=SCG.Dictionary.[int,SCG.List[int]](); def literals=SCG.List.[int]();
+      batch.EdgeCounts=array(node.Edges.Count);
+      for(mutable j=0;j<node.Members.Count;++j) when(batch.Set.Members.Contains(node.Candidates[j])) ++batch.EdgeCounts[node.Members[j]];
+      for(mutable i=0;i<node.Edges.Count;++i) when(batch.EdgeCounts[i] > 0)
+      {
+        if(node.Guards.ContainsKey(i)) literals.Add(i);
+        else
+        {
+          def op=node.Edges[i].Operation.Interface ?? node.Edges[i].Operation; def guard=op.FirstGuard ?? op;
+          unless(groups.ContainsKey(guard.Id)) groups[guard.Id]=SCG.List(); groups[guard.Id].Add(i);
+        }
+      }
+      def tasks=SCG.List.[NitraGuardTask]();
+      when(literals.Count>0)
+      {
+        def task=NitraGuardTask(); task.Literal=true; task.Edges=literals.ToArray(); task.Cached=array(literals.Count); tasks.Add(task);
+        for(mutable i=0;i<literals.Count;++i)
+        { def guard=node.Guards[literals[i]]; when(lexical.ContainsKey(Key(guard.Id,p))) task.Cached[i]=lexical[Key(guard.Id,p)]; }
+        when(groups.Count==0)
+        {
+          def window=source.Substring(p,Math.Min(node.LiteralWidth,source.Length-p));
+          batch.Key=(context.Owner.Operation.Id,node.Id,batch.Set.Id.ToString()+":literal:"+window);
+          when(reductions.ContainsKey(batch.Key))
+          {
+            def entry=reductions[batch.Key]; TouchReduction(entry); ++result.ReductionCacheHits;
+            task.Reused=array(literals.Count);
+            for(mutable j=0;j<node.Members.Count;++j) when(entry.Keep[j])
+            { def index=literals.IndexOf(node.Members[j]); when(index>=0) task.Reused[index]=true; }
+          }
+        }
+      }
+      foreach(edges in groups.Values)
+      {
+        def task=NitraGuardTask(); task.Edges=edges.ToArray(); task.Cached=array(edges.Count);
+        for(mutable i=0;i<edges.Count;++i)
+        {
+          def op=node.Edges[edges[i]].Operation.Interface ?? node.Edges[edges[i]].Operation;
+          when(op.FirstGuard!=null && lexical.ContainsKey(Key(op.FirstGuard.Id,p))) task.Cached[i]=lexical[Key(op.FirstGuard.Id,p)];
+        }
+        tasks.Add(task);
+      }
+      foreach(task in tasks) foreach(edge in task.Edges) task.Weight+=batch.EdgeCounts[edge];
+      batch.Tasks=tasks.ToArray(); NitraFilterWorkers.Start(batch,prepared.MaximumFilterWorkers,prepared.MinimumFilterCandidates);
+      ++result.ReductionBatches; result.ReductionPartitions+=batch.Workers; result.CandidatesTested+=batch.Set.Members.Count;
+      ++context.Owner.Pending; batches.Add(batch);
+    }
+    private CommitFamilyReady(batch : NitraReductionBatch) : bool
+    {
+      when(batch.Committed) return false;
+      when(batch.Session!=session || batch.Context.Versions[(batch.Node.Id,batch.Position)]!=batch.Version || batch.Context.Sets[(batch.Node.Id,batch.Position)]!=batch.Set)
+        throw ArgumentException("stale family reduction");
+      when(batch.Failure!=null) throw batch.Failure;
+      mutable changed=false;
+      for(mutable t=0;t<batch.Tasks.Length;++t)
+        when(!batch.Applied[t] && System.Threading.Volatile.Read(ref batch.Published[t])!=0)
+      {
+        batch.Applied[t]=true; --batch.PendingTasks; changed=true; def task=batch.Tasks[t];
+        result.GuardChecks+=task.Checks; when(task.PoolThread) result.PooledGuardChecks+=task.Checks;
+        result.GuardLexicalCacheHits+=task.CacheHits; result.FilterObservations+=task.Characters;
+        MergeGuard(task.LexicalResults,task.FirstTables,task.Observations,task.Evaluations,task.DispatchBuilds);
+        for(mutable i=0;i<task.Edges.Length;++i)
+        {
+          def edge=task.Edges[i];
+          if(task.Passed[i])
+          {
+            def live=SCG.List.[int](); foreach(id in batch.Node.Edges[edge].Candidates) when(batch.Set.Members.Contains(id)) live.Add(id);
+            batch.Context.EdgeSets[(batch.Node.Id,batch.Position,edge)]=InternSet(batch.Context.Owner.Operation.Id,live);
+            def operation=batch.Node.Edges[edge].Operation.Interface ?? batch.Node.Edges[edge].Operation;
+            _=validated.Add(Key(operation.Id,batch.Position)); ++result.CarriedCandidateSets;
+            for(mutable j=0;j<batch.Node.Members.Count;++j) when(batch.Node.Members[j]==edge && batch.Set.Members.Contains(batch.Node.Candidates[j])) batch.Keep[j]=true;
+            ConnectFamily(batch.Context,batch.Node,batch.Position,batch.Node.Edges[edge]);
+          }
+          else
+          {
+            foreach(id in batch.Node.Edges[edge].Candidates) _=batch.RemainingCandidates.Remove(id);
+            result.CandidatesEliminated+=batch.EdgeCounts[edge]; result.FamilyEliminations+=batch.EdgeCounts[edge];
+          }
+        }
+        when(batch.PendingTasks>0) ++result.PartialReductions;
+      }
+      when(batch.PendingTasks==0)
+      {
+        def (_,_,existingSignature)=batch.Key;
+        when(existingSignature!=null && !reductions.ContainsKey(batch.Key))
+        {
+          def entry=NitraReductionEntry(); entry.Key=batch.Key; entry.Keep=batch.Keep; TouchReduction(entry); reductions.Add(entry.Key,entry);
+          when(reductions.Count>4096) { def oldest=oldestReduction; oldestReduction=oldest.Next; when(oldestReduction!=null) oldestReduction.Previous=null; _=reductions.Remove(oldest.Key); oldest.Next=null; }
+        }
+        batch.Committed=true;
+        batch.Context.Sets[(batch.Node.Id,batch.Position)]=InternSet(batch.Context.Owner.Operation.Id,batch.RemainingCandidates);
+        --batch.Context.Owner.Pending; TryClose(batch.Context.Owner);
+      }
+      result.EvidenceTimestamp=timestamp; changed
+    }
+    private CommitFamily(batch : NitraReductionBatch) : void
+    { when(batch.Committed) return; batch.Wait(); _=CommitFamilyReady(batch); }
+    private ConnectFamily(context : NitraFamilyContext, node : NitraFamilyNode, p : int, edge : NitraFamilyEdge) : void
+    {
+      mutable work=Work(context.Owner,6); work.Context=context.Id; work.Node=node.Id; work.Edge=node.Edges.IndexOf(edge); work.Position=p;
+      Subscribe(context.Owner,edge.Operation,p,work);
+    }
+    private FamilyDelivery(work : NitraNodeWork,target : int) : void
+    {
+      def context=contexts[work.Context]; def node=context.Family.Nodes[work.Node]; def edge=node.Edges[work.Edge];
+      def p=work.Position; def end=work.End; def key=(node.Id,p);
+      unless(context.Outgoing.ContainsKey(key)) context.Outgoing[key]=SCG.List();
+      def connection=(target,end);
+      unless(context.Outgoing[key].Contains(connection)) context.Outgoing[key].Add(connection);
+      foreach(view in edge.Views) _=Project(view,p,end);
+      AdvanceFamily(context,context.Family.Nodes[target],p,end);
+    }
+    private EarlierNode(owner : int, epoch : long) : bool
+    {
+      foreach(batch in nodeBatches) when(batch.Epoch<epoch)
+        for(mutable i=0;i<batch.Inputs.Length;++i)
+          when(!batch.Committed[i] && batch.Inputs[i].Work.Owner==owner) return true;
+      false
+    }
+    private EarlierFilter(owner : int, epoch : long) : bool
+    { foreach(batch in batches) when(!batch.Committed && batch.Timestamp<epoch && batch.Context.Owner.Id==owner) return true; false }
+    private DrainFamilies() : bool
+    {
+      when(batches.Count==0) return false;
+      def blocked=SCG.HashSet.[int](); mutable i=0; mutable changed=false;
+      while(i<batches.Count)
+      {
+        def batch=batches[i]; def owner=batch.Context.Owner.Id;
+        if(!blocked.Contains(owner) && !EarlierNode(owner,batch.Timestamp))
+        {
+          when(CommitFamilyReady(batch)) changed=true;
+          if(batch.Committed) batches.RemoveAt(i); else { _=blocked.Add(owner); ++i; }
+        }
+        else { _=blocked.Add(owner); ++i; }
+      }
+      changed
+    }
+    private PumpFamilies(wait : bool) : void
+    {
+      when(batches.Count==0) return;
+      // Publish all independent ready reductions before waiting. One slow
+      // context must not block available evidence work in another context.
+      when(DrainFamilies() || !wait || queue.Count>0 || batches.Count==0) return;
+      def observed=nodeWake.Read();
+      unless(DrainFamilies()) nodeWake.Wait(observed);
+      _=DrainFamilies();
+    }
+    private poolDependencies : SCG.Dictionary[int,SCG.List[NitraNodeWork]] = SCG.Dictionary();
+    private TrackPoolDependency(child : NitraSample,work : NitraNodeWork) : void
+    {
+      unless(poolDependencies.ContainsKey(child.Id)) poolDependencies[child.Id]=SCG.List();
+      unless(poolDependencies[child.Id].Contains(work))
+      {
+        poolDependencies[child.Id].Add(work);
+        when(child.Closed) PoolDependencyFact(child,work,2);
+      }
+    }
+    private PoolDependencyEvidence(child : NitraSample,kind : int) : void
+    { when(poolDependencies.ContainsKey(child.Id)) foreach(work in poolDependencies[child.Id]) PoolDependencyFact(child,work,kind); }
+    private PoolDependencyFact(child : NitraSample,work : NitraNodeWork,kind : int) : void
+    {
+      def context=contexts[work.Context]; def lane=context.PoolLanes[(work.Node,work.Position)];
+      mutable fact=default(NitraPoolEvidence); fact.Kind=kind; fact.Session=session; fact.Context=context.Id;
+      fact.Generation=lane.Generation; fact.Position=lane.Position; fact.Subject=child.Id; fact.SubjectVersion=child.Version;
+      fact.Edge=work.Edge; fact.EndpointCount=child.Ends.Count;
+      ++timestamp; fact.Epoch=timestamp; ++result.PoolDependencyFacts; ++context.Owner.Pending;
+      QueuePoolFact(lane,fact);
+    }
+    private QueuePoolFact(lane : NitraPoolLane,fact : NitraPoolEvidence) : void
+    {
+      if(lane.Leased!=0) { when(lane.Deferred==null) lane.Deferred=SCG.Queue(); lane.Deferred.Enqueue(fact); }
+      else
+      { lane.Epoch=fact.Epoch; lane.Evidence=fact; lane.Ready=0; lane.Leased=1; poolReady.Enqueue(lane); poolReadyWeight+=PoolWeight(lane); }
+    }
+    private ResumePool(lane : NitraPoolLane) : void
+    { when(lane.Leased==0 && lane.Deferred!=null && lane.Deferred.Count>0) QueuePoolFact(lane,lane.Deferred.Dequeue()); }
+    private poolMaskStores : SCG.Dictionary[int,NitraPoolMasks] = SCG.Dictionary();
+    private mutable poolReadyWeight : int;
+    private PoolWeight(lane : NitraPoolLane) : int
+    { if(lane.Evidence.Kind==0 && lane.First) Math.Max(1,lane.Last-lane.From) else 1 }
+    private poolReady : SCG.Queue[NitraPoolLane] = SCG.Queue();
+    private poolFlight : SCG.List[NitraPoolLane] = SCG.List();
+    private poolTransitions : SCG.Dictionary[int*int*int*int*int*int,NitraPoolEffect] = SCG.Dictionary();
+    private PoolSelect(context : NitraFamilyContext,left : NitraPoolMask,right : NitraPoolMask,remove : bool) : NitraPoolMask
+    { context.Masks.Select(left,right,remove) }
+    private PoolUnion(context : NitraFamilyContext,left : NitraPoolMask,right : NitraPoolMask) : NitraPoolMask
+    { context.Masks.Union(left,right) }
+    private sourceFacts : SCG.Dictionary[int,NitraPoolEvidence] = SCG.Dictionary();
+    private SourceFact(p : int) : NitraPoolEvidence
+    {
+      when(sourceFacts.ContainsKey(p)) return sourceFacts[p];
+      mutable fact=default(NitraPoolEvidence); fact.Session=session; fact.Context= -1; fact.Position=p; fact.End=p>=source.Length;
+      unless(fact.End)
+      {
+        def ch=source[p]; fact.Character=ch;
+        unless(firstSets.ContainsKey(ch))
+        {
+          if((ch :> int)<128) lock(prepared.FirstAscii)
+          { when(prepared.FirstAscii[ch :> int]==null) prepared.FirstAscii[ch :> int]=First(ch); firstSets[ch]=prepared.FirstAscii[ch :> int]; }
+          else firstSets[ch]=First(ch);
+        }
+        fact.First=firstSets[ch];
+      }
+      ++timestamp; fact.Epoch=timestamp; sourceFacts[p]=fact; fact
+    }
+    private PublishPool(lane : NitraPoolLane) : void
+    {
+      mutable evidence=SourceFact(lane.Position); evidence.Context=lane.Context.Id; evidence.Generation=lane.Generation;
+      ++timestamp; evidence.Epoch=timestamp;
+      ++result.PoolEvidenceSteps; when(!lane.First) ++result.PoolLaneResumes;
+      QueuePoolFact(lane,evidence);
+    }
+    private VisitPool(context : NitraFamilyContext,node : NitraFamilyNode,p : int) : void
+    {
+      MarkFamily(context,node,p); def key=(node.Id,p); def incoming=context.PoolSets[key];
+      when(node.Terminal && PoolSelect(context,incoming,node.TerminalMask,false).Count>0) Candidate(context.Owner,p);
+      unless(context.Visited.Add(key))
+      { when(context.Outgoing.ContainsKey(key)) foreach((target,end) in context.Outgoing[key]) VisitFamily(context,context.Family.Nodes[target],end); return; }
+      ++result.ContinuationAdvances; when(node.Edges.Count==0) return;
+      def lane=NitraPoolLane(); lane.Context=context; lane.Node=node; lane.Start=p; lane.Position=p;
+      lane.Generation=1; lane.Prefix=node.LiteralFilter; lane.Incoming=incoming; lane.Remaining=incoming; lane.Matched=context.Family.EmptyMask;
+      context.PoolLanes[key]=lane;
+      def size=Math.Max(1,prepared.MinimumFilterCandidates);
+      if(node.GeneralFilters.Count>size)
+      {
+        def groups=Math.Min(Math.Max(1,(node.GeneralFilters.Count+size-1)/size),Math.Min(NitraFilterWorkers.Limit,Math.Max(1,prepared.MaximumFilterWorkers)));
+        for(mutable i=0;i<groups;++i)
+        {
+          def (first,last)=NitraFilterWorkers.Partition(node.GeneralFilters.Count,groups,i);
+          when(last>first)
+          {
+            def group=NitraPoolLane(); group.Context=context; group.Node=node; group.Start=p; group.Position=p; group.Generation=1;
+            group.Prefix=node.LiteralFilter; group.Incoming=incoming; group.Root=lane; group.GeneralOnly=true; group.From=first; group.Last=last;
+            when(lane.Groups==null) lane.Groups=SCG.List(); lane.Groups.Add(group); ++result.PoolLaneCreations; ++context.Owner.Pending; PublishPool(group);
+          }
+        }
+      }
+      else lane.Last=node.GeneralFilters.Count;
+      ++result.PoolLaneCreations; ++context.Owner.Pending; PublishPool(lane);
+    }
+    private PoolConnect(lane : NitraPoolLane,edgeIndex : int) : void
+    {
+      def edge=lane.Node.Edges[edgeIndex]; def selected=PoolSelect(lane.Context,lane.Incoming,edge.Mask,false);
+      when(selected.Count==0) return;
+      lane.Matched=PoolUnion(lane.Context,lane.Matched,selected);
+      lane.Context.PoolEdges[(lane.Node.Id,lane.Start,edgeIndex)]=selected;
+      ++result.CarriedCandidateSets; ConnectFamily(lane.Context,lane.Node,lane.Start,edge);
+    }
+    private PoolCommit(lane : NitraPoolLane) : void
+    {
+      def effect=lane.Effect; def e=effect.Evidence;
+      when(e.Session!=session || e.Context!=lane.Context.Id || e.Generation!=lane.Generation)
+        throw ArgumentException("stale pool evidence");
+      when(lane.Applied>=e.Epoch) return;
+      when(e.Epoch!=lane.Epoch || e.Kind==0 && e.Position!=lane.Position)
+        throw ArgumentException("stale pool evidence");
+      when(lane.Failure!=null) throw lane.Failure;
+      lane.Applied=e.Epoch; def pool=lane.Root ?? lane;
+      // Keep the lease while merging: dependency publications queue behind this fact.
+      when(e.Kind!=0)
+      {
+        when(effect.Reject)
+        {
+          def previous=pool.Remaining.Count;
+          pool.Remaining=PoolSelect(lane.Context,pool.Remaining,lane.Node.Edges[e.Edge].Mask,true);
+          result.CandidatesEliminated+=previous-pool.Remaining.Count; result.FamilyEliminations+=previous-pool.Remaining.Count;
+          lane.Context.PoolSets[(lane.Node.Id,lane.Start)]=pool.Remaining;
+        }
+        --lane.Context.Owner.Pending; TryClose(lane.Context.Owner); lane.Leased=0; ResumePool(lane); return;
+      }
+      when(lane.First)
+      {
+        unless(lane.GeneralOnly) foreach(edge in lane.Node.LiteralFilter.Matches) PoolConnect(pool,edge);
+        for(mutable i=0;i<lane.Last-lane.From;++i)
+        {
+          def edge=lane.Node.GeneralFilters[lane.From+i]; ++result.GuardChecks;
+          if(effect.General[i]) PoolConnect(pool,edge);
+          else
+          { def previous=pool.Remaining.Count; pool.Remaining=PoolSelect(lane.Context,pool.Remaining,lane.Node.Edges[edge].Mask,true); result.CandidatesEliminated+=previous-pool.Remaining.Count; result.FamilyEliminations+=previous-pool.Remaining.Count; }
+        }
+      }
+      when(lane.GeneralOnly)
+      { lane.First=false; lane.Done=true; lane.Context.PoolSets[(lane.Node.Id,lane.Start)]=pool.Remaining;
+        --lane.Context.Owner.Pending; TryClose(lane.Context.Owner); lane.Leased=0; ResumePool(lane); return; }
+      when(effect.Matches!=null) foreach(edge in effect.Matches) PoolConnect(lane,edge);
+      lane.First=false; lane.Prefix=effect.Next;
+      if(effect.Continue) { ++lane.Position; PublishPool(lane); }
+      else
+      {
+        def previous=pool.Remaining.Count;
+        def literals=PoolSelect(lane.Context,lane.Incoming,lane.Node.LiteralMask,false);
+        def failed=PoolSelect(lane.Context,literals,pool.Matched,true);
+        pool.Remaining=PoolSelect(lane.Context,pool.Remaining,failed,true);
+        result.CandidatesEliminated+=previous-pool.Remaining.Count; result.FamilyEliminations+=previous-pool.Remaining.Count;
+        lane.Context.PoolSets[(lane.Node.Id,lane.Start)]=pool.Remaining;
+        lane.Done=true; --lane.Context.Owner.Pending; TryClose(lane.Context.Owner);
+      }
+      result.EvidenceTimestamp=e.Epoch; lane.Leased=0; ResumePool(lane);
+    }
+    private PoolKey(lane : NitraPoolLane) : int*int*int*int*int*int
+    { (lane.Context.Owner.Operation.Id,lane.Node.Id,lane.Prefix.Id,if(lane.Evidence.End) -1 else (lane.Evidence.Character :> int),lane.From,lane.Last) }
+    private PumpPools() : void
+    {
+      mutable i=0;
+      while(i<poolFlight.Count)
+      {
+        def lane=poolFlight[i];
+        if(System.Threading.Volatile.Read(ref lane.Ready)!=0)
+        { poolFlight.RemoveAt(i); when(lane.Failure!=null) throw lane.Failure; when(lane.Evidence.Kind==0) { when(poolTransitions.Count>=4096) poolTransitions.Clear(); poolTransitions[PoolKey(lane)]=lane.Effect; } PoolCommit(lane); }
+        else ++i;
+      }
+      when(poolReady.Count==0) return;
+      // Inline evidence uses the identical evaluator and commit checks, without
+      // allocating a dispatch batch or staging a completed result in-flight.
+      when(poolReady.Count==1 || prepared.MaximumFilterWorkers<=1 || poolReadyWeight<Math.Max(1,prepared.MinimumFilterCandidates))
+      {
+        while(poolReady.Count>0)
+        {
+          def lane=poolReady.Dequeue(); poolReadyWeight-=PoolWeight(lane); def key=PoolKey(lane);
+          if(lane.Evidence.Kind==0 && poolTransitions.ContainsKey(key))
+          { mutable effect=poolTransitions[key]; effect.Evidence=lane.Evidence; lane.Effect=effect; ++result.PoolTransitionHits; ++result.ReductionCacheHits; }
+          else
+          {
+            lane.Evaluate(); when(lane.Failure!=null) throw lane.Failure;
+            when(lane.Evidence.Kind==0) { when(poolTransitions.Count>=4096) poolTransitions.Clear(); poolTransitions[key]=lane.Effect; }
+          }
+          PoolCommit(lane);
+          when(queue.Count>0) return;
+        }
+        return;
+      }
+      def work=SCG.List.[NitraPoolLane]();
+      while(poolReady.Count>0)
+      {
+        def lane=poolReady.Dequeue(); poolReadyWeight-=PoolWeight(lane); def key=PoolKey(lane);
+        if(lane.Evidence.Kind==0 && poolTransitions.ContainsKey(key))
+        { mutable effect=poolTransitions[key]; effect.Evidence=lane.Evidence; lane.Effect=effect; lane.Ready=1; ++result.PoolTransitionHits; ++result.ReductionCacheHits; poolFlight.Add(lane); }
+        else { work.Add(lane); poolFlight.Add(lane); }
+      }
+      when(work.Count>0)
+      {
+        def workers=NitraFilterWorkers.StartLanes(work.ToArray(),nodeWake,prepared.MaximumFilterWorkers,prepared.MinimumFilterCandidates);
+        when(workers>1) { result.PoolPooledSteps+=work.Count; result.PooledGuardChecks+=work.Count; }
+      }
+    }
+    private StartFamily(s : NitraSample) : void
+    {
+      def context=NitraFamilyContext(); context.Id=contexts.Count; contexts.Add(context); context.Owner=s; context.Family=s.Operation.Family;
+      def root=context.Family.Nodes[0];
+      when(!prepared.GuardBatchCompatibility)
+      { unless(poolMaskStores.ContainsKey(s.Operation.Id)) poolMaskStores[s.Operation.Id]=NitraPoolMasks(context.Family.MaskStore);
+        context.Masks=poolMaskStores[s.Operation.Id]; context.PoolSets[(0,s.Start)]=context.Family.RootMask; ++result.FamilyDiscoveries; VisitFamily(context,root,s.Start); return; }
+      context.Versions=SCG.Dictionary(); context.Sets=SCG.Dictionary(); context.EdgeSets=SCG.Dictionary();
+      def candidates=SCG.List.[int](root.Candidates); candidates.AddRange(root.Terminals);
+      context.Sets[(0,s.Start)]=InternSet(s.Operation.Id,candidates);
+      ++result.FamilyDiscoveries; VisitFamily(context,root,s.Start);
+    }
+    public this(prepared : NitraPreparedGrammar, source : string) { this.prepared=prepared; this.source=source; result.Source=source; }
+    private Key(id : int, p : int) : long { (id :> long)*4294967296L+(p :> long) }
+    private Count() : void
+    { ++result.Evaluations; when(result.Evaluations>5000000) throw ArgumentException("recognition convergence limit exceeded (5000000)"); }
+    private Work(owner : NitraSample, kind : int) : NitraNodeWork
+    { mutable work=default(NitraNodeWork); work.Owner=owner.Id; work.Kind=kind; work.Position=owner.Start; work.End=owner.Start; work }
+    private Schedule(owner : NitraSample, work : NitraNodeWork) : void
+    {
+      when(work.Kind==6 && !prepared.GuardBatchCompatibility && !prepared.LegacyRecognition)
+      { ++timestamp; work.EvidenceEpoch=timestamp; ++result.PoolEndpointFacts; }
+      ++owner.Pending; queue.Enqueue(work); ++result.WorkDeliveries;
+    }
+    private Deliver(linkId : int) : void
+    {
+      mutable link=links[linkId]; def child=samples[link.Child]; def ends=child.Ends;
+      mutable entry=if(link.Delivered<0) ends.Arena.Headers[ends.Id].Head else ends.Arena.Entries[link.Delivered].Next;
+      while(entry>=0)
+      {
+        def value=ends.Arena.Entries[entry]; mutable work=link.Work; work.End=value.Value;
+        Schedule(samples[work.Owner],work); link.Delivered=entry; entry=value.Next;
+      }
+      links[linkId]=link;
+    }
+    private Emit(s : NitraSample, end : int) : void
+    {
+      when(s.Ends.Add(end))
+      {
+        when(end>result.Furthest) result.Furthest=end;
+        mutable link=s.SubscriberHead;
+        while(link>=0) { def next=links[link].Next; Deliver(link); link=next; }
+      }
+    }
+    private Input(work : NitraNodeWork) : NitraTransitionInput
+    { def owner=samples[work.Owner]; mutable input=default(NitraTransitionInput); input.Work=work; input.Operation=owner.Operation; input.Start=owner.Start; input.Version=owner.Version; input }
+    private ProcessEffect(effect : NitraTransitionEffect) : void
+    {
+      def work=effect.Work; def owner=samples[work.Owner]; Count();
+      when(effect.Error!=null) throw ArgumentException(effect.Error);
+      match(work.Kind)
+      {
+        | 0 => Initialize(owner);
+        | 1 => Candidate(owner,work.End);
+        | 2 =>
+          when(Cursor(owner,work.Stage,work.End,0))
+          { if(effect.Publish) Candidate(owner,work.End); else Subscribe(owner,effect.Target,work.End,effect.Next); }
+        | 3 =>
+          when(Cursor(owner,0,work.End,work.Count))
+          { when(effect.Publish) Candidate(owner,work.End); when(effect.Continue) Subscribe(owner,effect.Target,work.End,effect.Next); }
+        | 5 =>
+          when(effect.Publish) Candidate(owner,work.End);
+          Subscribe(owner,effect.Target,work.End,effect.Next);
+        | 6 => FamilyDelivery(work,effect.Next.Node);
+        | 7 => _=owner.Outstanding.Remove(work.Stage);
+        | 9 => _=owner.Candidates.Add(work.End);
+        | 10 => ();
+        | _ => throw ArgumentException("invalid recognition continuation");
+      }
+      --owner.Pending; TryClose(owner);
+    }
+    internal PumpWork() : void { ProcessEffect(NitraTransitions.Evaluate(Input(queue.Dequeue()))); }
+    private StartNodeBatch() : void
+    {
+      def batch=NitraTransitionBatch(); batch.Session=session; ++timestamp; batch.Epoch=timestamp;
+      batch.Wake=nodeWake;
+      batch.Inputs=array(queue.Count);
+      for(mutable i=0;i<batch.Inputs.Length;++i) batch.Inputs[i]=Input(queue.Dequeue());
+      foreach(input in batch.Inputs) when(input.Work.EvidenceEpoch>0 && input.Work.EvidenceEpoch<batch.Epoch) batch.Epoch=input.Work.EvidenceEpoch;
+      NitraFilterWorkers.StartNodes(batch,prepared.MaximumFilterWorkers,prepared.MinimumNodeWork);
+      nodeBatches.Add(batch); ++result.NodeBatches; result.NodePartitions+=batch.Workers;
+    }
+    private CommitNode(batch : NitraTransitionBatch, index : int) : void
+    {
+      when(batch.Committed[index]) return;
+      def input=batch.Inputs[index]; def owner=samples[input.Work.Owner];
+      when(batch.Session!=session || batch.Epoch>timestamp || input.Version!=owner.Version) throw ArgumentException("stale recognition transition");
+      batch.Committed[index]=true; --batch.Pending; ProcessEffect(batch.Effects[index]); ++result.NodeEffects;
+    }
+    private DrainNodes() : bool
+    {
+      mutable changed=false; def blocked=SCG.HashSet.[int](); mutable b=0;
+      while(b<nodeBatches.Count)
+      {
+        def batch=nodeBatches[b];
+        when(batch.Signal!=null && batch.Signal.Task.IsFaulted) batch.Signal.Task.GetAwaiter().GetResult();
+        for(mutable i=0;i<batch.Inputs.Length;++i) unless(batch.Committed[i])
+        {
+          def owner=batch.Inputs[i].Work.Owner;
+          if(!blocked.Contains(owner) && !EarlierFilter(owner,batch.Epoch) && System.Threading.Volatile.Read(ref batch.Ready[i])!=0)
+          { CommitNode(batch,i); changed=true; }
+          else _=blocked.Add(owner);
+        }
+        if(batch.Pending==0) nodeBatches.RemoveAt(b); else ++b;
+      }
+      changed
+    }
+    private PumpNodes(wait : bool) : void
+    {
+      when(nodeBatches.Count==0) return;
+      def observed=nodeWake.Read();
+      when(DrainNodes() || !wait || queue.Count>0 || nodeBatches.Count==0) return;
+      nodeWake.Wait(observed); _=DrainNodes();
+    }
+    private Candidate(s : NitraSample, end : int) : void
+    {
+      when(s.Candidates.Add(end))
+        unless(s.Operation.Kind=="longest" || (s.Operation.Kind=="repeat" || s.Operation.Kind=="separated") && !s.Operation.AllEnds) Emit(s,end);
+    }
+    private Views(s : NitraSample, original : NitraOperation) : void
+    {
+      mutable o=original;
+      while(s.Views.Add(o.Id) && o!=s.Operation && o.Children.Count==1 && o.Interface==s.Operation) o=o.Children[0];
+      _=s.Views.Add(s.Operation.Id);
+    }
+    private Request(original : NitraOperation, p : int) : NitraSample
+    {
+      def o=original.Interface ?? original;
+      when(prepared.Ready && !prepared.GuardBatchCompatibility && !prepared.LegacyRecognition && !memo.ContainsKey(Key(o.Id,p)))
+      {
+        ++result.PoolStartChecks;
+        unless(NitraPoolPredicates.Allows(o,SourceFact(p))) { ++result.FamilyEliminations; return default(NitraSample); }
+      }
+      unless(!prepared.GuardBatchCompatibility && !prepared.LegacyRecognition || !prepared.LegacyRecognition && o.Family!=null || validated.Contains(Key(o.Id,p)) || Possible(o,p) && (o.FirstGuard==null || Lexical(o.FirstGuard,p).Count>0)) { ++result.FamilyEliminations; return default(NitraSample); }
+      def key=Key(o.Id,p);
+      when(memo.ContainsKey(key)) { ++result.SampleReuse; when(o.SharedPrefix) ++result.PrefixReuse; def s=samples[memo[key]]; Views(s,original); return s; }
+      // A lexical sample is immutable. Validate it before opening dependent work.
+      def fast=o.Fast || o.Kind=="literal" || o.Kind=="class" || o.Kind=="empty";
+      def observed=if(fast) Lexical(o,p) else null;
+      when(fast && observed.Count==0) { ++result.FamilyEliminations; return default(NitraSample); }
+      when(samples.Count>=500000) throw ArgumentException("recognition region limit exceeded (500000)");
+      def s=samples.Add(o,p);
+      ++openSamples; when(componentsReady && !fast) AddComponent(s); memo.Add(key,s.Id); Views(s,original); ++result.SampleCreations; when(o.SharedPrefix) ++result.PrefixSamples;
+      if(fast) { s.Started=true; foreach(end in observed) Candidate(s,end); Close(s); }
+      else Schedule(s,Work(s,0));
+      s
+    }
+    private Subscribe(owner : NitraSample, operation : NitraOperation, p : int, continuation : NitraNodeWork) : void
+    {
+      def op=operation.Interface ?? operation; def identity=Key(op.Id,p);
+      when(prepared.GuardBatchCompatibility && !prepared.LegacyRecognition && op.Family!=null && !memo.ContainsKey(identity) && !validated.Contains(identity))
+        unless(ProbeGuard(op,p)) return;
+      def child=Request(operation,p); when(child.IsNull) return;
+      when(!prepared.GuardBatchCompatibility && !prepared.LegacyRecognition && continuation.Kind==6)
+        TrackPoolDependency(child,continuation);
+      when(owner.Dependencies.Add(child.Id))
+      {
+        _=child.Parents.Add(owner.Id);
+        unless(child.Closed) { _=owner.Outstanding.Add(child.Id); when(componentsReady) Depend(owner,child); }
+      }
+      def key=(child.Id,continuation); when(linkIndex.ContainsKey(key)) { ++result.DuplicateLinks; return; }
+      mutable link=default(NitraConsumerLink); link.Child=child.Id; link.Work=continuation; link.Next= -1; link.Delivered= -1;
+      def id=links.Add(link); linkIndex.Add(key,id); ++result.ConsumerLinks;
+      unless(child.Closed)
+      {
+        if(child.SubscriberTail<0) child.SubscriberHead=id;
+        else { mutable last=links[child.SubscriberTail]; last.Next=id; links[child.SubscriberTail]=last; }
+        child.SubscriberTail=id;
+      }
+      Deliver(id);
+    }
+    private Cursor(s : NitraSample, stage : int, p : int, count : int) : bool
+    {
+      def key=(stage,p,count);
+      if(s.Cursors.Add(key)) { ++result.ContinuationAdvances; true }
+      else { ++result.DuplicateTransitionsAvoided; false }
+    }
+    private Sequence(s : NitraSample, index : int, p : int) : void
+    {
+      unless(Cursor(s,index,p,0)) return;
+      if(index==s.Operation.Children.Count) Candidate(s,p);
+      else { mutable work=Work(s,2); work.Stage=index+1; Subscribe(s,s.Operation.Children[index],p,work); }
+    }
+    private RepeatItem(s : NitraSample, start : int, origin : int, count : int) : void
+    { mutable work=Work(s,4); work.Position=origin; work.Count=count; Subscribe(s,s.Operation.Children[0],start,work); }
+    private Repetition(s : NitraSample, p : int, count : int) : void
+    {
+      def o=s.Operation;
+      unless(Cursor(s,0,p,count)) return;
+      when(count>=o.Min) Candidate(s,p);
+      when(o.Max>=0 && count>=o.Max) return;
+      if(o.Kind=="separated" && count>0)
+      { mutable work=Work(s,5); work.Position=p; work.Count=count; Subscribe(s,o.Children[1],p,work); }
+      else RepeatItem(s,p,p,count);
+    }
+    private Initialize(s : NitraSample) : void
+    {
+      when(s.Started) { ++result.PrefixReplays; throw ArgumentException("recognition sample initialized twice"); }
+      s.Started=true; def o=s.Operation; def p=s.Start;
+      when(!prepared.LegacyRecognition && o.Family!=null) { StartFamily(s); return; }
+      match(o.Kind)
+      {
+        | "seq" => Sequence(s,0,p);
+        | "repeat" | "separated" => Repetition(s,p,0);
+        | "rule" | "alt" | "variant" | "capture" | "call" | "longest" =>
+          foreach(c in o.Children) Subscribe(s,c,p,Work(s,1));
+        | "and" => Subscribe(s,o.Children[0],p,Work(s,8));
+        | "not" => Subscribe(s,o.Children[0],p,Work(s,10));
+        | "subtract" =>
+          Subscribe(s,o.Children[0],p,Work(s,9));
+          Subscribe(s,o.Children[1],p,Work(s,10));
+        | "deferred" => throw ArgumentException(o.Text);
+        | _ => throw ArgumentException("unsupported recognition operation: "+o.Kind);
+      }
+    }
+    private KnownCount(o : NitraOperation, p : int) : int
+    { def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); if(memo.ContainsKey(key)) samples[memo[key]].Ends.Count else if(lexical.ContainsKey(key)) lexical[key].Count else 0 }
+    private KnownContains(o : NitraOperation, p : int, end : int) : bool
+    { def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); if(memo.ContainsKey(key)) samples[memo[key]].Ends.Contains(end) else lexical.ContainsKey(key) && lexical[key].Contains(end) }
+    private TryClose(s : NitraSample) : void
+    { when(!s.Closed && s.Started && s.Pending==0 && s.Outstanding.Count==0) Close(s); }
+    private Close(s : NitraSample) : void
+    {
+      when(s.Closed) return;
+      def o=s.Operation;
+      if(o.Kind=="not") { when(KnownCount(o.Children[0],s.Start)==0) Emit(s,s.Start); }
+      else if(o.Kind=="subtract")
+      { foreach(end in s.Candidates) unless(KnownContains(o.Children[1],s.Start,end)) Emit(s,end); }
+      else when(o.Kind=="longest" || (o.Kind=="repeat" || o.Kind=="separated") && !o.AllEnds)
+      { mutable last= -1; foreach(end in s.Candidates) when(end>last) last=end; when(last>=0) Emit(s,last); }
+      s.Closed=true; RemoveComponentMember(s);
+      when(!prepared.GuardBatchCompatibility && !prepared.LegacyRecognition) PoolDependencyEvidence(s,2);
+      foreach(parent in s.Parents)
+      {
+        def owner=samples[parent];
+        // Endpoint deliveries precede this closure delivery in the same queue.
+        mutable work=Work(owner,7); work.Stage=s.Id; Schedule(owner,work);
+      }
+      s.SubscriberHead= -1; s.SubscriberTail= -1;
+    }
+    // Most inputs close without any recursive stall. Build the component index
+    // only when needed; thereafter additions/closure update the retained graph.
+    internal EnsureComponents() : void
+    {
+      when(componentsReady) return;
+      ++ComponentBuilds;
+      def visited=SCG.HashSet.[int](); def order=SCG.List.[int]();
+      foreach(root in samples) unless(root.Closed || visited.Contains(root.Id))
+      {
+        def stack=SCG.Stack.[int*bool](); stack.Push((root.Id,false));
+        while(stack.Count>0)
+        {
+          def (id,exit)=stack.Pop();
+          if(exit) order.Add(id);
+          else when(visited.Add(id))
+          {
+            stack.Push((id,true));
+            foreach(child in samples[id].Outstanding)
+            { ++ComponentEdgeVisits; unless(samples[child].Closed || visited.Contains(child)) stack.Push((child,false)); }
+          }
+        }
+      }
+      def assigned=SCG.HashSet.[int](); def components=SCG.List.[NitraDependencyComponent]();
+      for(mutable i=order.Count-1;i>=0;--i) unless(assigned.Contains(order[i]))
+      {
+        def c=NitraDependencyComponent(); c.Start=samples[order[i]].Start;
+        def pending=SCG.Stack.[int](); pending.Push(order[i]);
+        while(pending.Count>0)
+        {
+          def id=pending.Pop(); when(assigned.Add(id))
+          {
+            def sample=samples[id]; sample.Component=c; _=c.Members.Add(id);
+            def kind=sample.Operation.Kind;
+            c.Barrier=c.Barrier || kind=="not" || kind=="subtract" || kind=="longest" || (kind=="repeat" || kind=="separated") && !sample.Operation.AllEnds;
+            foreach(parent in sample.Parents)
+            { ++ComponentEdgeVisits; when(!samples[parent].Closed && samples[parent].Outstanding.Contains(id)) pending.Push(parent); }
+          }
+        }
+        components.Add(c);
+      }
+      foreach(c in components) foreach(id in c.Members) foreach(child in samples[id].Outstanding)
+      {
+        ++ComponentEdgeVisits;
+        unless(samples[child].Closed || samples[child].Component==c)
+        { _=c.Outgoing.Add(samples[child].Component); _=samples[child].Component.Incoming.Add(c); }
+      }
+      foreach(c in components) when(c.Outgoing.Count==0) readyComponents.Enqueue(c);
+      componentsReady=true;
+    }
+    // Two unindexed passes bound setup cost for short-lived recursive stalls.
+    // Repeated settlement promotes to the retained component graph below.
+    private SettleUnindexed() : void
+    {
+      ++UnindexedSettlements; UnindexedSampleVisits+=samples.Count;
+      def visited=SCG.HashSet.[int](); def order=SCG.List.[int]();
+      foreach(root in samples) unless(root.Closed || visited.Contains(root.Id))
+      {
+        def stack=SCG.Stack.[int*bool](); stack.Push((root.Id,false));
+        while(stack.Count>0)
+        {
+          def (id,exit)=stack.Pop();
+          if(exit) order.Add(id);
+          else when(visited.Add(id))
+          {
+            stack.Push((id,true));
+            foreach(child in samples[id].Outstanding) unless(samples[child].Closed || visited.Contains(child)) stack.Push((child,false));
+          }
+        }
+      }
+      def assigned=SCG.HashSet.[int](); def leaves=SCG.List.[SCG.HashSet[int]*bool]();
+      for(mutable i=order.Count-1;i>=0;--i) unless(assigned.Contains(order[i]))
+      {
+        def members=SCG.HashSet.[int](); def pending=SCG.Stack.[int](); pending.Push(order[i]);
+        while(pending.Count>0)
+        {
+          def id=pending.Pop(); when(assigned.Add(id))
+          { _=members.Add(id); foreach(parent in samples[id].Parents) when(!samples[parent].Closed && samples[parent].Outstanding.Contains(id)) pending.Push(parent); }
+        }
+        mutable leaf=true; mutable barrier=false;
+        foreach(id in members)
+        {
+          def sample=samples[id]; def kind=sample.Operation.Kind;
+          when(kind=="not" || kind=="subtract" || kind=="longest" || (kind=="repeat" || kind=="separated") && !sample.Operation.AllEnds) barrier=true;
+          foreach(child in sample.Outstanding) unless(members.Contains(child) || samples[child].Closed) leaf=false;
+        }
+        when(leaf) leaves.Add((members,barrier));
+      }
+      when(leaves.Count==0) throw ArgumentException("unsettled recognition dependency");
+      foreach((members,barrier) in leaves)
+      {
+        when(barrier) throw ArgumentException("cyclic negative or longest-match recognition constraint");
+        foreach(id in members) Close(samples[id]);
+      }
+    }
+    // The positive queue has drained. Snapshot current leaf components before
+    // closing any: new closure notifications must run before their parents settle.
+    private SettleCycles() : void
+    {
+      when(queue.Count>0) return;
+      when(nodeBatches.Count>0) { PumpNodes(batches.Count==0); PumpFamilies(false); return; }
+      when(batches.Count>0) { PumpFamilies(true); return; }
+      ++SettlementPasses;
+      when(!componentsReady && SettlementPasses<=2) { SettleUnindexed(); return; }
+      EnsureComponents();
+      def leaves=SCG.List.[NitraDependencyComponent](); def selected=SCG.HashSet.[NitraDependencyComponent]();
+      while(readyComponents.Count>0)
+      {
+        def c=readyComponents.Dequeue();
+        when(!c.Removed && c.Outgoing.Count==0 && selected.Add(c)) leaves.Add(c);
+      }
+      when(leaves.Count==0) throw ArgumentException("unsettled recognition dependency");
+      foreach(c in leaves)
+      {
+        when(c.Barrier) throw ArgumentException("cyclic negative or longest-match recognition constraint");
+        def members=SCG.List(c.Members);
+        foreach(id in members) Close(samples[id]);
+      }
+    }
+    // Diagnostic-only full SCC oracle, called by tests between queued actions.
+    internal ValidateComponents() : void
+    {
+      unless(componentsReady)
+      {
+        mutable count=0; foreach(sample in samples) unless(sample.Closed) ++count;
+        unless(count==openSamples) throw ArgumentException("lazy open sample count differs from oracle");
+        return;
+      }
+      def visited=SCG.HashSet.[int](); def order=SCG.List.[int]();
+      foreach(root in samples) unless(root.Closed || visited.Contains(root.Id))
+      {
+        def stack=SCG.Stack.[int*bool](); stack.Push((root.Id,false));
+        while(stack.Count>0)
+        {
+          def (id,exit)=stack.Pop();
+          if(exit) order.Add(id);
+          else when(visited.Add(id))
+          {
+            stack.Push((id,true));
+            foreach(child in samples[id].Outstanding) unless(samples[child].Closed || visited.Contains(child)) stack.Push((child,false));
+          }
+        }
+      }
+      def assigned=SCG.HashSet.[int](); mutable count=0;
+      for(mutable i=order.Count-1;i>=0;--i) unless(assigned.Contains(order[i]))
+      {
+        def members=SCG.HashSet.[int](); def pending=SCG.Stack.[int](); pending.Push(order[i]);
+        while(pending.Count>0)
+        {
+          def id=pending.Pop(); when(assigned.Add(id))
+          { _=members.Add(id); foreach(parent in samples[id].Parents) when(!samples[parent].Closed && samples[parent].Outstanding.Contains(id)) pending.Push(parent); }
+        }
+        def component=samples[order[i]].Component;
+        unless(component.Members.SetEquals(members)) throw ArgumentException("incremental component membership differs from SCC oracle");
+        def outgoing=SCG.HashSet.[NitraDependencyComponent]();
+        foreach(id in members)
+        {
+          ++count;
+          foreach(child in samples[id].Outstanding) unless(samples[child].Closed || samples[child].Component==component) _=outgoing.Add(samples[child].Component);
+        }
+        unless(component.Outgoing.SetEquals(outgoing)) throw ArgumentException("incremental component edges differ from SCC oracle");
+      }
+      unless(count==openSamples) throw ArgumentException("incremental open sample count differs from SCC oracle");
+    }
+    private Lexical(o : NitraOperation, p : int) : SCG.HashSet[int]
+    {
+      def key=Key(o.Id,p); when(lexical.ContainsKey(key)) return lexical[key];
+      unless(lexicalActive.Add(key)) throw ArgumentException("cyclic lexical recognition at "+p.ToString());
+      Count(); def ends=SCG.HashSet.[int]();
+      try
+      {
+        match(o.Kind)
+        {
+          | "empty" => _=ends.Add(p);
+          | "literal" =>
+            ++result.Observations;
+            when(p+o.Text.Length<=source.Length && string.CompareOrdinal(source,p,o.Text,0,o.Text.Length)==0) _=ends.Add(p+o.Text.Length);
+          | "class" =>
+            ++result.Observations;
+            when(p<source.Length)
+            {
+              mutable found=false;
+              foreach(c in o.Children)
+                if(c.Kind=="range") { when(c.Text[0]<=source[p] && source[p]<=c.Text[1]) found=true; }
+                else when(Category(source[p],c.Text)) found=true;
+              when(found!=(o.Text=="inverted")) _=ends.Add(p+1);
+            }
+          | "seq" =>
+            mutable positions=SCG.HashSet.[int](); _=positions.Add(p);
+            foreach(c in o.Children)
+            { def next=SCG.HashSet.[int](); foreach(q in positions) when(Possible(c,q)) next.UnionWith(Lexical(c,q)); positions=next; }
+            ends.UnionWith(positions);
+          | "not" | "and" =>
+            def child=if(Possible(o.Children[0],p)) Lexical(o.Children[0],p) else SCG.HashSet();
+            when((child.Count==0)==(o.Kind=="not")) _=ends.Add(p);
+          | "subtract" => ends.UnionWith(Lexical(o.Children[0],p)); ends.ExceptWith(Lexical(o.Children[1],p));
+          | "repeat" | "separated" =>
+            def pending=SCG.Queue.[int*int](); def visited=SCG.HashSet.[long](); pending.Enqueue((p,0));
+            while(pending.Count>0)
+            {
+              Count(); def (q,count)=pending.Dequeue();
+              when(visited.Add(Key(count,q)))
+              {
+                when(count>=o.Min) _=ends.Add(q);
+                when(o.Kind=="separated" && o.Text=="trailing" && count>0 && count>=o.Min) ends.UnionWith(Lexical(o.Children[1],q));
+                when(o.Max<0 || count<o.Max)
+                {
+                  def positions=SCG.HashSet.[int]();
+                  if(o.Kind=="separated" && count>0) positions.UnionWith(Lexical(o.Children[1],q)); else _=positions.Add(q);
+                  foreach(start in positions) when(Possible(o.Children[0],start)) foreach(last in Lexical(o.Children[0],start))
+                  {
+                    when(last==q && !o.AllEnds) throw ArgumentException("non-progressing repetition at "+q.ToString());
+                    pending.Enqueue((last,if(o.Max<0 && count>=Math.Max(1,o.Min)) Math.Max(1,o.Min) else count+1));
+                  }
+                }
+              }
+            }
+          | "deferred" => throw ArgumentException(o.Text);
+          | _ => foreach(c in o.Children) when(Possible(c,p)) ends.UnionWith(Lexical(c,p));
+        }
+        when((o.Kind=="longest" || (o.Kind=="repeat" || o.Kind=="separated") && !o.AllEnds) && ends.Count>1)
+        { mutable last=p; foreach(q in ends) when(q>last) last=q; ends.Clear(); _=ends.Add(last); }
+        lexical.Add(key,ends);
+        when(o.Kind=="variant" && ends.Count>0) _=matchedProductions.Add(o.Label);
+        ends
+      }
+      finally { _=lexicalActive.Remove(key); }
+    }
+    private First(ch : char) : array[bool]
+    {
+      ++result.DispatchBuilds;
+        def bits : array[bool]=array(prepared.Operations.Count); def pending=SCG.Queue.[NitraOperation]();
+        foreach(op in prepared.Operations) pending.Enqueue(op);
+        while(pending.Count>0)
+        {
+          def op=pending.Dequeue(); unless(bits[op.Id])
+          {
+            mutable yes=false;
+            match(op.Kind)
+            {
+              | "literal" => yes=op.Text.Length>0 && op.Text[0]==ch;
+              | "class" =>
+                foreach(c in op.Children)
+                  if(c.Kind=="range") { when(c.Text[0]<=ch && ch<=c.Text[1]) yes=true; }
+                  else when(Category(ch,c.Text)) yes=true;
+                yes=yes!=(op.Text=="inverted");
+              | "deferred" => yes=true;
+              | "seq" =>
+                mutable more=true; foreach(c in op.Children) when(more) { when(bits[c.Id]) yes=true; more=c.Nullable; }
+              | "subtract" => yes=bits[op.Children[0].Id];
+              | "repeat" | "separated" => yes=bits[op.Children[0].Id];
+              | _ => foreach(c in op.Children) when(bits[c.Id]) yes=true;
+            }
+            when(yes) { bits[op.Id]=true; foreach(parent in op.Parents) pending.Enqueue(parent); }
+          }
+        }
+      bits
+    }
+    private Possible(o : NitraOperation, p : int) : bool
+    {
+      when(!prepared.Ready || o.Nullable) return true;
+      when(p>=source.Length) return false;
+      def ch=source[p];
+      unless(firstSets.ContainsKey(ch))
+      {
+        // Grammar dispatch is immutable and source-independent. Share bounded
+        // ASCII tables across inputs; non-ASCII tables stay local to this run.
+        if((ch :> int)<128) lock(prepared.FirstAscii)
+        {
+          mutable bits=prepared.FirstAscii[ch :> int];
+          when(bits==null) { bits=First(ch); prepared.FirstAscii[ch :> int]=bits; }
+          firstSets.Add(ch,bits);
+        }
+        else firstSets.Add(ch,First(ch));
+      }
+      firstSets[ch][o.Id]
+    }
+    private static categoryNames : array[string] = array["Lu","Ll","Lt","Lm","Lo","Mn","Mc","Me","Nd","Nl","No","Zs","Zl","Zp","Cc","Cf","Cs","Co","Pc","Pd","Ps","Pe","Pi","Pf","Po","Sm","Sc","Sk","So","Cn"];
+    private Category(c : char, name : string) : bool
+    {
+      def names=categoryNames;
+      def category=(char.GetUnicodeCategory(c) :> int);
+      names[category]==name || (name.Length==1 && names[category].StartsWith(name,StringComparison.Ordinal))
+    }
+    public Run(root : NitraOperation, name : string) : NitraRecognitionResult
+    { Run(root,name,false) }
+    public Run(root : NitraOperation, name : string, retain : bool) : NitraRecognitionResult
+    { Run(root,name,retain,true) }
+    public Run(root : NitraOperation, name : string, retain : bool, detailed : bool) : NitraRecognitionResult
+    {
+      result.Rule=name; result.Root= -1;
+      try
+      {
+        def first=Request(root,0);
+        while(queue.Count>0 || openSamples>0 || batches.Count>0 || nodeBatches.Count>0 || poolReady.Count>0 || poolFlight.Count>0)
+        {
+          def observed=nodeWake.Read();
+          while(queue.Count>0)
+          {
+            if(nodeBatches.Count>0 || queue.Count>=prepared.MinimumNodeWork && prepared.MaximumFilterWorkers>1) StartNodeBatch(); else PumpWork();
+            PumpNodes(false); PumpFamilies(false); PumpPools();
+          }
+          PumpNodes(false); PumpFamilies(false); PumpPools();
+          if(queue.Count==0 && poolReady.Count==0 && (nodeBatches.Count>0 || batches.Count>0 || poolFlight.Count>0))
+          {
+            mutable ready=false; foreach(lane in poolFlight) when(System.Threading.Volatile.Read(ref lane.Ready)!=0) ready=true;
+            unless(ready) nodeWake.Wait(observed);
+          }
+          else when(openSamples>0 && queue.Count==0 && poolReady.Count==0 && poolFlight.Count==0) SettleCycles();
+        }
+        result.Complete=true; result.Accepted=(!first.IsNull && first.Ends.Contains(source.Length)); ();
+      }
+      catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); }
+      // Compact endpoint evidence is authoritative. Diagnostic regions are a
+      // separate optional projection and never drive recognition or selection.
+      foreach(s in samples) foreach(view in s.Views)
+      {
+        def o=prepared.Operations[view];
+        def key=Key(o.Id,s.Start);
+        if(!projected.ContainsKey(key)) { def ends=SCG.HashSet.[int](); ends.UnionWith(s.Ends); projected[key]=ends; }
+        else projected[key].UnionWith(s.Ends);
+        when(o.Kind=="variant" && s.Ends.Count>0) _=matchedProductions.Add(o.Label);
+      }
+      foreach(pair in lexical)
+      {
+        unless(projected.ContainsKey(pair.Key)) projected[pair.Key]=pair.Value;
+      }
+      when(detailed)
+      {
+        def canonicalRegions=SCG.Dictionary.[long,int]();
+        foreach(pair in projected)
+        {
+          def op=prepared.Operations[(pair.Key/4294967296L) :> int]; def p=(pair.Key%4294967296L) :> int;
+          def region=NitraRegion(); region.Id=result.Regions.Count; region.Sample=region.Id;
+          region.Operation=op.Id; region.Kind=op.Kind; region.Label=op.Label; region.Start=p;
+          def canonical=Key((op.Interface ?? op).Id,p);
+          if(canonicalRegions.ContainsKey(canonical)) region.Sample=canonicalRegions[canonical];
+          else canonicalRegions[canonical]=region.Id;
+          region.Ends.AddRange(pair.Value); region.Ends.Sort(); result.Regions.Add(region);
+          when(op==root && p==0) result.Root=region.Id;
+        }
+        foreach(region in result.Regions)
+        {
+          def canonical=Key((prepared.Operations[region.Operation].Interface ?? prepared.Operations[region.Operation]).Id,region.Start);
+          when(memo.ContainsKey(canonical)) foreach(child in samples[memo[canonical]].Dependencies)
+          {
+            def sample=samples[child]; def key=Key(sample.Operation.Id,sample.Start);
+            when(canonicalRegions.ContainsKey(key)) region.Children.Add(canonicalRegions[key]);
+          }
+          region.Children.Sort();
+        }
+      }
+      when(retain && result.Complete && result.Accepted)
+      {
+        def evidence=NitraEvidence(); evidence.Root=root; evidence.Source=source;
+        foreach(operation in prepared.Operations) when(operation.GreedyCall) evidence.NativeSelection=true;
+        foreach(pair in projected)
+          evidence.Ends[(((pair.Key/4294967296L) :> int),((pair.Key%4294967296L) :> int))]=pair.Value;
+        result.Evidence=evidence;
+      }
+      result.UnindexedSampleVisits=UnindexedSampleVisits; result.UnindexedSettlements=UnindexedSettlements; result.ComponentBuilds=ComponentBuilds; result.ComponentEdgeVisits=ComponentEdgeVisits; result.ComponentMerges=ComponentMerges; result.SettlementPasses=SettlementPasses;
+      result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
+      result
+    }
+  }
+}

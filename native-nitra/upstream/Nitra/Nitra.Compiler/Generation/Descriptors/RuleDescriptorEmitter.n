@@ -1,0 +1,164 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Model;
+using Nitra.Typing;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal interface IRuleDescriptorEmitter
+  {
+    RuleSymbols : Seq[RuleDefSymbol] { get; }
+    DefineDescriptor() : void;
+    Emit(): void;
+  }
+
+  [Record]
+  internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmitter
+    where TRuleSymbol : RuleDefSymbol
+  {
+    public Owner       : SyntaxModuleEmitter { get; }
+    public RuleSymbols : list[TRuleSymbol]   { get; }
+
+    protected abstract BaseType  : PExpr  { get; }
+    protected abstract ClassName : string { get; }
+
+    protected virtual  BaseArgsNamesAndTypes : Seq[string * PExpr] { get { array[] } }
+    protected virtual  BaseArgs(symbol : TRuleSymbol)  : Seq[PExpr] { IgnoreParams(); array[] }
+
+    protected virtual  BaseArgsNames  : Seq[PExpr]      { get { BaseArgsNamesAndTypes.Map(x => <[ $(x[0] : global) ]>) } }
+    protected virtual  BaseParameters : Seq[PParameter] { get { BaseArgsNamesAndTypes.Map(x => <[ parameter: $(x[0] : global) : $(x[1]) ]>) } }
+
+    [RecordIgnore] protected DescriptorTb : TypeBuilder { get; private set; }
+
+    public virtual DefineDescriptor() : void
+    {
+      assert(DescriptorTb == null);
+      def baseParameters = [<[ parameter: idInGrammar : int ]>, <[ parameter: isTokenRule : bool ]>, <[ parameter: isKeyToken : bool ]>, <[ parameter: isVoid : bool ]>, <[ parameter: operatorInfo : Nitra.OperatorInfo ]>, <[ parameter: arity : int ]>].Concat(BaseParameters);
+      DescriptorTb = Owner.GrammarTB.DefineNestedType(<[decl:
+        private sealed class $(ClassName : usesite) : $BaseType
+        {
+          internal this(..$baseParameters)
+          {
+            base(..$BaseArgsNames);
+            this.IdInGrammar  = idInGrammar;
+            this.IsTokenRule  = isTokenRule;
+            this.IsKeyToken   = isKeyToken;
+            this.IsVoid       = isVoid;
+            this.OperatorInfo = operatorInfo;
+            this.Arity        = arity;
+          }
+
+          public override IdInGrammar  : int                      { get; }
+          public override IsTokenRule  : bool                     { get; }
+          public override IsKeyToken   : bool                     { get; }
+          public override IsVoid       : bool                     { get; }
+          public override OperatorInfo : Nitra.OperatorInfo       { get; }
+          public override Arity        : int                      { get; }
+          public override Grammar      : Nitra.GrammarDescriptor  { get { $(Owner.GrammarTB.GetMemType() : typed).StaticDescriptor } }
+        }
+      ]>);
+
+      def nameExpr = MakeRuleSelector(ruleSymbol => <[ $( $<#..$(ruleSymbol.ModuleRelativeName; ".")#> : string) ]>);
+      DescriptorTb.DefineConditional(<[decl: public override Name : string { get { $nameExpr } } ]>);
+
+      foreach (ruleSymbol in RuleSymbols)
+      {
+        def ctor      = <[ $(DescriptorTb.GetMemType() : typed) ]>;
+        def fieldName = ruleSymbol.DecorateRuleDescriptorName();
+
+        Owner.GrammarTB.DefineConditional(<[ decl:
+          public static $(fieldName : usesite) : $BaseType =
+            $ctor
+              (
+                $(ruleSymbol.IdInGrammar           : int),
+                $(ruleSymbol.IsToken               : bool),
+                $(ruleSymbol.Options.IsKeyToken    : bool),
+                $(ruleSymbol.Type is RuleType.Void : bool),
+                $(ruleSymbol.Options.OperatorInfo  :> int) :> Nitra.OperatorInfo,
+                $(ruleSymbol.Options.Arity         : int),
+                ..$(BaseArgs(ruleSymbol))
+              );
+        ]>);
+      }
+
+      if (RuleSymbols.Any(ruleSymbol => ruleSymbol.Options.SpanClassSymbol != null))
+      {
+        def spanClassExpr = MakeRuleSelector(
+          ruleSymbol => if (ruleSymbol.Options.SpanClassSymbol != null) Some(ruleSymbol.Options.SpanClassSymbol) else None(),
+          spanClass  => if (spanClass is Some(s)) Owner.Environment.MakeSpanClassRef(s) else <[ null ]>);
+
+        DescriptorTb.DefineConditional(<[ decl: public override SpanClass : Nitra.SpanClass { get { $spanClassExpr } } ]>);
+      }
+      else
+        DescriptorTb.DefineConditional(<[ decl: public override SpanClass : Nitra.SpanClass { get { null } } ]>);
+    }
+
+    public Emit() : void
+    {
+      assert(DescriptorTb != null);
+      DescriptorTb.Compile();
+    }
+
+    protected MakeRuleSelector(maker : TRuleSymbol -> PExpr) : PExpr
+    {
+      def cases = SCG.List();
+      foreach (ruleSymbol in RuleSymbols)
+      {
+        def expr = maker(ruleSymbol);
+        cases.Add(<[ case: | $(ruleSymbol.IdInGrammar : int) => $expr ]>);
+      }
+      cases.Add(<[ case: | id => assert(false, $"Invalid rule id $id.") ]>);
+      <[ match (this.IdInGrammar) { ..$cases } ]>
+    }
+
+    protected MakeRuleSelectorForParseTree(maker : TRuleSymbol -> PExpr) : PExpr
+    {
+      MakeRuleSelector(ruleSymbol =>
+        if (ruleSymbol.Type is RuleType.Void)
+          <[ assert(false, "ParseTree is not available") ]>
+        else
+          maker(ruleSymbol))
+    }
+
+    protected MakeRuleSelector[TKey](group : TRuleSymbol -> TKey, maker : TKey -> PExpr) : PExpr
+    {
+      def cases = SCG.List();
+      foreach (pair in RuleSymbols.Grouping(r => (group(r), r)))
+      {
+        def patterns = pair.Value.Map(ruleSymbol => <[ $(ruleSymbol.IdInGrammar : int) ]>);
+        def body     = maker(pair.Key);
+        def case     = MatchCase(patterns, body);
+        cases.Add(case);
+      }
+      cases.Add(<[ case: | id => assert(false, $"Invalid rule id $id.") ]>);
+      <[ match (this.IdInGrammar) { ..$cases } ]>
+    }
+
+    protected DefineNewParserMethod(returnType : PExpr, parameters : list[PParameter]) : void
+    {
+      def args = parameters.Map(parameter => <[ $(parameter.Name : global) ]>);
+      def parserExpr = MakeRuleSelector(ruleSymbol => <[ $(Owner.GrammarImplTB.GetMemType() : typed).$(ruleSymbol.DecorateRuleClassName() : global)(grammar, ruleIdBuilder, ..$args) ]>);
+      DescriptorTb.DefineConditional(<[decl:
+        public override NewParser(..$(<[parameter: grammar : Nitra.CompositeGrammar ]> :: <[parameter: ruleIdBuilder : Nitra.Internal.RuleIdBuilder ]> :: parameters)) : $returnType
+        {
+          $parserExpr
+        }
+      ]>);
+    }
+
+    protected DefineIsStartRuleProperty() : void
+    {
+      def isStartRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.Options.IsStart, isStart => <[ $(isStart : bool) ]>);
+      DescriptorTb.DefineConditional(<[decl: public override IsStartRule : bool { get { $isStartRuleExpr } } ]>);
+    }
+  }
+}

@@ -1,0 +1,71 @@
+﻿using Nitra.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using Nitra.Model;
+
+using Nemerle.Compiler;
+
+namespace Nitra.Compiler
+{
+  internal partial class ParseMethodEmitter : MethodEmitter
+  {
+    public this(owner : RuleParserEmitter, tb : TypeBuilder, sequence : SequenceCompileInfo.Root)
+    {
+      base(owner, sequence, tb);
+      _data         = SequenceDataContainer(sequence, this, SequenceData, SubruleData);
+    }
+
+    public Emit() : void
+    {
+      CompileFunction(SequenceCompileInfo);
+    }
+
+    public CurTextPos : PExpr { get { <[ curTextPos ]> } }
+
+    public MakeRawTreeForSingleCallExtension(subrule : SubruleCompileInfo) : PExpr
+    {
+      match (subrule, subrule.Owner)
+      {
+        | (SubruleCompileInfo.SimpleCall as subrule, SequenceCompileInfo.Root(Symbol = Nitra.Typing.ExtensionRuleSymbol) as sequence) when subrule.AllocateRawTree && sequence.Subrules.Length == 1 =>
+          <[
+            when ($(RawTreePtr(sequence).Var) == 0 && parseResult.TryGetRawTree($(RawTreeStart(sequence)), $(Owner.MakeParserName(subrule.Symbol) : global).RuleId) != 0)
+              $(RawTreePtr(sequence).Var) = parseResult.Allocate($(sequence.Size), $(sequence.RuleIdFieldName : global));
+          ]>
+
+        | (SubruleCompileInfo.ExtensibleCall as subrule, SequenceCompileInfo.Root(Symbol = Nitra.Typing.ExtensionRuleSymbol) as sequence) when subrule.AllocateRawTree && sequence.Subrules.Length == 1 =>
+          <[
+            when ($(RawTreePtr(sequence).Var) == 0 && parseResult.TryGetRawTree($(RawTreeStart(sequence)), $(Owner.MakeParserName(subrule.Symbol, subrule.BindingPower) : global).PrefixId) != 0)
+              $(RawTreePtr(sequence).Var) = parseResult.Allocate($(sequence.Size), $(sequence.RuleIdFieldName : global));
+          ]>
+
+        | _ => <[ {} ]>
+      }
+    }
+
+    public AllocateParentRawTree(subrule : SubruleCompileInfo) : PExpr
+    {
+      def sequence = subrule.Owner;
+      if (subrule.AllocateRawTree)
+        <[ $(RawTreePtr(sequence).Var) = int.MinValue ]>
+      else
+        <[ {} ]>
+    }
+
+    public RecoveryCode() : PExpr
+    {
+      <[
+        when (parseResult.MaxFailPos < curTextPos)
+          parseResult.MaxFailPos = curTextPos;
+      ]>
+    }
+  }
+}

@@ -1,0 +1,818 @@
+using Nemerle.Imperative;
+using System;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using System.Collections.Generic;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Platform;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.cache;
+using Nemerle.Scripting.dependencies;
+using System.Threading;
+using System.Threading.Tasks;
+using Nemerle.Scripting.facilities;
+
+public sealed class ScriptHost
+{
+  static gate : object = object();
+  settings : ScriptHostOptions;
+  public this() { settings = ScriptHostOptions(); }
+  public this(options : ScriptHostOptions) { settings = options.Snapshot(); }
+  public CompileAsync(source : ScriptSource, definition : ScriptDefinition, cancellation : CancellationToken) : Task[CompilationResult]
+  {
+    def snapshot = definition.Snapshot();
+    Task.Run(() => { cancellation.ThrowIfCancellationRequested(); CompileConfigured(source, snapshot, cancellation) }, cancellation)
+  }
+  public CompileAndEvaluateAsync(source : ScriptSource, definition : ScriptDefinition, inputs : ScriptInputs,
+                                cancellation : CancellationToken) : Task[Nemerle.Scripting.session.SubmissionResult]
+  {
+    def snapshot = definition.Snapshot(); def inputSnapshot = inputs.Snapshot();
+    Task.Run(() =>
+    {
+      cancellation.ThrowIfCancellationRequested();
+      def compilation = CompileConfigured(source, snapshot, cancellation);
+      cancellation.ThrowIfCancellationRequested();
+      Nemerle.Scripting.session.SubmissionResult(compilation, if (compilation.Success) Evaluate(compilation.Script, inputSnapshot) else null)
+    }, cancellation)
+  }
+
+  static CheckType(value : object, type : Type, name : string) : void
+  {
+    when ((value == null && type.IsValueType && Nullable.GetUnderlyingType(type) == null)
+       || (value != null && !type.IsInstanceOfType(value)))
+      throw ArgumentException("Script input has the wrong type: " + name);
+  }
+
+  static Shared(definition : ScriptDefinition) : array[Assembly]
+  {
+    def assemblies : List[Assembly] = List();
+    assemblies.AddRange(definition.SharedAssemblies);
+    def addType(type : Type) : void
+    {
+      unless (assemblies.Contains(type.Assembly)) assemblies.Add(type.Assembly);
+      when (type.IsArray) addType(type.GetElementType());
+      foreach (arg in type.GetGenericArguments()) addType(arg);
+    }
+    foreach (type in definition.Properties.Values) addType(type);
+    foreach (type in definition.ReceiverTypes) addType(type);
+    foreach (type in definition.BaseArgumentTypes) addType(type);
+    addType(definition.BaseType); foreach (type in definition.Interfaces) addType(type);
+    when (definition.ResultType != null) addType(definition.ResultType);
+    assemblies.ToArray()
+  }
+
+  public ClassifyInput(source : ScriptSource, definition : ScriptDefinition) : ScriptInputCompleteness
+  {
+    lock (gate)
+    {
+      def previous = ManagerClass.Instance;
+      try
+      {
+        def options = CompilationOptions(); options.TargetIsLibrary = true; options.TargetIsSet = true;
+        options.IgnoreConfusion = true; options.ProgressBar = false; options.ColorMessages = false;
+        options.TargetReferenceDirectory = definition.TargetReferenceDirectory; ScriptCompilerOptions.Apply(options, definition.CompilerOptions, source.Path);
+        options.ReferencedLibraries = NList.FromArray(definition.References.ToArray());
+        def data = ScriptCompilationData(); data.TypeName = "__syntax"; data.FileName = "__syntax";
+        data.Template = "public class __syntax { public this() { base(); } }";
+        def defaultImports : List[string] = List();
+        foreach (name in definition.Imports) unless (definition.OpenImportedNames.Contains(name)) defaultImports.Add(name);
+        foreach (name in definition.OpenImportedNames)
+          foreach (binding in definition.ImportBindings)
+            when (name == binding.Owner || name.StartsWith(binding.Owner + ".", StringComparison.Ordinal))
+            {
+              def suffix = name.Substring(binding.Owner.Length);
+              if (suffix == "") defaultImports.Add(binding.Script.ScriptType.FullName);
+              else when (HasNestedPath(binding.Script.ScriptType, suffix.Substring(1))) defaultImports.Add(binding.Script.ScriptType.FullName + suffix);
+            }
+        data.DefaultImports = defaultImports.ToArray(); options.Script = data;
+        options.Sources = NList.FromArray(array[StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), source.Text) : ISource]);
+        def manager = ManagerClass(options); def syntaxOutput = StringWriter(); manager.InitOutput(syntaxOutput);
+        def status = manager.ClassifyScriptInput();
+
+        match (status) { | 0 => ScriptInputCompleteness.Complete | 1 => ScriptInputCompleteness.Incomplete | _ => ScriptInputCompleteness.Invalid }
+      }
+      finally { ManagerClass.Instance = previous; }
+    }
+  }
+
+  public Compile(source : ScriptSource) : CompilationResult
+  {
+    def definition = if (settings.DefinitionSelector == null) ScriptDefinition() else settings.DefinitionSelector.Select(source);
+    Compile(source, definition)
+  }
+  public Compile(source : ScriptSource, definition : ScriptDefinition) : CompilationResult
+  { CompileConfigured(source, definition, CancellationToken.None) }
+
+  internal CompileConfigured(source : ScriptSource, requestedDefinition : ScriptDefinition, cancellation : CancellationToken) : CompilationResult
+  {
+    CompileConfigured(source, requestedDefinition, cancellation, Dictionary())
+  }
+  internal CompileConfigured(source : ScriptSource, requestedDefinition : ScriptDefinition, cancellation : CancellationToken,
+                             imports : Dictionary[string, CompiledScript]) : CompilationResult
+  {
+    def graph = ScriptCompilationGraph(); foreach (pair in imports) graph.Compiled.Add(pair.Key, pair.Value);
+    try
+    {
+      def result = CompileGraph(source, requestedDefinition, cancellation, graph);
+      when (result.Success) { imports.Clear(); foreach (pair in graph.Compiled) imports.Add(pair.Key, pair.Value); }
+      result
+    }
+    finally { Directory.Delete(graph.Directory, true); }
+  }
+
+  CompileGraph(source : ScriptSource, requestedDefinition : ScriptDefinition, cancellation : CancellationToken,
+               graph : ScriptCompilationGraph) : CompilationResult
+  {
+    mutable definition = requestedDefinition.Snapshot();
+    mutable collected : ScriptCollectedData = null;
+    mutable version = settings.ConfigurationVersion;
+    mutable cacheable = true;
+    mutable selectedText : string = null;
+    try
+    {
+      foreach (refiner in settings.Refiners)
+      {
+        cancellation.ThrowIfCancellationRequested();
+        definition = refiner.BeforeParsing(source, definition).Snapshot();
+        when (String.IsNullOrEmpty(refiner.Version)) cacheable = false;
+        version = version + "|" + refiner.Version;
+      }
+      lock (gate)
+      {
+        def previous = ManagerClass.Instance;
+        try
+        {
+          def annotations : List[string] = List();
+          foreach (refiner in settings.CompilationRefiners) annotations.AddRange(refiner.AnnotationNames);
+          def selectedSource = SelectFragments(source, definition); selectedText = selectedSource.Text;
+          def metadataOptions = CompilationOptions(); ScriptCompilerOptions.Apply(metadataOptions, definition.CompilerOptions, source.Path);
+          collected = ScriptMetadata.Collect(selectedSource, ManagerClass(metadataOptions), annotations.ToArray());
+          when (collected.CompilerOptions.Count > 0)
+          {
+            def arguments : List[string] = List(); arguments.AddRange(definition.CompilerOptions); arguments.AddRange(collected.CompilerOptions);
+            def configured = CompilationOptions(); ScriptCompilerOptions.Apply(configured, arguments, source.Path);
+            collected = ScriptMetadata.Collect(selectedSource, ManagerClass(configured), annotations.ToArray());
+          }
+        }
+        finally { ManagerClass.Instance = previous; }
+      }
+      foreach (refiner in settings.CompilationRefiners)
+      {
+        when (String.IsNullOrEmpty(refiner.Version)) cacheable = false;
+        version = version + "|" + refiner.Version;
+        when (collected.Annotations.Exists(a => Array.IndexOf(refiner.AnnotationNames, a.Name) >= 0))
+          definition = refiner.OnAnnotations(collected, definition).Snapshot();
+        definition = refiner.BeforeCompiling(collected, definition).Snapshot();
+      }
+      foreach (refiner in settings.EvaluationRefiners) version = version + "|eval:" + refiner.Version;
+      when (settings.ExecutionWrapper != null) version = version + "|wrapper:" + settings.ExecutionWrapper.Version;
+      when (settings.SourceResolver != null) { version = version + "|source:" + settings.SourceResolver.Version; when (String.IsNullOrEmpty(settings.SourceResolver.Version)) cacheable = false; }
+      definition.CompilerOptions.AddRange(collected.CompilerOptions);
+      when (definition.FileLocationProperty != null)
+      {
+        unless (definition.Properties.ContainsKey(definition.FileLocationProperty)) definition.Properties.Add(definition.FileLocationProperty, typeof(string));
+        unless (definition.Properties[definition.FileLocationProperty] == typeof(string))
+          throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "File location binding must have type string", true));
+      }
+      collected.Packages.AddRange(definition.Packages); collected.Repositories.AddRange(definition.Repositories);
+      foreach (refiner in settings.Refiners) definition = refiner.OnDependencies(collected, definition).Snapshot();
+      foreach (request in definition.Packages)
+        unless (collected.Packages.Exists(p => p.Id == request.Id && p.Version == request.Version)) collected.Packages.Add(request);
+      foreach (repository in definition.Repositories) unless (collected.Repositories.Contains(repository)) collected.Repositories.Add(repository);
+      unless (SelectFragments(source, definition).Text == selectedText) throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "Source fragments must be finalized before annotation collection", true));
+      def files = FileSystemScriptResolver().Resolve(collected);
+      definition.References.AddRange(files.CompilationReferences); definition.RuntimeReferences.AddRange(files.RuntimeReferences);
+      when (collected.Packages.Count > 0)
+      {
+        when (settings.Resolver == null)
+          throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "No script dependency resolver configured", true));
+        def resolution = settings.Resolver.Resolve(collected, definition, cancellation);
+        definition.References.AddRange(resolution.CompilationReferences);
+        definition.RuntimeReferences.AddRange(resolution.RuntimeReferences);
+        definition.NativeReferences.AddRange(resolution.NativeReferences);
+        definition.DependencyFingerprint = resolution.LockFingerprint;
+        definition.Packages.Clear(); definition.Packages.AddRange(collected.Packages);
+        definition.Repositories.Clear(); definition.Repositories.AddRange(collected.Repositories);
+      }
+      when (files.LockFingerprint != "")
+        definition.DependencyFingerprint = ClrScriptSupport.Digest(System.Text.Encoding.UTF8.GetBytes(definition.DependencyFingerprint + "|" + files.LockFingerprint));
+      def runtimeIdentities : Dictionary[string, string] = Dictionary();
+      foreach (path in definition.RuntimeReferences)
+      {
+        def identity = AssemblyName.GetAssemblyName(path);
+        def value = identity.FullName + ":" + ClrScriptSupport.Digest(File.ReadAllBytes(path));
+        when (runtimeIdentities.ContainsKey(identity.Name) && runtimeIdentities[identity.Name] != value)
+          throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "Conflicting runtime dependency: " + identity.Name, true));
+        runtimeIdentities[identity.Name] = value;
+      }
+      cancellation.ThrowIfCancellationRequested();
+      def requests : List[AssemblyRequest] = List(); requests.AddRange(collected.ScriptImports);
+      foreach (path in definition.ImportScripts)
+        unless (requestedDefinition.ChildDefinition != null && requests.Exists(r => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(source.Path)), r.Path)) == Path.GetFullPath(path)))
+          requests.Add(AssemblyRequest(path, ScriptDiagnostic(source.Path, 1, 1, "", false)));
+      def direct : HashSet[string] = HashSet();
+      def identity = Path.GetFullPath(source.Path);
+      unless (graph.Active.Add(identity)) throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "Cyclic script import: " + identity, true));
+      try
+      {
+        foreach (request in requests)
+        {
+          def resolver = if (settings.SourceResolver == null) FileSystemScriptSourceResolver() : IScriptSourceResolver else settings.SourceResolver;
+          mutable child : ScriptSource = null;
+          try { child = resolver.Resolve(source, request.Path, cancellation); }
+          catch { | error is IOException => throw ScriptDependencyException(ScriptDiagnostic(source.Path, request.Location.Line, request.Location.Column, error.Message, true)); }
+          def childIdentity = Path.GetFullPath(child.Path);
+          unless (direct.Add(childIdentity)) throw ScriptDependencyException(ScriptDiagnostic(source.Path, request.Location.Line, request.Location.Column, "Duplicate script import: " + childIdentity, true));
+          when (graph.Active.Contains(childIdentity)) throw ScriptDependencyException(ScriptDiagnostic(source.Path, request.Location.Line, request.Location.Column, "Cyclic script import: " + childIdentity, true));
+          def childDefinition = if (settings.DefinitionSelector == null) ScriptDefinition() else settings.DefinitionSelector.Select(child);
+          when (settings.DefinitionSelector == null)
+          {
+            childDefinition.TargetReferenceDirectory = definition.TargetReferenceDirectory;
+            childDefinition.Debug = definition.Debug;
+            def inherited = requestedDefinition.ChildDefinition ?? requestedDefinition;
+            foreach (pair in inherited.Properties) childDefinition.Properties.Add(pair.Key, pair.Value);
+            childDefinition.ReceiverTypes.AddRange(inherited.ReceiverTypes);
+            childDefinition.References.AddRange(inherited.References); childDefinition.SharedAssemblies.AddRange(inherited.SharedAssemblies);
+            childDefinition.BaseType = inherited.BaseType; childDefinition.BaseArgumentTypes.AddRange(inherited.BaseArgumentTypes);
+            childDefinition.Packages.AddRange(inherited.Packages); childDefinition.Repositories.AddRange(inherited.Repositories);
+            childDefinition.TargetFramework = inherited.TargetFramework; childDefinition.RuntimeIdentifier = inherited.RuntimeIdentifier;
+          }
+          def childKey = ScriptFingerprint.Create(child, childDefinition, version);
+          childDefinition.GeneratedTypeName = "Imported_" + childKey.Substring(0, 24);
+          mutable imported : CompiledScript = null;
+          if (graph.Compiled.ContainsKey(childKey)) imported = graph.Compiled[childKey];
+          else
+          {
+            def result = CompileGraph(child, childDefinition, cancellation, graph);
+            unless (result.Success) return result;
+            imported = result.Script; graph.Compiled.Add(childKey, imported);
+          }
+          def filename = Path.GetFileName(child.Path);
+          def owner = if (filename.EndsWith(imported.Definition.FileExtension, StringComparison.Ordinal)) filename.Substring(0, filename.Length - imported.Definition.FileExtension.Length) else Path.GetFileNameWithoutExtension(filename);
+          when (definition.ImportBindings.Exists(b => b.Owner == owner)) throw ScriptDependencyException(ScriptDiagnostic(source.Path, request.Location.Line, request.Location.Column, "Imported file owner is ambiguous: " + owner, true));
+          def property = "__import_" + childKey.Substring(0, 24);
+          definition.ImportBindings.Add(ScriptImportBinding(owner, property, imported));
+          definition.Properties.Add(property, imported.ScriptType); definition.SharedAssemblies.Add(imported.Assembly);
+          definition.PreviousTypeNames[owner] = imported.ScriptType.FullName;
+          foreach (pair in imported.Members)
+            unless (Array.Exists(imported.ScriptType.GetNestedTypes(BindingFlags.Public), type => type.Name.Split('`')[0] == pair.Value)) definition.PreviousNames[pair.Key] = property + "." + pair.Value;
+          def assemblyPath = Path.Combine(graph.Directory, imported.Assembly.GetName().Name + ".dll");
+          unless (File.Exists(assemblyPath)) File.WriteAllBytes(assemblyPath, imported.Image);
+          definition.References.Add(assemblyPath);
+          foreach (reference in imported.Definition.References) unless (definition.References.Contains(reference)) definition.References.Add(reference);
+          foreach (reference in imported.Definition.RuntimeReferences) unless (definition.RuntimeReferences.Contains(reference)) definition.RuntimeReferences.Add(reference);
+          foreach (reference in imported.Definition.NativeReferences) unless (definition.NativeReferences.Contains(reference)) definition.NativeReferences.Add(reference);
+          definition.DependencyFingerprint = ClrScriptSupport.Digest(Encoding.UTF8.GetBytes(definition.DependencyFingerprint + "|" + childKey + "|" + imported.Definition.DependencyFingerprint));
+        }
+      }
+      finally { _ = graph.Active.Remove(identity); }
+      foreach (path in definition.RuntimeReferences)
+      {
+        def identity = AssemblyName.GetAssemblyName(path);
+        def value = identity.FullName + ":" + ClrScriptSupport.Digest(File.ReadAllBytes(path));
+        when (runtimeIdentities.ContainsKey(identity.Name) && runtimeIdentities[identity.Name] != value)
+          throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "Conflicting runtime dependency in script graph: " + identity.Name, true));
+        runtimeIdentities[identity.Name] = value;
+      }
+      foreach (name in collected.Imports)
+        when (definition.ImportBindings.Exists(b => name == b.Owner || name.StartsWith(b.Owner + ".", StringComparison.Ordinal))) definition.OpenImportedNames.Add(name);
+      foreach (name in definition.Imports)
+        when (definition.ImportBindings.Exists(b => name == b.Owner || name.StartsWith(b.Owner + ".", StringComparison.Ordinal))) definition.OpenImportedNames.Add(name);
+    }
+    catch { | error is ScriptDependencyException => return CompilationResult(null, array[error.Diagnostic]); }
+
+    def key = if (settings.Cache == null || !cacheable || !definition.Cacheable) null else ScriptFingerprint.Create(source, definition, version);
+    when (key != null)
+    {
+      def path = settings.Cache.GetPath(key);
+      when (path != null)
+        try { def cached = Load(path, definition); _ = cached.Definition.References.RemoveAll(reference => reference.StartsWith(graph.Directory + Path.DirectorySeparatorChar, StringComparison.Ordinal)); return CompilationResult(cached, cached.Diagnostics.ToArray()); }
+        catch { | _ is InvalidDataException => settings.Cache.Invalidate(key); | _ is IOException => settings.Cache.Invalidate(key); | _ is ArgumentException => settings.Cache.Invalidate(key); | _ is BadImageFormatException => settings.Cache.Invalidate(key); | _ is TypeLoadException => settings.Cache.Invalidate(key); }
+    }
+    def previousAliases : Dictionary[string, string] = Dictionary(definition.PreviousTypeNames);
+    foreach (alias in previousAliases)
+      when (definition.ImportBindings.Exists(b => alias.Value == b.Owner || alias.Value.StartsWith(b.Owner + ".", StringComparison.Ordinal)))
+      {
+        def previousNames : Dictionary[string, string] = Dictionary(definition.PreviousNames);
+        foreach (pair in previousNames)
+          when (pair.Key.StartsWith(alias.Value + ".", StringComparison.Ordinal)) definition.PreviousNames[alias.Key + pair.Key.Substring(alias.Value.Length)] = pair.Value;
+        foreach (binding in definition.ImportBindings)
+          when (alias.Value == binding.Owner || alias.Value.StartsWith(binding.Owner + ".", StringComparison.Ordinal))
+          {
+            def suffix = alias.Value.Substring(binding.Owner.Length);
+            if (suffix == "" || HasNestedPath(binding.Script.ScriptType, suffix.Substring(1)))
+              definition.PreviousTypeNames[alias.Key] = binding.Script.ScriptType.FullName + suffix;
+            else _ = definition.PreviousTypeNames.Remove(alias.Key);
+          }
+      }
+    def sourceText = collected.Source.Text.ToCharArray();
+    foreach (directive in collected.UsingDirectives)
+      when (definition.ImportBindings.Exists(b => directive.Name == b.Owner || directive.Name.StartsWith(b.Owner + ".", StringComparison.Ordinal)))
+      {
+        for (mutable i = directive.Start; i < directive.Start + directive.Length; i++) unless (sourceText[i] == '\n' || sourceText[i] == '\r') sourceText[i] = ' ';
+        when (directive.Alias != null)
+        {
+          foreach (binding in definition.ImportBindings)
+            when (directive.Name == binding.Owner || directive.Name.StartsWith(binding.Owner + ".", StringComparison.Ordinal))
+            {
+              def suffix = directive.Name.Substring(binding.Owner.Length);
+              when (suffix == "" || HasNestedPath(binding.Script.ScriptType, suffix.Substring(1)))
+                definition.PreviousTypeNames[directive.Alias] = binding.Script.ScriptType.FullName + suffix;
+            }
+          def previousNames : Dictionary[string, string] = Dictionary(definition.PreviousNames);
+          foreach (pair in previousNames)
+            when (pair.Key.StartsWith(directive.Name + ".", StringComparison.Ordinal))
+              definition.PreviousNames[directive.Alias + pair.Key.Substring(directive.Name.Length)] = pair.Value;
+        }
+      }
+    def result = CompileUncached(ScriptSource(string(sourceText), source.Path), definition, cancellation);
+    _ = definition.References.RemoveAll(path => path.StartsWith(graph.Directory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+    when (result.Success) { result.Script.Source = source; result.Script.ImportedScripts.AddRange(definition.ImportBindings); result.Script.Imports.AddRange(collected.Imports); foreach (pair in collected.Aliases) result.Script.Aliases.Add(pair.Key, pair.Value); result.Script.Diagnostics.AddRange(result.Diagnostics); }
+    when (result.Success && key != null)
+      try { settings.Cache.Publish(key, result.Script, this); }
+      catch { | error is IOException => result.Script.Diagnostics.Add(ScriptDiagnostic(source.Path, 1, 1, "Artifact cache write failed: " + error.Message, false)); }
+    if (result.Success) CompilationResult(result.Script, result.Script.Diagnostics.ToArray()) else result
+  }
+
+  static HasNestedPath(root : Type, path : string) : bool
+  {
+    mutable current = root;
+    foreach (part in path.Split('.'))
+    {
+      mutable found : Type = null;
+      foreach (type in current.GetNestedTypes(BindingFlags.Public)) when (type.Name.Split('`')[0] == part) found = type;
+      when (found == null) return false; current = found;
+    }
+    true
+  }
+
+  static SelectFragments(source : ScriptSource, definition : ScriptDefinition) : ScriptSource
+  {
+    when (definition.SourceFragments.Count == 0) return source;
+    def selected = array(source.Text.Length) : array[bool];
+    foreach (fragment in definition.SourceFragments)
+    {
+      when (fragment.Start > source.Text.Length || fragment.Length > source.Text.Length - fragment.Start)
+        throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "Source fragment lies outside the source", true));
+      for (mutable i = fragment.Start; i < fragment.Start + fragment.Length; i++) selected[i] = true;
+    }
+    def text = source.Text.ToCharArray();
+    for (mutable i = 0; i < text.Length; i++) unless (selected[i] || text[i] == '\n' || text[i] == '\r') text[i] = ' ';
+    ScriptSource(string(text), source.Path)
+  }
+
+  CompileUncached(source : ScriptSource, definition : ScriptDefinition, cancellation : CancellationToken) : CompilationResult
+  {
+    lock (gate)
+    {
+      cancellation.ThrowIfCancellationRequested();
+      def previous = ManagerClass.Instance;
+      def directory = Path.Combine(Path.GetTempPath(), "nemerle-script-" + Guid.NewGuid().ToString("N"));
+      _ = Directory.CreateDirectory(directory);
+      def diagnostics : List[ScriptDiagnostic] = List();
+      mutable compiled : CompiledScript = null;
+      try
+      {
+        def options = CompilationOptions();
+        options.TargetIsLibrary = true; options.TargetIsSet = true;
+        options.IgnoreConfusion = true; options.ProgressBar = false; options.ColorMessages = false;
+        options.TargetReferenceDirectory = definition.TargetReferenceDirectory;
+        ScriptCompilerOptions.Apply(options, definition.CompilerOptions, source.Path);
+        options.EmitDebug = definition.Debug;
+        options.OutputFileName = Path.Combine(directory, "Script_" + Guid.NewGuid().ToString("N") + ".dll");
+        def data = ScriptCompilationData();
+        def filename = Path.GetFileName(source.Path);
+        data.FileName = if (filename.EndsWith(definition.FileExtension, StringComparison.Ordinal))
+          filename.Substring(0, filename.Length - definition.FileExtension.Length) else Path.GetFileNameWithoutExtension(filename);
+        unless (ClrScriptSupport.Identifier(data.FileName) && !LexerBase.BaseKeywords.Contains(data.FileName)) throw ArgumentException("Script filename must be a language identifier");
+        data.CaptureResult = definition.CaptureResult; data.ResultField = definition.ResultField;
+        data.ResultTypeName = if (definition.ResultType == null) null else ClrScriptSupport.TypeName(definition.ResultType);
+        data.OpenImportedNames.AddRange(definition.OpenImportedNames);
+        data.TypeName = if (definition.GeneratedTypeName == null) data.FileName else definition.GeneratedTypeName;
+        foreach (pair in definition.Aliases) data.PreviousTypeNames.Add(pair.Key, pair.Value);
+        foreach (pair in definition.PreviousTypeNames) data.PreviousTypeNames[pair.Key] = pair.Value;
+        foreach (pair in definition.PreviousNames) data.PreviousNames.Add(pair.Key, pair.Value);
+        def importedTypes(root : Type, owner : string) : void
+        {
+          foreach (type in root.GetNestedTypes(BindingFlags.Public))
+          {
+            def logical = owner + "." + type.Name.Split('`')[0];
+            def physical = System.Text.RegularExpressions.Regex.Replace(type.FullName.Replace('+', '.'), "`[0-9]+", "");
+            data.ImportedTypeNames[logical] = physical; importedTypes(type, logical);
+          }
+        }
+        foreach (binding in definition.ImportBindings) importedTypes(binding.Script.ScriptType, binding.Owner);
+        def importedTypeNames : Dictionary[string, string] = Dictionary(data.ImportedTypeNames);
+        foreach (alias in data.PreviousTypeNames)
+          foreach (pair in importedTypeNames)
+          {
+            when (pair.Value == alias.Value && alias.Key != pair.Value) data.ImportedTypeNames[alias.Key] = pair.Value;
+            when (pair.Value.StartsWith(alias.Value + ".", StringComparison.Ordinal) && alias.Key + pair.Value.Substring(alias.Value.Length) != pair.Value) data.ImportedTypeNames[alias.Key + pair.Value.Substring(alias.Value.Length)] = pair.Value;
+          }
+        def text = StringBuilder();
+        foreach (name in definition.Imports)
+        {
+          foreach (part in name.Split('.'))
+            unless (ClrScriptSupport.Identifier(part)) throw ArgumentException("Invalid default import: " + name);
+          when (definition.OpenImportedNames.Contains(name)) continue;
+          _ = text.Append("using ").Append(name).Append(";\n");
+        }
+        _ = text.Append("public class ").Append(data.TypeName).Append(" : ").Append(ClrScriptSupport.TypeName(definition.BaseType));
+        foreach (type in definition.Interfaces) { unless (type.IsInterface) throw ArgumentException("Expected a CLR interface"); _ = text.Append(", ").Append(ClrScriptSupport.TypeName(type)); }
+        _ = text.Append(" {\n");
+        when (definition.ResultField != null)
+        {
+          unless (definition.CaptureResult && definition.ResultType != null && ClrScriptSupport.Identifier(definition.ResultField))
+            throw ScriptDependencyException(ScriptDiagnostic(source.Path, 1, 1, "A named result requires enabled capture, an identifier and ResultType", true));
+          _ = text.Append("public ").Append(definition.ResultField).Append(" : ").Append(ClrScriptSupport.TypeName(definition.ResultType)).Append(";\n");
+        }
+        def names : List[string] = List();
+        def parameters : List[string] = List();
+        def initialize = StringBuilder();
+        foreach (property in definition.Properties)
+        {
+          unless (ClrScriptSupport.Identifier(property.Key)) throw ArgumentException("Invalid supplied name: " + property.Key);
+          names.Add(property.Key);
+          def ty = ClrScriptSupport.TypeName(property.Value);
+          _ = text.Append("public ").Append(property.Key).Append(" : ").Append(ty).Append(";\n");
+          def input = data.Prefix + "input" + names.Count;
+          parameters.Add(input + " : " + ty);
+          _ = initialize.Append("this.").Append(property.Key).Append(" = ").Append(input).Append(";\n");
+        }
+        for (mutable i = 0; i < definition.ReceiverTypes.Count; i++)
+        {
+          def name = data.Prefix + "receiver" + i;
+          def ty = ClrScriptSupport.TypeName(definition.ReceiverTypes[i]);
+          _ = text.Append("public ").Append(name).Append(" : ").Append(ty).Append(";\n");
+          parameters.Add(name + "_input : " + ty);
+          _ = initialize.Append("this.").Append(name).Append(" = ").Append(name).Append("_input;\n");
+        }
+        def baseArgs : List[string] = List();
+        for (mutable i = 0; i < definition.BaseArgumentTypes.Count; i++)
+        {
+          def name = data.Prefix + "base" + i;
+          parameters.Add(name + " : " + ClrScriptSupport.TypeName(definition.BaseArgumentTypes[i])); baseArgs.Add(name);
+        }
+        _ = text.Append("public this(").Append(String.Join(",", parameters.ToArray())).Append(") { base(")
+          .Append(String.Join(",", baseArgs.ToArray())).Append(");\n").Append(initialize.ToString()).Append("}\n}");
+        for (mutable i = definition.Preludes.Count - 1; i >= 0; i--) data.PreludeSources.Add(Tuple.Create(definition.Preludes[i].Path, definition.Preludes[i].Text));
+        data.Template = text.ToString(); data.ReceiverCount = definition.ReceiverTypes.Count;
+        def defaultImports : List[string] = List();
+        foreach (name in definition.Imports) unless (definition.OpenImportedNames.Contains(name)) defaultImports.Add(name);
+        foreach (name in definition.OpenImportedNames)
+          foreach (binding in definition.ImportBindings)
+            when (name == binding.Owner || name.StartsWith(binding.Owner + ".", StringComparison.Ordinal))
+            {
+              def suffix = name.Substring(binding.Owner.Length);
+              if (suffix == "") defaultImports.Add(binding.Script.ScriptType.FullName);
+              else when (HasNestedPath(binding.Script.ScriptType, suffix.Substring(1))) defaultImports.Add(binding.Script.ScriptType.FullName + suffix);
+            }
+        data.DefaultImports = defaultImports.ToArray(); options.Script = data;
+        options.SharedAssemblies = Shared(definition);
+        def references : List[string] = List(); references.AddRange(definition.References);
+        foreach (assembly in options.SharedAssemblies)
+          when (assembly.Location != "" && !references.Contains(assembly.Location)) references.Add(assembly.Location);
+        options.ReferencedLibraries = NList.FromArray(references.ToArray());
+        options.Sources = NList.FromArray(array[StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), source.Text) : ISource]);
+        def manager = ManagerClass(options);
+        manager.InitOutput(StringWriter());
+        manager.ErrorOccured += (loc, message) => diagnostics.Add(ScriptDiagnostic(loc.File, loc.Line, loc.Column, message, true));
+        manager.WarningOccured += (loc, message) => diagnostics.Add(ScriptDiagnostic(loc.File, loc.Line, loc.Column, message, false));
+        try { manager.Run(); }
+        catch { | e => unless (diagnostics.Exists(d => d.IsError)) throw e; }
+        cancellation.ThrowIfCancellationRequested();
+        unless (diagnostics.Exists(d => d.IsError))
+        {
+          def image = File.ReadAllBytes(options.OutputFileName);
+          def pdb = Path.ChangeExtension(options.OutputFileName, ".pdb");
+          def symbols = if (File.Exists(pdb)) File.ReadAllBytes(pdb) else null;
+          def assembly = ClrScriptSupport.Load(image, symbols, options.SharedAssemblies, RuntimeReferences(definition, references.ToArray()), definition.NativeReferences.ToArray());
+          compiled = CompiledScript(definition, assembly, assembly.GetType(data.TypeName, true), image, symbols, data.Exports, names.ToArray(), data.Prefix + "evaluate");
+          foreach (pair in data.Members) compiled.Members.Add(pair.Key, pair.Value);
+        }
+      }
+      catch { | error is ScriptDependencyException => diagnostics.Add(error.Diagnostic); }
+      finally { ManagerClass.Instance = previous; Directory.Delete(directory, true); }
+      CompilationResult(compiled, diagnostics.ToArray())
+    }
+  }
+
+  static RuntimeReferences(definition : ScriptDefinition, references : array[string]) : array[string]
+  {
+    def paths : Dictionary[string, string] = Dictionary();
+    foreach (path in references) paths[AssemblyName.GetAssemblyName(path).FullName] = path;
+    foreach (path in definition.RuntimeReferences) paths[AssemblyName.GetAssemblyName(path).FullName] = path;
+    def result : List[string] = List(); result.AddRange(paths.Values); result.ToArray()
+  }
+
+  public Evaluate(script : CompiledScript, inputs : ScriptInputs) : EvaluationResult
+  { EvaluateGraph(script, inputs, Dictionary()) }
+
+  internal EvaluateGraph(script : CompiledScript, inputs : ScriptInputs,
+                         instances : Dictionary[CompiledScript, EvaluationResult]) : EvaluationResult
+  {
+    def prepared : Dictionary[CompiledScript, PreparedScript] = Dictionary();
+    def prepare(node : CompiledScript, supplied : ScriptInputs) : PreparedScript
+    {
+      when (script.Definition.ShareImportedInstances && prepared.ContainsKey(node)) return prepared[node];
+      mutable values = supplied.Snapshot();
+      when (node.Definition.FileLocationProperty != null) values.Properties[node.Definition.FileLocationProperty] = node.Source.Path;
+      foreach (refiner in settings.EvaluationRefiners)
+        values = refiner.BeforeEvaluate(ScriptEvaluationContext(node, values)).Snapshot();
+      def state = PreparedScript(node, values);
+      when (script.Definition.ShareImportedInstances) prepared[node] = state;
+      foreach (binding in node.ImportedScripts)
+      {
+        def inherited = ScriptInputs();
+        foreach (pair in binding.Script.Definition.Properties)
+          when (values.Properties.ContainsKey(pair.Key)) inherited.Properties[pair.Key] = values.Properties[pair.Key];
+        for (mutable i = 0; i < binding.Script.Definition.ReceiverTypes.Count; i++)
+          when (i < values.Receivers.Count) inherited.Receivers.Add(values.Receivers[i]);
+        for (mutable i = 0; i < binding.Script.Definition.BaseArgumentTypes.Count; i++)
+          when (i < values.BaseArguments.Count) inherited.BaseArguments.Add(values.BaseArguments[i]);
+        def childValues = if (settings.ImportedInputProvider == null) inherited else settings.ImportedInputProvider.GetInputs(binding.Script, ScriptEvaluationContext(node, values), inherited).Snapshot();
+        state.Children.Add(prepare(binding.Script, childValues));
+        values.Properties[binding.PropertyName] = null;
+      }
+      _ = ValidateInputs(node, values);
+      state
+    }
+    def root = prepare(script, inputs);
+    def run(state : PreparedScript) : EvaluationResult
+    {
+      def node = state.Script; def values = state.Inputs;
+      when (script.Definition.ShareImportedInstances && instances.ContainsKey(node)) return instances[node];
+      mutable invoked = 0;
+      def execute() : EvaluationResult
+      {
+        when (Interlocked.Exchange(ref invoked, 1) != 0) throw InvalidOperationException("A script execution wrapper cannot invoke the script more than once");
+        for (mutable i = 0; i < node.ImportedScripts.Count; i++)
+        {
+          def child = run(state.Children[i]); when (child.Kind == ScriptResultKind.Error) return child;
+          values.Properties[node.ImportedScripts[i].PropertyName] = child.Instance;
+        }
+        EvaluateInstance(node, values)
+      }
+      def result = if (settings.ExecutionWrapper == null) execute() else settings.ExecutionWrapper.Execute(ScriptEvaluationContext(node, values), (execute : Func[EvaluationResult]));
+      when (result == null) throw InvalidOperationException("Execution wrapper returned no result");
+      when (script.Definition.ShareImportedInstances && result.Kind != ScriptResultKind.Error) instances[node] = result;
+      result
+    }
+    run(root)
+  }
+
+  static ValidateInputs(script : CompiledScript, inputs : ScriptInputs) : array[object]
+  {
+    def args : List[object] = List();
+    foreach (name in script.PropertyNames)
+    {
+      unless (inputs.Properties.ContainsKey(name)) throw ArgumentException("Missing script input: " + name);
+      def value = inputs.Properties[name]; CheckType(value, script.Definition.Properties[name], name); args.Add(value);
+    }
+    unless (inputs.Properties.Count == script.PropertyNames.Length) throw ArgumentException("Unexpected supplied property");
+    unless (inputs.Receivers.Count == script.Definition.ReceiverTypes.Count) throw ArgumentException("Receiver count mismatch");
+    for (mutable i = 0; i < inputs.Receivers.Count; i++)
+    { CheckType(inputs.Receivers[i], script.Definition.ReceiverTypes[i], "receiver " + i); args.Add(inputs.Receivers[i]); }
+    unless (inputs.BaseArguments.Count == script.Definition.BaseArgumentTypes.Count) throw ArgumentException("Base argument count mismatch");
+    for (mutable i = 0; i < inputs.BaseArguments.Count; i++)
+    { CheckType(inputs.BaseArguments[i], script.Definition.BaseArgumentTypes[i], "base argument " + i); args.Add(inputs.BaseArguments[i]); }
+    args.ToArray()
+  }
+
+  static EvaluateInstance(script : CompiledScript, inputs : ScriptInputs) : EvaluationResult
+  {
+    def args = ValidateInputs(script, inputs);
+    mutable instance : object = null;
+    try
+    {
+      instance = Activator.CreateInstance(script.ScriptType, args);
+      def result = script.ScriptType.GetMethod(script.EvaluationMethod).Invoke(instance, null) :> array[object];
+      EvaluationResult(if (result[0] :> bool) ScriptResultKind.Void else ScriptResultKind.Value,
+                       result[1], result[2] :> Type, null, instance, script.Exports)
+    }
+    catch
+    {
+      | e is TargetInvocationException => EvaluationResult(ScriptResultKind.Error, null, null, e.InnerException, instance, script.Exports);
+      | e => EvaluationResult(ScriptResultKind.Error, null, null, e, instance, script.Exports);
+    }
+  }
+  public Save(script : CompiledScript, path : string) : void
+  {
+    File.WriteAllBytes(path, script.Image);
+    def pdb = Path.ChangeExtension(path, ".pdb");
+    if (script.Symbols != null) File.WriteAllBytes(pdb, script.Symbols);
+    else when (File.Exists(pdb)) File.Delete(pdb);
+    using (writer = BinaryWriter(File.Create(path + ".script")))
+    {
+      writer.Write("Nemerle.Script"); writer.Write(3 : int);
+      writer.Write(ClrScriptSupport.Digest(script.Image));
+      writer.Write(if (script.Symbols == null) "" else ClrScriptSupport.Digest(script.Symbols));
+      writer.Write(script.Source != null); when (script.Source != null) { writer.Write(script.Source.Path); writer.Write(script.Source.Text); }
+      writer.Write(script.Definition.CaptureResult); writer.Write(script.Definition.ResultField ?? ""); writer.Write(if (script.Definition.ResultType == null) "" else script.Definition.ResultType.AssemblyQualifiedName);
+      writer.Write(script.Definition.ShareImportedInstances); writer.Write(script.Definition.FileLocationProperty ?? "");
+      writer.Write(script.ImportedScripts.Count);
+      foreach (binding in script.ImportedScripts)
+      {
+        def relative = Path.GetFileName(path) + ".dependencies/scripts/" + ClrScriptSupport.Digest(binding.Script.Image) + "/script.dll";
+        def destination = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)), relative);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(destination)); Save(binding.Script, destination);
+        writer.Write(binding.Owner); writer.Write(binding.PropertyName); writer.Write(relative); writer.Write(ClrScriptSupport.Digest(binding.Script.Image)); writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(destination + ".script")));
+        WriteDefinition(writer, binding.Script.Definition);
+      }
+      writer.Write(script.ScriptType.FullName); writer.Write(script.EvaluationMethod);
+      writer.Write(script.PropertyNames.Length);
+      foreach (name in script.PropertyNames)
+      { writer.Write(name); writer.Write(script.Definition.Properties[name].AssemblyQualifiedName); }
+      writer.Write(script.Definition.ReceiverTypes.Count);
+      foreach (type in script.Definition.ReceiverTypes) writer.Write(type.AssemblyQualifiedName);
+      writer.Write(script.Definition.BaseType.AssemblyQualifiedName);
+      writer.Write(script.Definition.BaseArgumentTypes.Count);
+      foreach (type in script.Definition.BaseArgumentTypes) writer.Write(type.AssemblyQualifiedName);
+      writer.Write(script.Exports.Count);
+      foreach (pair in script.Exports) { writer.Write(pair.Key); writer.Write(pair.Value); }
+      writer.Write(script.Members.Count);
+      foreach (pair in script.Members) { writer.Write(pair.Key); writer.Write(pair.Value); }
+      writer.Write(script.Imports.Count); foreach (name in script.Imports) writer.Write(name);
+      writer.Write(script.Aliases.Count); foreach (pair in script.Aliases) { writer.Write(pair.Key); writer.Write(pair.Value); }
+      writer.Write(script.Diagnostics.Count);
+      foreach (diagnostic in script.Diagnostics)
+      { writer.Write(diagnostic.File); writer.Write(diagnostic.Line); writer.Write(diagnostic.Column); writer.Write(diagnostic.Message); writer.Write(diagnostic.IsError); }
+      def saveDependencies(references : List[string], kind : string) : void
+      {
+        writer.Write(references.Count);
+        foreach (reference in references)
+        {
+          def digest = ClrScriptSupport.Digest(File.ReadAllBytes(reference));
+          def relative = Path.GetFileName(path) + ".dependencies/" + kind + "/" + digest + "/" + Path.GetFileName(reference);
+          def destination = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)), relative);
+          _ = Directory.CreateDirectory(Path.GetDirectoryName(destination));
+          unless (File.Exists(destination)) File.Copy(reference, destination);
+          writer.Write(relative); writer.Write(digest);
+        }
+      }
+      saveDependencies(script.Definition.References, "compile");
+      saveDependencies(script.Definition.RuntimeReferences, "runtime");
+      saveDependencies(script.Definition.NativeReferences, "native");
+    }
+  }
+
+  static WriteDefinition(writer : BinaryWriter, definition : ScriptDefinition) : void
+  {
+    writer.Write(definition.Id); writer.Write(definition.Version); writer.Write(definition.FileExtension);
+    writer.Write(definition.DependencyFingerprint); writer.Write(definition.TargetFramework); writer.Write(definition.RuntimeIdentifier);
+    def properties : Dictionary[string, Type] = Dictionary(definition.Properties);
+    foreach (binding in definition.ImportBindings) _ = properties.Remove(binding.PropertyName);
+    writer.Write(properties.Count); foreach (pair in properties) { writer.Write(pair.Key); writer.Write(pair.Value.AssemblyQualifiedName); }
+    writer.Write(definition.ReceiverTypes.Count); foreach (type in definition.ReceiverTypes) writer.Write(type.AssemblyQualifiedName);
+    writer.Write(definition.BaseType.AssemblyQualifiedName);
+    writer.Write(definition.BaseArgumentTypes.Count); foreach (type in definition.BaseArgumentTypes) writer.Write(type.AssemblyQualifiedName);
+  }
+  static ReadCount(reader : BinaryReader) : int
+  { def count = reader.ReadInt32(); when (count < 0 || count > 100000) throw InvalidDataException("Invalid descriptor count"); count }
+  static ReadDefinition(reader : BinaryReader) : ScriptDefinition
+  {
+    def result = ScriptDefinition(); result.Id = reader.ReadString(); result.Version = reader.ReadString(); result.FileExtension = reader.ReadString();
+    result.DependencyFingerprint = reader.ReadString(); result.TargetFramework = reader.ReadString(); result.RuntimeIdentifier = reader.ReadString();
+    repeat (ReadCount(reader)) { def name = reader.ReadString(); result.Properties.Add(name, Type.GetType(reader.ReadString(), true)); }
+    repeat (ReadCount(reader)) result.ReceiverTypes.Add(Type.GetType(reader.ReadString(), true));
+    result.BaseType = Type.GetType(reader.ReadString(), true);
+    repeat (ReadCount(reader)) result.BaseArgumentTypes.Add(Type.GetType(reader.ReadString(), true)); result
+  }
+  public Load(path : string, definition : ScriptDefinition) : CompiledScript
+  { LoadGraph(path, definition, Dictionary()) }
+  LoadGraph(path : string, definition : ScriptDefinition, graph : Dictionary[string, CompiledScript]) : CompiledScript
+  {
+    def definition = definition.Snapshot();
+    def image = File.ReadAllBytes(path);
+    def pdb = Path.ChangeExtension(path, ".pdb");
+    def symbols = if (File.Exists(pdb)) File.ReadAllBytes(pdb) else null;
+    using (reader = BinaryReader(File.OpenRead(path + ".script")))
+    {
+      when (reader.BaseStream.Length > 268435456) throw InvalidDataException("Script descriptor is too large");
+      unless (reader.ReadString() == "Nemerle.Script") throw InvalidDataException("Unsupported script descriptor");
+      def version = reader.ReadInt32();
+      unless (version == 1 || version == 2 || version == 3) throw InvalidDataException("Unsupported script descriptor version");
+      unless (reader.ReadString() == ClrScriptSupport.Digest(image))
+        throw InvalidDataException("Script descriptor does not match the assembly");
+      when (version >= 2)
+      {
+        def symbolHash = reader.ReadString();
+        when (symbols != null && ClrScriptSupport.Digest(symbols) != symbolHash) throw InvalidDataException("Script symbols changed");
+      }
+      mutable source : ScriptSource = null;
+      def bindings : List[ScriptImportBinding] = List();
+      def suppliedBindings : List[ScriptImportBinding] = List(); suppliedBindings.AddRange(definition.ImportBindings);
+      when (version >= 3)
+      {
+        when (reader.ReadBoolean()) { def sourcePath = reader.ReadString(); source = ScriptSource(reader.ReadString(), sourcePath); }
+        definition.CaptureResult = reader.ReadBoolean(); def resultField = reader.ReadString(); def resultType = reader.ReadString();
+        definition.ResultField = if (resultField == "") null else resultField;
+        definition.ResultType = if (resultType == "") null else Type.GetType(resultType, true);
+        definition.ShareImportedInstances = reader.ReadBoolean(); def locationProperty = reader.ReadString();
+        definition.FileLocationProperty = if (locationProperty == "") null else locationProperty;
+        foreach (binding in definition.ImportBindings) _ = definition.Properties.Remove(binding.PropertyName);
+        definition.ImportBindings.Clear();
+        repeat (ReadCount(reader))
+        {
+          def owner = reader.ReadString(); def property = reader.ReadString(); def relative = reader.ReadString(); def digest = reader.ReadString(); def descriptorDigest = reader.ReadString();
+          def childDefinition = ReadDefinition(reader);
+          def root = Path.GetDirectoryName(Path.GetFullPath(path)) + Path.DirectorySeparatorChar;
+          def childPath = Path.GetFullPath(Path.Combine(root, relative));
+          unless (childPath.StartsWith(root, StringComparison.Ordinal) && File.Exists(childPath) && ClrScriptSupport.Digest(File.ReadAllBytes(childPath)) == digest && File.Exists(childPath + ".script") && ClrScriptSupport.Digest(File.ReadAllBytes(childPath + ".script")) == descriptorDigest)
+            throw InvalidDataException("Missing or changed imported script: " + relative);
+          mutable supplied : CompiledScript = null;
+          foreach (binding in suppliedBindings)
+            when (binding.Owner == owner && ClrScriptSupport.Digest(binding.Script.Image) == digest) supplied = binding.Script;
+          def child = if (graph.ContainsKey(digest)) graph[digest] else if (supplied != null) supplied else LoadGraph(childPath, childDefinition, graph);
+          graph[digest] = child;
+          def binding = ScriptImportBinding(owner, property, child); bindings.Add(binding); definition.ImportBindings.Add(binding);
+          definition.Properties[property] = child.ScriptType; unless (definition.SharedAssemblies.Contains(child.Assembly)) definition.SharedAssemblies.Add(child.Assembly);
+        }
+      }
+      def typeName = reader.ReadString(); def evaluationMethod = reader.ReadString();
+      def names : List[string] = List();
+      def propertyCount = reader.ReadInt32();
+      unless (propertyCount == definition.Properties.Count) throw ArgumentException("Supplied property schema mismatch");
+      repeat (propertyCount)
+      {
+        def name = reader.ReadString(); def type = reader.ReadString();
+        unless (definition.Properties.ContainsKey(name) && definition.Properties[name].AssemblyQualifiedName == type)
+          throw ArgumentException("Supplied property schema mismatch: " + name);
+        names.Add(name);
+      }
+      unless (reader.ReadInt32() == definition.ReceiverTypes.Count) throw ArgumentException("Receiver schema mismatch");
+      foreach (type in definition.ReceiverTypes)
+        unless (reader.ReadString() == type.AssemblyQualifiedName) throw ArgumentException("Receiver type mismatch");
+      unless (reader.ReadString() == definition.BaseType.AssemblyQualifiedName) throw ArgumentException("Script base mismatch");
+      unless (reader.ReadInt32() == definition.BaseArgumentTypes.Count) throw ArgumentException("Base constructor schema mismatch");
+      foreach (type in definition.BaseArgumentTypes)
+        unless (reader.ReadString() == type.AssemblyQualifiedName) throw ArgumentException("Base constructor type mismatch");
+      def exports : Dictionary[string, string] = Dictionary();
+      def count = reader.ReadInt32();
+      when (count < 0 || count > 100000) throw InvalidDataException("Invalid export count");
+      repeat (count) { def name = reader.ReadString(); exports.Add(name, reader.ReadString()); }
+      def members : Dictionary[string, string] = Dictionary();
+      def aliases : Dictionary[string, string] = Dictionary();
+      def imports : List[string] = List(); def diagnostics : List[ScriptDiagnostic] = List();
+      when (version >= 2)
+      {
+        def memberCount = reader.ReadInt32();
+        when (memberCount < 0 || memberCount > 100000) throw InvalidDataException("Invalid member count");
+        repeat (memberCount) { def name = reader.ReadString(); members.Add(name, reader.ReadString()); }
+        def importCount = reader.ReadInt32();
+        when (importCount < 0 || importCount > 100000) throw InvalidDataException("Invalid import count");
+        repeat (importCount) imports.Add(reader.ReadString());
+        def aliasCount = reader.ReadInt32(); when (aliasCount < 0 || aliasCount > 100000) throw InvalidDataException("Invalid alias count");
+        repeat (aliasCount) { def name = reader.ReadString(); aliases.Add(name, reader.ReadString()); }
+        def diagnosticCount = reader.ReadInt32();
+        when (diagnosticCount < 0 || diagnosticCount > 100000) throw InvalidDataException("Invalid diagnostic count");
+        repeat (diagnosticCount)
+          diagnostics.Add(ScriptDiagnostic(reader.ReadString(), reader.ReadInt32(), reader.ReadInt32(), reader.ReadString(), reader.ReadBoolean()));
+        def loadDependencies(references : List[string]) : void
+        {
+          def count = reader.ReadInt32();
+          when (count < 0 || count > 100000) throw InvalidDataException("Invalid dependency count");
+          def supplied = references.Count > 0;
+          def hashes : Dictionary[string, string] = Dictionary();
+          foreach (reference in references) hashes[ClrScriptSupport.Digest(File.ReadAllBytes(reference))] = reference;
+          repeat (count)
+          {
+            def relative = reader.ReadString(); def digest = reader.ReadString();
+            if (supplied)
+            {
+              unless (hashes.ContainsKey(digest)) throw InvalidDataException("Script dependency changed");
+            }
+            else
+            {
+              def root = Path.GetDirectoryName(Path.GetFullPath(path)) + Path.DirectorySeparatorChar;
+              def dependency = Path.GetFullPath(Path.Combine(root, relative));
+              unless (dependency.StartsWith(root, StringComparison.Ordinal) && File.Exists(dependency)
+                      && ClrScriptSupport.Digest(File.ReadAllBytes(dependency)) == digest)
+                throw InvalidDataException("Missing or changed script dependency: " + relative);
+              references.Add(dependency);
+            }
+          }
+        }
+        loadDependencies(definition.References); loadDependencies(definition.RuntimeReferences); loadDependencies(definition.NativeReferences);
+      }
+      unless (reader.BaseStream.Position == reader.BaseStream.Length) throw InvalidDataException("Unexpected script descriptor data");
+      def assembly = ClrScriptSupport.Load(image, symbols, Shared(definition), RuntimeReferences(definition, definition.References.ToArray()), definition.NativeReferences.ToArray());
+      def scriptType = assembly.GetType(typeName, true);
+      def evaluate = scriptType.GetMethod(evaluationMethod, BindingFlags.Public | BindingFlags.Instance);
+      unless (evaluate != null && evaluate.GetParameters().Length == 0 && evaluate.ReturnType == typeof(array[object]))
+        throw InvalidDataException("Invalid script evaluation entry point");
+      def parameters : List[Type] = List(); foreach (name in names) parameters.Add(definition.Properties[name]);
+      parameters.AddRange(definition.ReceiverTypes); parameters.AddRange(definition.BaseArgumentTypes);
+      when (scriptType.GetConstructor(parameters.ToArray()) == null) throw InvalidDataException("Invalid script constructor schema");
+      def compiled = CompiledScript(definition, assembly, scriptType, image, symbols, exports, names.ToArray(), evaluationMethod);
+      compiled.Source = source; compiled.ImportedScripts.AddRange(bindings);
+      foreach (pair in members) compiled.Members.Add(pair.Key, pair.Value);
+      foreach (pair in aliases) compiled.Aliases.Add(pair.Key, pair.Value);
+      compiled.Imports.AddRange(imports); compiled.Diagnostics.AddRange(diagnostics);
+      compiled
+    }
+  }
+
+}

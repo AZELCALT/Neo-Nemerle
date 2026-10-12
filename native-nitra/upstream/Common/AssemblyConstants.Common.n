@@ -1,0 +1,16 @@
+﻿using Nemerle.Utility;
+
+#if !(BOOT || BOOT2)
+[assembly: GeneratedAssemblyVersion("$GitTag.$GitRevision.0", Defaults(GitTag="1.0", GitRevision="9999"))]
+#endif
+
+module AssemblyConstants
+{
+  public Company                    = "RSDN";
+  public Product                    = "Nitra Language Framework";
+  public Copyright                  = "Copyright © RSDN 2017";
+  public Trademark                  = "";
+  public GrammarImplName            = "GrammarImpl";
+
+  public TargetedPatchingOptOutText = "Performance critical to inline across NGen image boundaries";
+}

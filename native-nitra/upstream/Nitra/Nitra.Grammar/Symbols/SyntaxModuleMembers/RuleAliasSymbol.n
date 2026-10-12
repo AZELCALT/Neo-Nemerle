@@ -1,0 +1,33 @@
+﻿using Nitra.Model;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  [Record, /*ExportableSymbol*/]
+  public abstract class RuleAliasSymbol : SingleDefSymbol
+  {
+    public abstract Rule : G.RuleExpression { get; }
+    public override Description : string { get "rule alias" }
+  }
+
+  public sealed class ParsedRuleAliasSymbol : RuleAliasSymbol
+  {
+    public this(node : G.RuleAlias)
+    {
+      base(node.Name);
+      Rule = node.RuleExpression;
+    }
+
+    public override Rule : G.RuleExpression { get; }
+  }
+}

@@ -1,0 +1,66 @@
+﻿using Nitra.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using Nitra.Model;
+
+using N = Nemerle.Compiler;
+
+namespace Nitra.Compiler
+{
+  internal partial class ParseMethodEmitter : MethodEmitter
+  {
+    public override CompileRegularCall(code : SCG.List[PExpr], subrule : SubruleCompileInfo.RegularCall) : void
+    {
+      def call = <[ $(MakeRegularRuleCallFullName(subrule.Symbol))($CurTextPos, text) ]>;
+      CompileCallImpl(code, call, subrule);
+    }
+
+    public override CompileExtensibleCall(code : SCG.List[PExpr], subrule : SubruleCompileInfo.ExtensibleCall) : void
+    {
+      def call = <[ $(Owner.MakeParserName(subrule.Symbol, subrule.BindingPower) : global).Parse($CurTextPos, text, parseResult) ]>;
+      CompileCallImpl(code, call, subrule);
+    }
+
+    public override CompileSimpleCall(code : SCG.List[PExpr], subrule : SubruleCompileInfo.SimpleCall) : void
+    {
+      def call = <[ $(Owner.MakeParserName(subrule.Symbol) : global).Parse($CurTextPos, text, parseResult) ]>;
+      CompileCallImpl(code, call, subrule)
+    }
+
+    public CompileCallImpl(code : SCG.List[PExpr], call : PExpr, subrule : SubruleCompileInfo) : void
+    {
+      def (predicateCode, predicateFailLabel) = CompilePredicate(subrule.HeadPredicates);
+      code.Add(<[
+      $(ParseLabel(subrule));
+        _ = $(subrule.ToString());
+        $predicateCode;
+        newPos = $call;
+        tmpSize = newPos - $CurTextPos;
+        if (newPos >= 0)
+        {
+          $(AllocateParentRawTree(subrule));
+          $(SetSubruleSize(subrule, <[ tmpSize ]>));
+          $CurTextPos = newPos;
+          $(GotoContinueParseLabel(subrule));
+        }
+        else
+        {
+          $predicateFailLabel;
+          $(RecoveryCode());
+          parseState = $(subrule.State : int);//состояние
+          $(MakeRawTreeForSingleCallExtension(subrule));
+          $(GotoFailParseLabel(subrule));
+        }
+      ]>)
+    }
+  }
+}

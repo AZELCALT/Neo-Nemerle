@@ -1,0 +1,13 @@
+{
+  "description": "Offline build-input pin from .NET SDK 10.0.112. NuGet.Protocol informational version 7.0.3-rc.65534; no SDK dependency at runtime.",
+  "files": {
+    "NuGet.Common.dll": "ca8521d3e85e131bb8de708d2a1203db3bf55d9454381e1977c1c2b96c8de208",
+    "NuGet.Configuration.dll": "6c073bc79c9b7d0c07a0d02fb8bc256b07e7ba57e450e640d923d6f6bf9fb699",
+    "NuGet.Frameworks.dll": "b49713fbf4f8a4949550f6126e14d5d4eef3fb288bf792c3a127810e4b99a374",
+    "NuGet.Packaging.dll": "48a1f3e3f7b4a7242ab912b5daf7c288b037ac3b0b366cb26090f7f04558edc9",
+    "NuGet.Protocol.dll": "c6ef5552c49d15f5e6745ff33b8eea9099de66528e1b8eae3f822aa3807c59f5",
+    "NuGet.Versioning.dll": "64b3c93eafb09915fab24582e01f0cbd135efc506181a111bb06d0385f6e2b72",
+    "Newtonsoft.Json.dll": "7a45da28487bde678ef2fd7caa95395535817e0df9f908a6f360301edcdbc022",
+    "PortableRuntimeIdentifierGraph.json": "f83f7a24c25fc42f2e577f130f6255889d6285c32971565f7a70342e0b446cd6"
+  }
+}

@@ -1,0 +1,10 @@
+﻿namespace Nitra.Declarations
+{
+  abstract declaration Container
+  {
+    symbol
+    {
+      table MemberTable;
+    }
+  }
+}

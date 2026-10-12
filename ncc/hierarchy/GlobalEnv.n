@@ -254,7 +254,11 @@ namespace Nemerle.Compiler
     {
       def collect (pref : NamespaceTree.Node, res)
       {
-        match ((res, pref.LookupMacro (name)))
+        def candidate = if (Manager.Options.FileModules
+              && Manager.FileModuleRegistry.ModulePrefix(pref.FullName + name) != null)
+            None()
+          else pref.LookupMacro(name);
+        match ((res, candidate))
         {
           | (x, None) | (None, x) => x
           | (Some (x), Some (y)) when (x : object) == (y : object) => res
@@ -290,11 +294,41 @@ namespace Nemerle.Compiler
       (nameTree.namespace_tree :: open_namespaces).Exists (is_something)
     }
 
+    private AllowFileCandidate(t : TypeInfo, pref : NamespaceTree.Node = null, requested : list[string] = null) : bool
+    {
+      unless (Manager.Options.FileModules) return true;
+      def registry = Manager.FileModuleRegistry;
+      def source = registry.ModulePrefix(t.NamespaceNode.FullName) != null;
+      unless (t is TypeBuilder) return !source;
+      when (source && pref != null)
+      {
+        when (registry.IsDirectory(pref.FullName)) return false;
+        when (pref.IsFromAlias && requested != null && !requested.IsEmpty)
+          foreach ((short, full) when short == requested.Head in namespace_aliases)
+            when (registry.IsDirectory(NString.Split(full, '.'))) return false;
+      }
+      true
+    }
+
+    // A quoted name retains its definition environment. Do not combine that
+    // file's helpers with unrelated members in the macro caller's file.
+    private FileLexicalContext(parent : TypeBuilder) : NamespaceTree.Node
+    {
+      unless (Manager.Options.FileModules) return null;
+      def scopeType = current_namespace.LookupType([], -1);
+      unless (Manager.FileModuleRegistry.ModulePrefix(current_namespace.FullName) != null
+           || (scopeType.IsSome && (scopeType.Value.IsModule
+                || (scopeType.Value.IsAbstract && scopeType.Value.IsSealed)))) return null;
+      for (mutable node = parent?.NamespaceNode; node != null; node = node.Parent)
+        when (node.Equals(current_namespace)) return parent.NamespaceNode;
+      current_namespace
+    }
+
     public LookupType (name : list [string], from : TypeBuilder, args_count : int) : option [TypeInfo]
     {
       //Message.Debug ($"$name - $args_count");
       match (nameTree.LookupExactType (name, args_count)) {
-        | (Some (t)) as r when from == null || t.CanAccess (from) => r
+        | (Some (t)) as r when AllowFileCandidate(t) && (from == null || t.CanAccess (from)) => r
         | _ =>
           def non_public_external (t : TypeInfo)
           {
@@ -306,7 +340,7 @@ namespace Nemerle.Compiler
           }
           def check_access (x)
           {
-            | Some (t) when non_public_external (t) => None ()
+            | Some (t) when !AllowFileCandidate(t) || non_public_external (t) => None ()
             | Some (t) when from == null || (t : TypeInfo).CanAccess (from) => x
             | _ => None ()
           }
@@ -413,14 +447,23 @@ namespace Nemerle.Compiler
         // do not lookup members in base classes (type_node is non-null when searching them in code below)
         // they are already correctly added in add_members_from
         when (type_node == null || !type_part.IsEmpty)
-          foreach (ti in pref.LookupTypes(type_part))
+          foreach (ti when AllowFileCandidate(ti, pref, type_part) in pref.LookupTypes(type_part))
             acc = add_members_from((null, ti), acc);
 
-        foreach (t : IMember in pref.LookupTypes(name, for_completion))
+        foreach (t : IMember when AllowFileCandidate(t :> TypeInfo, pref, name) in pref.LookupTypes(name, for_completion))
           when (!acc.Contains((null, t)))
             acc ::= (null, t);
 
         acc
+      }
+
+      def lexicalContext = FileLexicalContext(parent);
+      for (mutable scope = lexicalContext;
+           scope != null && !(scope.Value is NSTree.TypeInfoCache.NamespaceReference);
+           scope = scope.Parent)
+      {
+        def local = lookup_members(scope, []);
+        unless (local.IsEmpty) return local;
       }
 
       mutable result = [];
@@ -440,7 +483,7 @@ namespace Nemerle.Compiler
       // Try to resolve symbols in current type. VladD2: In C# this symbols prefer.
       // But Nemerle use overload resolution instead. Maybe it's a bug.
 
-      mutable ns_node = parent?.NamespaceNode;
+      mutable ns_node = if (lexicalContext != null) lexicalContext else parent?.NamespaceNode;
 
       while (ns_node != null)
       {
@@ -536,14 +579,25 @@ namespace Nemerle.Compiler
         // do not lookup members in base classes (type_node is non-null when searching them in code below)
         // they are already correctly added in add_members_from
         when (type_node == null || !type_part.IsEmpty)
-          foreach (ti in pref.LookupTypes(type_part))
+          foreach (ti when AllowFileCandidate(ti, pref, type_part) in pref.LookupTypes(type_part))
             add_members_from((null, ti), result);
 
-        foreach (t : IMember in pref.LookupTypes(name, for_completion))
+        foreach (t : IMember when AllowFileCandidate(t :> TypeInfo, pref, name) in pref.LookupTypes(name, for_completion))
           when (!result.Contains((null, t)))
             result.Add((null, t));
       }
       
+      def lexicalContext = FileLexicalContext(parent);
+      for (mutable scope = lexicalContext;
+           scope != null && !(scope.Value is NSTree.TypeInfoCache.NamespaceReference);
+           scope = scope.Parent)
+      {
+        def local : SCG.List[TypeInfo * IMember] = SCG.List();
+        lookup_members(scope, local);
+        when (local.Exists(((_, member)) => member is TypeInfo))
+          return (local, SCG.List());
+      }
+
       // We must prefer aliases because a alias used to resolve type conflicts.
       def aliasesMembers = SCG.List();
       foreach (ns when ns.IsFromAlias in open_namespaces) // check aliases
@@ -560,7 +614,8 @@ namespace Nemerle.Compiler
       // Try to resolve symbols in current type.
       def nodeMembers = SCG.List();
       
-      for (mutable ns_node = parent?.NamespaceNode; ns_node != null; ns_node = ns_node.Parent)
+      for (mutable ns_node = if (lexicalContext != null) lexicalContext else parent?.NamespaceNode;
+           ns_node != null; ns_node = ns_node.Parent)
       {
         lookup_members(ns_node, nodeMembers);
         
@@ -587,6 +642,9 @@ namespace Nemerle.Compiler
 
     public AddOpenNamespace (ns : list [string], loc : Location) : GlobalEnv
     {
+      when (Manager.Options.FileModules && Manager.FileModuleRegistry.IsDirectory(ns)
+            && !Manager.FileModuleRegistry.HasClrNamespace(ns))
+        Message.Error(loc, "import a file module, not its containing directory: " + ns.ToString("."));
       match (ns) {
         | head :: tail =>
           mutable possible_expansions = [nameTree.ExactPath (ns)];
@@ -626,6 +684,9 @@ namespace Nemerle.Compiler
     public AddNamespaceAlias (short_name : string, long_name : list [string],
                                 loc : Location) : GlobalEnv
     {
+      when (Manager.Options.FileModules && Manager.FileModuleRegistry.IsDirectory(long_name)
+            && !Manager.FileModuleRegistry.HasClrNamespace(long_name))
+        Message.Error(loc, "alias a file module, not its containing directory: " + long_name.ToString("."));
       def nodes_with_prefix = add_alias_nodes (short_name, long_name);
       def entered = nodes_with_prefix.Map(x => x.Path([short_name]));
       nameTree.referenced_namespace_nodes.Add ((entered, loc));
@@ -703,7 +764,10 @@ namespace Nemerle.Compiler
         }
         else
         {
-          def ext = Manager.MacrosRegistry.GetSyntaxExtensions (x);
+          def ext = if (Manager.Options.FileModules
+                && Manager.FileModuleRegistry.ModulePrefix(x.FullName) != null)
+              []
+            else Manager.MacrosRegistry.GetSyntaxExtensions(x);
           when (ext : object != [])
             exts ::= ext;
 

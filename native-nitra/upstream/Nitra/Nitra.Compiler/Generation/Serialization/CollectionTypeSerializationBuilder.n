@@ -1,0 +1,75 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Serialization
+{
+  [Record]
+  public sealed class CollectionTypeSerializationBuilder : ComplexTypeSerializationBuilder
+  {
+    public override Tag : TypeTag { get { TypeTag.Collection } }
+
+    private _collectionType : DefaultTypeSerializationFactory.CollectionType;
+    private _itemType       : TypeVar;
+
+    [RecordIgnore] private mutable _itemSerializationBuilder : TypeSerializationBuilder;
+
+    protected override CollectTypeData() : void
+    {
+      assert(_itemSerializationBuilder : object == null);
+
+      _itemSerializationBuilder = Compiler.EnqueueType(_itemType.Fix());
+    }
+
+    protected override GenerateWriteBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_itemSerializationBuilder : object != null);
+
+      def count =
+        match (_collectionType)
+        {
+          | ImmutableArray
+          | Array
+          | NemerleList => <[ obj.Length ]>
+          | IEnumerable => <[ System.Linq.Enumerable.Count(obj) ]>
+          | _           => <[ obj.Count ]>
+        };
+
+      body.Add(Formatter.WriteInt32(count));
+      body.Add(<[ foreach (item in obj)
+                    $(_itemSerializationBuilder.Write(<[ item ]>)); ]>);
+    }
+
+    protected override GenerateReadBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_itemSerializationBuilder : object != null);
+
+      def readItem = _itemSerializationBuilder.Read(<[ "item" ]>, _itemSerializationBuilder.TagExpr);
+      body.Add(<[ def count  = $(Formatter.ReadInt32()); ]>);
+      match (_collectionType)
+      {
+        | IImmutableList
+        | ImmutableArray =>
+          body.Add(<[ def buffer = System.Collections.Immutable.ImmutableArray.CreateBuilder(count); ]>);
+          body.Add(<[ repeat (count)
+                        buffer.Add($readItem); ]>);
+          body.Add(<[ buffer.MoveToImmutable() ]>);
+
+        | NemerleList         with result = <[ Nemerle.Collections.NList.FromArray(buffer) ]>
+        | IReadOnlyCollection with result = <[ System.Collections.ObjectModel.ReadOnlyCollection(buffer) ]>
+        | IReadOnlyList       with result = <[ System.Collections.ObjectModel.ReadOnlyCollection(buffer) ]>
+        | _                   with result = <[ buffer ]> =>
+          body.Add(<[ def buffer = array(count); ]>);
+          body.Add(<[ for(mutable i = 0; i < buffer.Length; ++i)
+                        buffer[i] = $readItem; ]>);
+          body.Add(result);
+      }
+    }
+  }
+}

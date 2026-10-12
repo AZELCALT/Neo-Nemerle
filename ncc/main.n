@@ -94,10 +94,11 @@ namespace Nemerle.CommandlineCompiler
       Manager = ManagerClass(Options);
       Manager.InitOutput(Console.Out);
       parse_command_line();
+      when (Options.ParseGrammarSpaces) Manager.InitOutput(Console.Error);
 
       def runInAppropriateProcess(processName : string) : void
       {
-        def dir = IO.Path.GetDirectoryName(Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
+        def dir = IO.Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         def path = IO.Path.Combine(dir, processName);
         def argsList = Environment.GetCommandLineArgs().NToList();
         def args = $<#..$(argsList.Tail; " ")#>;
@@ -161,7 +162,7 @@ namespace Nemerle.CommandlineCompiler
       try
       {
         Options.LibraryPaths ::= IO.Path.GetDirectoryName
-          (Uri(typeof(MainClass).Assembly.CodeBase).LocalPath);
+          (typeof(MainClass).Assembly.Location);
 
         // run compilation with already created options
         Manager.Run ()

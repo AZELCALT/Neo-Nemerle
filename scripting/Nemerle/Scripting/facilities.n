@@ -1,0 +1,116 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Threading;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.dependencies;
+
+public sealed class ScriptSourceFragment
+{
+  public Start : int;
+  public Length : int;
+  public this(start : int, length : int)
+  { when (start < 0 || length < 0) throw ArgumentOutOfRangeException("fragment"); Start = start; Length = length; }
+}
+public sealed class ScriptAnnotation
+{
+  public Name : string;
+  public Arguments : array[string];
+  public Location : ScriptDiagnostic;
+  public this(name : string, arguments : array[string], location : ScriptDiagnostic)
+  { Name = name; Arguments = arguments; Location = location; }
+}
+public interface IScriptCompilationRefiner
+{
+  Version : string { get; }
+  AnnotationNames : array[string] { get; }
+  OnAnnotations(data : ScriptCollectedData, definition : ScriptDefinition) : ScriptDefinition;
+  BeforeCompiling(data : ScriptCollectedData, definition : ScriptDefinition) : ScriptDefinition;
+}
+public sealed class ScriptEvaluationContext
+{
+  public Script : CompiledScript;
+  public Source : ScriptSource;
+  public Definition : ScriptDefinition;
+  public Inputs : ScriptInputs;
+  public this(script : CompiledScript, inputs : ScriptInputs)
+  { Script = script; Source = script.Source; Definition = script.Definition.Snapshot(); Inputs = inputs.Snapshot(); }
+}
+public interface IScriptEvaluationRefiner
+{
+  Version : string { get; }
+  BeforeEvaluate(context : ScriptEvaluationContext) : ScriptInputs;
+}
+public interface IScriptExecutionWrapper
+{
+  Version : string { get; }
+  Execute(context : ScriptEvaluationContext, execute : Func[EvaluationResult]) : EvaluationResult;
+}
+public interface IScriptSourceResolver
+{
+  Version : string { get; }
+  Resolve(importing : ScriptSource, path : string, cancellation : CancellationToken) : ScriptSource;
+}
+public sealed class FileSystemScriptSourceResolver : IScriptSourceResolver
+{
+  public Version : string { get { "1" } }
+  public Resolve(importing : ScriptSource, path : string, cancellation : CancellationToken) : ScriptSource
+  {
+    cancellation.ThrowIfCancellationRequested();
+    def full = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(importing.Path)), path));
+    ScriptSource(File.ReadAllText(full), full)
+  }
+}
+public interface IScriptImportedInputProvider
+{
+  GetInputs(imported : CompiledScript, importing : ScriptEvaluationContext, inherited : ScriptInputs) : ScriptInputs;
+}
+public sealed class ScriptImportBinding
+{
+  public Owner : string;
+  public PropertyName : string;
+  public Script : CompiledScript;
+  public this(owner : string, propertyName : string, script : CompiledScript)
+  { Owner = owner; PropertyName = propertyName; Script = script; }
+}
+internal sealed class ScriptCompilationGraph
+{
+  public Active : HashSet[string] = HashSet();
+  public Compiled : Dictionary[string, CompiledScript] = Dictionary();
+  public Directory : string;
+  public this()
+  { Directory = Path.Combine(Path.GetTempPath(), "nemerle-imports-" + Guid.NewGuid().ToString("N")); _ = System.IO.Directory.CreateDirectory(Directory); }
+}
+
+internal sealed class ScriptUsingDirective
+{
+  public Name : string;
+  public Alias : string;
+  public Start : int;
+  public Length : int;
+  public this(name : string, alias : string, start : int, length : int)
+  { Name = name; Alias = alias; Start = start; Length = length; }
+}
+
+public enum ScriptInputCompleteness { | Complete | Incomplete | Invalid }
+
+internal sealed class PreparedScript
+{
+  public Script : CompiledScript;
+  public Inputs : ScriptInputs;
+  public Children : List[PreparedScript] = List();
+  public this(script : CompiledScript, inputs : ScriptInputs) { Script = script; Inputs = inputs; }
+}
+internal static class ScriptCompilerOptions
+{
+  public Apply(options : Nemerle.Compiler.CompilationOptions, arguments : List[string], source : string) : void
+  {
+    def allowed = array["-define", "-warn", "-nowarn", "-dowarn", "-warnaserror", "-optimize", "-optimize-options", "-checked", "-general-tail-call-opt", "-boolean-constant-matching-opt", "-ordinal-constant-matching-opt"];
+    foreach (argument in arguments)
+    {
+      def name = argument.Split(':', '=')[0].TrimEnd('+', '-');
+      unless (Array.IndexOf(allowed, name) >= 0) throw ScriptDependencyException(ScriptDiagnostic(source, 1, 1, "Compiler option is controlled by the script host: " + argument, true));
+    }
+    Nemerle.Utility.Getopt.Parse(message => { throw ScriptDependencyException(ScriptDiagnostic(source, 1, 1, message, true)); }, options.GetCommonOptions(), Nemerle.Collections.NList.FromArray(arguments.ToArray()));
+  }
+}

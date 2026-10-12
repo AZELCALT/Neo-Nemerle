@@ -29,6 +29,7 @@
 using System;
 using SCG = System.Collections.Generic;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Assertions;
 using Nemerle.Utility;
@@ -106,13 +107,37 @@ namespace Nemerle.Compiler
   public sealed class DefaultParser : IParser
   {
     [Accessor] manager : ManagerClass;
+    [RecordIgnore] private mutable nativeSession : NitraSourceSession = null;
 
     public Parse(source : ISource) : ParseResult
     {
+      when(manager.Options.NitraSources!=null)
+      {
+        try
+        {
+          when(nativeSession==null)
+          {
+            def session=NitraSourceSession(manager); session.Index(); nativeSession=session;
+          }
+          def text=nativeSession.Rewrite(source);
+          def lexer=LexerFile(manager,source.FileIndex,text,manager.Options.LexerStoreComments);
+          return DefaultParseResult(MainParser.Parse(lexer),lexer);
+        }
+        catch { | e is ArgumentException => Message.Error(Location(source.FileIndex,1,1),e.Message); return ParseResult([]); }
+      }
+      def grammarLocation = GrammarParsing.FindConstruct(source);
+      if (grammarLocation.FileIndex != 0)
+      {
+        Message.Error(grammarLocation, "grammar/space normalization not implemented; compile/runtime blocks are experimental placeholders; use -parse-grammar-spaces for recognition or -experimental-grammar-ir for archival");
+        ParseResult([])
+      }
+      else
+      {
       def lexer = LexerFile(manager, source.FileIndex, source.GetText(), manager.Options.LexerStoreComments);
       when(manager.Options.IndentationSyntax)
         lexer.SwitchToIndentationMode();
       DefaultParseResult(MainParser.Parse(lexer), lexer)
+      }
     }
   }
 

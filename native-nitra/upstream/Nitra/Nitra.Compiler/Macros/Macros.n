@@ -1,0 +1,83 @@
+﻿using Nitra.Compiler;
+
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra
+{
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  public macro InvokeNitraCompiler()
+  {
+    def manager = Nemerle.Macros.Manager();
+    manager.MacroColors.InGlobalColor(CompilingNitraProject.Instance(manager).BeforeInheritance);
+  }
+
+  [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Assembly)]
+  public macro InvokeNitraCompiler()
+  {
+    def manager = Nemerle.Macros.Manager();
+    manager.MacroColors.InGlobalColor(CompilingNitraProject.Instance(manager).BeforeTypedMembers);
+  }
+
+  [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Assembly)]
+  public macro InvokeNitraCompiler()
+  {
+    def manager = Nemerle.Macros.Manager();
+    manager.MacroColors.InGlobalColor(CompilingNitraProject.Instance(manager).WithTypedMembers);
+  }
+
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class)]
+  public macro ExportableSymbol(tb : TypeBuilder, externalSymbolTypeName : PExpr = null)
+  {
+    tb.AddImplementedInterface(<[ Nitra.Serialization.IExportableSymbol ]>);
+    def externalSymbolType =
+      if (externalSymbolTypeName == null)
+        None()
+      else match (TypeVarEnv(tb.Manager).BindFixedType(tb.GlobalEnv, tb, externalSymbolTypeName, false))
+      {
+        | FixedType.Class(TypeBuilder as externalSymbolTb, []) =>
+          externalSymbolTb.AddImplementedInterface(<[ Nitra.Serialization.IImportableSymbol ]>);
+          externalSymbolTb.DisableImplicitConstructor();
+          Some(externalSymbolTb)
+
+        | _ =>
+          Message.Error("Invalid external symbol type specified");
+          None()
+      };
+
+    CompilingNitraProject.Instance(tb.Manager).AddExportableSymbol(tb, externalSymbolType);
+  }
+
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class)]
+  public macro ChemicalSymbol(tb : TypeBuilder, chemicalSymbolTypeName : PExpr = null)
+  {
+    def chemicalSymbolType =
+      if (chemicalSymbolTypeName == null)
+        None()
+      else match (TypeVarEnv(tb.Manager).BindFixedType(tb.GlobalEnv, tb, chemicalSymbolTypeName, false))
+      {
+        | FixedType.Class(TypeBuilder as chemicalSymbolTb, []) =>
+          chemicalSymbolTb.DisableImplicitConstructor();
+          Some(chemicalSymbolTb)
+
+        | _ =>
+          Message.Error("Invalid chemical symbol type specified");
+          None()
+      };
+
+    CompilingNitraProject.Instance(tb.Manager).AddChemicalSymbol(tb, chemicalSymbolType);
+  }
+
+  public macro PExprAnchor(e : PExpr)
+  {
+    e
+  }
+}

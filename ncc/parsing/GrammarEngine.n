@@ -1,0 +1,433 @@
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+
+namespace Nemerle.Compiler
+{
+  internal sealed class GState
+  {
+    public mutable End : int;
+    public Nodes : SCG.List[GrammarMatch] = SCG.List();
+    public this(end : int) { End=end; }
+  }
+  internal sealed class GEngine
+  {
+    registry : GRegistry;
+    file : GFile;
+    grammars : SCG.List[GDefinition];
+    rules : SCG.List[GRule] = SCG.List();
+    memo : SCG.Dictionary[string, SCG.List[GState]] = SCG.Dictionary();
+    active : SCG.HashSet[string] = SCG.HashSet();
+    ranks : SCG.Dictionary[string, int] = SCG.Dictionary();
+    public mutable Furthest : int;
+    public mutable Limit : int;
+    public mutable Expected : string;
+    public mutable Steps : int;
+    private mutable depth : int;
+    private mutable skipping : bool;
+    public mutable Roots : SCG.List[GDefinition];
+    public this(registry : GRegistry, file : GFile, grammars : SCG.List[GDefinition])
+    {
+      this.registry=registry; this.file=file; this.grammars=grammars; Limit=file.Text.Length;
+      Roots=grammars;
+      foreach(g in grammars) foreach(r in g.Rules)
+      {
+        def copy=GRule(r.Name,r.Grammar,r.Module,r.Kind); copy.Id=r.Id; copy.Lexical=r.Lexical; copy.StartRule=r.StartRule; copy.Offset=r.Offset;
+        copy.Alternatives.AddRange(r.Alternatives); rules.Add(copy);
+      }
+      foreach(g in grammars) foreach(ext in g.Extensions)
+      {
+        def target=Resolve(ext.Name,ext);
+        when(target==null) throw ArgumentException("unknown extension target: "+ext.Name);
+        when(target.Kind!=ext.Kind) throw ArgumentException("extension kind does not match target: "+ext.Name);
+        def origin=GRule(ext.Name,ext.Grammar,ext.Module,ext.Kind); origin.Target=target;
+        foreach(a in ext.Alternatives)
+        {
+          def copy=GAlternative(); copy.Owner=origin; copy.Name=a.Name; copy.Expr=a.Expr;
+          copy.Precedence=a.Precedence; copy.Right=a.Right; target.Alternatives.Add(copy);
+        }
+      }
+      Rank();
+    }
+    public Validate() : void
+    {
+      def visit(e : GExpr, r : GRule) : void
+      {
+        when(e.Kind=="ref" || e.Kind=="slot")
+        {
+          unless(e.Text=="Any" || e.Text=="Space" || e.Text=="s" || e.Text=="S" || e.Text=="sm" || e.Text=="nl" || e.Text=="inl" || e.Text=="d")
+          {
+            def target=Resolve(e.Text,r);
+            when(target==null) throw ArgumentException("unknown rule or semantic kind: "+e.Text+" in "+r.Key);
+            when(e.Kind=="slot" && target.Kind!="semantic") throw ArgumentException("form slot must reference a semantic kind: "+e.Text);
+          }
+        }
+        when(e.Kind=="binding" && !ranks.ContainsKey(e.Text)) throw ArgumentException("unknown precedence: "+e.Text);
+        foreach(c in e.Items) visit(c,r);
+      }
+      def nullable=SCG.Dictionary.[string,bool]();
+      foreach(r in rules) nullable[r.Key]=false;
+      def empty(e : GExpr, r : GRule) : bool
+      {
+        match(e.Kind)
+        {
+          | "literal" => e.Text.Length==0
+          | "not" | "and" => true
+          | "chars" => false
+          | "ref" | "slot" =>
+            def target=Resolve(e.Text,r);
+            if(target!=null) nullable[target.Key]
+            else e.Text=="s" || e.Text=="S" || e.Text=="sm" || e.Text=="nl" || e.Text=="inl" || e.Text=="d"
+          | "repeat" | "separated" => e.Min==0 || empty(e.Items[0],r)
+          | "alt" =>
+            mutable yes=false; foreach(c in e.Items) when(empty(c,r)) yes=true; yes
+          | _ =>
+            mutable yes=true; foreach(c in e.Items) unless(empty(c,r)) yes=false; yes
+        }
+      }
+      mutable changed=true;
+      while(changed)
+      {
+        changed=false;
+        foreach(r in rules) foreach(a in r.Alternatives)
+          when(!nullable[r.Key] && empty(a.Expr,a.Owner ?? r)) { nullable[r.Key]=true; changed=true; }
+      }
+      def progress(e : GExpr, r : GRule) : void
+      {
+        when((e.Kind=="repeat" || e.Kind=="separated") && empty(e.Items[0],r))
+          throw ArgumentException("non-progressing repetition in "+r.Key);
+        foreach(c in e.Items) progress(c,r);
+      }
+      foreach(r in rules) foreach(a in r.Alternatives)
+      { visit(a.Expr,a.Owner ?? r); progress(a.Expr,a.Owner ?? r); }
+
+      def links=SCG.Dictionary.[string,SCG.List[string]]();
+      foreach(r in rules) links[r.Key]=SCG.List();
+      def leading(e : GExpr, context : GRule, destinations : SCG.List[string]) : void
+      {
+        if(e.Kind=="ref" || e.Kind=="slot")
+        { def target=Resolve(e.Text,context); when(target!=null) destinations.Add(target.Key); }
+        else if(e.Kind=="seq")
+        { mutable more=true; foreach(c in e.Items) when(more) { leading(c,context,destinations); more=empty(c,context); } }
+        else if(e.Kind=="separated" || e.Kind=="repeat") leading(e.Items[0],context,destinations)
+        else unless(e.Kind=="literal" || e.Kind=="chars")
+          foreach(c in e.Items) leading(c,context,destinations);
+      }
+      foreach(r in rules)
+      {
+        when(r.Name=="IgnoreToken" && nullable[r.Key]) throw ArgumentException("non-progressing IgnoreToken");
+        foreach(a in r.Alternatives)
+        {
+          def items=Seq(a.Expr); def context=a.Owner ?? r;
+          if(!r.Lexical && items.Count>0 && IsSelf(items[0],r,context))
+          { when(items.Count==1) throw ArgumentException("non-progressing expression operator: "+a.Name); }
+          else leading(a.Expr,context,links[r.Key]);
+        }
+      }
+      def visiting=SCG.HashSet.[string](); def visited=SCG.HashSet.[string]();
+      def walk(key : string) : void
+      {
+        when(visiting.Contains(key)) throw ArgumentException("unsupported left recursion or cyclic rule at "+key);
+        unless(visited.Contains(key))
+        { _=visiting.Add(key); foreach(next in links[key]) walk(next); _=visiting.Remove(key); _=visited.Add(key); }
+      }
+      foreach(r in rules) walk(r.Key);
+      foreach(g in grammars) foreach(b in g.Bindings)
+      {
+        when(!g.Forms.ContainsKey(b.Value)) throw ArgumentException("unknown statement form: "+b.Value);
+        def context=GRule("$form",g,b.Key,"form");
+        visit(g.Forms[b.Value],context); progress(g.Forms[b.Value],context);
+        when(empty(g.Forms[b.Value],context)) throw ArgumentException("non-progressing statement form: "+b.Value);
+      }
+    }
+    private Tick() : void
+    {
+      ++Steps;
+      when(Steps>1000000) throw ArgumentException("recognition work limit exceeded (one million steps)");
+    }
+    private Rank() : void
+    {
+      def groups=SCG.List.[string](); def edges=SCG.List.[string]();
+      groups.Add("0");
+      foreach(g in grammars)
+      {
+        foreach(p in g.Precedences) unless(groups.Contains(p)) groups.Add(p);
+        foreach(e in g.Orders) edges.Add(e);
+        foreach(r in g.Rules)
+        {
+          mutable previous="0";
+          foreach(a in r.Alternatives)
+            when(a.Precedence!=previous)
+            { edges.Add(previous+"<"+a.Precedence); previous=a.Precedence; }
+        }
+      }
+      foreach(e in edges)
+      { def parts=e.Split(array['<']); foreach(p in parts) unless(groups.Contains(p)) groups.Add(p); }
+      mutable level=0;
+      while(groups.Count>0)
+      {
+        mutable selected : string=null;
+        foreach(p in groups)
+        {
+          mutable ready=true;
+          foreach(e in edges)
+          { def parts=e.Split(array['<']); when(parts[1]==p && groups.Contains(parts[0]) && parts[0]!=p) ready=false; }
+          when(ready && selected==null) selected=p;
+        }
+        when(selected==null) throw ArgumentException("precedence cycle");
+        ranks[selected]=level; ++level; _=groups.Remove(selected);
+      }
+    }
+    public Skip(pos : int) : int
+    {
+      mutable p=pos;
+      mutable again=true;
+      while(again)
+      {
+        again=false;
+        while(p<Limit && char.IsWhiteSpace(file.Text[p])) ++p;
+        unless(skipping)
+        {
+          skipping=true;
+          try
+          {
+            foreach(r in rules)
+              when(r.Name=="IgnoreToken")
+              {
+                unless(r.Lexical) throw ArgumentException("IgnoreToken must be lexical (token, regex, or void)");
+                def choices=Rule(r,p,0);
+                mutable end=p;
+                foreach(c in choices) when(c.End>end) end=c.End;
+                when(end>p) { p=end; again=true; }
+              }
+          }
+          finally { skipping=false; }
+        }
+      }
+      p
+    }
+    private Fail(pos : int, expected : string) : SCG.List[GState]
+    { when(pos>=Furthest) { Furthest=pos; Expected=expected; } SCG.List() }
+    private Single(pos : int) : SCG.List[GState]
+    { def res=SCG.List(); res.Add(GState(pos)); res }
+    private Node(kind : string, name : string, start : int, end : int) : GrammarMatch
+    { def n=GrammarMatch(kind,name,start,end); n.File=file.Path; n }
+    public Resolve(name : string, context : GRule) : GRule
+    {
+      def candidates=SCG.List.[GRule]();
+      foreach(r in rules)
+        when((r.Grammar==context.Grammar && r.Module==context.Module && r.Name==name)
+          || r.Key==name || r.Grammar.Name+"."+r.Module+"."+r.Name==name
+          || r.Grammar==context.Grammar && r.Module+"."+r.Name==name)
+          candidates.Add(r);
+      when(candidates.Count==0)
+      {
+        foreach(r in rules)
+          when(r.Grammar==context.Grammar && r.Module=="" && r.Name==name) candidates.Add(r);
+        foreach(pair in context.Grammar.Imports)
+          when(pair.Key.StartsWith(context.Module+":",StringComparison.Ordinal))
+          {
+            def alias=pair.Key.Substring(context.Module.Length+1); def target=pair.Value;
+            def lookup=if(name.StartsWith(alias+".",StringComparison.Ordinal)) target+name.Substring(alias.Length) else target+"."+name;
+            foreach(r in rules)
+              when(r.Key==lookup || r.Grammar.Name+"."+r.Module+"."+r.Name==lookup
+                || r.Grammar.FullName+"."+r.Name==lookup || r.Grammar.Name+"."+r.Name==lookup
+                || r.Grammar==context.Grammar && r.Module+"."+r.Name==lookup)
+                unless(candidates.Contains(r)) candidates.Add(r);
+          }
+      }
+      when(candidates.Count>1) throw ArgumentException("ambiguous rule reference: "+name);
+      if(candidates.Count==1) candidates[0] else null
+    }
+    private IsSelf(e : GExpr, r : GRule, context : GRule) : bool
+    {
+      if(e.Kind=="capture" || e.Kind=="binding") IsSelf(e.Items[0],r,context)
+      else e.Kind=="ref" && (e.Text==r.Name || e.Text==r.Module+"."+r.Name || e.Text==r.Key || Resolve(e.Text,context)==r)
+    }
+    private LeftCapture(e : GExpr, left : GState, start : int) : GState
+    {
+      if(e.Kind=="binding") LeftCapture(e.Items[0],left,start)
+      else if(e.Kind=="capture")
+      {
+        def inner=LeftCapture(e.Items[0],left,start); def n=Node("capture",e.Text,start,left.End);
+        n.Capture=e.Text; n.Children.AddRange(inner.Nodes); def s=GState(left.End); s.Nodes.Add(n); s
+      }
+      else left
+    }
+    private Seq(e : GExpr) : SCG.List[GExpr]
+    { if(e.Kind=="seq") e.Items else { def list=SCG.List(); list.Add(e); list } }
+    public Rule(r : GRule, position : int, minimum : int) : SCG.List[GState]
+    {
+      Tick(); def p=if(r.Lexical) position else Skip(position);
+      def key=r.Id.ToString()+":"+p.ToString()+":"+minimum.ToString();
+      when(memo.ContainsKey(key)) { ++registry.Result.MemoHits; return memo[key]; }
+      when(active.Contains(key)) throw ArgumentException("unsupported left recursion or cyclic rule at "+r.Key+"; use precedence alternatives for expressions");
+      ++depth; when(depth>256) throw ArgumentException("grammar nesting limit exceeded (256)");
+      _=active.Add(key); ++registry.Result.RuleEvaluations;
+      def bases=SCG.List.[GState]();
+      foreach(a in r.Alternatives)
+      {
+        def items=Seq(a.Expr);
+        unless(items.Count>0 && IsSelf(items[0],r,a.Owner ?? r))
+        {
+          def threshold=if(a.Precedence=="0") 0 else ranks[a.Precedence];
+          foreach(s in Eval(a.Expr,a.Owner ?? r,p,r.Lexical,threshold)) bases.Add(Wrap(r,a,p,s));
+        }
+      }
+      // Expression operators extend a recognized left operand. The same rule
+      // and precedence machinery applies when the operand is a semantic kind.
+      def completed=SCG.List.[GState](); def pending=SCG.Queue.[GState]();
+      foreach(s in bases) pending.Enqueue(s);
+      while(pending.Count>0)
+      {
+        Tick(); def left=pending.Dequeue(); mutable extended=false;
+        foreach(a in r.Alternatives)
+        {
+          def items=Seq(a.Expr);
+          when(items.Count>0 && IsSelf(items[0],r,a.Owner ?? r))
+          {
+            def rank=ranks[a.Precedence];
+            when(rank>=minimum)
+            {
+              def tail=GExpr("seq",null);
+              for(mutable i=1;i<items.Count;++i) tail.Items.Add(items[i]);
+              foreach(s in Eval(tail,a.Owner ?? r,left.End,r.Lexical,if(a.Right) rank else rank+1))
+              {
+                when(s.End<=left.End) throw ArgumentException("non-progressing expression operator: "+a.Name);
+                def combined=GState(s.End); combined.Nodes.AddRange(LeftCapture(items[0],left,p).Nodes); combined.Nodes.AddRange(s.Nodes);
+                pending.Enqueue(Wrap(r,a,p,combined)); extended=true;
+              }
+            }
+          }
+        }
+        unless(extended) completed.Add(left);
+        when(completed.Count+pending.Count>4096) throw ArgumentException("too many competing grammar recognized (4096)");
+      }
+      _=active.Remove(key); --depth; memo[key]=completed; completed
+    }
+    private Wrap(r : GRule, a : GAlternative, start : int, state : GState) : GState
+    {
+      def n=Node(r.Kind,r.Name,start,state.End); n.Grammar=r.Grammar.FullName; n.Module=r.Module; n.Variant=a.Name;
+      n.Children.AddRange(state.Nodes); def s=GState(state.End); s.Nodes.Add(n); s
+    }
+    public Eval(e : GExpr, context : GRule, position : int, lexical : bool, selfMinimum : int) : SCG.List[GState]
+    {
+      Tick(); def p=if(lexical) position else Skip(position);
+      match(e.Kind)
+      {
+        | "literal" =>
+          if(p+e.Text.Length<=Limit && string.CompareOrdinal(file.Text,p,e.Text,0,e.Text.Length)==0)
+          {
+            // Word literals are keyword-bounded outside lexical rules.
+            def end=p+e.Text.Length;
+            if(!lexical && e.Text.Length>0 && (char.IsLetter(e.Text[0]) || e.Text[0]=='_') && (char.IsLetterOrDigit(e.Text[e.Text.Length-1]) || e.Text[e.Text.Length-1]=='_')
+              && end<Limit && (char.IsLetterOrDigit(file.Text[end]) || file.Text[end]=='_')) Fail(p,e.Text)
+            else Single(end)
+          }
+          else Fail(p,e.Text)
+        | "chars" =>
+          mutable found=false;
+          when(p<Limit)
+            for(mutable i=0;i<e.Text.Length;i+=2) when(e.Text[i]<=file.Text[p] && file.Text[p]<=e.Text[i+1]) found=true;
+          if(found) Single(p+1) else Fail(p,"character class")
+        | "ref" | "slot" =>
+          if(e.Text=="Any") { if(p<Limit) Single(p+1) else Fail(p,"character") }
+          else if(e.Text=="Space") Nested(p)
+          else if(e.Text=="s" || e.Text=="S" || e.Text=="sm" || e.Text=="nl" || e.Text=="inl" || e.Text=="d") Single(Skip(position))
+          else
+          {
+            def r=Resolve(e.Text,context);
+            when(r==null) throw ArgumentException("unknown rule or semantic kind: "+e.Text+" in "+context.Key);
+            when(e.Kind=="slot" && r.Kind!="semantic") throw ArgumentException("form slot must reference a semantic kind: "+e.Text);
+            Rule(r,p,if(r.Key==context.Key || context.Target!=null && context.Target.Key==r.Key) selfMinimum else 0)
+          }
+        | "binding" =>
+          when(!ranks.ContainsKey(e.Text)) throw ArgumentException("unknown precedence: "+e.Text);
+          def child=e.Items[0]; def r=Resolve(child.Text,context);
+          when(r==null) throw ArgumentException("unknown precedence-qualified rule: "+child.Text);
+          Rule(r,p,ranks[e.Text])
+        | "capture" =>
+          def res=SCG.List.[GState]();
+          foreach(s in Eval(e.Items[0],context,p,lexical,selfMinimum))
+          { def n=Node("capture",e.Text,p,s.End); n.Capture=e.Text; n.Children.AddRange(s.Nodes); def c=GState(s.End); c.Nodes.Add(n); res.Add(c); }
+          res
+        | "seq" =>
+          mutable states=Single(p);
+          foreach(item in e.Items)
+          {
+            def next=SCG.List.[GState]();
+            foreach(s in states) foreach(t in Eval(item,context,s.End,lexical,selfMinimum))
+            { def c=GState(t.End); c.Nodes.AddRange(s.Nodes); c.Nodes.AddRange(t.Nodes); next.Add(c); }
+            states=next;
+            when(states.Count>4096) throw ArgumentException("too many competing sequence recognized (4096)");
+          }
+          states
+        | "alt" =>
+          def res=SCG.List.[GState](); foreach(item in e.Items) res.AddRange(Eval(item,context,p,lexical,selfMinimum)); res
+        | "not" | "and" =>
+          def recognized=Eval(e.Items[0],context,p,lexical,selfMinimum);
+          if((recognized.Count==0)==(e.Kind=="not")) Single(position) else Fail(p,"predicate")
+        | "repeat" | "separated" =>
+          def accepted=SCG.List.[GState](); def queue=SCG.Queue.[GState*int](); queue.Enqueue((GState(p),0));
+          while(queue.Count>0)
+          {
+            Tick(); def (state,count)=queue.Dequeue();
+            mutable next=SCG.List.[GState]();
+            when(e.Max<0 || count<e.Max)
+            {
+              if(e.Kind=="separated" && count>0)
+              {
+                foreach(sep in Eval(e.Items[1],context,state.End,lexical,selfMinimum))
+                {
+                  def values=Eval(e.Items[0],context,sep.End,lexical,selfMinimum);
+                  when(values.Count==0 && e.Text=="trailing")
+                  { def t=GState(sep.End); t.Nodes.AddRange(state.Nodes); accepted.Add(t); }
+                  next.AddRange(values);
+                }
+              }
+              else next=Eval(e.Items[0],context,state.End,lexical,selfMinimum);
+            }
+            if(next.Count==0) { when(count>=e.Min) accepted.Add(state); }
+            else foreach(t in next)
+            {
+              when(t.End<=state.End) throw ArgumentException("non-progressing repetition");
+              def c=GState(t.End); c.Nodes.AddRange(state.Nodes); c.Nodes.AddRange(t.Nodes); queue.Enqueue((c,count+1));
+            }
+            when(queue.Count+accepted.Count>4096) throw ArgumentException("too many competing repetition recognized (4096)");
+          }
+          accepted
+        | _ => throw ArgumentException("unsupported recognition node: "+e.Kind);
+      }
+    }
+    private Nested(pos : int) : SCG.List[GState]
+    {
+      unless(pos+5<=Limit && file.Text.Substring(pos,5)=="space") return Fail(pos,"space");
+      when(pos+5<Limit && (char.IsLetterOrDigit(file.Text[pos+5]) || file.Text[pos+5]=='_')) return Fail(pos,"space");
+      def reader=GReader(file.Text,file.Path,pos,Limit);
+      mutable zone : GZone;
+      try { zone=registry.ReadZoneHeader(reader,file); }
+      catch { | _ is ArgumentException => return Fail(pos,"space header"); }
+      def recognized=registry.ParseZone(zone);
+      def res=SCG.List.[GState]();
+      foreach(n in recognized) { when(n.End>Limit) throw ArgumentException("nested space crosses enclosing boundary"); def s=GState(n.End); s.Nodes.Add(n); res.Add(s); }
+      res
+    }
+    public Forms(pos : int) : SCG.List[GState]
+    {
+      def res=SCG.List.[GState]();
+      foreach(g in Roots) foreach(binding in g.Bindings)
+      {
+        when(!g.Forms.ContainsKey(binding.Value)) throw ArgumentException("unknown statement form: "+binding.Value);
+        def context=GRule("$form",g,binding.Key,"form");
+        foreach(s in Eval(g.Forms[binding.Value],context,pos,false,0))
+        {
+          def n=Node("form",binding.Value,Skip(pos),s.End); n.Grammar=g.FullName; n.Module=binding.Key;
+          n.Children.AddRange(s.Nodes); def state=GState(s.End); state.Nodes.Add(n); res.Add(state);
+        }
+      }
+      res
+    }
+  }
+}

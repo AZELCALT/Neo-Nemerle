@@ -60,6 +60,7 @@
   </ItemGroup>
   <!--Projects related only to compiler.-->
   <ItemGroup>
+    <NCompilerProject Include="$(NRoot)\Nemerle.Platform.csproj" />
     <NCompilerProject Include="$(NRoot)\Nemerle.nproj" />
     <NCompilerProject Include="$(NRoot)\Nemerle.Compiler.nproj" />
     <NCompilerProject Include="$(NRoot)\Nemerle.Macros.nproj" />

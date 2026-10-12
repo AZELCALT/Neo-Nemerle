@@ -1,0 +1,102 @@
+// The custom dialect is retained while native Nitra is integrated.
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle.Imperative;
+namespace Nemerle.Compiler
+{
+  public sealed class NitraInactiveConstruct
+  {
+    public mutable Kind : string;
+    public mutable File : string;
+    public mutable Start : int;
+    public mutable End : int;
+    public mutable Text : string;
+  }
+  internal module NitraInactiveSyntax
+  {
+    internal Blank(chars : array[char], start : int, end : int) : void
+    { for(mutable i=start;i<end;++i) unless(chars[i]=='\r' || chars[i]=='\n') chars[i]=' '; }
+
+    private Group(r : GReader, open : string, close : string) : void
+    {
+      r.Need(open); mutable depth=1;
+      while(depth>0)
+      {
+        def t=r.Take(); when(t.Text=="<eof>") r.Fail("unterminated inactive header");
+        unless(t.Quoted) { when(t.Text==open) ++depth; when(t.Text==close) --depth; }
+      }
+    }
+    private Restore(r : GReader, start : int) : void { r.Pos=start; r.Reset(); }
+
+    // Recognition is retained; the old custom handlers are intentionally not
+    // called here. Native Nitra syntax modules and semantic declarations remain
+    // active. Preserve offsets so this suspension cannot move diagnostics.
+    internal Filter(text : string, file : string, constructs : SCG.List[NitraInactiveConstruct]) : string
+    {
+      def chars=text.ToCharArray(); def r=GReader(text,file,0,text.Length);
+      mutable previous="";
+      while(!r.Is("<eof>"))
+      {
+        def t=r.Take(); mutable kind : string=null;
+        when(!t.Quoted && (t.Text=="ast" || t.Text=="declaration" || t.Text=="map" || t.Text=="language"))
+        {
+          while(!r.Is("<eof>") && !r.Is("{") && !r.Is(";"))
+          {
+            if(r.Is("(")) Group(r,"(",")");
+            else if(r.Is("[")) Group(r,"[","]");
+            else _=r.Take();
+          }
+          if(r.Is("{")) _=r.Block(); else _=r.Eat(";");
+          previous=""; continue;
+        }
+        unless(t.Quoted || !(previous=="" || previous=="{" || previous=="}" || previous==";" || previous=="]"))
+        {
+          when(t.Text=="statement" && r.Is("form")) { _=r.Take(); kind="statement form"; }
+          // Existing spelling is: statement Name form { ... }.
+          when(t.Text=="statement" && kind==null)
+          {
+            def saved=r.Peek().Start;
+            try { _=r.Name(); when(r.Is("form")) { _=r.Take(); kind="statement form"; } }
+            catch { | _ is ArgumentException => () }
+            when(kind==null) Restore(r,saved);
+          }
+          when(t.Text=="semantic" && r.Is("kind")) { _=r.Take(); kind="semantic kind"; }
+          when(t.Text=="extend" && r.Is("semantic"))
+          { _=r.Take(); r.Need("kind"); kind="extend semantic kind"; }
+          when(t.Text=="form") kind="form binding";
+          when(t.Text=="grammar" && r.Is("(")) kind="grammar interaction";
+          when(t.Text=="runtime" || t.Text=="compile")
+          {
+            def saved=r.Peek().Start;
+            try
+            {
+              unless(r.Is("{") || r.Is("(")) _=r.Name();
+              when(r.Is("(")) Group(r,"(",")");
+              when(r.Is("{")) kind=t.Text;
+            }
+            catch { | _ is ArgumentException => () }
+            when(kind==null) Restore(r,saved);
+          }
+        }
+        if(kind!=null)
+        {
+          mutable ended=false; mutable end=t.End;
+          while(!r.Is("<eof>") && !ended)
+          {
+            if(r.Is("{")) { def b=r.Block(); end=b.End; ended=true; }
+            else if(r.Is("(")) { Group(r,"(",")"); end=r.Pos; }
+            else if(r.Is("[")) { Group(r,"[","]"); end=r.Pos; }
+            else if(r.Is(";")) { end=r.Take().End; ended=true; }
+            else { when(r.Is("}")) throw ArgumentException("unterminated inactive "+kind); end=r.Take().End; }
+          }
+          unless(ended) throw ArgumentException("unterminated inactive "+kind);
+          def c=NitraInactiveConstruct(); c.Kind=kind; c.File=file; c.Start=t.Start; c.End=end;
+          c.Text=text.Substring(t.Start,end-t.Start); constructs.Add(c); Blank(chars,t.Start,end);
+          previous="";
+        }
+        else previous=t.Text;
+      }
+      string(chars)
+    }
+  }
+}

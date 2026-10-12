@@ -993,7 +993,7 @@ public abstract class LexerBase
                                            "``disable'' or ``restore'', not ``$s''")
               }
 
-            def warnings = read_to_the_end_of_line ().Replace (',', ' ').Split (null);
+            def warnings = read_to_the_end_of_line ().Replace (',', ' ').Split (null : array[char]);
             mutable did_something = false;
             foreach (warn in warnings)
               unless (warn == "") {
@@ -1464,7 +1464,7 @@ public abstract class LexerBase
           _ = buf.Append ('$');
           loop ()
 
-        | '\0' => rawString.Length--; Message.Error(this.Location, "Unterminated string literal") // like MS csc
+        | '\0' => rawString.Length--; when (Manager.Options.Script != null) Manager.Options.Script.IncompleteInput = true; Message.Error(this.Location, "Unterminated string literal") // like MS csc
         | '\n' | '\u2028' | '\u2029' | '\u0085' => rawString.Length--; Message.Error(this.Location, "Newline in constant") // like MS csc
         | ch when ch != end_ch =>
           _ = buf.Append (ch);
@@ -1520,6 +1520,7 @@ public abstract class LexerBase
               tok
           }
         | '\0' =>
+          when (Manager.Options.Script != null) Manager.Options.Script.IncompleteInput = true;
           Message.Error (this.Location, "Unterminated string literal"); // like MS csc
           rawString.Length--;
           def tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
@@ -1576,7 +1577,8 @@ public abstract class LexerBase
           }
 
         | '\0' =>
-            Message.Error (this.Location, "Unterminated string literal"); // like MS csc
+            when (Manager.Options.Script != null) Manager.Options.Script.IncompleteInput = true;
+          Message.Error (this.Location, "Unterminated string literal"); // like MS csc
             rawString.Length--;
             def tok = Token.StringLiteral (buf.ToString (), rawString.ToString ());
             tok.Location = Location (file_idx, startLine, startCol, line, col - 1);
@@ -1900,6 +1902,7 @@ public class LexerFile : LexerStringBase
             | '*' => loop1 (true, store)
             | '/' when seen_star => ()
             | '\0' =>
+              when (Manager.Options.Script != null) Manager.Options.Script.IncompleteInput = true;
               Message.Error (startLocation, "End-of-file found, '*/' expected!") // like MS csc
             | _ => loop1 (false, store)
           }
@@ -2035,6 +2038,7 @@ public class LexerString : LexerStringBase
                CommentLocations.Add((finalLoc, currentComment.ToString(), false));
                currentComment.Length = 0;
             | '\0' =>
+              when (Manager.Options.Script != null) Manager.Options.Script.IncompleteInput = true;
               Message.Error (startLocation, "End-of-file found, '*/' expected!") // like MS csc
             | commentChar => _ = currentComment.Append(commentChar); loop1 (false, store)
           }

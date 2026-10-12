@@ -1,0 +1,79 @@
+using System;
+using SCG = System.Collections.Generic;
+namespace Nemerle.Compiler
+{
+  /// Experimental APIs deliberately separate declaration inspection from execution.
+  public module NitraSyntax
+  {
+    private native : Lazy[NitraPreparedGrammar] = Lazy(fun() { NitraPreparation(NitraBootstrap.Documents(),array["NitraSyntax"]).Prepare() });
+    public BaselineDefinitions(experimental : bool) : array[NitraDocument]
+    {
+      unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
+      NitraBootstrap.Documents()
+    }
+    public Read(source : string, file : string, experimental : bool) : NitraDocument
+    {
+      def d=ReadDefinitions(source,file,experimental);
+      when(d.Success)
+      {
+        def check=native.Value.Recognize("NitraSyntax.Start",source); d.Surface=check;
+        if(check.Complete && check.Accepted) d.SurfaceValidated=true;
+        else if(check.Diagnostics.Count>0) foreach(message in check.Diagnostics) d.Diagnostics.Add(GrammarDiagnostic(d.File,check.Furthest,message));
+        else d.Diagnostics.Add(GrammarDiagnostic(d.File,check.Furthest,"source does not match the pinned Nitra declaration grammar"));
+      }
+      d
+    }
+    /// Source hosting retains the suspended custom dialect without activating it.
+    /// Read remains the strict native Nitra reader.
+    public ReadSourceGrammar(source : string, file : string, experimental : bool) : NitraDocument
+    {
+      unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
+      when(source==null) throw ArgumentNullException("source");
+      def inactive=SCG.List.[NitraInactiveConstruct]();
+      try
+      {
+        def filtered=NitraInactiveSyntax.Filter(source,file,inactive);
+        def d=Read(filtered,file,true); d.Source=source; d.InactiveConstructs.AddRange(inactive);
+        def pending=SCG.Stack.[NitraDeclaration](); foreach(item in d.Declarations) pending.Push(item);
+        while(pending.Count>0)
+        {
+          def item=pending.Pop(); item.Text=source.Substring(item.Start,item.End-item.Start);
+          foreach(child in item.Children) pending.Push(child);
+        }
+        d
+      }
+      catch { | e is ArgumentException => Failed(source,file,e.Message) }
+    }
+    public Prepare(documents : SCG.IEnumerable[NitraDocument], modules : SCG.IEnumerable[string], experimental : bool) : NitraPreparedGrammar
+    {
+      unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
+      NitraPreparation(documents,modules).Prepare()
+    }
+    public Structure(grammar : NitraPreparedGrammar, rule : string, source : string,
+                     resolver : Func[NitraStructuralChoice,int], experimental : bool) : NitraStructureResult
+    {
+      unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
+      when(grammar==null) throw ArgumentNullException("grammar");
+      NitraStructureBuilder(grammar.Recognize(rule,source,true,true),resolver).Run()
+    }
+    internal StructureCompact(grammar : NitraPreparedGrammar, rule : string, source : string,
+                              resolver : Func[NitraStructuralChoice,int]) : NitraStructureResult
+    { NitraStructureBuilder(grammar.Recognize(rule,source,true,false),resolver).Run() }
+    private Failed(source : string, file : string, message : string) : NitraDocument
+    { def d=NitraDocument(); d.Source=source; d.File=file ?? "<grammar>"; d.Diagnostics.Add(GrammarDiagnostic(d.File,0,message)); d }
+    public ReadDefinitions(source : string, file : string, experimental : bool) : NitraDocument
+    {
+      unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
+      when(source==null) throw ArgumentNullException("source");
+      try { NitraDeclarationReader(source,file ?? "<grammar>").Read() }
+      catch
+      {
+        | e is ArgumentException =>
+          def d=NitraDocument(); d.Source=source; d.File=file ?? "<grammar>";
+          d.Diagnostics.Add(GrammarDiagnostic(d.File,0,e.Message)); d
+        | e is FormatException => Failed(source,file,e.Message)
+        | e is OverflowException => Failed(source,file,e.Message)
+      }
+    }
+  }
+}

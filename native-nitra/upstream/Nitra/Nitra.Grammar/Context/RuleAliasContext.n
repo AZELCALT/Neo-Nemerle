@@ -1,0 +1,32 @@
+﻿using Nitra.ProjectSystem;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing
+{
+  public class RuleAliasContext : SimpleNameContext[RuleAliasSymbol]
+  {
+    RuleAlias    : RuleAliasSymbol { get; }
+    public override SymbolMap : Map[string, RuleAliasSymbol] { get; }
+
+    public this(parent : Context, ruleAlias : RuleAliasSymbol)
+    {
+      base(parent);
+      RuleAlias  = ruleAlias;
+      def parent = TryGetParent.[RuleAliasContext]();
+      SymbolMap  = (parent?.SymbolMap ?? Map()).Replace(ruleAlias.Name, RuleAlias);
+    }
+
+    public override ToString() : string
+    {
+      "alias " + RuleAlias.Name + " = " + RuleAlias.Rule
+    }
+  }
+}

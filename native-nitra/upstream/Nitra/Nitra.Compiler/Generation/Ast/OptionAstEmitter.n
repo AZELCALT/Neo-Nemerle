@@ -1,0 +1,120 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal sealed class OptionAstEmitter : CollectionAstEmitter
+  {
+    public override TypeCompiler : NTypeCompiler { get { Environment.AstOptionTypeCompiler } }
+
+    public this(environment : EmitterEnvironment, symbol : AstSymbol)
+    {
+      base(environment, symbol)
+    }
+
+    protected override CreateBaseTb(ownerTb : TypeBuilder, itemType : FixedType) : TypeBuilder
+    {
+      ownerTb.DefineNestedType(<[ decl:
+        new public interface IAstOption : Nitra.Declarations.IAstOption[$(itemType : typed)]
+        {
+        }
+      ]>)
+    }
+
+    protected override CreateConcreteTb(ownerTb : TypeBuilder, itemType : FixedType, baseType : FixedType) : TypeBuilder
+    {
+      ownerTb.DefineNestedType(<[ decl:
+        new public sealed class AstOption : Nitra.Declarations.AstOption[$(itemType : typed)], $(baseType : typed)
+        {
+          public this(loc : Nitra.ILocated)
+          {
+            base(loc);
+          }
+          public this(loc : Nitra.Location)
+          {
+            base(loc);
+          }
+          public this(loc : Nitra.ILocated, value : $(itemType : typed))
+          {
+            base(loc, value);
+          }
+          public this(loc : Nitra.Location, value : $(itemType : typed))
+          {
+            base(loc, value);
+          }
+        }
+      ]>)
+    }
+
+    protected override CreateAmbiguousTb(ownerTb : TypeBuilder, itemType : FixedType, baseType : FixedType) : TypeBuilder
+    {
+      ownerTb.DefineNestedType(<[ decl:
+        new public sealed class AmbiguousAstOption : Nitra.Declarations.AmbiguousAstOption[$(itemType : typed)], $(baseType : typed)
+        {
+          public this(ambiguities : array[$(baseType : typed)])
+          {
+            base((ambiguities : object) :> array[Nitra.Declarations.IAstOption[$(itemType : typed)]]);
+          }
+          public new Ambiguities : array[$(baseType : typed)] { get { base.Ambiguities :> array[$(baseType : typed)] } }
+        }
+      ]>)
+    }
+
+    protected override MakeEvalPropertiesBody(dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
+    {
+      def setValueInputs  = SCG.List();
+      def setNoneOutputs = SCG.List();
+      def setSomeOutputs = SCG.List();
+
+      foreach (propertySymbol in dependentProperties.Keys)
+      {
+        match (propertySymbol.Direction)
+        {
+          | In =>
+            def optionInputRef = DependencyPath.DeclaredProperty(DependencyPath.This(), propertySymbol, 0);
+            def valueInputRef  = DependencyPath.DeclaredProperty(DependencyPath.Variable("item"), propertySymbol, 0);
+            setValueInputs.Add(LinkProperties(optionInputRef, valueInputRef, dependentProperties));
+
+          | Out =>
+            def optionOutputRef = DependencyPath.DeclaredProperty(DependencyPath.This(), propertySymbol, 0);
+            def valueOutputRef  = DependencyPath.DeclaredProperty(DependencyPath.Variable("item"), propertySymbol, 0);
+            if (propertySymbol.LinkedProperty is SymbolRef.Some(linkedProperty))
+            {
+              def optionInputRef = DependencyPath.DeclaredProperty(DependencyPath.This(), linkedProperty, 0);
+              setNoneOutputs.Add(LinkProperties(optionInputRef, optionOutputRef, dependentProperties));
+              setSomeOutputs.Add(LinkProperties(valueOutputRef, optionOutputRef, dependentProperties));
+            }
+            else
+            {
+              setNoneOutputs.Add(SetPropertyValue(optionOutputRef, <[ VNone() ]>, dependentProperties));
+              setSomeOutputs.Add(LinkProperties(valueOutputRef, optionOutputRef, dependentProperties, x => <[ VSome($x) ]>));
+            }
+        }
+      }
+
+      <[
+        if (this.HasValue)
+        {
+          def item = this._value;
+          ..$setValueInputs;
+          item.EvalProperties(context);
+          ..$setSomeOutputs;
+        }
+        else { ..$setNoneOutputs }
+      ]>
+    }
+  }
+}

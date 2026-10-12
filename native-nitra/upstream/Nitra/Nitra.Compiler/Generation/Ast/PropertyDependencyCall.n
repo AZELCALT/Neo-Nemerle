@@ -1,0 +1,47 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ProjectSystem;
+using Nitra.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  [Record]
+  internal variant PropertyDependencyCall : IPropertyDependencyNode
+  {
+                   public Id            : int                             { get; }
+                   public DeclaredIn    : PropertyContainerSymbol         { get; }
+                   public Location      : Nemerle.Compiler.Location       { get; }
+                   public NitraLocation : Location                        { get { (DeclaredIn.Node.Project :> NitraProject).MakeNitraLocation(Location) } }
+    [RecordIgnore] public DependendOn   : HashSet[PropertyDependencyNode] { get; default HashSet(); }
+                   public Path          : DependencyPath                  { get; }
+                   public IsCollector   : bool                            { get { false } }
+                   public Code          : PropertyDependencyCode          { get; }
+
+    | Normal
+    | Collect
+    | StagedUse
+
+    public override Equals(other : object) : bool
+    {
+      | PropertyDependencyCall(Id = otherId, DeclaredIn = otherDeclaredIn) => Id == otherId && DeclaredIn : object == otherDeclaredIn
+      | _ => false
+    }
+
+    public override GetHashCode() : int { Id ^ DeclaredIn.Id }
+
+    public override ToString() : string { NitraLocation.GetText() }
+
+    public CreateMethodName() : string
+    {
+      "Call-" + Id
+    }
+  }
+}

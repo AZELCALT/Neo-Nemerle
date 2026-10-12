@@ -1,0 +1,161 @@
+// Experimental retention only: these records do not define block semantics.
+using System;
+using System.IO;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Platform;
+
+namespace Nemerle.Compiler
+{
+  public sealed class ExperimentalGrammarBlock
+  {
+    public mutable Kind : string;
+    public mutable Header : string;
+    public mutable Name : string = "";
+    public Grammars : SCG.List[string] = SCG.List();
+    public mutable File : string;
+    public mutable Owner : string;
+    public mutable EnclosingStart : int = -1;
+    public mutable Start : int;
+    public mutable BodyStart : int;
+    public mutable BodyEnd : int;
+    public mutable End : int;
+    public mutable Body : string;
+  }
+  public sealed class ExperimentalGrammarArchive
+  {
+    public Blocks : SCG.List[ExperimentalGrammarBlock] = SCG.List();
+    public Diagnostics : SCG.List[GrammarDiagnostic] = SCG.List();
+    public Success : bool { get { Diagnostics.Count==0 } }
+    public ToJson() : string { GrammarArchives.Serialize(this) }
+  }
+  public module GrammarArchives
+  {
+    public Collect(sources : list[ISource], sourceRoot : string) : ExperimentalGrammarArchive
+    {
+      def result=ExperimentalGrammarArchive();
+      def root=Path.GetFullPath(sourceRoot ?? Environment.CurrentDirectory);
+      foreach(source in sources)
+      {
+        def file=Location.GetFileName(source.FileIndex); def text=source.GetText();
+        def r=GReader(text,file,0,text.Length);
+        def context=SCG.Stack.[int](); mutable previous="";
+        try
+        {
+          while(!r.Is("<eof>"))
+          {
+            def token=r.Take();
+            if(!token.Quoted && previous!="." && IsKind(token.Text)
+                && (r.Is("{") || r.Is("(") || Identifier(r.Peek())))
+            {
+              def b=ExperimentalGrammarBlock(); b.Kind=token.Text; b.File=file;
+              def path=Path.GetFullPath(file); def prefix=root.TrimEnd(array[Path.DirectorySeparatorChar])+Path.DirectorySeparatorChar;
+              b.Owner=Path.ChangeExtension(if(path.StartsWith(prefix,StringComparison.Ordinal)) path.Substring(prefix.Length) else Path.GetFileName(path),null).Replace(Path.DirectorySeparatorChar,'.');
+              b.Start=token.Start; b.EnclosingStart=if(context.Count>0) context.Peek() else -1;
+              if(r.Eat("("))
+              {
+                b.Header="list"; b.Grammars.Add(ReadName(r));
+                while(r.Eat(",")) b.Grammars.Add(ReadName(r)); r.Need(")");
+              }
+              else if(r.Is("{")) b.Header="bare";
+              else { b.Header="named"; b.Name=ReadName(r); }
+              // Bodies are opaque. Do not discover nested declarations here.
+              r.SqlComments=true; def body=r.Block(); r.SqlComments=false;
+              b.BodyStart=body.Start+1; b.BodyEnd=body.End-1; b.End=body.End;
+              b.Body=text.Substring(b.BodyStart,b.BodyEnd-b.BodyStart); result.Blocks.Add(b);
+            }
+            else unless(token.Quoted)
+            {
+              when(token.Text=="{") context.Push(token.Start);
+              when(token.Text=="}" && context.Count>0) _=context.Pop();
+            }
+            previous=token.Text;
+          }
+        }
+        catch { | e is ArgumentException => result.Diagnostics.Add(GrammarDiagnostic(file,r.Pos,e.Message)); }
+      }
+      result
+    }
+    private IsKind(s : string) : bool { s=="runtime" || s=="compile" || s=="grammar" || s=="space" }
+    private Identifier(t : GLexeme) : bool
+    { !t.Quoted && t.Text.Length>0 && (char.IsLetter(t.Text[0]) || t.Text[0]=='_') }
+    private ReadName(r : GReader) : string
+    {
+      unless(Identifier(r.Peek())) r.Fail("expected block name or grammar reference");
+      mutable name=r.Take().Text;
+      while(r.Eat("."))
+      { unless(Identifier(r.Peek())) r.Fail("expected identifier after '.'"); name=name+"."+r.Take().Text; }
+      name
+    }
+    public Serialize(archive : ExperimentalGrammarArchive) : string
+    {
+      when(archive==null) throw ArgumentNullException("archive");
+      unless(archive.Success) throw InvalidOperationException("Cannot serialize an archive with collection errors.");
+      def b=StringBuilder("{\"format\":\"Nemerle.Experimental.GrammarIR\",\"version\":1,\"blocks\":[");
+      mutable first=true;
+      foreach(block in archive.Blocks)
+      {
+        unless(first) _=b.Append(','); first=false;
+        _=b.Append("{\"kind\":"+GrammarJson.Quote(block.Kind)+",\"header\":"+GrammarJson.Quote(block.Header)
+          +",\"name\":"+GrammarJson.Quote(block.Name)+",\"grammars\":[");
+        mutable gf=true;
+        foreach(g in block.Grammars) { unless(gf) _=b.Append(','); gf=false; _=b.Append(GrammarJson.Quote(g)); }
+        _=b.Append("],\"file\":"+GrammarJson.Quote(block.File)+",\"owner\":"+GrammarJson.Quote(block.Owner)
+          +",\"enclosingStart\":"+block.EnclosingStart.ToString()+",\"start\":"+block.Start.ToString()
+          +",\"bodyStart\":"+block.BodyStart.ToString()+",\"bodyEnd\":"+block.BodyEnd.ToString()
+          +",\"end\":"+block.End.ToString()+",\"body\":"+GrammarJson.Quote(block.Body)+"}");
+      }
+      _=b.Append("]}"); b.ToString()
+    }
+    public Deserialize(json : string) : ExperimentalGrammarArchive
+    {
+      when(json==null) throw ArgumentNullException("json");
+      try
+      {
+        unless(ClrCompilerSection.JsonString(json,"format")=="Nemerle.Experimental.GrammarIR")
+          throw InvalidDataException("Unknown compiler archive format.");
+        unless(ClrCompilerSection.JsonInt(json,"version")==1)
+          throw NotSupportedException("Unsupported experimental compiler archive version.");
+        def result=ExperimentalGrammarArchive();
+        foreach(item in ClrCompilerSection.JsonArray(json,"blocks",false))
+        {
+          def b=ExperimentalGrammarBlock();
+          b.Kind=ClrCompilerSection.JsonString(item,"kind"); b.Header=ClrCompilerSection.JsonString(item,"header");
+          b.Name=ClrCompilerSection.JsonString(item,"name"); b.File=ClrCompilerSection.JsonString(item,"file");
+          b.Owner=ClrCompilerSection.JsonString(item,"owner"); b.Body=ClrCompilerSection.JsonString(item,"body");
+          b.Grammars.AddRange(ClrCompilerSection.JsonArray(item,"grammars",true));
+          b.EnclosingStart=ClrCompilerSection.JsonInt(item,"enclosingStart"); b.Start=ClrCompilerSection.JsonInt(item,"start");
+          b.BodyStart=ClrCompilerSection.JsonInt(item,"bodyStart"); b.BodyEnd=ClrCompilerSection.JsonInt(item,"bodyEnd");
+          b.End=ClrCompilerSection.JsonInt(item,"end");
+          unless(IsKind(b.Kind) && (b.Header=="bare" || b.Header=="named" || b.Header=="list")
+            && b.Start>=0 && b.BodyStart>b.Start && b.BodyEnd>=b.BodyStart && b.End==b.BodyEnd+1
+            && b.Body.Length==b.BodyEnd-b.BodyStart && b.EnclosingStart >= -1 && b.EnclosingStart<b.Start
+            && (if(b.Header=="named") b.Name.Length>0 && b.Grammars.Count==0
+                else if(b.Header=="list") b.Name=="" && b.Grammars.Count>0 else b.Name=="" && b.Grammars.Count==0))
+              throw InvalidDataException("Invalid experimental block record.");
+          result.Blocks.Add(b);
+        }
+        result
+      }
+      catch
+      {
+        | e is NotSupportedException => throw e;
+        | e is InvalidDataException => throw e;
+        | e => throw InvalidDataException("Malformed experimental compiler archive.",e);
+      }
+    }
+    public WriteDll(archive : ExperimentalGrammarArchive, path : string, keyFile : string, debug : bool) : void
+    {
+      unless(string.Equals(Path.GetExtension(path),".dll",StringComparison.OrdinalIgnoreCase))
+        throw ArgumentException("Experimental grammar archives require a .dll output path.");
+      def json=Serialize(archive); _=Deserialize(json);
+      ClrCompilerSection.WriteArchive(path,json,keyFile,debug);
+    }
+    // null means an ordinary DLL with no compiler archive. Inspection never loads it.
+    public ReadDll(path : string) : ExperimentalGrammarArchive
+    { def json=ClrCompilerSection.Read(path); if(json==null) null else Deserialize(json) }
+  }
+}

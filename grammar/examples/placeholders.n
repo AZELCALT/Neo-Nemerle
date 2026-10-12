@@ -1,0 +1,16 @@
+// Archive-only draft. Bodies deliberately have no implemented semantics.
+grammar Messages {
+  future syntax module and semantic kind declarations go here
+}
+compile (Messages, Other.Expressions) {
+  future compiler lookup and construction support goes here
+}
+runtime Messages {
+  future message dispatch behavior goes here
+}
+grammar (Messages, Other.Expressions) {
+  future cross-grammar interaction goes here
+}
+space (Messages, Other.Expressions) {
+  future mixed syntax goes here
+}

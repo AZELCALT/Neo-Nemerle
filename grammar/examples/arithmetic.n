@@ -1,0 +1,27 @@
+grammar Arithmetic {
+  statement general form { "start" ...operation... "end" }
+  syntax module Expressions {
+    form general;
+    semantic kind operation { | Evaluate = Value=Expr; }
+    regex Digits = ['0'..'9']+;
+    syntax Expr {
+      | Number = Digits;
+      | Parenthesized = "(" Expr ")";
+      precedence Additive:
+      | Add = Expr "+" Expr;
+      | Subtract = Expr "-" Expr;
+      precedence Multiplicative:
+      | Multiply = Expr "*" Expr;
+      | Divide = Expr "/" Expr;
+      precedence Power:
+      | Power = Expr "^" Expr right-associative;
+      precedence Unary:
+      | Negative = "-" Expr;
+    }
+  }
+}
+space Arithmetic {
+  start 1 + 2 * 3 end
+  start (4 + 5) * 6 end
+  start 2 ^ 3 ^ 4 end
+}

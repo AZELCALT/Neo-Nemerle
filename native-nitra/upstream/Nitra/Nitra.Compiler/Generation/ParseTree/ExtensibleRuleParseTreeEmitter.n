@@ -1,0 +1,122 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal sealed class ExtensibleRuleParseTreeEmitter : RuleParseTreeEmitter
+  {
+    mutable _baseTb               : TypeBuilder;
+    mutable _ambiguousOrMissingTb : TypeBuilder;
+
+    public this(environment : EmitterEnvironment, ruleSymbol : ExtensibleRuleSymbol)
+    {
+      base(environment, environment.DefaultTypeCompiler, ruleSymbol)
+    }
+
+    public override IsTypesDefined : bool { get { _baseTb != null } }
+
+    public override CreateConstant(_ : string, _ : int) : string
+    {
+      throw NotSupportedException();
+    }
+
+    public override DefineNestedType(td : ClassMember.TypeDeclaration) : TypeBuilder
+    {
+      assert(IsTypesDefined);
+      _baseTb.DefineNestedType(td);
+    }
+
+    public override Emit() : void
+    {
+      assert(IsTypesDefined);
+      _baseTb.Compile();
+      _ambiguousOrMissingTb.Compile();
+    }
+
+    public override DefineTypes(defineType : ClassMember.TypeDeclaration -> TypeBuilder) : void
+    {
+      assert(!IsTypesDefined);
+
+      Util.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      {
+        _baseTb = defineType(<[decl:
+          public new abstract partial class $(this.RuleSymbol.Name : usesite) : $(Environment.ParseTreeTypeVar : typed)
+          {
+            public override RuleDescriptor : Nitra.RuleDescriptor { get { $(RuleSymbol.GetRuleDescriptorRef()) } }
+          }
+        ]>);
+
+        _ambiguousOrMissingTb = _baseTb.DefineNestedType(<[decl:
+          public new sealed partial class AmbiguousOrMissingNode : $(_baseTb.GetMemType() : typed), Nitra.IAmbiguousParseTree
+          {
+            public this(ambiguities : array[$(_baseTb.GetMemType() : typed)], ambiguityType : Nitra.ParseTreeAmbiguityType)
+            {
+              assert(ambiguities != null);
+              this.ambiguities   = ambiguities;
+              this.ambiguityType = ambiguityType;
+            }
+
+            private ambiguities    : array[$(_baseTb.GetMemType() : typed)];
+            private ambiguityType  : Nitra.ParseTreeAmbiguityType;
+            private sourceProvider : Nitra.Runtime.ISourceSnapshotProvider;
+            private pos            : int;
+
+            public override IsMissing      : bool                                   { get { this.ambiguities == null } }
+            public override IsAmbiguous    : bool                                   { get { this.ambiguities != null } }
+            public override Location       : Nitra.Location                         { get { if (IsAmbiguous) this.ambiguities[0].Location else Nitra.Location(this.sourceProvider, this.pos) } }
+            public          Ambiguities    : array[$(_baseTb.GetMemType() : typed)] { get { assert(IsAmbiguous); this.ambiguities } }
+            public          AmbiguityType  : Nitra.ParseTreeAmbiguityType           { get { assert(IsAmbiguous); this.ambiguityType } }
+          }
+        ]>);
+      });
+    }
+
+    public override DefineMembers() : void
+    {
+      assert(IsTypesDefined);
+
+      Util.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      {
+        DefineCreateMethod();
+        DefineExtensibleRuleGetAstMethod(_baseTb);
+        DefineExtensibleRuleMethods(_baseTb);
+
+        DefineAmbiguousOrMissingCtorAndFields(SCG.List(), _ambiguousOrMissingTb);
+        DefineAmbiguousOrMissingGetAstMethod(_ambiguousOrMissingTb);
+        DefineAmbiguousOrMissingPrettyPrint(_ambiguousOrMissingTb);
+        DefineAmbiguousOrMissingRuleMethods(_ambiguousOrMissingTb);
+      })
+    }
+
+    private DefineCreateMethod() : void
+    {
+      when (this.RuleSymbol.Options.IsStart)
+      {
+        _baseTb.DefineConditional(<[ decl:
+          [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
+          public static CreateParseTree(parseResult : Nitra.IParseResult) : $(_baseTb.GetMemType() : typed)
+          {
+            def parseResult = parseResult :> ParseResult;
+            Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create(
+              parseResult.StartPos,
+              parseResult.ParseEnd,
+              parseResult,
+              "0",
+              $(this.RuleSymbol.GetRuleDescriptorRef()),
+              parseResult.RuleParser.Grammar);
+          }
+        ]>);
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+﻿namespace Nitra
+{
+  public interface IParseTree
+  {
+    Span : NSpan { get; }
+  }
+}

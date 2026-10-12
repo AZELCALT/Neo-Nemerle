@@ -1,0 +1,47 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Macros
+{
+  [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Property)]
+  macro LocatedOption(typeBuilder : TypeBuilder, property : PropertyBuilder, optionName : string = null)
+  {
+    LocatedOptionImpl.DoTransform(Macros.ImplicitCTX(), typeBuilder, property, optionName)
+  }
+
+  module LocatedOptionImpl
+  {
+    public DoTransform(typer : Typer, typeBuilder : TypeBuilder, property : PropertyBuilder, optionName : string = null) : void
+    {
+      Macros.DefineCTX(typer);
+
+      def msg = if (optionName == null) "The option is redefined." else $"The $optionName is redefined.";
+
+      def name = if (property.Name.StartsWith("Is")) property.Name.Substring(2) else property.Name;
+      def isSetName    = <[ $("Is" + name + "Set" : usesite) ]>.name;
+      def locationName = <[ $(name + "Location" : usesite) ]>.name;
+      typeBuilder.Define(<[ decl: public $(locationName : name) : Nitra.Location { get; private set; } ]>);
+      typeBuilder.Define(<[ decl: public $(isSetName : name) : bool { get; private set; } ]>);
+      typeBuilder.Define(<[ decl:
+        public $("Set" + name : usesite)(located : Nitra.Located, newValue : $(property.Getter.ReturnType : typed)) : this
+        {
+          when (this.$(isSetName : name))
+            using (rootMsg = Nitra.ProjectSystem.NitraProject.CurrentProject.RootError(located, $msg))
+              rootMsg.Hint(this.$(locationName : name), "Previous definition.");
+
+          this.$(isSetName : name) = true;
+          this.$(locationName : name) = located.Location;
+          this.$(property.Name : usesite) = newValue;
+        } ]>);
+    }
+  }
+}

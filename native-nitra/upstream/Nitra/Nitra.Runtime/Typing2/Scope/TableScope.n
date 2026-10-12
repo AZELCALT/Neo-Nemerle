@@ -1,0 +1,264 @@
+﻿using System.Text;
+using Nitra.ProjectSystem;
+using Nitra.Serialization2;
+using Nitra.Internal;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+
+namespace Nitra.Declarations
+{
+  public class TableScope : Scope
+  {
+    public this(name : string)
+    {
+      this(null, name);
+    }
+
+    public this(owner : DeclarationSymbol, name : string)
+    {
+      _owner     = owner;
+      _name      = name;
+      _nameTable = Hashtable();
+    }
+
+    private _owner     : DeclarationSymbol;
+    private _name      : string;
+    private _nameTable : Hashtable[int, list[DeclarationSymbol]]; //TODO: replace with LightList[DeclarationSymbol]?
+
+    public Owner   : DeclarationSymbol { get { _owner } }
+    public Name    : string            { get { _name } }
+
+    public override AllSymbols : Seq[DeclarationSymbol]
+    {
+      get { _nameTable.Values.SelectMany(symbols => symbols).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray() }
+    }
+    public virtual Symbols : Hashtable[int, list[DeclarationSymbol]].ValueCollection { get { _nameTable.Values } }
+
+    public virtual Define[TSymbol](declaration : Declaration, context : DependentPropertyEvalContext, name : Name = null) : TSymbol
+      where TSymbol : DeclarationSymbol
+    {
+      when (name != null)
+        (declaration :> DeclarationBase).UpdateName(name);
+        
+      def     name2            = declaration.Name;
+      def     candidateSymbols = LightList();
+      mutable ambiguousSymbols : HashSet[DeclarationSymbol];
+
+      mutable lookupResult;
+      when (_nameTable.TryGetValue(name2.Id, out lookupResult))
+      {
+        ambiguousSymbols = HashSet(lookupResult);
+        foreach (symbol is TSymbol when symbol.CanMerge(declaration) in lookupResult)
+          candidateSymbols.Add(symbol);
+      }
+
+      def concreteSymbol =
+        match (candidateSymbols.Count)
+        {
+          | 0 =>
+            def newSymbol = declaration.CreateSymbol();
+            (newSymbol :> SymbolBase).Owner = this;
+            newSymbol :> TSymbol;
+
+          | 1 => candidateSymbols[0] // merge
+          | _ => assert(false)
+        };
+
+      if (ambiguousSymbols : object == null)
+        _nameTable.Add(name2.Id, [concreteSymbol]);
+      else when (ambiguousSymbols.Add(concreteSymbol))
+      {
+        // фильтруем без учета конкретного типа
+        def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsSameIdentity(declaration));
+        when (realAmbiguousSymbols.Length > 0)
+        {
+          def cm = declaration.Source.File.TypingMessages;
+          using (nested = cm.RootError(name2, $"Redefinition of '$name2'"))
+            foreach (ambiguous in realAmbiguousSymbols)
+              foreach (d in ambiguous.Declarations)
+                nested.Hint(d.Name, "previous definition.");
+        }
+        _nameTable[name2.Id] = ambiguousSymbols.NToList();
+      }
+
+      concreteSymbol.AddDeclaration(declaration);
+      when (context : object != null)
+      when (candidateSymbols.Count == 0)
+        concreteSymbol.EvalProperties(context); // initialize symbol default values
+
+      assert(!name2.IsSymbolEvaluated);
+      name2.Symbol = concreteSymbol;
+
+      concreteSymbol
+    }
+
+    public virtual Undefine(shouldRemove : Predicate[Declaration]) : void
+    {
+      def undefine(lst : list[DeclarationSymbol]) : list[DeclarationSymbol]
+      {
+        | []      => []
+        | x :: xs =>
+          assert(x.Owner : object == this, $"Symbol '$x' is not defined in table scope.");
+
+          def survivedDeclarations = x.RemoveDeclarations(shouldRemove);
+          if (survivedDeclarations > 0)
+          {
+            def newXs = undefine(xs);
+            if (newXs : object != xs)
+              x :: newXs
+            else
+              lst
+          }
+          else
+          {
+            (x :> SymbolBase).Owner = null;
+            undefine(xs)
+          }
+      }
+
+      foreach (pair in _nameTable.ToArray())
+      {
+        def newList = undefine(pair.Value);
+
+        when (newList : object != pair.Value)
+          if (newList.IsEmpty)
+            _nameTable.Remove(pair.Key);
+          else
+            _nameTable[pair.Key] = newList;
+      }
+    }
+
+    public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+    {
+      def res = LightList();
+      
+      foreach (symbols in _nameTable.Values)
+      foreach (symbol is TSymbol when isMatch(symbol) in symbols)
+        res.Add(symbol);
+
+      res.ToBindResult()
+    }
+
+    public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+    {
+      mutable lookupResult;
+      if (_nameTable.TryGetValue(reference.Id, out lookupResult))
+      {
+        def res = LightList();
+        foreach (x is TSymbol in lookupResult)
+          res.Add(x);
+        res.ToBindResult()
+      }
+      else
+        BindResult.Nil()
+    }
+
+    public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
+    {
+      def id = nodeToIdMap.GetObjectId(this);
+      def symbols = AllSymbols.ToArray();
+      
+      // make DOT HTML table for symbols
+      
+      def maxCols = 6;
+      def last = symbols.Length - 1;
+      mutable cols = Math.Min(maxCols, symbols.Length);
+      mutable rows = symbols.Length / cols;
+      when (symbols.Length % cols != 0)
+        rows++;
+
+      def builder = StringBuilder();
+      def owner = if (Owner == null) "" 
+                  else
+                  {
+                    "Owner: " + (if (Owner.IsKindEvaluated) " <FONT COLOR='blue'>" + Owner.Kind + "</FONT>&nbsp;" else "")
+                    + AstUtils.XmlEscape(if (Owner.IsFullNameEvaluated) Owner.FullName else Owner.InitialName);
+                  };
+      _ = builder.Append(
+$<#<table border='0' cellspacing='0' cellpadding='3' bgcolor='lightskyblue'>
+<tr>
+	<td colspan="$cols" align="center" bgcolor="WhiteSmoke" border='1'>TableScope: '<B>$(AstUtils.XmlEscape(_name))</B>' $owner</td>
+</tr>
+#>);
+      for (mutable row = 0; row < rows; row++)
+      {
+        _ = builder.Append("  <tr>\r\n");
+        for (mutable col = 0; col < cols; col++)
+        {
+          def i = row * cols + col;
+          if (i > last)
+            _ = builder.Append("    <td border='1'></td>\r\n");
+          else
+          {
+            def symbol  = symbols[i];
+            def content = if (symbol.IsKindEvaluated) "<FONT COLOR='blue'>" + symbol.Kind + "</FONT><BR/>" + AstUtils.XmlEscape(symbol.InitialName) else AstUtils.XmlEscape(symbol.InitialName);
+            _ = builder.Append($"    <td border='1'>$content</td>\r\n");
+          }
+        }
+        _ = builder.Append("  </tr>\r\n");
+      }
+
+      _ = builder.Append(<#
+</table>#>);
+
+      nodes.Add($<#Obj_$id [shape=none label=<$builder>]#>);
+    }
+    
+    public override ToString() : string
+    {
+      $<#TableScope($(AllSymbols.Count()))]#>
+    }
+
+    internal EnqueueSymbols(metadataWriter : MetadataWriter) : void
+    {
+      foreach (pair in _nameTable)
+        foreach (s when s.HasParsedDeclarations in pair.Value)
+          metadataWriter.EnqueueSymbol(s)
+    }
+
+    public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(_owner, writer);
+      when (metadataWriter.BeginWriteObject(this, writer))
+      {
+        writer.Write(_name : string);
+        EnqueueSymbols(metadataWriter);
+      }
+    }
+
+    public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+    {
+      // TODO: сделать более эффективной десериализацию
+      def owner = metadataReader.ReadObject.[DeclarationSymbol](reader);
+      mutable scope;
+      _ = metadataReader.BeginReadObject(reader, out scope, GetTableScope(owner));
+      scope
+    }
+
+    private static GetTableScope(owner : DeclarationSymbol) : Func[BinaryReader, MetadataReader, TableScope]
+    {
+      fun (reader, _metadataReader)
+      {
+        def name  = reader.ReadString();
+        if (owner == null)
+          TableScope(name)
+        else
+        {
+          def result = owner.GetTable(name);
+          assert(result.HasValue, $"Table '$name' not found in symbol '$owner'");
+          result.GetValueOrDefault()
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing.RuleMethod
+{
+  [Record, ExportableSymbol]
+  public abstract class OverrideSymbol : DefinitionSymbol, IBody
+  {
+    public abstract BaseRuleMethod : SymbolRef[RuleMethodSymbol] { get; }
+    public virtual  Body           : RuleMethodBody              { get { throw NotSupportedException() } } // implementation for external symbol
+  }
+
+  public sealed class ParsedOverrideSymbol : OverrideSymbol, IBody
+  {
+    _node : G.RuleBodyMember.RuleMethodOverride;
+
+    public this(node : G.RuleBodyMember.RuleMethodOverride)
+    {
+      base(node.Name);
+      _node = node;
+    }
+
+    public override BaseRuleMethod : SymbolRef[RuleMethodSymbol] { get { _node.BaseRuleMethod } }
+    public override Body           : RuleMethodBody              { get { _node.Body } }
+  }
+}

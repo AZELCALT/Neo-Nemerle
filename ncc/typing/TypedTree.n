@@ -407,12 +407,15 @@ namespace Nemerle.Compiler.Typedtree
 
     public GetRetTypeRequiredModifiers () : array [System.Type]
     {
-      ret_type_required_modifiers.ToArray ()
+      // Mono's persisted Reflection.Emit path requires null for no modifiers.
+      if (ret_type_required_modifiers.IsEmpty) null
+      else ret_type_required_modifiers.ToArray ()
     }
 
     public GetRetTypeOptionalModifiers () : array [System.Type]
     {
-      ret_type_optional_modifiers.ToArray ()
+      if (ret_type_optional_modifiers.IsEmpty) null
+      else ret_type_optional_modifiers.ToArray ()
     }
 
     public GetParamTypeRequiredModifiers () : array [array [System.Type]]

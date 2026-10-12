@@ -496,6 +496,15 @@ namespace Nemerle.Compiler
         | FunBody.Parsed (e) =>
           when (CurrentFunction.decl == null) // if it is a method
             CurrentMethodBuilder.StartTyping();
+
+          def script = Manager.Options.Script;
+          when (script != null && CurrentType.FullName == script.TypeName && CurrentMethodBuilder.IsConstructor && CurrentFunction.decl == null)
+          {
+            // Keep inferred initializer trees in this typing attempt's root
+            // solver state, never in an overload's speculative transaction.
+            script.TypedInitializers.Clear();
+            foreach (field is FieldBuilder in CurrentType.GetFields()) field.InferScriptType(this);
+          }
         
           def skip_n_return =
             match (parent_typer)
@@ -3388,7 +3397,7 @@ namespace Nemerle.Compiler
 
     public TypeMember(obj : TExpr, name : PT.Name, expected : TypeVar, for_completion = false) : option[list[OverloadPossibility]]
     {
-      def mem_name = name.Id;
+      mutable mem_name = name.Id;
 
       match (obj)
       {
@@ -3402,6 +3411,17 @@ namespace Nemerle.Compiler
           | Some (t) => t
           | None => null
         };
+      def script = Manager.Options.Script;
+      when (script != null && current_type.FullName == script.TypeName
+            && CurrentFunction != null && script.FunctionScopes.ContainsKey(CurrentFunction.Name))
+        match (possible_type)
+        {
+          | FixedType.Class(tc, _) when tc.Equals(current_type) =>
+            def scope = script.FunctionScopes[CurrentFunction.Name];
+            def key = scope + "." + mem_name;
+            when (scope != "" && script.Names.ContainsKey(key)) mem_name = script.Names[key];
+          | _ => ();
+        }
       if (possible_type != null)
       {
         def mems = Hashtable ();
@@ -3430,6 +3450,7 @@ namespace Nemerle.Compiler
 										// Set only if parsing get-only autoproperty in constructor.
 										mutable getOnlyAutoPropertyField = None();
 
+                                        when (mem is FieldBuilder as field) field.InferScriptType(this);
 										def (ty, vars) =
 											match (mem)
 											{
@@ -3635,6 +3656,77 @@ namespace Nemerle.Compiler
 
     public TypeNameFull(expr : PExpr, expected : TypeVar, for_completion = false) : list[OverloadPossibility]
     {
+      def script = Manager.Options.Script;
+      when (script != null && current_type.FullName == script.TypeName)
+      {
+        match (Util.QidOfExpr(expr))
+        {
+          | Some((parts, original)) =>
+            def first = PT.Name(parts.Head, original.Location, original.color, original.context, parts.Head);
+            when (local_context.FindLocal(first).IsNone)
+            {
+              // Source type ownership precedes CLR names, including member overloads.
+              // Resolve the complete known source type prefix before normal namespace lookup.
+              unless (script.Names.ContainsKey(parts.Head) || script.PreviousNames.ContainsKey(parts.ToString(".")))
+              {
+                mutable typePrefix = "";
+                def qualified = parts.ToString(".");
+                foreach (pair in script.ImportedTypeNames)
+                  when ((qualified == pair.Key || qualified.StartsWith(pair.Key + ".", System.StringComparison.Ordinal)) && pair.Key.Length > typePrefix.Length) typePrefix = pair.Key;
+                when (typePrefix != "")
+                {
+                  def target = (script.ImportedTypeNames[typePrefix] + qualified.Substring(typePrefix.Length)).Split('.');
+                  mutable redirected = PExpr.Ref(expr.Location, PT.Name.NameInCurrentColor(target[0], expr.Location, env));
+                  for (mutable i = 1; i < target.Length; i++) redirected = <[ $redirected.$(target[i] : usesite) ]>;
+                  redirected.Location = expr.Location;
+                  return TypeNameFull(redirected, expected, for_completion);
+                }
+              }
+              mutable scope = "";
+              mutable namespaceScope = original.GetEnv(env).CurrentNamespace.FullName.ToString(".");
+              when (namespaceScope.StartsWith(script.TypeName + ".", System.StringComparison.Ordinal))
+                namespaceScope = namespaceScope.Substring(script.TypeName.Length + 1);
+              when (namespaceScope != "" && script.Owners.ContainsValue(namespaceScope)) scope = namespaceScope;
+              when (CurrentFunction != null && script.FunctionScopes.ContainsKey(CurrentFunction.Name))
+                scope = script.FunctionScopes[CurrentFunction.Name];
+              mutable key = parts.ToString(".");
+              when (key.StartsWith(script.FileName + ".", System.StringComparison.Ordinal))
+                key = key.Substring(script.FileName.Length + 1);
+              when (scope != "" && script.Names.ContainsKey(scope + "." + key))
+                key = scope + "." + key;
+              mutable previousKey = parts.ToString(".");
+              when (!script.Names.ContainsKey(key) && !script.PreviousNames.ContainsKey(previousKey))
+              {
+                mutable found = false;
+                foreach (opened in script.OpenImportedNames)
+                  when (script.PreviousNames.ContainsKey(opened + "." + parts.ToString(".")))
+                  {
+                    when (found) ReportLocatedError(expr.Location, messenger, "Ambiguous imported script member: " + parts.ToString("."));
+                    previousKey = opened + "." + parts.ToString("."); found = true;
+                  }
+              }
+              when (!script.Names.ContainsKey(key) && script.PreviousNames.ContainsKey(previousKey))
+              {
+                def target = script.PreviousNames[previousKey].Split('.');
+                mutable receiver = PExpr.Ref(expr.Location, PT.Name.NameInCurrentColor(target[0], expr.Location, env));
+                for (mutable i = 1; i < target.Length - 1; i++)
+                  receiver = <[ $receiver.$(target[i] : usesite) ]>;
+                receiver.Location = expr.Location;
+                return Option.UnSome(TypeMember(TypeExpr(receiver),
+                  PT.Name.NameInCurrentColor(target[target.Length - 1], expr.Location, env), expected, for_completion));
+              }
+              when (script.Names.ContainsKey(key) && (script.Names[key] != key || parts.Length > 1))
+              {
+                when (script.PrivateNames.Contains(key) && script.Owners[key] != scope)
+                  ReportLocatedError(expr.Location, messenger, "Private script member is not accessible: " + key);
+                def redirected = PExpr.Ref(expr.Location,
+                  PT.Name.NameInCurrentColor(script.Names[key], expr.Location, env));
+                return TypeNameFull(redirected, expected, for_completion);
+              }
+            }
+          | _ => ();
+        }
+      }
       mutable mem_name = null;
       def tyVarEnv = if (CurrentFunction != null) CurrentFunction.tenv else current_type.Tenv;
 
@@ -3730,7 +3822,23 @@ namespace Nemerle.Compiler
         | _ => []
       }
       
-      match (from_this + from_global)
+      mutable from_receivers = [];
+      when (script != null && current_type.FullName == script.TypeName && is_method)
+        match (expr)
+        {
+          | PExpr.Ref(name) =>
+            for (mutable i = script.ReceiverCount - 1; i >= 0; i--)
+            {
+              def receiver = TypeExpr(<[ this.$(script.Prefix + "receiver" + i : usesite) ]>);
+              def found = try { solver.PushState(); !Option.UnSome(TypeMember(receiver, name, expected, for_completion)).IsEmpty; }
+                          finally { solver.PopState(); };
+              def candidates = if (found) Option.UnSome(TypeMember(receiver, name, expected, for_completion)) else [];
+              foreach (candidate in candidates) candidate.ScriptScope = script.ReceiverCount - i;
+              from_receivers = from_receivers + candidates;
+            }
+          | _ => ();
+        }
+      match (from_this + from_global + from_receivers)
       {
         | [] =>
           if (globals.IsEmpty)

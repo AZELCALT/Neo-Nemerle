@@ -792,6 +792,10 @@ namespace Nemerle.Compiler
             unless (parms.IsEmpty) {
               if (meth.DeclaringType.IsDelegate && meth.Name == ".ctor") {
                 def parm = parms.Head;
+                // Delegate conversion can put closure initialization (including
+                // ref/out calls) inside the target expression. It still needs
+                // stage 4 before we decide whether to box the target.
+                parm.expr = Walk(parm.expr);
                 when (NeedBoxing (InternalType.Object, parm.expr))
                   parm.expr = Box (InternalType.Object, parm.expr);
               } else {
