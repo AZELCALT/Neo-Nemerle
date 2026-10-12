@@ -178,6 +178,35 @@ namespace Nemerle.Compiler
     private mutable heapStart : array[int] = array(256);
     private mutable heapId : array[int] = array(256);
 
+    // Diagnostic (NITRA_PHASES=1): warm per-phase medians printed at process exit.
+    private static phaseLog : SCG.Dictionary[string,SCG.List[long]] = SCG.Dictionary();
+    private static mutable phaseHooked : bool;
+    internal static PhasesOn : bool = Environment.GetEnvironmentVariable("NITRA_PHASES")=="1";
+    internal static NoteCount(name : string, count : int) : void
+    { NotePhase(name+"#",(count :> long)*System.Diagnostics.Stopwatch.Frequency/1000000L); }
+    internal static NotePhase(name : string, ticks : long) : void
+    {
+      lock(phaseLog)
+      {
+        unless(phaseLog.ContainsKey(name)) phaseLog[name]=SCG.List();
+        phaseLog[name].Add(ticks);
+        unless(phaseHooked)
+        {
+          phaseHooked=true;
+          AppDomain.CurrentDomain.ProcessExit += fun(_, _)
+          {
+            def b=StringBuilder("NITRA_PHASES");
+            foreach(pair in phaseLog)
+            {
+              def v=SCG.List(pair.Value); when(v.Count>1) v.RemoveAt(0);
+              v.Sort();
+              _=b.Append(" "+pair.Key+"_us="+(v[v.Count/2]*1000000L/System.Diagnostics.Stopwatch.Frequency).ToString());
+            }
+            Console.Error.WriteLine(b.ToString());
+          };
+        }
+      }
+    }
     public this(prepared : NitraPreparedGrammar, source : string)
     { this.prepared=prepared; this.source=source; result.Source=source; }
 
@@ -658,6 +687,7 @@ namespace Nemerle.Compiler
     public Run(root : NitraOperation, name : string, retain : bool, detailed : bool) : NitraRecognitionResult
     {
       result.Rule=name; result.Root= -1; keepChildren=detailed;
+      def started=System.Diagnostics.Stopwatch.GetTimestamp();
       try
       {
         def o=root.Interface ?? root; when(o.Code<0) o.Classify();
@@ -682,7 +712,11 @@ namespace Nemerle.Compiler
         result.Complete=true; result.Accepted=accepted;
       }
       catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); }
+      def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
+      result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
+      when(PhasesOn) { NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result
     }
@@ -690,35 +724,41 @@ namespace Nemerle.Compiler
     // ---- output ----
     private Export(root : NitraOperation, retain : bool, detailed : bool) : void
     {
-      // Compact endpoint evidence is authoritative. Diagnostic regions are a
-      // separate optional projection and never drive recognition or selection.
-      def projected=SCG.Dictionary.[long,SCG.HashSet[int]]();
-      def add(op : NitraOperation, p : int, ends : NitraEnds) : void
-      {
-        def key=Key(op.Id,p);
-        def set=if(projected.ContainsKey(key)) projected[key] else { def fresh=SCG.HashSet.[int](); projected[key]=fresh; fresh };
-        for(mutable i=0;i<ends.Count;++i) _=set.Add(ends.Items[i]);
-        when(op.Kind=="variant" && ends.Count>0) _=matchedProductions.Add(op.Label);
-      }
-      for(mutable r=0;r<regions;++r) add(rOp[r],rStart[r],rEnds[r]);
+      // Variant productions that matched anywhere.
+      for(mutable r=0;r<regions;++r) when(rOp[r].Kind=="variant" && rEnds[r].Count>0) _=matchedProductions.Add(rOp[r].Label);
       for(mutable v=0;v<viewOps.Count;++v)
       {
-        def op=prepared.Operations[viewOps[v]]; def p=viewStarts[v]; def target=viewTargets[v];
-        def id=memo.Find(Key(target,p));
-        if(id>=0) add(op,p,rEnds[id])
-        else
+        def op=prepared.Operations[viewOps[v]];
+        when(op.Kind=="variant")
         {
-          def key=Key(target,p);
-          when(lexical.ContainsKey(key))
-          {
-            def holder=NitraEnds(); foreach(e in lexical[key]) _=holder.Add(e);
-            add(op,p,holder);
-          }
+          def id=memo.Find(Key(viewTargets[v],viewStarts[v]));
+          when(id>=0 && rEnds[id].Count>0 || id<0 && lexical.ContainsKey(Key(viewTargets[v],viewStarts[v])) && lexical[Key(viewTargets[v],viewStarts[v])].Count>0)
+            _=matchedProductions.Add(op.Label);
         }
       }
-      foreach(pair in lexical) unless(projected.ContainsKey(pair.Key)) projected[pair.Key]=pair.Value;
+      def accepted=retain && result.Complete && result.Accepted;
+      mutable evidence : NitraEvidence=null;
+      when(accepted || detailed)
+      {
+        evidence=NitraEvidence(); evidence.Root=root; evidence.Source=source; evidence.Scanned=lexical;
+        foreach(operation in prepared.Operations) when(operation.GreedyCall) evidence.NativeSelection=true;
+        for(mutable r=0;r<regions;++r) evidence.Add(Key(rOp[r].Id,rStart[r]),rEnds[r]);
+        for(mutable v=0;v<viewOps.Count;++v)
+        {
+          def target=Key(viewTargets[v],viewStarts[v]); def id=memo.Find(target);
+          def ends=if(id>=0) rEnds[id] else evidence.At(prepared.Operations[viewTargets[v]],viewStarts[v]);
+          evidence.Add(Key(viewOps[v],viewStarts[v]),ends);
+        }
+      }
       when(detailed)
       {
+        def projected=SCG.Dictionary.[long,SCG.HashSet[int]]();
+        evidence.ForEach(fun(id : int,p : int,ends : NitraEnds)
+        {
+          def set=SCG.HashSet.[int]();
+          for(mutable i=0;i<ends.Count;++i) _=set.Add(ends.Items[i]);
+          projected[Key(id,p)]=set;
+        });
         def canonicalRegions=SCG.Dictionary.[long,int]();
         foreach(pair in projected)
         {
@@ -753,14 +793,7 @@ namespace Nemerle.Compiler
           region.Children.Sort();
         }
       }
-      when(retain && result.Complete && result.Accepted)
-      {
-        def evidence=NitraEvidence(); evidence.Root=root; evidence.Source=source;
-        foreach(operation in prepared.Operations) when(operation.GreedyCall) evidence.NativeSelection=true;
-        foreach(pair in projected)
-          evidence.Ends[(((pair.Key/4294967296L) :> int),((pair.Key%4294967296L) :> int))]=pair.Value;
-        result.Evidence=evidence;
-      }
+      when(accepted) result.Evidence=evidence;
     }
   }
 }

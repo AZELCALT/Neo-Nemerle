@@ -82,6 +82,8 @@ namespace Nemerle.Compiler
     public mutable DuplicateTransitionsAvoided : int;
     public mutable PrefixReplays : int;
     public mutable DispatchBuilds : int;
+    public mutable RecognizeMicroseconds : int;
+    public mutable ExportMicroseconds : int;
     public MatchedProductions : SCG.List[string] = SCG.List();
     public Regions : SCG.List[NitraRegion] = SCG.List();
     public Diagnostics : SCG.List[string] = SCG.List();

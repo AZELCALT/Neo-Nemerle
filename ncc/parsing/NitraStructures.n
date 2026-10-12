@@ -9,15 +9,61 @@ namespace Nemerle.Compiler
     public mutable Root : NitraOperation;
     public mutable Source : string;
     public mutable NativeSelection : bool;
-    public Ends : SCG.Dictionary[int*int,SCG.HashSet[int]] = SCG.Dictionary();
-    private empty : SCG.HashSet[int] = SCG.HashSet();
-    public At(o : NitraOperation, start : int) : SCG.HashSet[int]
-    { if(Ends.ContainsKey((o.Id,start))) Ends[(o.Id,start)] else empty }
+    // Region end sets are shared with the recognizer; scanned (lexical) results are wrapped on demand.
+    internal Sets : SCG.List[NitraEnds] = SCG.List();
+    internal Keys : SCG.List[long] = SCG.List();
+    internal Index : NitraLongMap = NitraLongMap();
+    internal mutable Scanned : SCG.Dictionary[long,SCG.HashSet[int]];
+    private wrapped : SCG.Dictionary[long,NitraEnds] = SCG.Dictionary();
+    private static empty : NitraEnds = NitraEnds();
+    public Add(key : long, ends : NitraEnds) : void
+    { when(Index.Find(key)<0) { Index.Add(key,Sets.Count); Sets.Add(ends); Keys.Add(key); } }
+    private Wrap(key : long) : NitraEnds
+    {
+      if(wrapped.ContainsKey(key)) wrapped[key]
+      else if(Scanned!=null && Scanned.ContainsKey(key))
+      { def ends=NitraEnds(); foreach(e in Scanned[key]) _=ends.Add(e); wrapped[key]=ends; ends }
+      else empty
+    }
+    public At(o : NitraOperation, start : int) : NitraEnds
+    {
+      def key=(o.Id :> long)*4294967296L+(start :> long); def i=Index.Find(key);
+      if(i>=0) Sets[i] else Wrap(key)
+    }
+    private mutable byOperation : SCG.Dictionary[int,SCG.List[int]];
+    private mutable scannedByOperation : SCG.Dictionary[int,SCG.List[long]];
+    public ForEachOperation(op : int, action : Action[int,NitraEnds]) : void
+    {
+      when(byOperation==null)
+      {
+        byOperation=SCG.Dictionary(); scannedByOperation=SCG.Dictionary();
+        for(mutable i=0;i<Keys.Count;++i)
+        {
+          def id=(Keys[i]/4294967296L) :> int;
+          unless(byOperation.ContainsKey(id)) byOperation[id]=SCG.List();
+          byOperation[id].Add(i);
+        }
+        when(Scanned!=null) foreach(pair in Scanned) when(Index.Find(pair.Key)<0)
+        {
+          def id=(pair.Key/4294967296L) :> int;
+          unless(scannedByOperation.ContainsKey(id)) scannedByOperation[id]=SCG.List();
+          scannedByOperation[id].Add(pair.Key);
+        }
+      }
+      when(byOperation.ContainsKey(op)) foreach(i in byOperation[op]) action.Invoke((Keys[i]%4294967296L) :> int,Sets[i]);
+      when(scannedByOperation.ContainsKey(op)) foreach(k in scannedByOperation[op]) action.Invoke((k%4294967296L) :> int,Wrap(k));
+    }
+    public ForEach(action : Action[int,int,NitraEnds]) : void
+    {
+      for(mutable i=0;i<Sets.Count;++i) action.Invoke((Keys[i]/4294967296L) :> int,(Keys[i]%4294967296L) :> int,Sets[i]);
+      when(Scanned!=null) foreach(pair in Scanned) when(Index.Find(pair.Key)<0)
+        action.Invoke((pair.Key/4294967296L) :> int,(pair.Key%4294967296L) :> int,Wrap(pair.Key));
+    }
   }
   internal sealed class NitraEndpointView
   {
     public Original : SCG.List[int] = SCG.List();
-    public mutable Members : SCG.HashSet[int];
+    public mutable Members : NitraEnds;
     private mutable ordered : SCG.List[int];
     private mutable ordinals : SCG.Dictionary[int,int];
     public Ordered : SCG.List[int]
@@ -104,7 +150,7 @@ namespace Nemerle.Compiler
     public Diagnostics : SCG.List[string] = SCG.List();
     public Success : bool { get { Root!=null && Diagnostics.Count==0 } }
   }
-  internal sealed class NitraStructureBuilder
+  internal sealed class NitraLegacyStructureBuilder
   {
     evidence : NitraEvidence;
     resolver : Func[NitraStructuralChoice,int];
@@ -115,7 +161,7 @@ namespace Nemerle.Compiler
     checking : SCG.HashSet[int*int*int] = SCG.HashSet();
     private longest : SCG.Dictionary[int*int,int] = SCG.Dictionary();
     private endpoints : SCG.Dictionary[int*int,NitraEndpointView] = SCG.Dictionary();
-    private sources : SCG.Dictionary[int,SCG.List[int*SCG.HashSet[int]]] = SCG.Dictionary();
+    private sources : SCG.Dictionary[int,SCG.List[int*NitraEnds]] = SCG.Dictionary();
     private reverse : SCG.Dictionary[int,SCG.Dictionary[int,SCG.HashSet[int]]] = SCG.Dictionary();
     private rawSuffixes : SCG.Dictionary[int*int*int,SCG.HashSet[int]] = SCG.Dictionary();
     private choices : SCG.Dictionary[int*int*int,NitraSuffixSearch] = SCG.Dictionary();
@@ -135,7 +181,10 @@ namespace Nemerle.Compiler
     { result.Recognition=recognition; evidence=recognition.Evidence; this.resolver=resolver; }
     private Key(o : NitraOperation, start : int, end : int) : int*int*int
     { (o.Id,start,end) }
-    private Later(action : Action) : void { tasks.Push(action); }
+    internal mutable LaterCount : int;
+    internal mutable AskCount : int;
+    internal mutable BuildCount : int;
+    private Later(action : Action) : void { ++LaterCount; tasks.Push(action); }
     private Drain() : void
     {
       while(tasks.Count>0) tasks.Pop().Invoke();
@@ -152,22 +201,21 @@ namespace Nemerle.Compiler
       def key=(o.Id,p);
       when(endpoints.ContainsKey(key)) return endpoints[key];
       def view=NitraEndpointView(); view.Members=evidence.At(o,p);
-      view.Original.AddRange(view.Members);
+      for(mutable i=0;i<view.Members.Count;++i) view.Original.Add(view.Members.Items[i]);
       endpoints.Add(key,view); ++EndpointBuilds; view
     }
     private Reverse(o : NitraOperation) : SCG.Dictionary[int,SCG.HashSet[int]]
     {
       when(reverse.ContainsKey(o.Id)) return reverse[o.Id];
       when(sources.Count==0)
-        foreach(pair in evidence.Ends)
+        evidence.ForEach(fun(id : int,p : int,ends : NitraEnds)
         {
-          def (id,p)=pair.Key;
           unless(sources.ContainsKey(id)) sources[id]=SCG.List();
-          sources[id].Add((p,pair.Value));
-        }
+          sources[id].Add((p,ends));
+        });
       def index=SCG.Dictionary.[int,SCG.HashSet[int]]();
-      when(sources.ContainsKey(o.Id)) foreach((p,ends) in sources[o.Id]) foreach(q in ends)
-      { unless(index.ContainsKey(q)) index[q]=SCG.HashSet(); _=index[q].Add(p); }
+      when(sources.ContainsKey(o.Id)) foreach((p,ends) in sources[o.Id]) for(mutable k=0;k<ends.Count;++k)
+      { def q=ends.Items[k]; unless(index.ContainsKey(q)) index[q]=SCG.HashSet(); _=index[q].Add(p); }
       reverse[o.Id]=index; index
     }
     // Backward joins find possible suffix starts directly from settled spans.
@@ -328,6 +376,7 @@ namespace Nemerle.Compiler
     }
     private Ask(current : NitraOperation, first : int, last : int, receive : Action[bool]) : void
     {
+      ++AskCount;
       Later(fun()
       {
         unless(evidence.At(current,first).Contains(last)) { receive.Invoke(false); return; }
@@ -392,6 +441,7 @@ namespace Nemerle.Compiler
     { work.Push(fun() { Build(o,start,end,receive); }); }
     private Build(o : NitraOperation, start : int, end : int, receive : Action[NitraStructure]) : void
     {
+      ++BuildCount;
       def key=Key(o,start,end);
       when(active.Contains(key)) throw ArgumentException("cyclic structural interpretation in "+o.Label);
       when(memo.ContainsKey(key)) { receive.Invoke(memo[key]); return; }
