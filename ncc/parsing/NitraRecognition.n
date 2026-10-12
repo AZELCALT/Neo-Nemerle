@@ -23,6 +23,8 @@ namespace Nemerle.Compiler
     public mutable Scanned : bool;
     // The operation always has a zero-width result at any position (never depends on lookahead or input).
     public mutable Sure : bool;
+    // Selection: first operation down a chain of pure pass-through wrappers (feasibility is identical).
+    public mutable Pass : NitraOperation;
     // Recomputed when preparation finishes (Fast is final only then).
     public Classify() : void
     {
@@ -429,6 +431,21 @@ namespace Nemerle.Compiler
       }
       foreach(o in result.Operations) _=guard(o);
       foreach(o in result.Operations) { o.Classify(); when(o.GreedyCall) result.Native=true; }
+      {
+        def resolving=SCG.HashSet.[int]();
+        def pass(o : NitraOperation) : NitraOperation
+        {
+          when(o.Pass!=null) return o.Pass;
+          def wrapper=(!o.GreedyCall) && (!o.OpaqueValue) && ((o.Code==4 || o.Code==5) && o.Children.Count==1 || o.Code==10);
+          if(!wrapper || !resolving.Add(o.Id)) o
+          else
+          {
+            def target=pass(o.Children[0]);
+            _=resolving.Remove(o.Id); o.Pass=target; target
+          }
+        }
+        foreach(o in result.Operations) when(o.Pass==null) o.Pass=pass(o);
+      }
       result.Ready=true;
       result
     }

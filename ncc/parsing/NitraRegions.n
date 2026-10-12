@@ -677,6 +677,27 @@ namespace Nemerle.Compiler
         firstSets[ch][o.Id]
       }
     }
+    // End of an empty / literal / class operation at p, or -1. Leaves are never stored.
+    internal LeafEnd(o : NitraOperation, p : int) : int
+    {
+      match(o.Code)
+      {
+        | 0 => p
+        | 1 =>
+          if(p+o.Text.Length<=source.Length && string.CompareOrdinal(source,p,o.Text,0,o.Text.Length)==0) p+o.Text.Length else -1
+        | 2 =>
+          if(p<source.Length)
+          {
+            mutable found=false; def ch=source[p];
+            foreach(c in o.Children)
+              if(c.Kind=="range") { when(c.Text[0]<=ch && ch<=c.Text[1]) found=true; }
+              else when(Category(ch,c.Text)) found=true;
+            if(found!=(o.Text=="inverted")) p+1 else -1
+          }
+          else -1
+        | _ => -1
+      }
+    }
     internal ZeroOnly(o : NitraOperation, p : int) : bool { o.Sure && prepared.Ready && !Begins(o,p) }
     private zeros : SCG.Dictionary[int,NitraEnds] = SCG.Dictionary();
     private lexWrapped : SCG.Dictionary[long,NitraEnds] = SCG.Dictionary();

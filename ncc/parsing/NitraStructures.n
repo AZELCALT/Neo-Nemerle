@@ -14,6 +14,7 @@ namespace Nemerle.Compiler
     internal mutable Recognizer : NitraRecognizer;
     public At(o : NitraOperation, start : int) : NitraEnds { Recognizer.EvidenceAt(o,start) }
     public ForEachOperation(o : NitraOperation, action : Action[int,NitraEnds]) : void { Recognizer.EvidenceForEach(o,action) }
+    public LeafEnd(o : NitraOperation, start : int) : int { Recognizer.LeafEnd(o,start) }
     public IsZero(o : NitraOperation, start : int) : bool { Recognizer.ZeroOnly(o.Interface ?? o,start) }
   }
 

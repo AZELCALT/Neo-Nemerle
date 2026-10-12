@@ -62,7 +62,7 @@ namespace Nemerle.Compiler
         {
           NitraRecognizer.NotePhase("select",System.Diagnostics.Stopwatch.GetTimestamp()-started);
           NitraRecognizer.NoteCount("later",builder.LaterCount); NitraRecognizer.NoteCount("ask",builder.AskCount); NitraRecognizer.NoteCount("build",builder.BuildCount);
-          NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
+          NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); for(mutable k=1;k<=5;++k) { NitraRecognizer.NotePhase("step"+k.ToString(),builder.StepTicks[k]); NitraRecognizer.NoteCount("steps"+k.ToString(),builder.StepCounts[k]); } NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
         }
         result
       }

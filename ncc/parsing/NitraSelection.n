@@ -64,26 +64,29 @@ namespace Nemerle.Compiler
       }
     }
   }
-  /// Derivation graph of one sequence over a fixed span: edges per stage, and the
-  /// positions per stage that can still reach the end.
+  /// Derivation graph of one sequence over a fixed span: edges (stage, from, to) in stage
+  /// order, and which of them lie on a path that reaches the end.
   internal sealed class NitraSeqPlan
   {
     public Stages : int;
-    public From : array[SCG.List[int]];
-    public To : array[SCG.List[int]];
-    public Alive : array[NitraEnds];
+    public Edges : array[int];
+    public EdgeCount : int;
+    public First : array[int];
+    public Good : array[bool];
     public mutable Ok : bool;
-    public this(stages : int)
+    public this(stages : int, edges : array[int], count : int)
     {
-      Stages=stages; From=array(stages); To=array(stages); Alive=array(stages+1);
-      for(mutable i=0;i<stages;++i) { From[i]=SCG.List(); To[i]=SCG.List(); }
+      Stages=stages; Edges=edges; EdgeCount=count; Good=array(count); First=array(stages+2);
+      for(mutable s=0;s<=stages+1;++s) First[s]=count;
+      for(mutable k=count-1;k>=0;--k) First[edges[3*k]]=k;
+      // A stage without edges keeps the sentinel; make ranges monotone from the back.
+      for(mutable s=stages;s>=0;--s) when(First[s] >First[s+1]) First[s]=First[s+1];
     }
     public Options(stage : int, position : int) : SCG.List[int]
     {
       def found=SCG.List.[int]();
-      def edges=From[stage]; def alive=Alive[stage+1];
-      for(mutable k=0;k<edges.Count;++k)
-        when(edges[k]==position && alive.Contains(To[stage][k]) && !found.Contains(To[stage][k])) found.Add(To[stage][k]);
+      for(mutable k=First[stage];k<First[stage+1];++k)
+        when(Good[k] && Edges[3*k+1]==position && !found.Contains(Edges[3*k+2])) found.Add(Edges[3*k+2]);
       found.Sort(); found
     }
   }
@@ -130,12 +133,17 @@ namespace Nemerle.Compiler
     public mutable Cs : int;
     public mutable PP : int;
     public mutable SepFlag : bool;
-    public mutable Cur : NitraEnds;
-    public mutable Next : NitraEnds;
+    public mutable Cur : array[int];
+    public mutable CurN : int;
+    public mutable Next : array[int];
+    public mutable NextN : int;
+    public mutable NextSet : SCG.HashSet[int];
+    public mutable EdgeBuf : array[int];
+    public mutable EdgeN : int;
     public mutable Back : NitraEnds;
-    public mutable SeqPlan : NitraSeqPlan;
     public mutable RepPlan : NitraRepPlan;
-    public mutable Choices : SCG.List[int];
+    public mutable Choices : array[int];
+    public mutable ChoiceN : int;
     public mutable Pairs : SCG.List[int];
     public mutable Sorted : array[int];
   }
@@ -165,7 +173,7 @@ namespace Nemerle.Compiler
     private repMap : NitraPairMap = NitraPairMap();
     private backMap : NitraPairMap = NitraPairMap();
     private seqPlans : SCG.List[NitraSeqPlan] = SCG.List();
-    private choicePlans : SCG.List[SCG.List[int]] = SCG.List();
+    private choicePlans : SCG.List[array[int]] = SCG.List();
     private repPlans : SCG.List[NitraRepPlan] = SCG.List();
     private backSets : SCG.List[NitraEnds] = SCG.List();
     private revCache : SCG.Dictionary[int,SCG.Dictionary[int,SCG.List[int]]] = SCG.Dictionary();
@@ -194,6 +202,10 @@ namespace Nemerle.Compiler
 
     private static Pair(o : NitraOperation, p : int) : long { (o.Id :> long)*4294967296L+(p :> long) }
     private Ev(o : NitraOperation, p : int) : NitraEnds { evidence.At(o,p) }
+    private static IsLeaf(o : NitraOperation) : bool { o.Code>=0 && o.Code<=2 }
+    // Does o span exactly (p, e) in the evidence? Leaves are answered by the scanner.
+    private Has(o : NitraOperation, p : int, e : int) : bool
+    { if(IsLeaf(o)) evidence.LeafEnd(o,p)==e else Ev(o,p).Contains(e) }
     private BeginSearch() : void
     {
       // A negative answer produced by an active-cycle cut is path-dependent.
@@ -207,6 +219,7 @@ namespace Nemerle.Compiler
     {
       def key=Pair(o,p);
       if(sortedCache.ContainsKey(key)) sortedCache[key]
+      else if(IsLeaf(o)) { def end=evidence.LeafEnd(o,p); if(end<0) array(0) else array[end] }
       else
       {
         def ends=Ev(o,p); def copy : array[int]=array(ends.Count);
@@ -260,11 +273,24 @@ namespace Nemerle.Compiler
         if(slot==o.Children.Count) _=found.Add(end);
         else
         {
-          def later=BackSet(o,slot+1,end); def rev=Rev(o.Children[slot]);
+          def later=BackSet(o,slot+1,end); def leafChild=o.Children[slot];
+          if(IsLeaf(leafChild))
+          {
+            for(mutable i=0;i<later.Count;++i)
+            {
+              def q=later.Items[i];
+              def p=match(leafChild.Code) { | 0 => q | 1 => q-leafChild.Text.Length | _ => q-1 };
+              when(p>=0 && evidence.LeafEnd(leafChild,p)==q) { ++EndpointVisits; _=found.Add(p); }
+            }
+          }
+          else
+          {
+          def rev=Rev(o.Children[slot]);
           for(mutable i=0;i<later.Count;++i)
           {
             def q=later.Items[i];
             when(rev.ContainsKey(q)) foreach(p in rev[q]) { ++EndpointVisits; _=found.Add(p); }
+          }
           }
           // Zero-width results are not stored anywhere: they hold at every position the next character cannot start.
           def child=o.Children[slot];
@@ -282,8 +308,8 @@ namespace Nemerle.Compiler
       when(frames[sp]==null) frames[sp]=NitraAskFrame();
       def f=frames[sp]; ++sp; ++Frames;
       f.Kind=kind; f.Op=o; f.P=p; f.E=e; f.Key=key; f.I=0; f.J=0; f.K=0; f.Phase=0; f.Pending=false; f.Failed=false;
-      f.Q=0; f.Last=0; f.X=0; f.Count=0; f.SepFlag=false; f.Cur=null; f.Next=null; f.Back=null;
-      f.SeqPlan=null; f.RepPlan=null; f.Choices=null; f.Pairs=null; f.Sorted=null;
+      f.Q=0; f.Last=0; f.X=0; f.Count=0; f.SepFlag=false; f.CurN=0; f.NextN=0; f.NextSet=null; f.EdgeN=0; f.ChoiceN=0; f.Back=null;
+      f.RepPlan=null; f.Pairs=null; f.Sorted=null;
       f
     }
     private Finish(key : long, e : int, value : bool) : int
@@ -291,11 +317,12 @@ namespace Nemerle.Compiler
     private Done(f : NitraAskFrame, value : bool) : void
     { feasible.Set(f.Key,(f.E :> long),if(value) 1 else 0); --sp; ret=value; }
     // 1 feasible, 0 not feasible, -1 a frame was pushed and will deliver ret.
-    private Enter(o : NitraOperation, p : int, e : int) : int
+    private Enter(o0 : NitraOperation, p : int, e : int) : int
     {
       ++AskCount;
-      unless(Ev(o,p).Contains(e)) return 0;
-      unless(evidence.NativeSelection) return 1;
+      unless(Has(o0,p,e)) return 0;
+      def o=if(o0.Pass!=null) o0.Pass else o0;
+      unless(evidence.NativeSelection && !IsLeaf(o)) return 1;
       def key=Pair(o,p); def known=feasible.Find(key,(e :> long));
       when(known==2) { cyclic=true; return 0; }
       when(known>=0) return known;
@@ -324,8 +351,8 @@ namespace Nemerle.Compiler
           else
           {
             def f=NewFrame(4,o,p,e,key);
-            f.SeqPlan=NitraSeqPlan(o.Children.Count); f.Cur=NitraEnds(); _=f.Cur.Add(p); f.Next=NitraEnds();
-            f.Back=BackSet(o,1,e); -1
+            when(f.Cur==null) { f.Cur=array(8); f.Next=array(8); f.EdgeBuf=array(24); }
+            f.Cur[0]=p; f.CurN=1; f.Back=BackSet(o,1,e); -1
           }
         | 6 | 7 =>
           if(p==e) Finish(key,e,o.Min==0)
@@ -337,14 +364,18 @@ namespace Nemerle.Compiler
         | _ =>
           if(o.Children.Count==0) Finish(key,e,false)
           else if(o.Children.Count==1) { _=NewFrame(2,o,p,e,key); -1 }
-          else { def f=NewFrame(1,o,p,e,key); f.Choices=SCG.List(); -1 }
+          else { def f=NewFrame(1,o,p,e,key); when(f.Choices==null) f.Choices=array(8); -1 }
       }
     }
     private Drain() : void { while(sp>0) Step(); }
+    internal StepTicks : array[long] = array(8);
+    internal StepCounts : array[int] = array(8);
     private Step() : void
     {
       def f=frames[sp-1];
-      match(f.Kind)
+      def started=if(NitraRecognizer.PhasesOn) System.Diagnostics.Stopwatch.GetTimestamp() else 0L;
+      def kind=f.Kind;
+      match(kind)
       {
         | 1 => StepChoice(f)
         | 2 => StepPass(f)
@@ -352,25 +383,32 @@ namespace Nemerle.Compiler
         | 4 => StepSeq(f)
         | _ => StepRep(f)
       }
+      when(NitraRecognizer.PhasesOn) { StepTicks[kind]+=System.Diagnostics.Stopwatch.GetTimestamp()-started; ++StepCounts[kind]; }
+    }
+    private AddChoice(f : NitraAskFrame, i : int) : void
+    {
+      when(f.ChoiceN==f.Choices.Length) { mutable a=f.Choices; Array.Resize(ref a,f.ChoiceN*2); f.Choices=a; }
+      f.Choices[f.ChoiceN]=i; ++f.ChoiceN;
     }
     private StepChoice(f : NitraAskFrame) : void
     {
-      when(f.Pending) { f.Pending=false; when(ret) f.Choices.Add(f.Q); }
+      when(f.Pending) { f.Pending=false; when(ret) AddChoice(f,f.Q); }
       def o=f.Op; mutable waiting=false;
       while(!waiting && f.I<o.Children.Count)
       {
         def i=f.I; ++f.I; def c=o.Children[i];
-        when(Ev(c,f.P).Contains(f.E))
+        when(Has(c,f.P,f.E))
         {
           def r=Enter(c,f.P,f.E);
           if(r<0) { f.Pending=true; f.Q=i; waiting=true; }
-          else when(r==1) f.Choices.Add(i);
+          else when(r==1) AddChoice(f,i);
         }
       }
       unless(waiting)
       {
-        choiceMap.Set(f.Key,(f.E :> long),choicePlans.Count); choicePlans.Add(f.Choices);
-        Done(f,f.Choices.Count>0);
+        def chosen : array[int]=array(f.ChoiceN); Array.Copy(f.Choices,chosen,f.ChoiceN);
+        choiceMap.Set(f.Key,(f.E :> long),choicePlans.Count); choicePlans.Add(chosen);
+        Done(f,f.ChoiceN>0);
       }
     }
     private StepPass(f : NitraAskFrame) : void
@@ -409,55 +447,92 @@ namespace Nemerle.Compiler
         Done(f,chosen==f.E);
       }
     }
+    private AddEdge(f : NitraAskFrame, stage : int, from : int, to : int) : void
+    {
+      when(3*f.EdgeN+3>f.EdgeBuf.Length) { mutable a=f.EdgeBuf; Array.Resize(ref a,f.EdgeBuf.Length*2); f.EdgeBuf=a; }
+      f.EdgeBuf[3*f.EdgeN]=stage; f.EdgeBuf[3*f.EdgeN+1]=from; f.EdgeBuf[3*f.EdgeN+2]=to; ++f.EdgeN;
+      // Next-stage position set (no duplicates).
+      mutable present=false;
+      if(f.NextSet!=null) present= !f.NextSet.Add(to)
+      else for(mutable i=0;i<f.NextN;++i) when(f.Next[i]==to) present=true;
+      unless(present)
+      {
+        when(f.NextN==f.Next.Length) { mutable a=f.Next; Array.Resize(ref a,f.NextN*2); f.Next=a; }
+        f.Next[f.NextN]=to; ++f.NextN;
+        when(f.NextSet==null && f.NextN>16)
+        { f.NextSet=SCG.HashSet(); for(mutable i=0;i<f.NextN;++i) _=f.NextSet.Add(f.Next[i]); }
+      }
+    }
     private StepSeq(f : NitraAskFrame) : void
     {
-      def o=f.Op; def n=o.Children.Count; def plan=f.SeqPlan;
+      def o=f.Op; def n=o.Children.Count;
       when(f.Pending)
       {
         f.Pending=false;
-        when(ret) { plan.From[f.I].Add(f.X); plan.To[f.I].Add(f.Q); _=f.Next.Add(f.Q); }
+        when(ret) AddEdge(f,f.I,f.X,f.Q);
       }
       mutable waiting=false; mutable finished=false;
       while(!waiting && !finished)
       {
         if(f.I>=n) finished=true
-        else if(f.J>=f.Cur.Count)
+        else if(f.J>=f.CurN)
         {
-          if(f.Next.Count==0) { f.Failed=true; finished=true; }
+          if(f.NextN==0) { f.Failed=true; finished=true; }
           else
           {
-            f.Cur=f.Next; f.Next=NitraEnds(); ++f.I; f.J=0; f.K=0;
+            def swap=f.Cur; f.Cur=f.Next; f.Next=swap; f.CurN=f.NextN; f.NextN=0; f.NextSet=null;
+            ++f.I; f.J=0; f.K=0;
             when(f.I<n) f.Back=BackSet(o,f.I+1,f.E);
           }
         }
         else
         {
-          def x=f.Cur.Items[f.J]; def ends=Ev(o.Children[f.I],x);
-          if(f.K>=ends.Count) { ++f.J; f.K=0; }
+          def x=f.Cur[f.J]; def child=o.Children[f.I];
+          if(IsLeaf(child))
+          {
+            if(f.K>0) { ++f.J; f.K=0; }
+            else
+            {
+              f.K=1; def q=evidence.LeafEnd(child,x);
+              when(q>=0 && q<=f.E && f.Back.Contains(q)) AddEdge(f,f.I,x,q);
+            }
+          }
           else
           {
-            def q=ends.Items[f.K]; ++f.K;
-            when(q<=f.E && f.Back.Contains(q))
+            def ends=Ev(child,x);
+            if(f.K>=ends.Count) { ++f.J; f.K=0; }
+            else
             {
-              def r=Enter(o.Children[f.I],x,q);
-              if(r<0) { f.Pending=true; f.X=x; f.Q=q; waiting=true; }
-              else when(r==1) { plan.From[f.I].Add(x); plan.To[f.I].Add(q); _=f.Next.Add(q); }
+              def q=ends.Items[f.K]; ++f.K;
+              when(q<=f.E && f.Back.Contains(q))
+              {
+                def r=Enter(child,x,q);
+                if(r<0) { f.Pending=true; f.X=x; f.Q=q; waiting=true; }
+                else when(r==1) AddEdge(f,f.I,x,q);
+              }
             }
           }
         }
       }
       unless(waiting)
       {
-        def reached=NitraEnds();
-        unless(f.Failed) when(f.Cur.Contains(f.E)) _=reached.Add(f.E);
-        plan.Alive[n]=reached;
-        for(mutable s=n-1;s>=0;--s)
+        def edges : array[int]=array(3*f.EdgeN); Array.Copy(f.EdgeBuf,edges,3*f.EdgeN);
+        def plan=NitraSeqPlan(n,edges,f.EdgeN);
+        def reached=(!f.Failed) && f.CurN>0 && f.Cur[0]==f.E;
+        for(mutable k=plan.EdgeCount-1;k>=0;--k)
         {
-          def alive=NitraEnds(); def next=plan.Alive[s+1];
-          for(mutable k=0;k<plan.From[s].Count;++k) when(next.Contains(plan.To[s][k])) _=alive.Add(plan.From[s][k]);
-          plan.Alive[s]=alive;
+          def stage=edges[3*k]; def to=edges[3*k+2];
+          if(stage==n-1) plan.Good[k]=reached && to==f.E
+          else
+          {
+            mutable ok=false;
+            for(mutable m=plan.First[stage+1];m<plan.First[stage+2] && !ok;++m) when(plan.Good[m] && edges[3*m+1]==to) ok=true;
+            plan.Good[k]=ok;
+          }
         }
-        plan.Ok=plan.Alive[0].Contains(f.P);
+        mutable root=false;
+        for(mutable k=plan.First[0];k<plan.First[1] && !root;++k) when(plan.Good[k] && edges[3*k+1]==f.P) root=true;
+        plan.Ok=root;
         seqMap.Set(f.Key,(f.E :> long),seqPlans.Count); seqPlans.Add(plan);
         Done(f,plan.Ok);
       }
@@ -604,7 +679,7 @@ namespace Nemerle.Compiler
         when(nodeActive[known]) throw ArgumentException("cyclic structural interpretation in "+o.Label);
         Receive(parent,result.Nodes[known]); return;
       }
-      unless(Ev(o,start).Contains(end)) throw ArgumentException("unobserved structural span in "+o.Label);
+      unless(Has(o,start,end)) throw ArgumentException("unobserved structural span in "+o.Label);
       when(result.Nodes.Count>=500000) throw ArgumentException("structural object limit exceeded (500000)");
       when(o.Code<0) o.Classify();
       def n=NitraStructure(); n.Id=result.Nodes.Count; n.Operation=o.Id; n.Kind=o.Kind; n.Label=o.Label;
