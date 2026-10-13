@@ -468,12 +468,12 @@ namespace Nemerle.Compiler
         def k=b+3*i; mutable h=cur[k];
         when(h==int.MinValue) { h=Get(o.Children[i],p); cur[k]=h; }
         def n=RCount(h);
-        for(mutable j=cur[k+1];j<n;++j) AddR(e,RItem(h,j));
+        for(mutable j=cur[k+1];j<n;++j) { def x=RItem(h,j); AddR(e,x); when(same) Chose(e,x,i); }
         cur[k+1]=n;
         unless(same)
         {
           def m=FCount(h);
-          for(mutable j=cur[k+2];j<m;++j) AddF(e,FItem(h,j));
+          for(mutable j=cur[k+2];j<m;++j) { def x=FItem(h,j); AddF(e,x); Chose(e,x,i); }
           cur[k+2]=m;
         }
       }
@@ -551,6 +551,12 @@ namespace Nemerle.Compiler
     { if(ePathEnd[e]==x) ePath[e] else if(ePathEnd[e]<0) -1 else pathMap.Find(e :> long,x :> long) }
     private SetPath(e : int, x : int, off : int) : void
     { if(ePathEnd[e]<0 || ePathEnd[e]==x) { ePathEnd[e]=x; ePath[e]=off; } else pathMap.Set(e :> long,x :> long,off) }
+    // The alternative that produced a feasible end of a union; a second alternative makes the end ambiguous.
+    private Chose(e : int, x : int, i : int) : void
+    {
+      def known=PathOf(e,x);
+      if(known<0) SetPath(e,x,i) else when(known!=i && known!=Ambiguous) SetPath(e,x,Ambiguous);
+    }
     private Remember(e : int, x : int, pb : int, n : int) : void
     {
       def known=PathOf(e,x);
@@ -668,18 +674,22 @@ namespace Nemerle.Compiler
     { if(parent==null) result.Root=child else parent.Children.Add(child); }
     private Build(o : NitraOperation, start : int, end : int, parent : NitraStructure) : void
     {
+      // Siblings partition their parent's span, so only zero-width spans can meet the same (operation, span) twice.
+      // Every span here comes from a feasible end of its parent's choice, so it is observed (no check needed).
       def ka=(o.Id :> long)*4294967296L+(start :> long);
-      def known=nodeMap.Find(ka,(end :> long));
-      when(known >= 0)
+      when(start==end)
       {
-        when(nodeActive[known]) Bail("cyclic structure");
-        Receive(parent,result.Nodes[known]); return;
+        def known=nodeMap.Find(ka,(end :> long));
+        when(known >= 0)
+        {
+          when(nodeActive[known]) Bail("cyclic structure");
+          Receive(parent,result.Nodes[known]); return;
+        }
       }
-      unless(RHas(Get(o,start),end)) Bail("unobserved span");
       when(result.Nodes.Count>=500000) Bail("node limit");
       def n=NitraStructure(); n.Id=result.Nodes.Count; n.Operation=o.Id; n.Kind=o.Kind; n.Label=o.Label;
       n.Start=start; n.End=end; n.Source=source; n.RuleKind=o.RuleKind; result.Nodes.Add(n);
-      nodeMap.Set(ka,(end :> long),n.Id); nodeActive.Add(true);
+      when(start==end) nodeMap.Set(ka,(end :> long),n.Id); nodeActive.Add(true);
       def finish=NewItem(2); finish.Node=n; finish.Parent=parent;
       if(o.OpaqueValue || o.Fast && (o.Code==6 || o.Code==7)) ()
       else match(o.Code)
@@ -701,10 +711,17 @@ namespace Nemerle.Compiler
           def child=o.Children[0];
           if(FHas(Get(child,start),end)) PushBuild(child,start,end,n) else Bail("infeasible pass");
         | _ =>
-          mutable chosen : NitraOperation=null; mutable count=0;
-          foreach(c in o.Children) when(FHas(Get(c,start),end)) { ++count; chosen=c; }
-          when(count!=1) Bail("choice");
-          PushBuild(chosen,start,end,n);
+          def h=Get(o,start);
+          def known=if(h >= 0 && (o.Code==4 || o.Code==5) && !o.GreedyCall) PathOf(h,end) else -1;
+          if(known==Ambiguous) Bail("choice")
+          else if(known >= 0) PushBuild(o.Children[known],start,end,n)
+          else
+          {
+            mutable chosen : NitraOperation=null; mutable count=0;
+            foreach(c in o.Children) when(FHas(Get(c,start),end)) { ++count; chosen=c; }
+            when(count!=1) Bail("choice");
+            PushBuild(chosen,start,end,n);
+          }
       }
     }
     // Can stages stage.. of o go from x to exactly end over feasible ends?
