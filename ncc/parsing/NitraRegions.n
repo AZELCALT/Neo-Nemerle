@@ -195,7 +195,15 @@ namespace Nemerle.Compiler
     private mutable lCount : array[int] = array(256);
     private mutable workTop : int;
     private mutable workArray : array[NitraWorkItem] = array(1024);
-    private memo : NitraLongMap = NitraLongMap();
+    // Regions by position: head per start position, chained through rMemoNext (about four regions per position).
+    private mutable memoHead : array[int];
+    private mutable rMemoNext : array[int] = array(256);
+    private MemoFind(o : NitraOperation, p : int) : int
+    {
+      mutable r=if(memoHead != null && p >= 0 && p<memoHead.Length) memoHead[p] else -1;
+      while(r >= 0 && rOp[r] != o) r=rMemoNext[r];
+      r
+    }
     private cursors : NitraPairSet = NitraPairSet();
     private viewMap : NitraLongMap = NitraLongMap();
     private viewOps : SCG.List[int] = SCG.List();
@@ -268,6 +276,7 @@ namespace Nemerle.Compiler
       mutable k1=rFState; Array.Resize(ref k1,n); rFState=k1;
       mutable k2=rFEnds; Array.Resize(ref k2,n); rFEnds=k2;
       mutable k3=rFMax; Array.Resize(ref k3,n); rFMax=k3;
+      mutable k4=rMemoNext; Array.Resize(ref k4,n); rMemoNext=k4;
     }
     private GrowLinks() : void
     {
@@ -360,7 +369,7 @@ namespace Nemerle.Compiler
     }
     private Region(original : NitraOperation, o : NitraOperation, p : int) : int
     {
-      def key=Key(o.Id,p); mutable id=memo.Find(key);
+      mutable id=MemoFind(o,p);
       if(id>=0) { ++profRegionHit; ++result.SampleReuse; when(o.SharedPrefix) ++result.PrefixReuse; }
       else
       {
@@ -369,7 +378,7 @@ namespace Nemerle.Compiler
         id=regions; ++regions; ++profRegionNew;
         rOp[id]=o; rStart[id]=p; rClosed[id]=false; rPending[id]=0; rOutstanding[id]=0;
         rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1; rEdgeHead[id]= -1; rFState[id]=0; rFEnds[id]=null; rFMax[id]= -1;
-        memo.Add(key,id); ++open; HeapPush(p,id);
+        rMemoNext[id]=memoHead[p]; memoHead[p]=id; ++open; HeapPush(p,id);
         ++result.SampleCreations; when(o.SharedPrefix) ++result.PrefixSamples;
         Push(0,id,0,p,0,p,p,-1);
       }
@@ -875,7 +884,7 @@ namespace Nemerle.Compiler
         else { def child=edChild[e]; NoteQuery(child); child<0 || rFState[child]==1 && rFEnds[child].Contains(edTo[e]) }
       }
     }
-    internal RegionOf(o : NitraOperation, p : int) : int { memo.Find(Key((o.Interface ?? o).Id,p)) }
+    internal RegionOf(o : NitraOperation, p : int) : int { MemoFind(o.Interface ?? o,p) }
     internal FeasibleState(r : int) : int { NoteQuery(r); rFState[r] }
     internal FeasibleEnds(r : int) : NitraEnds { NoteQuery(r); rFEnds[r] }
     internal FeasibleMax(r : int) : int { NoteQuery(r); rFMax[r] }
@@ -1121,7 +1130,7 @@ namespace Nemerle.Compiler
     // Ends of any operation at a position, as the recognizer settled them.
     internal EvidenceAt(o : NitraOperation, p : int) : NitraEnds
     {
-      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=memo.Find(key);
+      def canonical=o.Interface ?? o; def key=Key(canonical.Id,p); def id=MemoFind(canonical,p);
       if(id>=0) rEnds[id]
       else if(lexWrapped.ContainsKey(key)) lexWrapped[key]
       else if(lexical.ContainsKey(key))
@@ -1182,6 +1191,7 @@ namespace Nemerle.Compiler
       try
       {
         def o=root.Interface ?? root; when(o.Code<0) o.Classify();
+        memoHead=array(source.Length+2); for(mutable q=0;q<memoHead.Length;++q) memoHead[q]= -1;
         mutable accepted=false;
         if(!Possible(o,0)) ()
         else if(o.Scanned) { def ends=Lexical(o,0); when(ends.Count>0) NoteView(root,o,0); accepted=ends.Contains(source.Length); }
@@ -1280,7 +1290,7 @@ namespace Nemerle.Compiler
         foreach(region in result.Regions)
         {
           def canonical=Key((prepared.Operations[region.Operation].Interface ?? prepared.Operations[region.Operation]).Id,region.Start);
-          def id=memo.Find(canonical);
+          def id=MemoFind(prepared.Operations[region.Operation].Interface ?? prepared.Operations[region.Operation],region.Start);
           when(id>=0)
           {
             def seen=SCG.HashSet.[int]();
