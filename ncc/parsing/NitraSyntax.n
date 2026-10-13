@@ -55,6 +55,14 @@ namespace Nemerle.Compiler
       unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
       when(grammar==null) throw ArgumentNullException("grammar");
       def gcPause0=if(NitraRecognizer.PhasesOn) GC.GetTotalPauseDuration().Ticks else 0L; def gcCount0=if(NitraRecognizer.PhasesOn) GC.CollectionCount(0) else 0;
+      def fast=Hybrid(grammar,rule,source);
+      if(fast!=null && !NitraFastParser.Verify)
+      {
+        when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
+        fast
+      }
+      else
+      {
       def recognized=grammar.Recognize(rule,source,true,false);
       {
         def started=System.Diagnostics.Stopwatch.GetTimestamp();
@@ -68,12 +76,39 @@ namespace Nemerle.Compiler
           NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); for(mutable k=1;k<=5;++k) { NitraRecognizer.NotePhase("step"+k.ToString(),builder.StepTicks[k]); NitraRecognizer.NoteCount("steps"+k.ToString(),builder.StepCounts[k]); } NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
         }
         when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
+        when(fast!=null) NitraFastParser.Compare(fast,result);
         result
+      }
+      }
+    }
+    // Fast first pass; null means the full engine decides (see NitraFast.n).
+    private Hybrid(grammar : NitraPreparedGrammar, rule : string, source : string) : NitraStructureResult
+    {
+      if(NitraFastParser.Off) null
+      else
+      {
+        def started=if(NitraRecognizer.PhasesOn) System.Diagnostics.Stopwatch.GetTimestamp() else 0L; def alloc0=GC.GetAllocatedBytesForCurrentThread();
+        def parser=NitraFastParser(grammar,source); def fast=parser.Run(rule);
+        when(NitraRecognizer.PhasesOn)
+        {
+          NitraRecognizer.NotePhase("hybrid",System.Diagnostics.Stopwatch.GetTimestamp()-started);
+          NitraRecognizer.NoteCount("hybrid_hit",if(fast!=null) 1 else 0); NitraRecognizer.NoteCount("hybrid_passes",parser.Passes); NitraRecognizer.NoteCount("hybrid_runs",parser.Runs); NitraRecognizer.NoteCount("hybrid_groups",parser.Groups); NitraRecognizer.NoteCount("hybrid_entries",parser.Entries); NitraRecognizer.NoteCount("hybrid_deps",parser.Deps); NitraRecognizer.NoteCount("hybrid_kb",((GC.GetAllocatedBytesForCurrentThread()-alloc0)/1024L) :> int);
+        }
+        fast
       }
     }
     internal StructureCompact(grammar : NitraPreparedGrammar, rule : string, source : string,
                               resolver : Func[NitraStructuralChoice,int]) : NitraStructureResult
-    { NitraStructureBuilder(grammar.Recognize(rule,source,true,false),resolver).Run() }
+    {
+      def fast=Hybrid(grammar,rule,source);
+      if(fast!=null && !NitraFastParser.Verify) fast
+      else
+      {
+        def result=NitraStructureBuilder(grammar.Recognize(rule,source,true,false),resolver).Run();
+        when(fast!=null) NitraFastParser.Compare(fast,result);
+        result
+      }
+    }
     private Failed(source : string, file : string, message : string) : NitraDocument
     { def d=NitraDocument(); d.Source=source; d.File=file ?? "<grammar>"; d.Diagnostics.Add(GrammarDiagnostic(d.File,0,message)); d }
     public ReadDefinitions(source : string, file : string, experimental : bool) : NitraDocument

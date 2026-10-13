@@ -1084,8 +1084,9 @@ namespace Nemerle.Compiler
       finally { _=lexicalActive.Remove(key); }
     }
     private First(ch : char) : array[bool]
+    { ++result.DispatchBuilds; FirstBits(prepared,ch) }
+    internal static FirstBits(prepared : NitraPreparedGrammar, ch : char) : array[bool]
     {
-      ++result.DispatchBuilds;
       def bits : array[bool]=array(prepared.Operations.Count); def pending=SCG.Queue.[NitraOperation]();
       foreach(op in prepared.Operations) pending.Enqueue(op);
       while(pending.Count>0)
@@ -1218,7 +1219,7 @@ namespace Nemerle.Compiler
       when(scannedByOp.ContainsKey(canonical.Id)) foreach(k in scannedByOp[canonical.Id]) action.Invoke((k%4294967296L) :> int,EvidenceAt(canonical,(k%4294967296L) :> int));
     }
     private static categoryNames : array[string] = array["Lu","Ll","Lt","Lm","Lo","Mn","Mc","Me","Nd","Nl","No","Zs","Zl","Zp","Cc","Cf","Cs","Co","Pc","Pd","Ps","Pe","Pi","Pf","Po","Sm","Sc","Sk","So","Cn"];
-    private Category(c : char, name : string) : bool
+    internal static Category(c : char, name : string) : bool
     {
       def names=categoryNames;
       def category=(char.GetUnicodeCategory(c) :> int);

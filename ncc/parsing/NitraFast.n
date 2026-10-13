@@ -1,0 +1,778 @@
+// Fast first pass (hybrid). It computes the same two relations the region recognizer and selection settle,
+// R(op, p) = ends of op at p and F(op, p) = feasible ends (a greedy native call keeps only the longest feasible
+// end of its target), top-down with one memo entry per (operation, position), and then builds the structure
+// exactly as NitraStructureBuilder does. It gives up (null) whenever it would have to decide something the full
+// engine decides with more machinery: rejected input, any ambiguity, a cycle through an operation that is not a
+// plain union or the first stage of a sequence, very deep nesting. The full engine then runs from scratch, so the
+// result is always the full engine's result. NITRA_VERIFY=1 runs both and compares; NITRA_NOHYBRID=1 turns it off.
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+namespace Nemerle.Compiler
+{
+  internal sealed class NitraFastBail : Exception
+  { public this(why : string) { base(why) } }
+
+  internal sealed class NitraFastParser
+  {
+    internal static Off : bool = Environment.GetEnvironmentVariable("NITRA_NOHYBRID")=="1";
+    internal static Verify : bool = Environment.GetEnvironmentVariable("NITRA_VERIFY")=="1";
+    internal static Explain : bool = Environment.GetEnvironmentVariable("NITRA_HYBRID_WHY")=="1";
+    prepared : NitraPreparedGrammar;
+    source : string;
+    len : int;
+    native : bool;
+    // Entries: one per (operation, position), chained per position.
+    private mutable entries : int;
+    private mutable head : array[int];
+    private mutable eOp : array[NitraOperation];
+    private mutable ePos : array[int];
+    private mutable eNext : array[int];
+    // 0 new, 1 running, 2 settled, 3 provisional (depends on a running entry further up).
+    private mutable eState : array[int];
+    private mutable eDepth : array[int];
+    private mutable eProvLow : array[int];
+    private mutable eHit : array[bool];
+    private mutable eInProv : array[bool];
+    // F equals R (trivially feasible operations, or no native selection at all): F is never stored.
+    private mutable eSame : array[bool];
+    private mutable eCur : array[int];
+    // Ends: one inline value until a second one arrives, then an ordered set.
+    private mutable rOne : array[int];
+    private mutable rSet : array[NitraEnds];
+    private mutable fOne : array[int];
+    private mutable fSet : array[NitraEnds];
+    // Cursors of incremental operations (unions, first sequence stage): how much of each child list was consumed.
+    private mutable cur : array[int] = array(256);
+    private mutable curTop : int;
+    private mutable active : array[int] = array(64);
+    private mutable sp : int;
+    private mutable lowAcc : int = int.MaxValue;
+    private mutable grew : int;
+    // Settling a cycle group: who reads a still-unsettled entry, and a worklist of readers whose input grew.
+    private mutable consumer : int = -1;
+    private mutable settling : int;
+    private mutable depHead : array[int];
+    private mutable depNext : array[int] = array(256);
+    private mutable depTo : array[int] = array(256);
+    private mutable deps : int;
+    private mutable queued : array[bool];
+    private mutable queue : array[int] = array(64);
+    private mutable qTop : int;
+    private prov : SCG.List[int] = SCG.List();
+    private seen : NitraPairSet = NitraPairSet();
+    private mutable work : array[int] = array(64);
+    private mutable wTop : int;
+    // Derivation paths of sequence ends (stage ends, one int per stage) in an arena.
+    private mutable pathBuf : array[int] = array(64);
+    private mutable pathTop : int;
+    private mutable arena : array[int] = array(256);
+    private mutable arenaTop : int;
+    private pathMap : NitraPairMap = NitraPairMap();
+    private mutable ePath : array[int];
+    private mutable ePathEnd : array[int];
+    private mutable eMerged : array[bool];
+    private mutable nonAscii : SCG.Dictionary[char,array[bool]];
+    // Construction.
+    private result : NitraStructureResult = NitraStructureResult();
+    private nodeMap : NitraPairMap = NitraPairMap();
+    private nodeActive : SCG.List[bool] = SCG.List();
+    private failed : NitraPairSet = NitraPairSet();
+    private mutable items : array[NitraBuildItem] = array(64);
+    private mutable top : int;
+    internal mutable Passes : int;
+    internal mutable Runs : int;
+    internal mutable Groups : int;
+    internal Entries : int { get { entries } }
+    internal Deps : int { get { deps } }
+
+    public this(prepared : NitraPreparedGrammar, source : string)
+    { this.prepared=prepared; this.source=source; len=source.Length; native=prepared.Native; }
+
+    private static Bail(why : string) : void { throw NitraFastBail(why) }
+
+    // ---- storage ----
+    private Reserve(n : int) : void
+    {
+      eOp=array(n); ePos=array(n); eNext=array(n); eState=array(n); eDepth=array(n); eProvLow=array(n); depHead=array(n); queued=array(n); ePath=array(n); ePathEnd=array(n); eMerged=array(n);
+      eHit=array(n); eInProv=array(n); eSame=array(n); eCur=array(n); rOne=array(n); rSet=array(n); fOne=array(n); fSet=array(n);
+    }
+    private Grow() : void
+    {
+      def n=eOp.Length*2;
+      mutable a0=eOp; Array.Resize(ref a0,n); eOp=a0;
+      mutable a1=ePos; Array.Resize(ref a1,n); ePos=a1;
+      mutable a2=eNext; Array.Resize(ref a2,n); eNext=a2;
+      mutable a3=eState; Array.Resize(ref a3,n); eState=a3;
+      mutable a4=eDepth; Array.Resize(ref a4,n); eDepth=a4;
+      mutable a5=eProvLow; Array.Resize(ref a5,n); eProvLow=a5;
+      mutable a6=depHead; Array.Resize(ref a6,n); depHead=a6;
+      mutable a6b=queued; Array.Resize(ref a6b,n); queued=a6b;
+      mutable a6c=ePath; Array.Resize(ref a6c,n); ePath=a6c;
+      mutable a6d=ePathEnd; Array.Resize(ref a6d,n); ePathEnd=a6d;
+      mutable a6e=eMerged; Array.Resize(ref a6e,n); eMerged=a6e;
+      mutable a7=eHit; Array.Resize(ref a7,n); eHit=a7;
+      mutable a8=eInProv; Array.Resize(ref a8,n); eInProv=a8;
+      mutable a9=eSame; Array.Resize(ref a9,n); eSame=a9;
+      mutable b0=eCur; Array.Resize(ref b0,n); eCur=b0;
+      mutable b1=rOne; Array.Resize(ref b1,n); rOne=b1;
+      mutable b2=rSet; Array.Resize(ref b2,n); rSet=b2;
+      mutable b3=fOne; Array.Resize(ref b3,n); fOne=b3;
+      mutable b4=fSet; Array.Resize(ref b4,n); fSet=b4;
+    }
+    private Find(o : NitraOperation, p : int) : int
+    {
+      mutable e=head[p];
+      while(e >= 0 && eOp[e] != o) e=eNext[e];
+      e
+    }
+    private New(o : NitraOperation, p : int) : int
+    {
+      when(entries>=500000) Bail("entry limit");
+      when(entries==eOp.Length) Grow();
+      def e=entries; ++entries;
+      eOp[e]=o; ePos[e]=p; eNext[e]=head[p]; head[p]=e; eState[e]=0; eHit[e]=false; eInProv[e]=false; eProvLow[e]=int.MaxValue; depHead[e]= -1; queued[e]=false; ePathEnd[e]= -1; eMerged[e]=false;
+      rOne[e]= -1; rSet[e]=null; fOne[e]= -1; fSet[e]=null;
+      eSame[e]=(!native) || o.Fast || o.Code==8 || o.Code==9 || (!o.GreedyCall) && o.OpaqueValue;
+      def slots=if(o.Code==3) 3 else if(o.Code==4 && !o.GreedyCall) 3*o.Children.Count else 0;
+      eCur[e]=curTop;
+      when(slots>0)
+      {
+        when(curTop+slots>cur.Length) { mutable c=cur; Array.Resize(ref c,Math.Max(cur.Length*2,curTop+slots)); cur=c; }
+        for(mutable i=0;i<slots;i+=3) { cur[curTop+i]=int.MinValue; cur[curTop+i+1]=0; cur[curTop+i+2]=0; }
+        curTop+=slots;
+      }
+      e
+    }
+
+    // ---- handles: -1 nothing, <= -2 exactly one end (-2-end, leaves and zero-width), >= 0 an entry ----
+    private RCount(h : int) : int
+    { if(h >= 0) { def s=rSet[h]; if(s!=null) s.Count else if(rOne[h] >= 0) 1 else 0 } else if(h== -1) 0 else 1 }
+    private RItem(h : int, i : int) : int
+    { if(h >= 0) { def s=rSet[h]; if(s!=null) s.Items[i] else rOne[h] } else -2-h }
+    private FCount(h : int) : int
+    { if(h >= 0 && !eSame[h]) { def s=fSet[h]; if(s!=null) s.Count else if(fOne[h] >= 0) 1 else 0 } else RCount(h) }
+    private FItem(h : int, i : int) : int
+    { if(h >= 0 && !eSame[h]) { def s=fSet[h]; if(s!=null) s.Items[i] else fOne[h] } else RItem(h,i) }
+    private RHas(h : int, x : int) : bool
+    {
+      if(h >= 0) { def s=rSet[h]; if(s!=null) s.Contains(x) else rOne[h]==x }
+      else h== -2-x && h != -1
+    }
+    private FHas(h : int, x : int) : bool
+    {
+      if(h >= 0 && !eSame[h]) { def s=fSet[h]; if(s!=null) s.Contains(x) else fOne[h]==x }
+      else RHas(h,x)
+    }
+    private AddR(e : int, x : int) : void
+    {
+      def s=rSet[e];
+      if(s!=null) { when(s.Add(x)) Grew(e); }
+      else if(rOne[e]<0) { rOne[e]=x; Grew(e); }
+      else when(rOne[e]!=x) { def n=NitraEnds(); _=n.Add(rOne[e]); _=n.Add(x); rSet[e]=n; Grew(e); }
+    }
+    private AddF(e : int, x : int) : void
+    {
+      def s=fSet[e];
+      if(s!=null) { when(s.Add(x)) Grew(e); }
+      else if(fOne[e]<0) { fOne[e]=x; Grew(e); }
+      else when(fOne[e]!=x) { def n=NitraEnds(); _=n.Add(fOne[e]); _=n.Add(x); fSet[e]=n; Grew(e); }
+    }
+    private Grew(e : int) : void
+    {
+      ++grew;
+      when(settling>0 && eState[e]!=2)
+      {
+        mutable d=depHead[e];
+        while(d >= 0) { Enqueue(depTo[d]); d=depNext[d]; }
+      }
+    }
+    private Enqueue(x : int) : void
+    {
+      unless(queued[x])
+      {
+        queued[x]=true;
+        when(qTop==queue.Length) { mutable a=queue; Array.Resize(ref a,qTop*2); queue=a; }
+        queue[qTop]=x; ++qTop;
+      }
+    }
+    private AddDep(c : int, x : int) : void
+    {
+      when(x >= 0 && x!=c)
+      {
+        mutable d=depHead[c]; mutable found=false;
+        while(d >= 0 && !found) { when(depTo[d]==x) found=true; d=depNext[d]; }
+        unless(found)
+        {
+          when(deps==depTo.Length) { mutable a=depTo; Array.Resize(ref a,deps*2); depTo=a; mutable b=depNext; Array.Resize(ref b,deps*2); depNext=b; }
+          depTo[deps]=x; depNext[deps]=depHead[c]; depHead[c]=deps; ++deps;
+        }
+      }
+    }
+    // Reading a child that is still being settled is allowed only for unions and the first sequence stage.
+    private Need(h : int) : void
+    { when(h >= 0 && eState[h]!=2) Bail("cycle through "+eOp[h].Kind); }
+
+    // ---- lexical dispatch (same tables as the recognizer) ----
+    private Begins(o : NitraOperation, p : int) : bool
+    {
+      if(p>=len) false
+      else
+      {
+        def ch=source[p];
+        if((ch :> int)<128)
+        {
+          mutable bits=prepared.FirstAscii[ch :> int];
+          when(bits==null)
+            lock(prepared.FirstAscii)
+            {
+              bits=prepared.FirstAscii[ch :> int];
+              when(bits==null) { bits=NitraRecognizer.FirstBits(prepared,ch); prepared.FirstAscii[ch :> int]=bits; }
+            }
+          bits[o.Id]
+        }
+        else
+        {
+          when(nonAscii==null) nonAscii=SCG.Dictionary();
+          unless(nonAscii.ContainsKey(ch)) nonAscii.Add(ch,NitraRecognizer.FirstBits(prepared,ch));
+          nonAscii[ch][o.Id]
+        }
+      }
+    }
+    private LeafEnd(o : NitraOperation, p : int) : int
+    {
+      match(o.Code)
+      {
+        | 0 => p
+        | 1 => if(p+o.Text.Length<=len && string.CompareOrdinal(source,p,o.Text,0,o.Text.Length)==0) p+o.Text.Length else -1
+        | _ =>
+          if(p<len)
+          {
+            mutable found=false; def ch=source[p];
+            foreach(c in o.Children)
+              if(c.Kind=="range") { when(c.Text[0]<=ch && ch<=c.Text[1]) found=true; }
+              else when(NitraRecognizer.Category(ch,c.Text)) found=true;
+            if(found!=(o.Text=="inverted")) p+1 else -1
+          }
+          else -1
+      }
+    }
+    private Get(o : NitraOperation, x : int) : int
+    {
+      when(o.Code<0) o.Classify();
+      if(o.Code<=2) { def q=LeafEnd(o,x); if(q<0) -1 else -2-q }
+      else if(!(o.Nullable || Begins(o,x))) -1
+      else if(o.Sure && !Begins(o,x)) -2-x
+      else Eval(o,x)
+    }
+
+    // ---- evaluation ----
+    private Eval(o : NitraOperation, p : int) : int
+    {
+      mutable e=Find(o,p);
+      if(e<0) { e=New(o,p); Run(e); }
+      else match(eState[e])
+      {
+        | 2 => ()
+        | 1 => eHit[e]=true; when(eDepth[e]<lowAcc) lowAcc=eDepth[e];
+        | _ => when(eProvLow[e]<lowAcc) lowAcc=eProvLow[e];
+      }
+      when(eState[e]!=2) AddDep(e,consumer);
+      e
+    }
+    // Operations that may be settled together with a running entry: they only ever add ends.
+    private static Incremental(o : NitraOperation) : bool { o.Code==3 || o.Code==4 && !o.GreedyCall }
+    private Run(e : int) : void
+    {
+      when((sp & 15)==0 && !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) Bail("deep nesting");
+      ++Runs; def saved=lowAcc; lowAcc=int.MaxValue; def reader=consumer; consumer=e;
+      ++sp; when(sp==active.Length) { mutable a=active; Array.Resize(ref a,sp*2); active=a; }
+      active[sp]=e; def d=sp; eDepth[e]=d; eState[e]=1; eHit[e]=false;
+      def mark=prov.Count;
+      Body(e);
+      def low=lowAcc;
+      if(low<d)
+      {
+        def o=eOp[e]; unless(Incremental(o) && !o.Scanned) Bail("cycle through "+o.Kind);
+        eInProv[e]=true; prov.Add(e);
+        eState[e]=3; eProvLow[e]=low; --sp; lowAcc=Math.Min(saved,low);
+      }
+      else
+      {
+        when(eHit[e])
+        {
+          def o=eOp[e]; unless(Incremental(o) && !o.Scanned) Bail("cycle through "+o.Kind);
+          // Settle the group: start with every member once, then only readers whose input grew.
+          def qbase=qTop; ++settling; ++Groups;
+          Enqueue(e); for(mutable i=mark;i<prov.Count;++i) Enqueue(prov[i]);
+          while(qTop>qbase)
+          {
+            --qTop; def x=queue[qTop]; queued[x]=false; ++Passes;
+            consumer=x; lowAcc=int.MaxValue;
+            Body(x);
+            when(lowAcc<d) Bail("cycle widened");
+          }
+          --settling;
+          for(mutable i=mark;i<prov.Count;++i) { eState[prov[i]]=2; eInProv[prov[i]]=false; }
+          prov.RemoveRange(mark,prov.Count-mark);
+        }
+        eState[e]=2; --sp; lowAcc=saved;
+      }
+      consumer=reader;
+    }
+    private Body(e : int) : void
+    {
+      def o=eOp[e]; def p=ePos[e];
+      if(o.GreedyCall) Greedy(e,o,p)
+      else match(o.Code)
+      {
+        | 3 => Seq(e,o,p)
+        | 4 => Union(e,o,p)
+        | 5 => Longest(e,o,p)
+        | 6 | 7 => Rep(e,o,p)
+        | 8 | 9 =>
+          def h=Get(o.Children[0],p); Need(h);
+          when((RCount(h)>0)==(o.Code==8)) AddR(e,p);
+        | 10 =>
+          def a=Get(o.Children[0],p); def b=Get(o.Children[1],p); Need(a); Need(b);
+          def n=RCount(a);
+          for(mutable i=0;i<n;++i) { def x=RItem(a,i); unless(RHas(b,x)) { AddR(e,x); unless(eSame[e]) when(FHas(a,x)) AddF(e,x); } }
+        | _ => Bail("operation "+o.Kind)
+      }
+    }
+    // A greedy native call: every end of its target, and only the longest feasible one is feasible.
+    private Greedy(e : int, o : NitraOperation, p : int) : void
+    {
+      when(o.Children.Count!=1) Bail("call shape");
+      def h=Get(o.Children[0],p); Need(h);
+      def n=RCount(h); for(mutable i=0;i<n;++i) AddR(e,RItem(h,i));
+      def m=FCount(h); mutable best= -1;
+      for(mutable i=0;i<m;++i) { def x=FItem(h,i); when(x>best) best=x; }
+      when(best >= 0) AddF(e,best);
+    }
+    private Union(e : int, o : NitraOperation, p : int) : void
+    {
+      def b=eCur[e]; def same=eSame[e];
+      for(mutable i=0;i<o.Children.Count;++i)
+      {
+        def k=b+3*i; mutable h=cur[k];
+        when(h==int.MinValue) { h=Get(o.Children[i],p); cur[k]=h; }
+        def n=RCount(h);
+        for(mutable j=cur[k+1];j<n;++j) AddR(e,RItem(h,j));
+        cur[k+1]=n;
+        unless(same)
+        {
+          def m=FCount(h);
+          for(mutable j=cur[k+2];j<m;++j) AddF(e,FItem(h,j));
+          cur[k+2]=m;
+        }
+      }
+    }
+    // Longest match: only the longest end of all alternatives; feasible when some alternative is feasible there.
+    private Longest(e : int, o : NitraOperation, p : int) : void
+    {
+      mutable best= -1;
+      foreach(c in o.Children)
+      {
+        def h=Get(c,p); Need(h);
+        def n=RCount(h); for(mutable i=0;i<n;++i) { def x=RItem(h,i); when(x>best) best=x; }
+      }
+      when(best >= 0)
+      {
+        AddR(e,best);
+        unless(eSame[e])
+        {
+          mutable ok=false;
+          foreach(c in o.Children) when(!ok && FHas(Get(c,p),best)) ok=true;
+          when(ok) AddF(e,best);
+        }
+      }
+    }
+    private Seq(e : int, o : NitraOperation, p : int) : void
+    {
+      def n=o.Children.Count;
+      if(n==0) { AddR(e,p); unless(eSame[e]) AddF(e,p); }
+      else
+      {
+        def b=eCur[e]; mutable h=cur[b];
+        when(h==int.MinValue) { h=Get(o.Children[0],p); cur[b]=h; }
+        def pb=pathTop; pathTop+=n;
+        when(pathTop>pathBuf.Length) { mutable a=pathBuf; Array.Resize(ref a,Math.Max(pathBuf.Length*2,pathTop)); pathBuf=a; }
+        def rc=RCount(h);
+        for(mutable j=cur[b+1];j<rc;++j) { def q=RItem(h,j); pathBuf[pb]=q; Advance(e,o,1,q,false,pb); }
+        cur[b+1]=rc;
+        unless(eSame[e])
+        {
+          def fc=FCount(h);
+          for(mutable j=cur[b+2];j<fc;++j) { def q=FItem(h,j); pathBuf[pb]=q; Advance(e,o,1,q,true,pb); }
+          cur[b+2]=fc;
+        }
+        pathTop=pb;
+      }
+    }
+    // Depth-first over the stages; the stage ends of the current path are in pathBuf[pb..]. Every feasible end keeps
+    // the path that reached it (construction reads it back); a second, different path marks that end ambiguous.
+    private Advance(e : int, o : NitraOperation, stage : int, x : int, feasible : bool, pb : int) : void
+    {
+      if(stage==o.Children.Count)
+      {
+        if(feasible) AddF(e,x) else AddR(e,x);
+        when(feasible || eSame[e]) Remember(e,x,pb,stage);
+      }
+      else
+      {
+        def h=Get(o.Children[stage],x); Need(h);
+        def c=if(feasible) FCount(h) else RCount(h);
+        if(c==1) { def q=if(feasible) FItem(h,0) else RItem(h,0); pathBuf[pb+stage]=q; Advance(e,o,stage+1,q,feasible,pb) }
+        else
+        {
+          def a=((e :> long) << 1)+(if(feasible) 1L else 0L);
+          for(mutable k=0;k<c;++k)
+          {
+            def q=if(feasible) FItem(h,k) else RItem(h,k);
+            if(seen.Add(a,((stage :> long) << 32)+(q :> long))) { pathBuf[pb+stage]=q; Advance(e,o,stage+1,q,feasible,pb) }
+            else when(feasible || eSame[e]) eMerged[e]=true;
+          }
+        }
+      }
+    }
+    private static Ambiguous : int = int.MaxValue;
+    private PathOf(e : int, x : int) : int
+    { if(ePathEnd[e]==x) ePath[e] else if(ePathEnd[e]<0) -1 else pathMap.Find(e :> long,x :> long) }
+    private SetPath(e : int, x : int, off : int) : void
+    { if(ePathEnd[e]<0 || ePathEnd[e]==x) { ePathEnd[e]=x; ePath[e]=off; } else pathMap.Set(e :> long,x :> long,off) }
+    private Remember(e : int, x : int, pb : int, n : int) : void
+    {
+      def known=PathOf(e,x);
+      if(known<0)
+      {
+        when(arenaTop+n>arena.Length) { mutable a=arena; Array.Resize(ref a,Math.Max(arena.Length*2,arenaTop+n)); arena=a; }
+        for(mutable i=0;i<n;++i) arena[arenaTop+i]=pathBuf[pb+i];
+        SetPath(e,x,arenaTop); arenaTop+=n;
+      }
+      else when(known!=Ambiguous)
+      {
+        mutable same=true;
+        for(mutable i=0;i<n && same;++i) when(arena[known+i]!=pathBuf[pb+i]) same=false;
+        unless(same) SetPath(e,x,Ambiguous);
+      }
+    }
+    private static Cap(o : NitraOperation, count : int) : int
+    { if(o.Max<0 && count>=Math.Max(1,o.Min)) Math.Max(1,o.Min) else count+1 }
+    private Push2(a : int, b : int) : void
+    {
+      when(wTop+2>work.Length) { mutable w=work; Array.Resize(ref w,work.Length*2); work=w; }
+      work[wTop]=a; work[wTop+1]=b; wTop+=2;
+    }
+    private StepR(o : NitraOperation, item : NitraOperation, start : int, q : int, next : int, ka : long) : void
+    {
+      def hi=Get(item,start); Need(hi);
+      def n=RCount(hi);
+      for(mutable i=0;i<n;++i)
+      {
+        def last=RItem(hi,i);
+        when(last==q && !o.AllEnds) Bail("non-progressing repetition");
+        when(seen.Add(ka,((next :> long) << 32)+(last :> long))) Push2(last,next);
+      }
+    }
+    private StepF(item : NitraOperation, start : int, q : int, next : int, kf : long) : void
+    {
+      def hi=Get(item,start);
+      def n=FCount(hi);
+      for(mutable i=0;i<n;++i)
+      {
+        def last=FItem(hi,i);
+        when(last>q && seen.Add(kf,((next :> long) << 32)+(last :> long))) Push2(last,next);
+      }
+    }
+    private Rep(e : int, o : NitraOperation, p : int) : void
+    {
+      def separated=o.Code==7; def trailing=separated && o.Text=="trailing";
+      def item=o.Children[0]; def sep=if(separated) o.Children[1] else null;
+      def held=o.Holds; mutable best= -1;
+      // Ends: every state (position, capped count) reachable over item (and separator) ends.
+      def floor=wTop; def ka=((e :> long) << 2)+2L;
+      Push2(p,0); _=seen.Add(ka,(p :> long));
+      while(wTop>floor)
+      {
+        wTop-=2; def q=work[wTop]; def count=work[wTop+1];
+        when(count>=o.Min) { if(held) { when(q>best) best=q; } else AddR(e,q); }
+        when(trailing && count>0 && count>=o.Min)
+        {
+          def hs=Get(sep,q); Need(hs);
+          def n=RCount(hs); for(mutable i=0;i<n;++i) { def x=RItem(hs,i); if(held) { when(x>best) best=x; } else AddR(e,x); }
+        }
+        when(o.Max<0 || count<o.Max)
+        {
+          def next=Cap(o,count);
+          if(separated && count>0)
+          {
+            def hs=Get(sep,q); Need(hs);
+            def n=RCount(hs); for(mutable i=0;i<n;++i) StepR(o,item,RItem(hs,i),q,next,ka);
+          }
+          else StepR(o,item,q,q,next,ka);
+        }
+      }
+      when(held && best >= 0) AddR(e,best);
+      unless(eSame[e])
+      {
+        // Feasible ends: states reached over feasible, progressing item ends only.
+        when(o.Min==0 && RHas(e,p)) AddF(e,p);
+        def kf=((e :> long) << 2)+3L;
+        Push2(p,0); _=seen.Add(kf,(p :> long));
+        while(wTop>floor)
+        {
+          wTop-=2; def q=work[wTop]; def count=work[wTop+1];
+          when(count>=o.Min && q>p && RHas(e,q)) AddF(e,q);
+          when(trailing && count>0 && count>=o.Min)
+          {
+            def hs=Get(sep,q);
+            def n=FCount(hs); for(mutable i=0;i<n;++i) { def x=FItem(hs,i); when(RHas(e,x)) AddF(e,x); }
+          }
+          when(o.Max<0 || count<o.Max)
+          {
+            def next=Cap(o,count);
+            if(separated && count>0)
+            {
+              def hs=Get(sep,q);
+              def n=FCount(hs); for(mutable i=0;i<n;++i) StepF(item,FItem(hs,i),q,next,kf);
+            }
+            else StepF(item,q,q,next,kf);
+          }
+        }
+      }
+    }
+
+    // ---- construction (mirrors NitraStructureBuilder.Build) ----
+    private NewItem(kind : int) : NitraBuildItem
+    {
+      when(top==items.Length) { mutable a=items; Array.Resize(ref a,top*2); items=a; }
+      when(items[top]==null) items[top]=NitraBuildItem();
+      def item=items[top]; ++top;
+      item.Kind=kind; item.Node=null; item.Parent=null; item.Op=null; item.Start=0; item.End=0; item.P=0; item.I=0;
+      item
+    }
+    private PushBuild(o : NitraOperation, start : int, end : int, parent : NitraStructure) : void
+    { def item=NewItem(1); item.Op=o; item.Start=start; item.End=end; item.Parent=parent; }
+    private Receive(parent : NitraStructure, child : NitraStructure) : void
+    { if(parent==null) result.Root=child else parent.Children.Add(child); }
+    private Build(o : NitraOperation, start : int, end : int, parent : NitraStructure) : void
+    {
+      def ka=(o.Id :> long)*4294967296L+(start :> long);
+      def known=nodeMap.Find(ka,(end :> long));
+      when(known >= 0)
+      {
+        when(nodeActive[known]) Bail("cyclic structure");
+        Receive(parent,result.Nodes[known]); return;
+      }
+      unless(RHas(Get(o,start),end)) Bail("unobserved span");
+      when(result.Nodes.Count>=500000) Bail("node limit");
+      def n=NitraStructure(); n.Id=result.Nodes.Count; n.Operation=o.Id; n.Kind=o.Kind; n.Label=o.Label;
+      n.Start=start; n.End=end; n.Source=source; n.RuleKind=o.RuleKind; result.Nodes.Add(n);
+      nodeMap.Set(ka,(end :> long),n.Id); nodeActive.Add(true);
+      def finish=NewItem(2); finish.Node=n; finish.Parent=parent;
+      if(o.OpaqueValue || o.Fast && (o.Code==6 || o.Code==7)) ()
+      else match(o.Code)
+      {
+        | 0 | 1 | 2 | 8 | 9 => ()
+        | 10 => PushBuild(o.Children[0],start,end,n)
+        | 3 =>
+          when(o.Children.Count>0)
+          {
+            def h=Get(o,start);
+            def path=if(h >= 0 && !eMerged[h]) PathOf(h,end) else -1;
+            when(path==Ambiguous) Bail("ambiguous sequence");
+            SeqAdvance(n,o,0,start,end,path);
+          }
+        | 6 | 7 =>
+          if(start==end) { when(o.Min>0) Bail("empty required repetition"); }
+          else RepAdvance(n,o,start,0,end)
+        | _ when(o.Children.Count==1) =>
+          def child=o.Children[0];
+          if(FHas(Get(child,start),end)) PushBuild(child,start,end,n) else Bail("infeasible pass");
+        | _ =>
+          mutable chosen : NitraOperation=null; mutable count=0;
+          foreach(c in o.Children) when(FHas(Get(c,start),end)) { ++count; chosen=c; }
+          when(count!=1) Bail("choice");
+          PushBuild(chosen,start,end,n);
+      }
+    }
+    // Can stages stage.. of o go from x to exactly end over feasible ends?
+    private SuffixReach(o : NitraOperation, stage : int, x : int, end : int) : bool
+    {
+      if(stage==o.Children.Count) x==end
+      else
+      {
+        def a=(o.Id :> long)*4294967296L+(end :> long); def b=((stage :> long) << 32)+(x :> long);
+        if(failed.Has(a,b)) false
+        else
+        {
+          def h=Get(o.Children[stage],x); def n=FCount(h); mutable ok=false;
+          for(mutable k=0;k<n && !ok;++k) { def q=FItem(h,k); when(q<=end && SuffixReach(o,stage+1,q,end)) ok=true; }
+          unless(ok) _=failed.Add(a,b);
+          ok
+        }
+      }
+    }
+    private SeqAdvance(n : NitraStructure, o : NitraOperation, i : int, p : int, end : int, path : int) : void
+    {
+      when(i==o.Children.Count) return;
+      def c=o.Children[i];
+      if(path >= 0)
+      {
+        def stop=arena[path+i];
+        def next=NewItem(3); next.Node=n; next.Op=o; next.I=i+1; next.P=stop; next.End=end; next.Start=path;
+        PushBuild(c,p,stop,n);
+      }
+      else SeqSearch(n,o,i,p,end);
+    }
+    private SeqSearch(n : NitraStructure, o : NitraOperation, i : int, p : int, end : int) : void
+    {
+      def c=o.Children[i]; def last=i==o.Children.Count-1;
+      def h=Get(c,p); def m=FCount(h);
+      mutable stop= -1; mutable many=false;
+      for(mutable k=0;k<m;++k)
+      {
+        def q=FItem(h,k);
+        when(q<=end && (!last || q==end)) { if(stop<0) stop=q else when(q!=stop) many=true; }
+      }
+      when(many)
+      {
+        stop= -1; mutable count=0;
+        for(mutable k=0;k<m;++k)
+        {
+          def q=FItem(h,k);
+          when(q<=end && SuffixReach(o,i+1,q,end)) { ++count; stop=q; }
+        }
+        when(count!=1) Bail("sequence split");
+      }
+      when(stop<0) Bail("sequence stop");
+      def next=NewItem(3); next.Node=n; next.Op=o; next.I=i+1; next.P=stop; next.End=end; next.Start= -1;
+      PushBuild(c,p,stop,n);
+    }
+    private static Key(o : NitraOperation, count : int) : int
+    { if(o.Max<0) Math.Min(count,Math.Max(1,o.Min)) else count }
+    private Finishes(o : NitraOperation, p : int, count : int, end : int) : bool
+    {
+      if(count>=o.Min && p==end) true
+      else count>=o.Min && count>0 && o.Code==7 && o.Text=="trailing" && FHas(Get(o.Children[1],p),end)
+    }
+    // Can the repetition go from state (p, count) to exactly end?
+    private RepViable(o : NitraOperation, p : int, count : int, end : int) : bool
+    {
+      if(Finishes(o,p,count,end)) true
+      else if(o.Max >= 0 && count>=o.Max) false
+      else
+      {
+        def a=(o.Id :> long)*4294967296L+(end :> long); def b=((Key(o,count) :> long) << 32)+(p :> long);
+        if(failed.Has(a,b+1000000000000L)) false
+        else
+        {
+          unless(System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) Bail("deep repetition");
+          mutable ok=false;
+          def tryFrom(q : int) : void
+          {
+            def h=Get(o.Children[0],q); def n=FCount(h);
+            for(mutable k=0;k<n && !ok;++k) { def last=FItem(h,k); when(last>p && last<=end && RepViable(o,last,count+1,end)) ok=true; }
+          }
+          if(o.Code==7 && count>0)
+          { def hs=Get(o.Children[1],p); def n=FCount(hs); for(mutable k=0;k<n && !ok;++k) tryFrom(FItem(hs,k)); }
+          else tryFrom(p);
+          unless(ok) _=failed.Add(a,b+1000000000000L);
+          ok
+        }
+      }
+    }
+    private RepAdvance(n : NitraStructure, o : NitraOperation, p : int, count : int, end : int) : void
+    {
+      def finish=Finishes(o,p,count,end);
+      // Steps (separator start, item start, item end) that fit the span.
+      mutable steps=0; mutable sq= -1; mutable sl= -1; mutable many=false;
+      def collect(viable : bool) : void
+      {
+        steps=0; sq= -1; sl= -1;
+        when(o.Max<0 || count<o.Max)
+        {
+          def from(q : int) : void
+          {
+            def h=Get(o.Children[0],q); def m=FCount(h);
+            for(mutable k=0;k<m;++k)
+            {
+              def last=FItem(h,k);
+              when(last>p && last<=end && (!viable || RepViable(o,last,count+1,end))) { ++steps; sq=q; sl=last; }
+            }
+          }
+          if(o.Code==7 && count>0)
+          { def hs=Get(o.Children[1],p); def m=FCount(hs); for(mutable k=0;k<m;++k) from(FItem(hs,k)); }
+          else from(p);
+        }
+      }
+      collect(false);
+      when(steps+(if(finish) 1 else 0)>1) { many=true; collect(true); }
+      def options=steps+(if(finish) 1 else 0);
+      when(options!=1) Bail(if(many) "repetition split" else "repetition stop");
+      if(finish) { when(p!=end) PushBuild(o.Children[1],p,end,n); }
+      else
+      {
+        def next=NewItem(4); next.Node=n; next.Op=o; next.P=sl; next.I=count+1; next.End=end;
+        PushBuild(o.Children[0],sq,sl,n);
+        when(o.Code==7 && count>0) PushBuild(o.Children[1],p,sq,n);
+      }
+    }
+
+    public Run(rule : string) : NitraStructureResult
+    {
+      try
+      {
+        mutable root : NitraOperation=null;
+        if(!prepared.Ready || !prepared.Entries.TryGetValue(rule,out root)) null
+        else
+        {
+          head=array(len+2); for(mutable q=0;q<head.Length;++q) head[q]= -1;
+          Reserve(Math.Min(4*len+64,1048576));
+          def h=Get(root,0);
+          if(!RHas(h,len) || !FHas(h,len)) { when(Explain) Console.Error.WriteLine("NITRA_HYBRID fallback: not accepted"); null }
+          else
+          {
+            PushBuild(root,0,len,null);
+            while(top>0)
+            {
+              --top; def item=items[top];
+              match(item.Kind)
+              {
+                | 1 => Build(item.Op,item.Start,item.End,item.Parent)
+                | 2 => nodeActive[item.Node.Id]=false; Receive(item.Parent,item.Node)
+                | 3 => SeqAdvance(item.Node,item.Op,item.I,item.P,item.End,item.Start)
+                | _ => RepAdvance(item.Node,item.Op,item.P,item.I,item.End)
+              }
+            }
+            def r=NitraRecognitionResult(); r.Source=source; r.Rule=rule; r.Root= -1; r.Accepted=true; r.Complete=true; r.Furthest=len;
+            r.SampleCreations=entries; r.Evaluations=Passes;
+            result.Recognition=r; result
+          }
+        }
+      }
+      catch
+      {
+        | e is NitraFastBail => when(Explain) Console.Error.WriteLine("NITRA_HYBRID fallback: "+e.Message); null
+      }
+    }
+
+    // NITRA_VERIFY: the hybrid result must be the full engine's result, node for node.
+    internal static Compare(a : NitraStructureResult, b : NitraStructureResult) : void
+    {
+      def fail(why : string) : void { throw InvalidOperationException("hybrid mismatch: "+why) }
+      unless(b.Success) fail("full engine did not succeed: "+string.Join("; ",b.Diagnostics));
+      when(a.Nodes.Count!=b.Nodes.Count) fail("node count "+a.Nodes.Count.ToString()+" vs "+b.Nodes.Count.ToString());
+      for(mutable i=0;i<a.Nodes.Count;++i)
+      {
+        def x=a.Nodes[i]; def y=b.Nodes[i];
+        when(x.Id!=y.Id || x.Operation!=y.Operation || x.Kind!=y.Kind || x.Label!=y.Label || x.RuleKind!=y.RuleKind || x.Start!=y.Start || x.End!=y.End || x.Children.Count!=y.Children.Count)
+          fail("node "+i.ToString()+": "+x.Kind+" "+(x.Label ?? "")+" "+x.Start.ToString()+".."+x.End.ToString()+" vs "+y.Kind+" "+(y.Label ?? "")+" "+y.Start.ToString()+".."+y.End.ToString());
+        for(mutable k=0;k<x.Children.Count;++k) when(x.Children[k].Id!=y.Children[k].Id) fail("children of node "+i.ToString());
+      }
+      when(a.Root.Id!=b.Root.Id) fail("root");
+    }
+  }
+}
