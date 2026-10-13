@@ -15,12 +15,15 @@ namespace Nitra.Compiler
     mutable ast : IAst;
     mutable astReady : bool;
 
+    [Obsolete("no longer experimental; use the overload without the flag")]
     public this(project : Project, index : int, text : string,
                 createTree : Func[ISourceSnapshotProvider,NitraSyntaxParseTree.Start],
-                experimental : bool)
+                _experimental : bool)
+    { this(project, index, text, createTree) }
+    public this(project : Project, index : int, text : string,
+                createTree : Func[ISourceSnapshotProvider,NitraSyntaxParseTree.Start])
     {
       base(project, index);
-      unless(experimental) throw InvalidOperationException("native semantic input requires experimental opt-in");
       when(text == null) throw ArgumentNullException("text");
       when(createTree == null) throw ArgumentNullException("createTree");
       source = SourceSnapshot(text, this);
@@ -62,15 +65,19 @@ namespace Nitra.Compiler
   {
     // Keeps upstream symbol loading, typing and mapping passes; replaces only
     // their source-file input. Call before BeforeTypedMembers starts.
+    [Obsolete("no longer experimental; use the overload without the flag")]
     public AddRecognizedFile(index : int, text : string,
                              createTree : Func[ISourceSnapshotProvider,NitraSyntaxParseTree.Start],
-                             experimental : bool) : RecognizedNemerleFile
+                             _experimental : bool) : RecognizedNemerleFile
+    { AddRecognizedFile(index, text, createTree) }
+    public AddRecognizedFile(index : int, text : string,
+                             createTree : Func[ISourceSnapshotProvider,NitraSyntaxParseTree.Start]) : RecognizedNemerleFile
     {
       when(_beforeTypedMembers)
         throw InvalidOperationException("cannot add grammar input after native typing starts");
       when(_allFiles.ContainsKey(index))
         throw ArgumentException("duplicate native semantic source identity");
-      def file = RecognizedNemerleFile(this, index, text, createTree, experimental);
+      def file = RecognizedNemerleFile(this, index, text, createTree);
       _allFiles.Add(index, file); _sourceFiles.Add(file);
       file
     }

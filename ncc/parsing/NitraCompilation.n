@@ -154,11 +154,14 @@ namespace Nemerle.Compiler
   }
   public module NitraCompilation
   {
+    [Obsolete("no longer experimental; use the overload without the flag")]
     public Compile(grammar : NitraPreparedGrammar, rule : string, source : string,
                    context : NitraCompilationContext, resolver : Func[NitraStructuralChoice,int],
-                   experimental : bool) : NitraCompilationResult
+                   _experimental : bool) : NitraCompilationResult
+    { Compile(grammar,rule,source,context,resolver) }
+    public Compile(grammar : NitraPreparedGrammar, rule : string, source : string,
+                   context : NitraCompilationContext, resolver : Func[NitraStructuralChoice,int]) : NitraCompilationResult
     {
-      unless(experimental) throw InvalidOperationException("Nitra compilation requires explicit experimental opt-in");
       when(context==null) throw ArgumentNullException("context");
       when(context.Running || context.Root!=null) throw InvalidOperationException("semantic contexts belong to one compilation invocation");
       def result=NitraCompilationResult();

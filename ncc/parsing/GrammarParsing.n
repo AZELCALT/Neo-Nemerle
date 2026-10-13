@@ -1,3 +1,5 @@
+// Previous grammar/space design, parked: compiled only with -define:OLD_GRAMMAR_DESIGN.
+#if OLD_GRAMMAR_DESIGN
 using System;
 using System.IO;
 using SCG = System.Collections.Generic;
@@ -11,46 +13,6 @@ namespace Nemerle.Compiler
   /// Source-only prototype. Recognition is independent of CLR emission.
   public module GrammarParsing
   {
-    internal FindConstruct(source : ISource) : Location
-    {
-      def text=source.GetText();
-      unless(text.Contains("grammar") || text.Contains("space") || text.Contains("runtime") || text.Contains("compile")) return Location.Default;
-      def reader=GReader(text,Location.GetFileName(source.FileIndex),0,text.Length);
-      try
-      {
-        while(!reader.Is("<eof>"))
-        {
-          def token=reader.Take();
-          when(!token.Quoted && (token.Text=="grammar" || token.Text=="space" || token.Text=="runtime" || token.Text=="compile"))
-          {
-            mutable found=reader.Is("{");
-            when(reader.Is("("))
-            {
-              _=reader.Take();
-              while(!reader.Is(")") && !reader.Is("<eof>")) _=reader.Take();
-              _=reader.Eat(")"); found=reader.Is("{");
-            }
-            when(reader.Peek().Text.Length>0 && char.IsLetter(reader.Peek().Text[0]))
-            { _=reader.Name(); found=reader.Is("{"); }
-            when(found)
-            {
-              mutable line=1; mutable column=1;
-              for(mutable i=0;i<token.Start;++i) if(text[i]=='\n') { ++line; column=1; } else ++column;
-              return Location(source.FileIndex,line,column);
-            }
-          }
-        }
-      }
-      // This is only an envelope pre-scan. Nemerle quotations and escapes need
-      // the real lexer; a failed pre-scan must not crash ordinary compilation.
-      catch
-      {
-        | _ is ArgumentException => ()
-        | _ is FormatException => ()
-        | _ is OverflowException => ()
-      }
-      Location.Default
-    }
     public ParseSources(manager : ManagerClass, sources : list[ISource], sourceRoot : string) : GrammarParseResult
     {
       when(manager==null) throw ArgumentNullException("manager", "Use ManagerClass.ParseGrammarSources to initialize compiler scope");
@@ -271,3 +233,4 @@ namespace Nemerle.Compiler
     }
   }
 }
+#endif

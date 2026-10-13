@@ -1,4 +1,4 @@
-# Experimental structural projection side parser
+# Structural projection side parser
 
 Design reference: `typed_recursive_syntax_chunks_for_codex.txt` in the workspace
 root. The intended system preserves Nitra-style syntax capabilities with shared
@@ -8,8 +8,7 @@ full implementation of that target, and does not replace the earlier parser.
 ## Current operation
 
 A host explicitly prepares a bounded set of kinds and forms with
-`StructuralProjection.Prepare(kinds, forms, experimental: true)`. Without opt-in,
-the API rejects the call. No additional source-language spelling is introduced.
+`StructuralProjection.Prepare(kinds, forms)`. No additional source-language spelling is introduced.
 A form in this slice has a name, one opener token, a body kind, and a nonempty
 sequence of ending marks. A kind supplies a structural token-validation callback.
 That callback checks observed body evidence; it does not build or resolve an AST.
@@ -85,7 +84,7 @@ var forms = new[] {
     new StructuralForm("B", "start", "Body", new[] { "end" }),
     new StructuralForm("C", "start", "Body", new[] { "end", "start" })
 };
-var plan = StructuralProjection.Prepare(kinds, forms, experimental: true);
+var plan = StructuralProjection.Prepare(kinds, forms);
 var observed = plan.Recognize("start this end start", "example");
 // observed.KindChecks == 1; inspect observed.Regions and observed.Tails.
 ```

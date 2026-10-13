@@ -1,6 +1,6 @@
-# Experimental dialect references and shared scopes
+# Dialect references and shared scopes
 
-Enabled by `-experimental-nitra-source` or `NitraSourceConfiguration(true)`.
+Active whenever a compilation contains `grammar`/`space` blocks.
 Nitra notation remains inside `grammar`; custom input remains inside `space`.
 These services belong to one compiler session, not a runtime dictionary.
 

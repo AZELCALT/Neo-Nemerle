@@ -135,7 +135,7 @@ namespace Nitra.Compiler
       {
         | inputs is SCG.List[NitraDocument] =>
           def registry=SelectedRegistry(); AddBuiltins(registry);
-          def grammar=NitraSyntax.Prepare(registry.Documents,array["NitraSyntax"],true);
+          def grammar=NitraSyntax.Prepare(registry.Documents,array["NitraSyntax"]);
           def project=CompilingNitraProject.Instance(manager);
           def sources=SCG.Dictionary.[string,SCG.List[string]](StringComparer.Ordinal);
           foreach(document in inputs)
@@ -149,10 +149,10 @@ namespace Nitra.Compiler
           foreach(source in sources)
           {
             def text=String.Join("\n",source.Value.ToArray());
-            def selected=NitraSyntax.Structure(grammar,"NitraSyntax.Start",text,null,true);
+            def selected=NitraSyntax.Structure(grammar,"NitraSyntax.Start",text,null);
             unless(selected.Success) throw ArgumentException(String.Join("\n",selected.Diagnostics.ToArray()));
             _=project.AddRecognizedFile(Nemerle.Compiler.Location.GetFileIndex(source.Key),text,
-              Func(provider => registry.Create("NitraSyntax.Start",provider,selected.Root) :> NitraSyntaxParseTree.Start),true);
+              Func(provider => registry.Create("NitraSyntax.Start",provider,selected.Root) :> NitraSyntaxParseTree.Start));
           }
         | _ =>
           when(manager.Options.OutputFileName.StartsWith("NativeGrammar_",StringComparison.Ordinal))
@@ -160,7 +160,7 @@ namespace Nitra.Compiler
       }
     }
     public Prepare(modules : SCG.IEnumerable[string]) : NitraPreparedGrammar
-    { NitraSyntax.Prepare(registry.Documents,modules,true) }
+    { NitraSyntax.Prepare(registry.Documents,modules) }
     public Modules(owner : string) : array[string]
     {
       def names=SCG.List.[string]();

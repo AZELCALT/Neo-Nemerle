@@ -682,7 +682,8 @@ namespace Nemerle.Compiler
       else if (Message.SeenError) 2 else 0
     }
 
-    // Host entry point for source recognition, without hierarchy building or IL emission.
+    /// Host entry point: initializes compiler scope (core environment, references, type hierarchy) without
+    /// compiling. With the previous grammar design parked (OLD_GRAMMAR_DESIGN) no recognition runs and the result is empty.
     public ParseGrammarSources() : GrammarParseResult
     {
       def previous = Instance;
@@ -690,7 +691,11 @@ namespace Nemerle.Compiler
       {
         Instance = this; InitCompiler(); LoadExternalLibraries(); Hierarchy = TypesManager(this);
         when (Options.FileModules) FileModuleRegistry.IndexSources();
+#if OLD_GRAMMAR_DESIGN
         GrammarParsing.ParseSources(this, Options.Sources, Options.SourceRoot ?? Options.ProjectPath)
+#else
+        GrammarParseResult()
+#endif
       }
       finally { Instance = previous; }
     }
@@ -701,15 +706,13 @@ namespace Nemerle.Compiler
 
       try
       {
-        when (Options.NitraSources != null && (Options.ExperimentalNitraSyntax || Options.ExperimentalGrammarIR || Options.ParseGrammarSpaces))
-          Message.FatalError("Native grammar compilation cannot be combined with declaration inspection, archive or recognition-only modes.");
-        when (Options.ExperimentalNitraSyntax)
+        when (Options.InspectNitraSyntax)
         {
-          when (Options.ExperimentalGrammarIR || Options.ParseGrammarSpaces || Options.CompileToMemory)
-            Message.FatalError("Nitra declaration inspection cannot be combined with archive, space recognition or in-memory compilation.");
+          when (Options.CompileToMemory)
+            Message.FatalError("Nitra declaration inspection cannot be combined with in-memory compilation.");
           foreach (file in Options.Sources)
           {
-            def document = NitraSyntax.Read(file.GetText(), Location.GetFileName(file.FileIndex), true);
+            def document = NitraSyntax.Read(file.GetText(), Location.GetFileName(file.FileIndex));
             System.Console.Out.WriteLine(document.ToJson());
             foreach (diagnostic in document.Diagnostics)
               Message.Error(diagnostic.File + "@" + diagnostic.Offset.ToString() + ": " + diagnostic.Message);
@@ -718,6 +721,7 @@ namespace Nemerle.Compiler
           return;
         }
 
+#if OLD_GRAMMAR_DESIGN
         when (Options.ExperimentalGrammarIR)
         {
           when (Options.ParseGrammarSpaces || Options.CompileToMemory)
@@ -733,6 +737,7 @@ namespace Nemerle.Compiler
           return;
         }
 
+#endif
         InitCompiler ();
 
         try
@@ -747,6 +752,7 @@ namespace Nemerle.Compiler
 
           when (Options.FileModules) FileModuleRegistry.IndexSources();
           Message.MaybeBailout();
+#if OLD_GRAMMAR_DESIGN
           when (Options.ParseGrammarSpaces)
           {
             def parsed = GrammarParsing.ParseSources(this, Options.Sources, Options.SourceRoot ?? Options.ProjectPath);
@@ -756,6 +762,7 @@ namespace Nemerle.Compiler
             Message.MaybeBailout();
             return;
           }
+#endif
           def parseResults = Options.Sources.Map(Parser.Parse);
 
           Message.MaybeBailout();    // we have detected multiple files already

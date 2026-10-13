@@ -1,8 +1,8 @@
 # Structural-region recognizer and selection (branch design/structural-recognizer)
 
 Replaces the sample/queue/pool recognizer and the closure-driven structure builder.
-Intent: `typed_recursive_syntax_chunks_for_codex.txt`. Everything here stays experimental;
-the previous implementation is preserved on branch `wip/codex-pools-snapshot`.
+Intent: `typed_recursive_syntax_chunks_for_codex.txt`. The
+previous implementation is preserved on branch `wip/codex-pools-snapshot`.
 
 ## What it is
 

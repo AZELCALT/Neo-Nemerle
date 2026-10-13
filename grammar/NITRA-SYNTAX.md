@@ -1,4 +1,4 @@
-# Experimental native Nitra declarations and static recognition
+# Native Nitra declarations and static recognition
 
 This is a separate, explicitly opted-in side parser. It accepts the declaration
 surface described by the pinned upstream Nitra grammar, and maps recognition
@@ -37,25 +37,24 @@ In particular, upstream semantic negative tests can pass declaration parsing.
 
 ```
 dotnet toolchain/nitra-syntax-prototype/ncc.exe \
-  -experimental-nitra-syntax example.nitra -no-color
+  -nitra-syntax example.nitra -no-color
 ```
 
-The command writes one declaration JSON object per source and emits no assembly.
-It rejects combinations with space recognition, archive emission or in-memory
-compilation. Existing `-parse-grammar-spaces` and `-experimental-grammar-ir` modes
-keep their existing behavior. This inspection mode does not compile source blocks.
-A separate host-configured path connects native grammar/space blocks to direct
-Nemerle output; see [NITRA-DIRECT-OUTPUT.md](NITRA-DIRECT-OUTPUT.md).
+The command writes one declaration JSON object per source and emits no assembly
+(`-experimental-nitra-syntax` is still accepted as an alias). It rejects in-memory
+compilation. This inspection mode does not compile source blocks; an ordinary
+compilation compiles every `grammar`/`space` block it finds, with no option;
+see [NITRA-DIRECT-OUTPUT.md](NITRA-DIRECT-OUTPUT.md).
 `[StartRule]` is not bound to a form.
 
 ## CLR host API
 
 ```csharp
-var document = NitraSyntax.Read(grammarText, "example.nitra", experimental: true);
+var document = NitraSyntax.Read(grammarText, "example.nitra");
 if (!document.Success || !document.SurfaceValidated)
     throw new Exception(document.ToJson());
-var definitions = NitraSyntax.BaselineDefinitions(experimental: true).Append(document);
-var prepared = NitraSyntax.Prepare(definitions, new[] { "Example" }, experimental: true);
+var definitions = NitraSyntax.BaselineDefinitions().Append(document);
+var prepared = NitraSyntax.Prepare(definitions, new[] { "Example" });
 var result = prepared.Recognize("Example.Query", foreignText);
 ```
 
@@ -68,8 +67,8 @@ per invocation. Callers should treat the returned metadata lists as read-only.
 
 `ReadDefinitions` is the extraction/bootstrap API. Its `Success` means extraction
 had no diagnostics; its `SurfaceValidated` remains false. Use `Read` for native
-surface validation. Passing `experimental: false` is rejected by these entry
-points. `BaselineDefinitions` returns fresh models, not the cached validator.
+surface validation. The older overloads with a trailing `experimental` flag still
+exist (obsolete, the flag is ignored). `BaselineDefinitions` returns fresh models, not the cached validator.
 
 `Complete` means recognition reached a settled result without a deferred action
 or resource/convergence diagnostic. `Accepted` additionally requires the explicit
@@ -127,7 +126,7 @@ through the existing operation/span interface, without recognizing the input aga
 The earlier `StructuralProjection` API remains the explicit form/body/boundary
 prototype. This native-rule graph supplies a broader recognition foundation; it
 does not claim that the future semantic-kind subsystem or form adapter is finished.
-All of this remains experimental, including the eventual integration.
+The previous source-only grammar prototype is parked; see `grammar/obsolete/`.
 
 ## Deferred facilities
 

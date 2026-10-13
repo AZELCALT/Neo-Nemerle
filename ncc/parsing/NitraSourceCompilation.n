@@ -15,19 +15,18 @@ namespace Nemerle.Compiler
     public CreateContext : Func[Typer,string,NitraCompilationContext];
     public mutable ResolveStructure : Func[NitraStructuralChoice,int];
     public InactiveConstructs : SCG.List[NitraInactiveConstruct] = SCG.List();
-    public this(experimental : bool)
+    public this() { CreateContext=null; }
+    public this(createContext : Func[Typer,string,NitraCompilationContext])
     {
-      unless(experimental) throw InvalidOperationException("native grammar compilation requires experimental opt-in");
-      CreateContext=null;
-    }
-    public this(createContext : Func[Typer,string,NitraCompilationContext], experimental : bool)
-    {
-      unless(experimental) throw InvalidOperationException("native grammar compilation requires experimental opt-in");
       when(createContext==null) throw ArgumentNullException("createContext"); CreateContext=createContext;
     }
+    [Obsolete("grammar/space compilation is no longer experimental; use the constructor without the flag")]
+    public this(_experimental : bool) { this() }
+    [Obsolete("grammar/space compilation is no longer experimental; use the constructor without the flag")]
+    public this(createContext : Func[Typer,string,NitraCompilationContext], _experimental : bool) { this(createContext) }
   }
-  // The native semantic compiler implements this bridge in the experimental
-  // distribution. Ordinary compilation does not load its assemblies.
+  // The native semantic compiler (Integrated.Nitra.Compiler.dll next to Nemerle.Compiler.dll) implements this bridge.
+  // It is loaded only when a source contains a grammar or space block.
   public interface INitraNativeSourceHost
   {
     Initialize(manager : ManagerClass, definitions : SCG.IEnumerable[NitraDocument]) : void;
@@ -110,7 +109,7 @@ namespace Nemerle.Compiler
             when(definitions.ContainsKey(name)) throw ArgumentException("duplicate source grammar: "+name);
             def block=r.Block();
             def nativeSource="namespace "+name+" {"+text.Substring(block.Start+1,block.End-block.Start-2)+"}";
-            def document=if(configuration.CreateContext!=null) NitraSyntax.ReadSourceGrammar(nativeSource,file,true)
+            def document=if(configuration.CreateContext!=null) NitraSyntax.ReadSourceGrammar(nativeSource,file)
                          else
                          {
                            // Automatic hosting obtains modules and rules from
@@ -165,7 +164,10 @@ namespace Nemerle.Compiler
       when(configuration.CreateContext==null)
       {
         def directory=System.IO.Path.GetDirectoryName(typeof(ManagerClass).Assembly.Location);
-        def assembly=System.Reflection.Assembly.LoadFrom(System.IO.Path.Combine(directory,"Integrated.Nitra.Compiler.dll"));
+        def hostPath=System.IO.Path.Combine(directory,"Integrated.Nitra.Compiler.dll");
+        unless(System.IO.File.Exists(hostPath))
+          throw ArgumentException("grammar and space blocks need the Nitra runtime (Integrated.Nitra.Compiler.dll and its Integrated.* dependencies) next to Nemerle.Compiler.dll in "+directory);
+        def assembly=System.Reflection.Assembly.LoadFrom(hostPath);
         def type=assembly.GetType("Nitra.Compiler.NativeSourceHost",true);
         nativeHost=Activator.CreateInstance(type) :> INitraNativeSourceHost;
         nativeHost.Initialize(manager,definitions.Values);
@@ -176,7 +178,7 @@ namespace Nemerle.Compiler
         if(z.Names.Count==0) foreach(pair in owners) when(pair.Value==z.File) selected.Add(pair.Key);
         else selected.AddRange(z.Names);
         when(selected.Count==0) throw ArgumentException("space has no selected source grammars");
-        def documents=SCG.List(NitraSyntax.BaselineDefinitions(true)); foreach(d in definitions.Values) documents.Add(d);
+        def documents=SCG.List(NitraSyntax.BaselineDefinitions()); foreach(d in definitions.Values) documents.Add(d);
         def modules=SCG.List.[string]();
         foreach(name in selected)
         {
@@ -185,7 +187,7 @@ namespace Nemerle.Compiler
           if(nativeHost!=null) modules.AddRange(nativeHost.Modules(name));
           else foreach(m in definitions[name].Modules) modules.Add(m.Name);
         }
-        z.Grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules,true);
+        z.Grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules);
         z.Owner=String.Join(",",selected.ToArray()); z.Dialect=selected[0];
         foreach(dialect in selected)
         {
@@ -229,7 +231,7 @@ namespace Nemerle.Compiler
       def context=configuration.CreateContext.Invoke(typer,z.Owner);
       when(context==null || context.Typer : object != typer : object) throw ArgumentException("source context must use the current typer");
       context.Location=location;
-      def compiled=NitraCompilation.Compile(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),context,configuration.ResolveStructure,true);
+      def compiled=NitraCompilation.Compile(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),context,configuration.ResolveStructure);
       unless(compiled.Success) { foreach(message in compiled.Diagnostics) Message.Error(context.Location,message); return PExpr.Error(context.Location); }
       compiled.Expression
     }

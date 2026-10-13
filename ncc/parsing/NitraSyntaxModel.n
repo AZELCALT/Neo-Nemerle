@@ -86,7 +86,7 @@ namespace Nemerle.Compiler
     public Success : bool { get { Diagnostics.Count==0 } }
     public ToJson() : string
     {
-      def b=StringBuilder("{\"experimental\":true,\"surfaceValidated\":"+(if(SurfaceValidated) "true" else "false")+",\"file\":"+GrammarJson.Quote(File)+",\"declarations\":[");
+      def b=StringBuilder("{\"surfaceValidated\":"+(if(SurfaceValidated) "true" else "false")+",\"file\":"+GrammarJson.Quote(File)+",\"declarations\":[");
       mutable first=true; def pending=SCG.Stack.[NitraDeclaration]();
       for(mutable i=Declarations.Count-1;i>=0;--i) pending.Push(Declarations[i]);
       while(pending.Count>0)

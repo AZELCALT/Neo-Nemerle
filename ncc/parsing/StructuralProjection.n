@@ -105,10 +105,11 @@ namespace Nemerle.Compiler
   }
   public module StructuralProjection
   {
-    // Explicit gate on the host API. Source grammar integration comes later.
-    public Prepare(kinds : array[StructuralKind], forms : array[StructuralForm], experimental : bool) : StructuralProjectionPlan
+    [Obsolete("no longer experimental; use the overload without the flag")]
+    public Prepare(kinds : array[StructuralKind], forms : array[StructuralForm], _experimental : bool) : StructuralProjectionPlan
+    { Prepare(kinds,forms) }
+    public Prepare(kinds : array[StructuralKind], forms : array[StructuralForm]) : StructuralProjectionPlan
     {
-      unless(experimental) throw InvalidOperationException("Structural projection requires explicit experimental opt-in.");
       when(kinds==null || forms==null) throw ArgumentNullException("kinds/forms");
       def plan=StructuralProjectionPlan(); def known=SCG.Dictionary.[string,StructuralKind]();
       foreach(k in kinds)

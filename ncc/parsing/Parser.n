@@ -111,12 +111,15 @@ namespace Nemerle.Compiler
 
     public Parse(source : ISource) : ParseResult
     {
-      when(manager.Options.NitraSources!=null)
+      // Grammar and space blocks are part of the language: a file containing one switches the compilation to the
+      // Nitra source path (all sources are indexed once); files without them are parsed as before.
+      when(manager.Options.NitraSources!=null || NitraSourceScan.FindConstruct(source).FileIndex!=0)
       {
         try
         {
           when(nativeSession==null)
           {
+            when(manager.Options.NitraSources==null) manager.Options.NitraSources=NitraSourceConfiguration();
             def session=NitraSourceSession(manager); session.Index(); nativeSession=session;
           }
           def text=nativeSession.Rewrite(source);
@@ -125,19 +128,10 @@ namespace Nemerle.Compiler
         }
         catch { | e is ArgumentException => Message.Error(Location(source.FileIndex,1,1),e.Message); return ParseResult([]); }
       }
-      def grammarLocation = GrammarParsing.FindConstruct(source);
-      if (grammarLocation.FileIndex != 0)
-      {
-        Message.Error(grammarLocation, "grammar/space normalization not implemented; compile/runtime blocks are experimental placeholders; use -parse-grammar-spaces for recognition or -experimental-grammar-ir for archival");
-        ParseResult([])
-      }
-      else
-      {
       def lexer = LexerFile(manager, source.FileIndex, source.GetText(), manager.Options.LexerStoreComments);
       when(manager.Options.IndentationSyntax)
         lexer.SwitchToIndentationMode();
       DefaultParseResult(MainParser.Parse(lexer), lexer)
-      }
     }
   }
 

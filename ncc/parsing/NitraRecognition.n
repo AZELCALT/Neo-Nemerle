@@ -96,7 +96,7 @@ namespace Nemerle.Compiler
     public Diagnostics : SCG.List[string] = SCG.List();
     public ToJson() : string
     {
-      def b=StringBuilder("{\"experimental\":true,\"accepted\":"+(if(Accepted) "true" else "false")+",\"complete\":"+(if(Complete) "true" else "false")+",\"root\":"+Root.ToString()+",\"furthest\":"+Furthest.ToString()+",\"regions\":[");
+      def b=StringBuilder("{\"accepted\":"+(if(Accepted) "true" else "false")+",\"complete\":"+(if(Complete) "true" else "false")+",\"root\":"+Root.ToString()+",\"furthest\":"+Furthest.ToString()+",\"regions\":[");
       mutable first=true;
       foreach(r in Regions)
       {

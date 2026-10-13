@@ -1,3 +1,5 @@
+// Previous grammar/space design, parked: compiled only with -define:OLD_GRAMMAR_DESIGN.
+#if OLD_GRAMMAR_DESIGN
 using System;
 using SCG = System.Collections.Generic;
 using Nemerle;
@@ -431,3 +433,4 @@ namespace Nemerle.Compiler
     }
   }
 }
+#endif

@@ -1,3 +1,5 @@
+// Previous grammar/space design, parked: compiled only with -define:OLD_GRAMMAR_DESIGN.
+#if OLD_GRAMMAR_DESIGN
 // Experimental retention only: these records do not define block semantics.
 using System;
 using System.IO;
@@ -159,3 +161,4 @@ namespace Nemerle.Compiler
     { def json=ClrCompilerSection.Read(path); if(json==null) null else Deserialize(json) }
   }
 }
+#endif

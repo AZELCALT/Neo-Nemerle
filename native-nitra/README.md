@@ -1,4 +1,4 @@
-# Experimental native Nitra integration
+# Native Nitra integration
 
 `upstream/` contains unchanged source from Nitra commit
 `b287b8a42237fac4d993444e7e3af9240b601503`. `NITRA-UPSTREAM.json` records
@@ -52,9 +52,11 @@ compiler-session registry, programmable resolution, and scope API.
 
 ## Automatic source hosting
 
-Use `-experimental-nitra-source`, or set
-`options.NitraSources = NitraSourceConfiguration(true)` through the compiler API.
-The experimental package supplies the native semantic compiler as an internal
+No option is needed: a compilation whose sources contain a `grammar` or `space`
+block indexes all sources once and compiles those blocks (`-experimental-nitra-source`
+is still accepted and does nothing). The Integrated.* dlls must sit next to
+`Nemerle.Compiler.dll`; without them the block gets one clear error.
+The toolchain directory keeps its historical name `toolchain/nitra-native-core-experimental`. It supplies the native semantic compiler as an internal
 component; hosts do not register mappings or construct native fields.
 
 `integration/RecognitionEmitter.n` generates a recognition graph from the same

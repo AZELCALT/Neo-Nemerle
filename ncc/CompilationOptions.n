@@ -86,9 +86,11 @@ namespace Nemerle.Compiler
     public mutable LibraryPaths : list[string];
     public mutable MacrosToLoad : list [string];
     public mutable Sources : list [ISource];
+    // Modes of the parked previous grammar design; only set when the compiler is built with OLD_GRAMMAR_DESIGN.
     public mutable ParseGrammarSpaces : bool;
     public mutable ExperimentalGrammarIR : bool;
-    public mutable ExperimentalNitraSyntax : bool;
+    /// -nitra-syntax: print the Nitra declarations of every source as JSON instead of compiling.
+    public mutable InspectNitraSyntax : bool;
     public mutable TryStartDebugger : bool;
 
     public mutable Platform : string;
@@ -162,7 +164,7 @@ namespace Nemerle.Compiler
       IndentationSyntax = false;
       ParseGrammarSpaces = false;
       ExperimentalGrammarIR = false;
-      ExperimentalNitraSyntax = false;
+      InspectNitraSyntax = false;
       DoPrintStats = false;
       LexerStoreComments = false;
       Optimize = null;
@@ -384,24 +386,27 @@ namespace Nemerle.Compiler
                                help = "Turn on indentation-based syntax (similar to Python)",
                                handler = fun () { this.IndentationSyntax = true; }),
 
+#if OLD_GRAMMAR_DESIGN
         Getopt.CliOption.Flag (name = "-parse-grammar-spaces",
                        help = "Parse experimental grammar/space source and write JSON without emitting an assembly",
                        handler = fun () { this.ParseGrammarSpaces = true; }),
-
-        Getopt.CliOption.Flag (name = "-experimental-nitra-source",
-                       aliases = [],
-                       help = "Compile native grammar declarations and space expressions (experimental)",
-                       handler = fun () { this.NitraSources = NitraSourceConfiguration(true); }),
-
-        Getopt.CliOption.Flag (name = "-experimental-nitra-syntax",
-                       aliases = [],
-                       help = "Inspect experimental native Nitra declarations without executing or compiling them",
-                       handler = fun () { this.ExperimentalNitraSyntax = true; }),
 
         Getopt.CliOption.Flag (name = "-experimental-grammar-ir",
                        aliases = [],
                        help = "Archive opaque experimental blocks in a DLL; does not compile or execute source",
                        handler = fun () { this.ExperimentalGrammarIR = true; }),
+#endif
+
+        // Grammar and space blocks are compiled whenever a source contains one; the old opt-in is still accepted.
+        Getopt.CliOption.Flag (name = "-experimental-nitra-source",
+                       aliases = [],
+                       help = "Accepted for compatibility; grammar and space blocks are always compiled",
+                       handler = fun () { () }),
+
+        Getopt.CliOption.Flag (name = "-nitra-syntax",
+                       aliases = ["-experimental-nitra-syntax"],
+                       help = "Print the Nitra declarations of each source as JSON without executing or compiling them",
+                       handler = fun () { this.InspectNitraSyntax = true; }),
 
         Getopt.CliOption.Flag (name = "-file-modules",
                        aliases = [],

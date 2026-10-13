@@ -1,4 +1,4 @@
-# Experimental settled structures and direct Nemerle output
+# Settled structures and direct Nemerle output
 
 This slice provides a running recognition-to-compilation bridge. Semantic and
 output callbacks are supplied by a compiler host or macro. It does **not** yet
@@ -56,7 +56,8 @@ restoration does not roll back arbitrary mutations of host-owned state by callba
 
 ## Source envelopes and limits
 
-Set `CompilationOptions.NitraSources` to an experimental `NitraSourceConfiguration`
+Grammar and space blocks are compiled automatically. To use this host-configured
+path instead, set `CompilationOptions.NitraSources` to a `NitraSourceConfiguration`
 with a context factory. Native modules stay inside `grammar G { ... }`; custom
 expressions stay inside `space G { ... }`, `space (G, H) { ... }`, or local bare
 `space { ... }`. Selected modules must expose exactly one selected start rule.
