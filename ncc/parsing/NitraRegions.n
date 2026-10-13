@@ -874,6 +874,22 @@ namespace Nemerle.Compiler
     internal EdgeFrom(e : int) : int { edFrom[e] }
     internal EdgeB(e : int) : int { edB[e] }
     internal EdgeTo(e : int) : int { edTo[e] }
+    internal EdgeChild(e : int) : int { edChild[e] }
+    private byEnd : SCG.Dictionary[int,array[long]] = SCG.Dictionary();
+    // Recorded edges of a region ordered by end: keys are (end << 32) + edge id. Built on first request.
+    internal EdgesByEnd(r : int) : array[long]
+    {
+      mutable a : array[long] = null;
+      unless(byEnd.TryGetValue(r,out a))
+      {
+        mutable n=0; mutable e=rEdgeHead[r];
+        while(e >= 0) { ++n; e=edNext[e] }
+        a=array(n); mutable i=0; e=rEdgeHead[r];
+        while(e >= 0) { a[i]=((edTo[e] :> long) << 32)+(e :> long); ++i; e=edNext[e] }
+        Array.Sort(a); byEnd[r]=a
+      }
+      a
+    }
     // After settlement: does this recorded edge take part in the feasible derivations of its region?
     internal EdgeUsable(r : int, e : int) : bool
     {

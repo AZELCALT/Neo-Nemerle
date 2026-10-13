@@ -834,16 +834,65 @@ namespace Nemerle.Compiler
     // Plans read straight from the recorded edges of the region (exact regions only).
     private planKeys : SCG.List[long] = SCG.List();
     private planEdges : SCG.List[int] = SCG.List();
+    private planSeen : SCG.HashSet[long] = SCG.HashSet();
+    private AddPlanEdge(stage : int, from : int, to : int) : void
+    { planKeys.Add(((stage :> long) << 32)+(planEdges.Count :> long)); planEdges.Add(stage); planEdges.Add(from); planEdges.Add(to); }
+    // Number of stages of the original sequence that a child of an interface sequence stands for.
+    private static StageWidth(c : NitraOperation) : int
+    { if(c.SharedPrefix) { mutable w=0; foreach(k in c.Children) w+=StageWidth(k); w } else 1 }
+    private static InterfaceWidth(c : NitraOperation) : int
+    { mutable w=0; foreach(k in c.Children) w+=StageWidth(k); w }
+    // Walk back from the ends of the whole sequence: edges of `stage` of interface region r that end at t, then the
+    // edges that lead to each of them. Prefix regions are entered at their last stage. Only edges on a path to the end are visited.
+    private CollectShared(rec : NitraRecognizer, r : int, I : NitraOperation, baseStage : int, stage : int, t : int) : bool
+    {
+      if(!planSeen.Add(((r :> long) << 40)+((stage :> long) << 32)+(t :> long))) true
+      else
+      {
+        def keys=rec.EdgesByEnd(r);
+        mutable lo=0; mutable hi=keys.Length; def target=(t :> long) << 32;
+        while(lo<hi) { def mid=(lo+hi)/2; if(keys[mid]<target) lo=mid+1 else hi=mid }
+        mutable ok=true; mutable i=lo;
+        while(ok && i<keys.Length && (keys[i] >> 32)==(t :> long))
+        {
+          def id=(keys[i] & 0xFFFFFFFFL) :> int;
+          when(rec.EdgeKind(id)==2 && rec.EdgeA(id)==stage && rec.EdgeUsable(r,id))
+          {
+            def child=I.Children[stage];
+            mutable off=baseStage; for(mutable k=0;k<stage;++k) off+=StageWidth(I.Children[k]);
+            def from=rec.EdgeFrom(id);
+            if(child.SharedPrefix)
+            {
+              def pr=rec.EdgeChild(id);
+              if(pr<0 || rec.FeasibleState(pr)!=1 || rec.RegionOp(pr)!=child) ok=false
+              else ok=CollectShared(rec,pr,child,off,child.Children.Count-1,t)
+            }
+            else AddPlanEdge(off,from,t);
+            when(ok && stage>0) ok=CollectShared(rec,r,I,baseStage,stage-1,from);
+          }
+          ++i;
+        }
+        ok
+      }
+    }
     private SeqFromEdges(o : NitraOperation, r : int, p : int, e : int) : int
     {
       def rec=evidence.Recognizer; def n=o.Children.Count;
       planKeys.Clear(); planEdges.Clear();
-      mutable id=rec.EdgeHead(r);
-      while(id >=0)
+      if(rec.RegionOp(r)==o)
       {
-        when(rec.EdgeKind(id)==2 && rec.EdgeTo(id)<=e && rec.EdgeUsable(r,id))
-        { planKeys.Add(((rec.EdgeA(id) :> long) << 32)+(planEdges.Count :> long)); planEdges.Add(rec.EdgeA(id)); planEdges.Add(rec.EdgeFrom(id)); planEdges.Add(rec.EdgeTo(id)); }
-        id=rec.EdgeNext(id);
+        mutable id=rec.EdgeHead(r);
+        while(id >=0)
+        {
+          when(rec.EdgeKind(id)==2 && rec.EdgeTo(id)<=e && rec.EdgeUsable(r,id)) AddPlanEdge(rec.EdgeA(id),rec.EdgeFrom(id),rec.EdgeTo(id));
+          id=rec.EdgeNext(id);
+        }
+      }
+      else
+      {
+        // The region belongs to the shared-prefix interface of o: flatten the prefix regions into o's stages.
+        planSeen.Clear();
+        unless(CollectShared(rec,r,rec.RegionOp(r),0,rec.RegionOp(r).Children.Count-1,e)) return -1;
       }
       def m=planEdges.Count/3; def keys=planKeys.ToArray(); Array.Sort(keys);
       def edges : array[int]=array(3*m);
@@ -941,11 +990,13 @@ namespace Nemerle.Compiler
       when(r >=0 && evidence.Recognizer.FeasibleState(r)!=1) ++DbgState;
       when(r >=0 && evidence.Recognizer.RegionOp(r)!=o) ++DbgOp;
       ++DbgCalls;
-      if(r<0 || evidence.Recognizer.FeasibleState(r)!=1 || evidence.Recognizer.RegionOp(r)!=o) -1
-      else if(o.Code==3 && o.Children.Count>0)
+      if(r<0 || evidence.Recognizer.FeasibleState(r)!=1) -1
+      else if(o.Code==3 && o.Children.Count>0 && (evidence.Recognizer.RegionOp(r)==o || o.Interface != null && evidence.Recognizer.RegionOp(r)==o.Interface && InterfaceWidth(o.Interface)==o.Children.Count))
       {
-        def index=SeqFromEdges(o,r,p,e); eState[en]=if(seqPlans[index].Ok) 1 else 0; index
+        def index=SeqFromEdges(o,r,p,e);
+        if(index<0) -1 else { eState[en]=if(seqPlans[index].Ok) 1 else 0; index }
       }
+      else if(evidence.Recognizer.RegionOp(r)!=o) -1
       else if((o.Code==4 || o.Code==5) && o.Children.Count>1)
       {
         def index=ChoiceFromEdges(o,r,e); eState[en]=if(choicePlans[index].Length>0) 1 else 0; index
