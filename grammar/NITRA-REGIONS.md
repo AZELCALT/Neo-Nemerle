@@ -71,9 +71,12 @@ the way Nitra's memo table does, and then builds the structure exactly as `Nitra
   alternative that produced it. Construction reads these back; a second path or alternative for the same end is
   precisely an ambiguity.
 * Rejected input is answered by the fast pass itself (same furthest offset and message as the full engine).
-* It gives up and the full engine runs from scratch on: any ambiguity, an accepted input that is not feasible,
+* Ambiguity is decided in the fast pass the way `NitraStructureBuilder.Pick` decides it: the same options, in the same
+  order, at the same moments, handed to the same resolver (no resolver: the same diagnostic).
+* It gives up and the full engine runs from scratch on: an accepted input that is not feasible,
   a cycle through any other operation, very deep nesting. So the result is always the full engine's result.
-* `NITRA_VERIFY=1` runs both and compares node for node (and rejections by offset and message);
+* `NITRA_VERIFY=1` runs the full engine first (recording the resolver's questions and answers), then the fast pass
+  replaying those answers; questions, nodes and rejections (offset, message) must be identical;
   `NITRA_NOHYBRID=1` turns the fast pass off; `NITRA_HYBRID_WHY=1` prints why it gave up.
 
 ## Results (this machine, .NET 10.0.12, sequential, 3 fresh processes per engine)

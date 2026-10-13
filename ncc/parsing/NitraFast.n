@@ -93,8 +93,25 @@ namespace Nemerle.Compiler
     internal Entries : int { get { entries } }
     internal Deps : int { get { deps } }
 
-    public this(prepared : NitraPreparedGrammar, source : string)
-    { this.prepared=prepared; this.source=source; len=source.Length; native=prepared.Native; }
+    resolver : Func[NitraStructuralChoice,int];
+    public this(prepared : NitraPreparedGrammar, source : string, resolver : Func[NitraStructuralChoice,int])
+    { this.prepared=prepared; this.source=source; len=source.Length; native=prepared.Native; this.resolver=resolver; }
+    // Ambiguity is decided exactly as NitraStructureBuilder.Pick decides it: same options, same order, same moments.
+    private static Option(o : NitraOperation, start : int, end : int) : NitraStructuralOption
+    { def n=NitraStructuralOption(); n.Operation=o.Id; n.Kind=o.Kind; n.Label=o.Label; n.Start=start; n.End=end; n }
+    private Pick(o : NitraOperation, start : int, end : int, options : SCG.List[NitraStructuralOption]) : NitraStructuralOption
+    {
+      when(options.Count==0) Bail("no option");
+      if(options.Count==1) options[0]
+      else
+      {
+        def choice=NitraStructuralChoice(); choice.Parent=o.Label; choice.Start=start; choice.End=end; choice.Options.AddRange(options);
+        when(resolver==null) throw ArgumentException("unresolved structural ambiguity in "+o.Label+" at "+start.ToString());
+        def selected=resolver.Invoke(choice);
+        when(selected<0 || selected>=options.Count) throw ArgumentException("structural resolver did not select a valid option in "+o.Label);
+        options[selected]
+      }
+    }
 
     private static Bail(why : string) : void { throw NitraFastBail(why) }
 
@@ -735,8 +752,7 @@ namespace Nemerle.Compiler
           {
             def h=Get(o,start);
             def path=if(h >= 0 && !eMerged[h]) PathOf(h,end) else -1;
-            when(path==Ambiguous) Bail("ambiguous sequence");
-            SeqAdvance(n,o,0,start,end,path);
+            SeqAdvance(n,o,0,start,end,if(path==Ambiguous) -1 else path);
           }
         | 6 | 7 =>
           if(start==end) { when(o.Min>0) Bail("empty required repetition"); }
@@ -747,14 +763,19 @@ namespace Nemerle.Compiler
         | _ =>
           def h=Get(o,start);
           def known=if(h >= 0 && (o.Code==4 || o.Code==5) && !o.GreedyCall) PathOf(h,end) else -1;
-          if(known==Ambiguous) Bail("choice")
-          else if(known >= 0) PushBuild(o.Children[known],start,end,n)
+          if(known >= 0 && known!=Ambiguous) PushBuild(o.Children[known],start,end,n)
           else
           {
             mutable chosen : NitraOperation=null; mutable count=0;
             foreach(c in o.Children) when(FHas(Get(c,start),end)) { ++count; chosen=c; }
-            when(count!=1) Bail("choice");
-            PushBuild(chosen,start,end,n);
+            if(count==1) PushBuild(chosen,start,end,n)
+            else
+            {
+              def options=SCG.List.[NitraStructuralOption]();
+              foreach(c in o.Children) when(FHas(Get(c,start),end)) options.Add(Option(c,start,end));
+              def selected=Pick(o,start,end,options);
+              foreach(c in o.Children) when(c.Id==selected.Operation) PushBuild(c,start,end,n);
+            }
           }
       }
     }
@@ -799,13 +820,19 @@ namespace Nemerle.Compiler
       }
       when(many)
       {
-        stop= -1; mutable count=0;
+        def good=SCG.List.[int]();
         for(mutable k=0;k<m;++k)
         {
           def q=FItem(h,k);
-          when(q<=end && SuffixReach(o,i+1,q,end)) { ++count; stop=q; }
+          when(q<=end && (!last || q==end) && !good.Contains(q) && SuffixReach(o,i+1,q,end)) good.Add(q);
         }
-        when(count!=1) Bail("sequence split");
+        if(good.Count==1) stop=good[0]
+        else
+        {
+          good.Sort(); def options=SCG.List.[NitraStructuralOption]();
+          foreach(q in good) options.Add(Option(c,p,q));
+          stop=Pick(o,p,end,options).End;
+        }
       }
       when(stop<0) Bail("sequence stop");
       def next=NewItem(3); next.Node=n; next.Op=o; next.I=i+1; next.P=stop; next.End=end; next.Start= -1;
@@ -870,9 +897,37 @@ namespace Nemerle.Compiler
       }
       collect(false);
       when(steps+(if(finish) 1 else 0)>1) { many=true; collect(true); }
-      def options=steps+(if(finish) 1 else 0);
-      when(options!=1) Bail(if(many) "repetition split" else "repetition stop");
-      if(finish) { when(p!=end) PushBuild(o.Children[1],p,end,n); }
+      mutable takeFinish=finish;
+      if(steps+(if(finish) 1 else 0)==1) ()
+      else
+      {
+        // Several viable continuations: the options in the order selection lists them (finish, then steps by start, end).
+        def pairs=SCG.List.[long]();
+        when(o.Max<0 || count<o.Max)
+        {
+          def from(q : int) : void
+          {
+            def h=Get(o.Children[0],q); def m=FCount(h);
+            for(mutable k=0;k<m;++k)
+            {
+              def last=FItem(h,k);
+              when(last>p && last<=end && RepViable(o,last,count+1,end)) pairs.Add(((q :> long) << 32)+(last :> long));
+            }
+          }
+          if(o.Code==7 && count>0)
+          { def hs=Get(o.Children[1],p); def m=FCount(hs); for(mutable k=0;k<m;++k) from(FItem(hs,k)); }
+          else from(p);
+        }
+        pairs.Sort();
+        def options=SCG.List.[NitraStructuralOption]();
+        when(finish) options.Add(Option(o,p,end));
+        foreach(pair in pairs) options.Add(Option(o.Children[0],(pair >> 32) :> int,(pair & 0xFFFFFFFFL) :> int));
+        def selected=Pick(o,p,end,options);
+        takeFinish=selected.Operation==o.Id;
+        unless(takeFinish) { sq=selected.Start; sl=selected.End; }
+      }
+      _=many;
+      if(takeFinish) { when(p!=end) PushBuild(o.Children[1],p,end,n); }
       else
       {
         def next=NewItem(4); next.Node=n; next.Op=o; next.P=sl; next.I=count+1; next.End=end;
@@ -906,17 +961,22 @@ namespace Nemerle.Compiler
           {
             when(NitraRecognizer.PhasesOn) NitraRecognizer.NotePhase("hybrid_eval",System.Diagnostics.Stopwatch.GetTimestamp()-started0);
             PushBuild(root,0,len,null);
-            while(top>0)
+            try
             {
-              --top; def item=items[top];
-              match(item.Kind)
+              while(top>0)
               {
-                | 1 => Build(item.Op,item.Start,item.End,item.Parent)
-                | 2 => nodeActive[item.Node.Id]=false; Receive(item.Parent,item.Node)
-                | 3 => SeqAdvance(item.Node,item.Op,item.I,item.P,item.End,item.Start)
-                | _ => RepAdvance(item.Node,item.Op,item.P,item.I,item.End)
+                --top; def item=items[top];
+                match(item.Kind)
+                {
+                  | 1 => Build(item.Op,item.Start,item.End,item.Parent)
+                  | 2 => nodeActive[item.Node.Id]=false; Receive(item.Parent,item.Node)
+                  | 3 => SeqAdvance(item.Node,item.Op,item.I,item.P,item.End,item.Start)
+                  | _ => RepAdvance(item.Node,item.Op,item.P,item.I,item.End)
+                }
               }
             }
+            // Unresolved ambiguity or a resolver refusal: the full engine reports it the same way.
+            catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); result.Root=null; }
             when(Environment.GetEnvironmentVariable("NITRA_HYBRID_DUMP")=="1")
             {
               def hist=SCG.Dictionary.[string,int]();
@@ -929,7 +989,7 @@ namespace Nemerle.Compiler
               Console.Error.WriteLine("NITRA_HYBRID_DUMP entries="+entries.ToString()+" nodes="+result.Nodes.Count.ToString());
               for(mutable i=0;i<Math.Min(25,rows.Count);++i) Console.Error.WriteLine("  "+rows[i].Value.ToString()+"  "+rows[i].Key);
             }
-            def r=NitraRecognitionResult(); r.Source=source; r.Rule=rule; r.Root= -1; r.Accepted=true; r.Complete=true; r.Furthest=len;
+            def r=NitraRecognitionResult(); r.Source=source; r.Rule=rule; r.Root= -1; r.Accepted=true; r.Complete=true; r.Furthest=furthest;
             r.SampleCreations=entries; r.Evaluations=Passes;
             result.Recognition=r; result
           }

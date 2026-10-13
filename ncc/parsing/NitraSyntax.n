@@ -55,40 +55,70 @@ namespace Nemerle.Compiler
       unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
       when(grammar==null) throw ArgumentNullException("grammar");
       def gcPause0=if(NitraRecognizer.PhasesOn) GC.GetTotalPauseDuration().Ticks else 0L; def gcCount0=if(NitraRecognizer.PhasesOn) GC.CollectionCount(0) else 0;
-      def fast=Hybrid(grammar,rule,source);
-      if(fast!=null && !NitraFastParser.Verify)
-      {
-        when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
-        fast
-      }
+      if(NitraFastParser.Verify && !NitraFastParser.Off) Verified(grammar,rule,source,resolver,true)
       else
       {
-      def recognized=grammar.Recognize(rule,source,true,false);
-      {
-        def started=System.Diagnostics.Stopwatch.GetTimestamp();
-        def allocStart=GC.GetAllocatedBytesForCurrentThread(); def findStart=NitraLongMap.Finds+NitraPairMap.Finds; def setStart=NitraPairMap.Sets+NitraLongMap.Adds;
-        def builder=NitraStructureBuilder(recognized,resolver); def result=builder.Run();
-        when(NitraRecognizer.PhasesOn)
+        def fast=Hybrid(grammar,rule,source,resolver);
+        if(fast!=null)
         {
-          NitraRecognizer.NoteCount("sel_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NitraRecognizer.NoteCount("sel_hash_finds",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NitraRecognizer.NoteCount("sel_hash_sets",((NitraPairMap.Sets+NitraLongMap.Adds-setStart) :> int));
-          NitraRecognizer.NotePhase("select",System.Diagnostics.Stopwatch.GetTimestamp()-started);
-          NitraRecognizer.NoteCount("later",builder.LaterCount); NitraRecognizer.NoteCount("ask",builder.AskCount); NitraRecognizer.NoteCount("build",builder.BuildCount);
-          NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); for(mutable k=1;k<=5;++k) { NitraRecognizer.NotePhase("step"+k.ToString(),builder.StepTicks[k]); NitraRecognizer.NoteCount("steps"+k.ToString(),builder.StepCounts[k]); } NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
+          when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
+          fast
         }
-        when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
-        when(fast!=null) NitraFastParser.Compare(fast,result);
-        result
-      }
+        else Full(grammar,rule,source,resolver,gcPause0,gcCount0)
       }
     }
+    private Full(grammar : NitraPreparedGrammar, rule : string, source : string, resolver : Func[NitraStructuralChoice,int], gcPause0 : long, gcCount0 : int) : NitraStructureResult
+    {
+      def recognized=grammar.Recognize(rule,source,true,false);
+      def started=System.Diagnostics.Stopwatch.GetTimestamp();
+      def allocStart=GC.GetAllocatedBytesForCurrentThread(); def findStart=NitraLongMap.Finds+NitraPairMap.Finds; def setStart=NitraPairMap.Sets+NitraLongMap.Adds;
+      def builder=NitraStructureBuilder(recognized,resolver); def result=builder.Run();
+      when(NitraRecognizer.PhasesOn)
+      {
+        NitraRecognizer.NoteCount("sel_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NitraRecognizer.NoteCount("sel_hash_finds",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NitraRecognizer.NoteCount("sel_hash_sets",((NitraPairMap.Sets+NitraLongMap.Adds-setStart) :> int));
+        NitraRecognizer.NotePhase("select",System.Diagnostics.Stopwatch.GetTimestamp()-started);
+        NitraRecognizer.NoteCount("later",builder.LaterCount); NitraRecognizer.NoteCount("ask",builder.AskCount); NitraRecognizer.NoteCount("build",builder.BuildCount);
+        NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); for(mutable k=1;k<=5;++k) { NitraRecognizer.NotePhase("step"+k.ToString(),builder.StepTicks[k]); NitraRecognizer.NoteCount("steps"+k.ToString(),builder.StepCounts[k]); } NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
+        NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
+      }
+      result
+    }
+    // NITRA_VERIFY: the full engine runs first with the caller's resolver (questions and answers recorded); the fast pass
+    // then replays the answers, must ask the very same questions in the same order, and must build the same result.
+    private Verified(grammar : NitraPreparedGrammar, rule : string, source : string, resolver : Func[NitraStructuralChoice,int], phases : bool) : NitraStructureResult
+    {
+      def asked=SCG.List.[string](); def answers=SCG.List.[int]();
+      def describe(c : NitraStructuralChoice) : string
+      {
+        def b=System.Text.StringBuilder((c.Parent ?? "")+"@"+c.Start.ToString()+".."+c.End.ToString());
+        foreach(o in c.Options) _=b.Append("|"+o.Operation.ToString()+":"+o.Kind+":"+(o.Label ?? "")+":"+o.Start.ToString()+".."+o.End.ToString());
+        b.ToString()
+      }
+      def recording=if(resolver==null) null else Func.[NitraStructuralChoice,int](fun(c) { def a=resolver.Invoke(c); asked.Add(describe(c)); answers.Add(a); a });
+      def full=if(phases) Full(grammar,rule,source,recording,0L,0) else NitraStructureBuilder(grammar.Recognize(rule,source,true,false),recording).Run();
+      mutable next=0;
+      def replay=if(resolver==null) null else Func.[NitraStructuralChoice,int](fun(c)
+      {
+        when(next>=asked.Count || asked[next]!=describe(c))
+          throw InvalidOperationException("hybrid mismatch: resolver question "+next.ToString()+" "+describe(c)+" vs "+(if(next<asked.Count) asked[next] else "none"));
+        def a=answers[next]; ++next; a
+      });
+      def fast=Hybrid(grammar,rule,source,replay);
+      when(fast!=null)
+      {
+        NitraFastParser.Compare(fast,full);
+        when(next!=asked.Count) throw InvalidOperationException("hybrid mismatch: resolver asked "+next.ToString()+" of "+asked.Count.ToString()+" questions");
+      }
+      full
+    }
     // Fast first pass; null means the full engine decides (see NitraFast.n).
-    private Hybrid(grammar : NitraPreparedGrammar, rule : string, source : string) : NitraStructureResult
+    private Hybrid(grammar : NitraPreparedGrammar, rule : string, source : string, resolver : Func[NitraStructuralChoice,int]) : NitraStructureResult
     {
       if(NitraFastParser.Off) null
       else
       {
         def started=if(NitraRecognizer.PhasesOn) System.Diagnostics.Stopwatch.GetTimestamp() else 0L; def alloc0=GC.GetAllocatedBytesForCurrentThread();
-        def parser=NitraFastParser(grammar,source); def fast=parser.Run(rule);
+        def parser=NitraFastParser(grammar,source,resolver); def fast=parser.Run(rule);
         when(NitraRecognizer.PhasesOn)
         {
           NitraRecognizer.NotePhase("hybrid",System.Diagnostics.Stopwatch.GetTimestamp()-started);
@@ -100,13 +130,11 @@ namespace Nemerle.Compiler
     internal StructureCompact(grammar : NitraPreparedGrammar, rule : string, source : string,
                               resolver : Func[NitraStructuralChoice,int]) : NitraStructureResult
     {
-      def fast=Hybrid(grammar,rule,source);
-      if(fast!=null && !NitraFastParser.Verify) fast
+      if(NitraFastParser.Verify && !NitraFastParser.Off) Verified(grammar,rule,source,resolver,false)
       else
       {
-        def result=NitraStructureBuilder(grammar.Recognize(rule,source,true,false),resolver).Run();
-        when(fast!=null) NitraFastParser.Compare(fast,result);
-        result
+        def fast=Hybrid(grammar,rule,source,resolver);
+        if(fast!=null) fast else NitraStructureBuilder(grammar.Recognize(rule,source,true,false),resolver).Run()
       }
     }
     private Failed(source : string, file : string, message : string) : NitraDocument
