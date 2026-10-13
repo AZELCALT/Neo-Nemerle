@@ -277,6 +277,7 @@ namespace Nemerle.Compiler
       mutable k2=rFEnds; Array.Resize(ref k2,n); rFEnds=k2;
       mutable k3=rFMax; Array.Resize(ref k3,n); rFMax=k3;
       mutable k4=rMemoNext; Array.Resize(ref k4,n); rMemoNext=k4;
+      mutable k5=rLocal; Array.Resize(ref k5,n); rLocal=k5;
     }
     private GrowLinks() : void
     {
@@ -892,22 +893,36 @@ namespace Nemerle.Compiler
     // ---- settlement of same-position cycles ----
     // Reached only when no queued work remains. Children never start before their
     // owners, so the open regions at the greatest start depend only on each other.
+    private settleGroup : SCG.List[int] = SCG.List();
+    private settleCalls : SCG.Stack[int] = SCG.Stack();
+    private settleStack : SCG.Stack[int] = SCG.Stack();
+    private mutable sIndex : array[int] = array(16);
+    private mutable sLow : array[int] = array(16);
+    private mutable sCur : array[int] = array(16);
+    private mutable sComp : array[int] = array(16);
+    private mutable sOn : array[bool] = array(16);
+    private mutable sLeaving : array[bool] = array(16);
+    private mutable rLocal : array[int] = array(256);
     private Settle() : void
     {
       while(heapSize>0 && rClosed[heapId[0]]) HeapPop();
       when(heapSize==0) throw ArgumentException("unsettled recognition dependency");
-      def start=heapStart[0]; def group=SCG.List.[int]();
+      def start=heapStart[0]; def group=settleGroup; group.Clear();
       while(heapSize>0 && heapStart[0]==start)
       {
         def id=heapId[0]; HeapPop();
         unless(rClosed[id]) group.Add(id);
       }
-      def n=group.Count; def local=SCG.Dictionary.[int,int]();
-      for(mutable i=0;i<n;++i) local[group[i]]=i;
-      def index : array[int]=array(n); def low : array[int]=array(n); def cur : array[int]=array(n);
-      def component : array[int]=array(n); def onStack : array[bool]=array(n);
-      for(mutable i=0;i<n;++i) { index[i]= -1; component[i]= -1; }
-      def calls=SCG.Stack.[int](); def stack=SCG.Stack.[int](); mutable counter=0; mutable components=0;
+      def n=group.Count;
+      // Scratch is shared between groups; a member's slot is its group index plus one in rLocal (0 = not in the group).
+      when(sIndex.Length<n)
+      {
+        def size=Math.Max(n,sIndex.Length*2);
+        sIndex=array(size); sLow=array(size); sCur=array(size); sComp=array(size); sOn=array(size); sLeaving=array(size);
+      }
+      for(mutable i=0;i<n;++i) { rLocal[group[i]]=i+1; sIndex[i]= -1; sComp[i]= -1; sOn[i]=false; sLeaving[i]=false; }
+      def index=sIndex; def low=sLow; def cur=sCur; def component=sComp; def onStack=sOn;
+      def calls=settleCalls; def stack=settleStack; calls.Clear(); stack.Clear(); mutable counter=0; mutable components=0;
       for(mutable s=0;s<n;++s) when(index[s]<0)
       {
         index[s]=counter; low[s]=counter; ++counter; stack.Push(s); onStack[s]=true; cur[s]=rOwned[group[s]]; calls.Push(s);
@@ -917,9 +932,9 @@ namespace Nemerle.Compiler
           if(l>=0)
           {
             cur[v]=lNextOwned[l]; def child=lChild[l];
-            when(!rClosed[child] && local.ContainsKey(child))
+            when(!rClosed[child] && (rLocal[child] > 0))
             {
-              def w=local[child];
+              def w=(rLocal[child]-1);
               if(index[w]<0)
               { index[w]=counter; low[w]=counter; ++counter; stack.Push(w); onStack[w]=true; cur[w]=rOwned[group[w]]; calls.Push(w); }
               else when(onStack[w] && index[w]<low[v]) low[v]=index[w];
@@ -938,14 +953,14 @@ namespace Nemerle.Compiler
           }
         }
       }
-      def leaving : array[bool]=array(components);
+      def leaving=sLeaving;
       for(mutable v=0;v<n;++v)
       {
         mutable l=rOwned[group[v]];
         while(l>=0)
         {
           def child=lChild[l];
-          when(!rClosed[child] && local.ContainsKey(child) && component[local[child]]!=component[v]) leaving[component[v]]=true;
+          when(!rClosed[child] && (rLocal[child] > 0) && component[(rLocal[child]-1)]!=component[v]) leaving[component[v]]=true;
           l=lNextOwned[l];
         }
       }
@@ -957,6 +972,7 @@ namespace Nemerle.Compiler
         when(o.Holds || o.Code==9) throw ArgumentException("cyclic negative or longest-match recognition constraint");
       }
       unless(leafFound) throw ArgumentException("unsettled recognition dependency");
+      for(mutable i=0;i<n;++i) rLocal[group[i]]=0;
       deferFeasible=true;
       for(mutable v=0;v<n;++v)
         if(leaving[component[v]]) HeapPush(start,group[v])
