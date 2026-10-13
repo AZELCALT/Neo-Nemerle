@@ -11,4 +11,5 @@ them compiles them, with no option. The Nitra runtime dlls (`Integrated.*`) must
 - [NITRA-REGIONS.md](NITRA-REGIONS.md) - the structural-region recognizer, selection and the hybrid fast pass.
 - [STRUCTURAL-PROJECTION.md](STRUCTURAL-PROJECTION.md) - the token-level structural projection API.
 - [../native-nitra/README.md](../native-nitra/README.md) - how the native Nitra compiler is integrated.
+- [../tools/language-server/README.md](../tools/language-server/README.md) - the language server (Nemerle parser + unmodified Nitra).
 - [obsolete/](obsolete/) - the previous source-only grammar design (parked behind `OLD_GRAMMAR_DESIGN`).

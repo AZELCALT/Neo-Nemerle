@@ -1,0 +1,89 @@
+using System;
+using SCG = System.Collections.Generic;
+namespace Nemerle.Compiler
+{
+  /// A `space` block found by the source index: offsets into the original file text.
+  public sealed class NitraEditorZone
+  {
+    public mutable File : int;
+    /// Offset of the `space` keyword.
+    public mutable Start : int;
+    /// First character inside the braces.
+    public mutable Body : int;
+    /// Offset of the closing brace.
+    public mutable End : int;
+    /// Selected start rule, `Module.Rule`.
+    public mutable Rule : string;
+    public mutable Grammars : array[string];
+  }
+  /// A `grammar Name { ... }` block: offsets into the original file text.
+  public sealed class NitraEditorGrammar
+  {
+    public mutable Name : string;
+    public mutable File : int;
+    public mutable Start : int;
+    public mutable End : int;
+    public mutable Document : NitraDocument;
+  }
+  /// Read-only view of how the compiler indexes grammar and space blocks, for editors: the blocks, the selected
+  /// start rule of every space, the native host (Nitra's compiled grammars) and the rewritten Nemerle text, in which
+  /// every block is blanked or replaced by its internal macro call so that lines stay where they were.
+  public sealed class NitraEditorIndex
+  {
+    public Zones : SCG.List[NitraEditorZone] = SCG.List();
+    public Grammars : SCG.List[NitraEditorGrammar] = SCG.List();
+    public InactiveConstructs : SCG.List[NitraInactiveConstruct] = SCG.List();
+    public mutable NativeHost : INitraNativeSourceHost;
+    /// Set when indexing failed (a malformed block, an unknown grammar, a failed grammar compilation).
+    public mutable Error : string;
+    texts : SCG.Dictionary[int,string] = SCG.Dictionary();
+    /// Nemerle text of a source after indexing; the original text when indexing failed.
+    public Text(file : int) : string { if(texts.ContainsKey(file)) texts[file] else null }
+    public Success : bool { get { Error==null } }
+
+    /// Indexes `manager.Options.Sources`. The manager must have its compiler scope initialized
+    /// (`ParseGrammarSources()`); `provideHost` may supply cached native hosts.
+    public static Scan(manager : ManagerClass,
+                       provideHost : Func[ManagerClass,SCG.List[NitraDocument],INitraNativeSourceHost]) : NitraEditorIndex
+    {
+      def index=NitraEditorIndex();
+      def configuration=NitraSourceConfiguration(); configuration.ProvideHost=provideHost;
+      def saved=manager.Options.NitraSources; def previous=ManagerClass.Instance;
+      try
+      {
+        manager.Options.NitraSources=configuration; ManagerClass.Instance=manager;
+        def session=NitraSourceSession(manager); session.IndexOnly=true;
+        try
+        {
+          session.Index();
+          foreach(source in manager.Options.Sources) index.texts[source.FileIndex]=session.Text(source.FileIndex);
+        }
+        catch { | e is ArgumentException => index.Error=e.Message; }
+        // A later failure (grammar compilation, start rules) still leaves the blocks blanked for the Nemerle parser.
+        foreach(source in manager.Options.Sources)
+          unless(index.texts.ContainsKey(source.FileIndex)) index.texts[source.FileIndex]=session.Text(source.FileIndex) ?? source.GetText();
+        index.NativeHost=session.NativeHost;
+        foreach((name,file,start,end) in session.GrammarBlocks)
+        {
+          def g=NitraEditorGrammar(); g.Name=name; g.File=file; g.Start=start; g.End=end;
+          g.Document=if(session.Definitions.ContainsKey(name)) session.Definitions[name] else null; index.Grammars.Add(g);
+        }
+        foreach(z in session.Zones)
+        {
+          def e=NitraEditorZone(); e.File=z.File; e.Start=z.Start; e.Body=z.Body; e.End=z.End; e.Rule=z.Rule;
+          e.Grammars=z.Names.ToArray(); index.Zones.Add(e);
+        }
+        index.InactiveConstructs.AddRange(configuration.InactiveConstructs);
+      }
+      finally { manager.Options.NitraSources=saved; ManagerClass.Instance=previous; }
+      index
+    }
+    /// Loads Nitra's native compiler next to Nemerle.Compiler.dll and compiles the definitions (seconds; cache it).
+    public static CreateNativeHost(manager : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost
+    {
+      def previous=ManagerClass.Instance;
+      try { ManagerClass.Instance=manager; NitraSourceSession.CreateNativeHost(manager,definitions) }
+      finally { ManagerClass.Instance=previous; }
+    }
+  }
+}

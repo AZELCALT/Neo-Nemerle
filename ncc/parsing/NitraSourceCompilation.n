@@ -15,6 +15,9 @@ namespace Nemerle.Compiler
     public CreateContext : Func[Typer,string,NitraCompilationContext];
     public mutable ResolveStructure : Func[NitraStructuralChoice,int];
     public InactiveConstructs : SCG.List[NitraInactiveConstruct] = SCG.List();
+    /// Optional: supplies the native semantic host for a set of grammar definitions (an editor caches hosts by grammar
+    /// text this way). Null: the host is loaded and initialized for every compilation (NitraSourceSession.CreateNativeHost).
+    public mutable ProvideHost : Func[ManagerClass,SCG.List[NitraDocument],INitraNativeSourceHost];
     public this() { CreateContext=null; }
     public this(createContext : Func[Typer,string,NitraCompilationContext])
     {
@@ -60,6 +63,15 @@ namespace Nemerle.Compiler
     files : SCG.Dictionary[int,string] = SCG.Dictionary();
     zones : SCG.List[NitraSourceZone] = SCG.List();
     mutable nativeHost : INitraNativeSourceHost;
+    // grammar name, file index, block start (keyword), block end
+    internal GrammarBlocks : SCG.List[string * int * int * int] = SCG.List();
+    // Editors index repeatedly with one manager: no expansion macros are registered then.
+    internal mutable IndexOnly : bool;
+    internal Zones : SCG.List[NitraSourceZone] { get { zones } }
+    internal Definitions : SCG.Dictionary[string,NitraDocument] { get { definitions } }
+    internal NativeHost : INitraNativeSourceHost { get { nativeHost } }
+    internal Configuration : NitraSourceConfiguration { get { configuration } }
+    internal Text(file : int) : string { if(files.ContainsKey(file)) files[file] else null }
     public this(manager : ManagerClass)
     { this.manager=manager; configuration=manager.Options.NitraSources; }
     private IsBlockHeader(text : string, file : string, start : int, keyword : string) : bool
@@ -125,7 +137,7 @@ namespace Nemerle.Compiler
               record.Start=block.Start+1+c.Start-("namespace "+name+" {").Length;
               record.End=record.Start+c.End-c.Start; configuration.InactiveConstructs.Add(record);
             }
-            definitions.Add(name,document); owners.Add(name,source.FileIndex); Blank(chars,t.Start,block.End);
+            definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
           }
           else if(!t.Quoted && previous!="." &&
                   (t.Text=="runtime" || t.Text=="compile" || t.Text=="grammar" && depth==0 && r.Is("(")) &&
@@ -161,16 +173,10 @@ namespace Nemerle.Compiler
         }
         files.Add(source.FileIndex,string(chars));
       }
-      when(configuration.CreateContext==null)
+      when(configuration.CreateContext==null && (definitions.Count>0 || zones.Count>0))
       {
-        def directory=System.IO.Path.GetDirectoryName(typeof(ManagerClass).Assembly.Location);
-        def hostPath=System.IO.Path.Combine(directory,"Integrated.Nitra.Compiler.dll");
-        unless(System.IO.File.Exists(hostPath))
-          throw ArgumentException("grammar and space blocks need the Nitra runtime (Integrated.Nitra.Compiler.dll and its Integrated.* dependencies) next to Nemerle.Compiler.dll in "+directory);
-        def assembly=System.Reflection.Assembly.LoadFrom(hostPath);
-        def type=assembly.GetType("Nitra.Compiler.NativeSourceHost",true);
-        nativeHost=Activator.CreateInstance(type) :> INitraNativeSourceHost;
-        nativeHost.Initialize(manager,definitions.Values);
+        def inputs=SCG.List(definitions.Values);
+        nativeHost=if(configuration.ProvideHost!=null) configuration.ProvideHost.Invoke(manager,inputs) else CreateNativeHost(manager,inputs);
       }
       foreach(z in zones)
       {
@@ -203,8 +209,23 @@ namespace Nemerle.Compiler
       }
       when(configuration.ConfigureDialects!=null) configuration.ConfigureDialects.Invoke(configuration.Dialects);
       foreach(source in manager.Options.Sources) files[source.FileIndex]=RewriteBoundaries(files[source.FileIndex],source.FileIndex);
-      manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
-      manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
+      unless(IndexOnly)
+      {
+        manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
+        manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
+      }
+    }
+    /// Loads the native semantic compiler next to Nemerle.Compiler.dll and compiles the grammar definitions with it.
+    public static CreateNativeHost(manager : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost
+    {
+      def directory=System.IO.Path.GetDirectoryName(typeof(ManagerClass).Assembly.Location);
+      def hostPath=System.IO.Path.Combine(directory,"Integrated.Nitra.Compiler.dll");
+      unless(System.IO.File.Exists(hostPath))
+        throw ArgumentException("grammar and space blocks need the Nitra runtime (Integrated.Nitra.Compiler.dll and its Integrated.* dependencies) next to Nemerle.Compiler.dll in "+directory);
+      def assembly=System.Reflection.Assembly.LoadFrom(hostPath);
+      def type=assembly.GetType("Nitra.Compiler.NativeSourceHost",true);
+      def host=Activator.CreateInstance(type) :> INitraNativeSourceHost;
+      host.Initialize(manager,definitions); host
     }
     public Rewrite(source : ISource) : string
     { unless(files.ContainsKey(source.FileIndex)) throw ArgumentException("source was not indexed in native grammar compilation"); files[source.FileIndex] }

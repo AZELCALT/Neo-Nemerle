@@ -81,6 +81,8 @@ namespace Nitra.Compiler
   {
     static InputKey : string = "Nitra.Compiler.NativeSourceHost.RecognizedDefinitions";
     mutable registry : SelectedRegistry;
+    /// The grammar assembly Nitra's compiler generated for the initialized definitions (descriptors for ParseSession).
+    public GrammarAssembly : Assembly { get; private set; }
     public Initialize(manager : ManagerClass, definitions : SCG.IEnumerable[NitraDocument]) : void
     {
       def inputs=SCG.List(definitions);
@@ -117,6 +119,7 @@ namespace Nitra.Compiler
         try { compiler.Run(); }
         catch { | exception => when(errors==0) throw exception; }
         when(errors>0 || compiler.GeneratedAssembly==null) throw ArgumentException("native grammar compilation failed:\n"+messages.ToString());
+        GrammarAssembly=compiler.GeneratedAssembly;
         registry=SelectedRegistry(); AddBuiltins(registry); registry.Add(compiler.GeneratedAssembly);
       }
       finally { ManagerClass.Instance=previous; }

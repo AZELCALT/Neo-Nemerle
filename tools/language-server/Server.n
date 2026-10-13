@@ -1,0 +1,299 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Text.Json.Nodes;
+using System.Collections.Concurrent;
+using SCG = System.Collections.Generic;
+using Nemerle.Imperative;
+
+namespace Nemerle.LanguageServer
+{
+  public sealed class Document
+  {
+    public Uri : string; public Path : string; public mutable Text : string; public mutable Version : int;
+    public this(uri : string, text : string, version : int)
+    {
+      Uri = uri; Text = text; Version = version;
+      Path = try { System.Uri(uri).LocalPath } catch { | _ => uri };
+    }
+  }
+
+  public variant Job
+  {
+    | Analyze { Uri : string; Version : int; }
+    | Request { Id : JsonNode; Method : string; Params : JsonNode; }
+    | Close { Uri : string; }
+  }
+
+  /// Reads messages on the calling thread; all analysis runs on one worker thread, in arrival order, so a request
+  /// always sees the edits sent before it. Superseded analyses are skipped.
+  public sealed class Server
+  {
+    transport : Transport;
+    references : string;
+    documents : SCG.Dictionary[string, Document] = SCG.Dictionary();
+    jobs : BlockingCollection[Job] = BlockingCollection();
+    results : SCG.Dictionary[string, AnalysisResult] = SCG.Dictionary(); // worker thread only
+    mutable analyzer : Analyzer;                                          // worker thread only
+    mutable shutdownRequested : bool;
+    log : TextWriter;
+
+    public this(input : Stream, output : Stream, references : string, log : TextWriter)
+    { transport = Transport(input, output); this.references = references; this.log = log; }
+
+    public Run() : int
+    {
+      def worker = Thread(Work, 64 * 1024 * 1024); // the parsers recurse deeply on long inputs
+      worker.IsBackground = true; worker.Start();
+      mutable exitCode = 1;
+      mutable running = true;
+      while (running)
+      {
+        def message = try { transport.Read() } catch { | e is Exception => log.WriteLine("read: " + e.Message); null };
+        if (message == null) running = false
+        else
+        {
+          def method = Str(message["method"]);
+          def id = message["id"];
+          try
+          {
+            match (method)
+            {
+              | "initialize" => transport.Respond(id, Capabilities())
+              | "initialized" => ()
+              | "shutdown" => shutdownRequested = true; transport.Respond(id, null)
+              | "exit" => exitCode = if (shutdownRequested) 0 else 1; running = false
+              | "textDocument/didOpen" =>
+                def d = message["params"]["textDocument"];
+                def doc = Document(Str(d["uri"]), Str(d["text"]), Int(d["version"]));
+                lock (documents) documents[doc.Uri] = doc;
+                jobs.Add(Job.Analyze(doc.Uri, doc.Version))
+              | "textDocument/didChange" =>
+                def p = message["params"]; def uri = Str(p["textDocument"]["uri"]); def version = Int(p["textDocument"]["version"]);
+                def changes = p["contentChanges"].AsArray();
+                when (changes.Count > 0)
+                {
+                  lock (documents)
+                    when (documents.ContainsKey(uri))
+                    { def doc = documents[uri]; doc.Text = Str(changes[changes.Count - 1]["text"]); doc.Version = version; }
+                  jobs.Add(Job.Analyze(uri, version))
+                }
+              | "textDocument/didClose" =>
+                def uri = Str(message["params"]["textDocument"]["uri"]);
+                lock (documents) _ = documents.Remove(uri);
+                jobs.Add(Job.Close(uri))
+              | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol" =>
+                jobs.Add(Job.Request(id.DeepClone(), method, message["params"].DeepClone()))
+              | _ => when (id != null) transport.RespondError(id, -32601, "method not supported: " + method)
+            }
+          }
+          catch { | e is Exception => log.WriteLine(method + ": " + e); when (id != null) transport.RespondError(id, -32603, e.Message) }
+        }
+      }
+      jobs.CompleteAdding();
+      exitCode
+    }
+
+    static Str(n : JsonNode) : string { if (n == null) null else n.GetValue.[string]() }
+    static Int(n : JsonNode) : int { if (n == null) 0 else n.GetValue.[int]() }
+
+    Capabilities() : JsonNode
+    {
+      def legend = JsonObject();
+      def types = JsonArray(); foreach (t in Legend.Types) types.Add(JsonValue.Create(t));
+      legend["tokenTypes"] = types; legend["tokenModifiers"] = JsonArray();
+      def tokens = JsonObject(); tokens["legend"] = legend; tokens["full"] = JsonValue.Create(true);
+      def caps = JsonObject();
+      caps["textDocumentSync"] = JsonValue.Create(1 : int);
+      caps["semanticTokensProvider"] = tokens;
+      caps["foldingRangeProvider"] = JsonValue.Create(true);
+      caps["documentSymbolProvider"] = JsonValue.Create(true);
+      def info = JsonObject(); info["name"] = JsonValue.Create("nemerle-lsp"); info["version"] = JsonValue.Create("0.1");
+      def r = JsonObject(); r["capabilities"] = caps; r["serverInfo"] = info; r
+    }
+
+    // ---- worker thread ----
+
+    Work() : void
+    {
+      foreach (job in jobs.GetConsumingEnumerable())
+        try
+        {
+          match (job)
+          {
+            | Job.Analyze(uri, version) =>
+              Thread.Sleep(100); // let a burst of edits settle; a newer version makes this job obsolete
+              def doc = Current(uri);
+              when (doc != null && doc.Version == version) Publish(uri, Ensure(doc))
+            | Job.Close(uri) =>
+              _ = results.Remove(uri);
+              def p = JsonObject(); p["uri"] = JsonValue.Create(uri); p["diagnostics"] = JsonArray();
+              transport.Notify("textDocument/publishDiagnostics", p)
+            | Job.Request(id, method, parameters) =>
+              def doc = Current(Str(parameters["textDocument"]["uri"]));
+              if (doc == null) transport.Respond(id, null)
+              else
+              {
+                def r = Ensure(doc);
+                match (method)
+                {
+                  | "textDocument/semanticTokens/full" => transport.Respond(id, SemanticTokens(r))
+                  | "textDocument/foldingRange" => transport.Respond(id, Folding(r))
+                  | _ => transport.Respond(id, Symbols(r))
+                }
+              }
+          }
+        }
+        catch
+        {
+          | e is Exception =>
+            log.WriteLine("worker: " + e);
+            match (job) { | Job.Request(id, _, _) => transport.RespondError(id, -32603, e.Message) | _ => () }
+        }
+    }
+
+    Current(uri : string) : Document
+    {
+      lock (documents)
+        if (uri != null && documents.ContainsKey(uri))
+        { def d = documents[uri]; Document(d.Uri, d.Text, d.Version) }
+        else null
+    }
+
+    Ensure(doc : Document) : AnalysisResult
+    {
+      mutable r;
+      if (results.TryGetValue(doc.Uri, out r) && r.Version == doc.Version && r.Text == doc.Text) r
+      else
+      {
+        when (analyzer == null) analyzer = Analyzer(references);
+        def started = Diagnostics.Stopwatch.StartNew();
+        r = analyzer.Analyze(doc.Path, doc.Version, doc.Text);
+        log.WriteLine("analyzed " + doc.Path + " v" + doc.Version.ToString() + " in " + started.ElapsedMilliseconds.ToString() + " ms");
+        results[doc.Uri] = r; r
+      }
+    }
+
+    Position(r : AnalysisResult, offset : int) : JsonNode
+    {
+      def o = Math.Max(0, Math.Min(offset, r.Text.Length));
+      def p = JsonObject(); p["line"] = JsonValue.Create(r.Lines.Line(o)); p["character"] = JsonValue.Create(r.Lines.Column(o)); p
+    }
+    Range(r : AnalysisResult, start : int, end : int) : JsonNode
+    { def x = JsonObject(); x["start"] = Position(r, start); x["end"] = Position(r, Math.Max(start, end)); x }
+
+    Publish(uri : string, r : AnalysisResult) : void
+    {
+      def items = JsonArray();
+      foreach (d in r.Diagnostics)
+      {
+        def x = JsonObject();
+        x["range"] = Range(r, d.Start, d.End); x["severity"] = JsonValue.Create(d.Severity :> int);
+        x["source"] = JsonValue.Create(d.Source); x["message"] = JsonValue.Create(d.Message);
+        items.Add(x);
+      }
+      def p = JsonObject(); p["uri"] = JsonValue.Create(uri);
+      p["version"] = JsonValue.Create(r.Version); p["diagnostics"] = items;
+      transport.Notify("textDocument/publishDiagnostics", p)
+    }
+
+    SemanticTokens(r : AnalysisResult) : JsonNode
+    {
+      // sorted, non-overlapping, split at line ends, delta encoded
+      def sorted = r.Tokens.OrderBy(t => t[0]).ThenByDescending(t => t[1]).ToList();
+      def data = JsonArray();
+      mutable lastLine = 0; mutable lastChar = 0; mutable covered = 0;
+      foreach ((offset, length, kind) in sorted)
+        when (offset >= covered && length > 0 && offset < r.Text.Length)
+        {
+          def end = Math.Min(offset + length, r.Text.Length);
+          covered = end;
+          mutable s = offset;
+          while (s < end)
+          {
+            def line = r.Lines.Line(s);
+            def lineEnd = Math.Min(end, r.Lines.LineEnd(line));
+            def piece = lineEnd - s;
+            when (piece > 0)
+            {
+              def ch = s - r.Lines.LineStart(line);
+              def dl = line - lastLine; def dc = if (dl == 0) ch - lastChar else ch;
+              data.Add(JsonValue.Create(dl)); data.Add(JsonValue.Create(dc)); data.Add(JsonValue.Create(piece));
+              data.Add(JsonValue.Create(kind)); data.Add(JsonValue.Create(0 : int));
+              lastLine = line; lastChar = ch;
+            }
+            s = r.Lines.LineEnd(line) + 1;
+          }
+        }
+      def x = JsonObject(); x["data"] = data; x
+    }
+
+    Folding(r : AnalysisResult) : JsonNode
+    {
+      def items = JsonArray(); def seen = SCG.HashSet.[int * int]();
+      foreach ((a, b) in r.Folds)
+        when (seen.Add((a, b)))
+        { def x = JsonObject(); x["startLine"] = JsonValue.Create(a); x["endLine"] = JsonValue.Create(b); items.Add(x); }
+      items
+    }
+
+    Symbols(r : AnalysisResult) : JsonNode
+    {
+      def convert(s : SymbolInfo) : JsonNode
+      {
+        def x = JsonObject();
+        x["name"] = JsonValue.Create(s.Name); x["kind"] = JsonValue.Create(s.Kind);
+        x["range"] = Range(r, s.Start, s.End); x["selectionRange"] = Range(r, s.NameStart, s.NameEnd);
+        def children = JsonArray(); foreach (c in s.Children) children.Add(convert(c));
+        x["children"] = children; x
+      }
+      def items = JsonArray(); foreach (s in r.Symbols.OrderBy(s => s.Start)) items.Add(convert(s)); items
+    }
+  }
+
+  module Program
+  {
+    Main(args : array[string]) : int
+    {
+      mutable references = null;
+      mutable logPath = null;
+      for (mutable i = 0; i < args.Length; ++i)
+        match (args[i])
+        {
+          | "--references" when i + 1 < args.Length => ++i; references = args[i]
+          | "--log" when i + 1 < args.Length => ++i; logPath = args[i]
+          | "--stdio" => ()
+          | _ => ()
+        }
+      when (references == null) references = DefaultReferences();
+      def log = if (logPath != null) StreamWriter(logPath, true) : TextWriter else Console.Error;
+      log.WriteLine("nemerle-lsp: references " + (references ?? "<none>"));
+      def server = Server(Console.OpenStandardInput(), Console.OpenStandardOutput(), references, TextWriter.Synchronized(log));
+      def code = server.Run();
+      log.Flush();
+      code
+    }
+
+    /// <exe dir>/references, else the newest Microsoft.NETCore.App.Ref pack next to the running runtime.
+    DefaultReferences() : string
+    {
+      def local = Path.Combine(AppContext.BaseDirectory, "references");
+      if (Directory.Exists(local)) local
+      else
+      {
+        def runtime = Path.GetDirectoryName(typeof(object).Assembly.Location); // <dotnet>/shared/Microsoft.NETCore.App/<v>
+        def root = Directory.GetParent(runtime).Parent.Parent.FullName;
+        def packs = Path.Combine(root, "packs", "Microsoft.NETCore.App.Ref");
+        if (!Directory.Exists(packs)) null
+        else
+        {
+          def tfm = "net" + Environment.Version.Major.ToString() + ".0";
+          def candidates = Directory.GetDirectories(packs).Select(d => Path.Combine(d, "ref", tfm)).Where(Directory.Exists)
+                             .OrderByDescending(d => Version.Parse(Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(d))))).ToList();
+          if (candidates.Count > 0) candidates[0] else null
+        }
+      }
+    }
+  }
+}
