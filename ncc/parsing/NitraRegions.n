@@ -521,6 +521,7 @@ namespace Nemerle.Compiler
     private profStep : array[long] = array(12);
     private profStepN : array[int] = array(12);
     private profPush : array[int] = array(12);
+    private mutable profAllocLoop : long;
     private mutable profClose : long;
     private mutable profSettle : long;
     private mutable profFinal : long;
@@ -1238,6 +1239,7 @@ namespace Nemerle.Compiler
             else Settle();
           }
           accepted=rEnds[first].Contains(source.Length);
+          when(PhasesOn) profAllocLoop=GC.GetAllocatedBytesForCurrentThread()-allocStart;
           when(accepted && prepared.Native)
           {
             if(PhasesOn) { def t0=System.Diagnostics.Stopwatch.GetTimestamp(); FinalizeFeasibility(); profFinal+=System.Diagnostics.Stopwatch.GetTimestamp()-t0 }
@@ -1250,7 +1252,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); NoteCount("g_fbatches",FeasibleBatches); NoteCount("g_finvalid",FeasibleInvalid); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); for(mutable k=0;k<12;++k) when(profStepN[k] > 0 || profPush[k] > 0) { NotePhase("pr_step"+k.ToString(),profStep[k]); NoteCount("pr_n"+k.ToString(),profStepN[k]); NoteCount("pr_push"+k.ToString(),profPush[k]); } NotePhase("pr_close",profClose); NotePhase("pr_settle",profSettle); NotePhase("pr_final",profFinal); NoteCount("pr_closed1",profClosedSingle); NoteCount("pr_closedN",profClosedMany); NoteCount("pr_regnew",profRegionNew); NoteCount("pr_reghit",profRegionHit); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); NoteCount("g_fbatches",FeasibleBatches); NoteCount("g_finvalid",FeasibleInvalid); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); for(mutable k=0;k<12;++k) when(profStepN[k] > 0 || profPush[k] > 0) { NotePhase("pr_step"+k.ToString(),profStep[k]); NoteCount("pr_n"+k.ToString(),profStepN[k]); NoteCount("pr_push"+k.ToString(),profPush[k]); } NoteCount("al_loop_kb",(profAllocLoop/1024L) :> int); NotePhase("pr_close",profClose); NotePhase("pr_settle",profSettle); NotePhase("pr_final",profFinal); NoteCount("pr_closed1",profClosedSingle); NoteCount("pr_closedN",profClosedMany); NoteCount("pr_regnew",profRegionNew); NoteCount("pr_reghit",profRegionHit); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result

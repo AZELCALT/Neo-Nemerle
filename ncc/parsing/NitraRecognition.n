@@ -125,7 +125,10 @@ namespace Nemerle.Compiler
     {
       when(source==null) throw ArgumentNullException("source");
       unless(Entries.ContainsKey(rule)) throw ArgumentException("unknown prepared rule: "+rule);
-      NitraRecognizer(this,source).Run(Entries[rule],rule,retain,detailed)
+      def before=if(NitraRecognizer.PhasesOn) GC.GetAllocatedBytesForCurrentThread() else 0L;
+      def recognizer=NitraRecognizer(this,source);
+      when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteCount("al_ctor_kb",((GC.GetAllocatedBytesForCurrentThread()-before)/1024L) :> int);
+      recognizer.Run(Entries[rule],rule,retain,detailed)
     }
   }
   internal sealed class NitraPreparation
