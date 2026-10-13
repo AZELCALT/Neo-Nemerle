@@ -57,7 +57,9 @@ namespace Nemerle.Compiler
     private mutable depNext : array[int] = array(256);
     private mutable depTo : array[int] = array(256);
     private mutable deps : int;
-    private mutable queued : array[bool];
+    // Queue index of an entry, or -1; an entry queued below the current group's base is queued again for this group.
+    private mutable queuedAt : array[int];
+    private mutable qBase : int;
     private mutable queue : array[int] = array(64);
     private mutable qTop : int;
     private prov : SCG.List[int] = SCG.List();
@@ -82,6 +84,8 @@ namespace Nemerle.Compiler
     private mutable items : array[NitraBuildItem] = array(64);
     private mutable top : int;
     internal mutable Passes : int;
+    // Furthest end of any recognizer region (what the full engine reports for rejected input).
+    private mutable furthest : int;
     internal mutable Runs : int;
     internal mutable Groups : int;
     internal Entries : int { get { entries } }
@@ -95,7 +99,7 @@ namespace Nemerle.Compiler
     // ---- storage ----
     private Reserve(n : int) : void
     {
-      eOp=array(n); ePos=array(n); eNext=array(n); eState=array(n); eDepth=array(n); eProvLow=array(n); depHead=array(n); queued=array(n); ePath=array(n); ePathEnd=array(n); eMerged=array(n);
+      eOp=array(n); ePos=array(n); eNext=array(n); eState=array(n); eDepth=array(n); eProvLow=array(n); depHead=array(n); queuedAt=array(n); ePath=array(n); ePathEnd=array(n); eMerged=array(n);
       eHit=array(n); eInProv=array(n); eSame=array(n); eCur=array(n); rOne=array(n); rSet=array(n); fOne=array(n); fSet=array(n);
     }
     private Grow() : void
@@ -108,7 +112,7 @@ namespace Nemerle.Compiler
       mutable a4=eDepth; Array.Resize(ref a4,n); eDepth=a4;
       mutable a5=eProvLow; Array.Resize(ref a5,n); eProvLow=a5;
       mutable a6=depHead; Array.Resize(ref a6,n); depHead=a6;
-      mutable a6b=queued; Array.Resize(ref a6b,n); queued=a6b;
+      mutable a6b=queuedAt; Array.Resize(ref a6b,n); queuedAt=a6b;
       mutable a6c=ePath; Array.Resize(ref a6c,n); ePath=a6c;
       mutable a6d=ePathEnd; Array.Resize(ref a6d,n); ePathEnd=a6d;
       mutable a6e=eMerged; Array.Resize(ref a6e,n); eMerged=a6e;
@@ -132,7 +136,7 @@ namespace Nemerle.Compiler
       when(entries>=500000) Bail("entry limit");
       when(entries==eOp.Length) Grow();
       def e=entries; ++entries;
-      eOp[e]=o; ePos[e]=p; eNext[e]=head[p]; head[p]=e; eState[e]=0; eHit[e]=false; eInProv[e]=false; eProvLow[e]=int.MaxValue; depHead[e]= -1; queued[e]=false; ePathEnd[e]= -1; eMerged[e]=false;
+      eOp[e]=o; ePos[e]=p; eNext[e]=head[p]; head[p]=e; eState[e]=0; eHit[e]=false; eInProv[e]=false; eProvLow[e]=int.MaxValue; depHead[e]= -1; queuedAt[e]= -1; ePathEnd[e]= -1; eMerged[e]=false;
       rOne[e]= -1; rSet[e]=null; fOne[e]= -1; fSet[e]=null;
       eSame[e]=(!native) || o.Fast || o.Code==8 || o.Code==9 || (!o.GreedyCall) && o.OpaqueValue;
       def slots=if(o.Code==3) 3 else if(o.Code==4 && !o.GreedyCall) 3*o.Children.Count else 0;
@@ -167,6 +171,7 @@ namespace Nemerle.Compiler
     }
     private AddR(e : int, x : int) : void
     {
+      when(x>furthest && !eOp[e].Fast) furthest=x;
       def s=rSet[e];
       if(s!=null) { when(s.Add(x)) Grew(e); }
       else if(rOne[e]<0) { rOne[e]=x; Grew(e); }
@@ -190,11 +195,10 @@ namespace Nemerle.Compiler
     }
     private Enqueue(x : int) : void
     {
-      unless(queued[x])
+      when(queuedAt[x]<qBase)
       {
-        queued[x]=true;
         when(qTop==queue.Length) { mutable a=queue; Array.Resize(ref a,qTop*2); queue=a; }
-        queue[qTop]=x; ++qTop;
+        queuedAt[x]=qTop; queue[qTop]=x; ++qTop;
       }
     }
     private AddDep(c : int, x : int) : void
@@ -413,16 +417,16 @@ namespace Nemerle.Compiler
         {
           def o=eOp[e]; unless(Incremental(o) && !o.Scanned) Bail("cycle through "+o.Kind);
           // Settle the group: start with every member once, then only readers whose input grew.
-          def qbase=qTop; ++settling; ++Groups;
+          def qbase=qTop; def outerBase=qBase; qBase=qbase; ++settling; ++Groups;
           Enqueue(e); for(mutable i=mark;i<prov.Count;++i) Enqueue(prov[i]);
           while(qTop>qbase)
           {
-            --qTop; def x=queue[qTop]; queued[x]=false; ++Passes;
+            --qTop; def x=queue[qTop]; when(queuedAt[x]==qTop) queuedAt[x]= -1; ++Passes;
             consumer=x; lowAcc=int.MaxValue;
             Body(x);
             when(lowAcc<d) Bail("cycle widened");
           }
-          --settling;
+          --settling; qBase=outerBase;
           for(mutable i=mark;i<prov.Count;++i) { eState[prov[i]]=2; eInProv[prov[i]]=false; }
           prov.RemoveRange(mark,prov.Count-mark);
         }
@@ -524,6 +528,11 @@ namespace Nemerle.Compiler
     // the path that reached it (construction reads it back); a second, different path marks that end ambiguous.
     private Advance(e : int, o : NitraOperation, stage : int, x : int, feasible : bool, pb : int) : void
     {
+      when(!feasible && x>furthest)
+      {
+        def marks=Boundaries(o);
+        when(marks!=null && marks[stage] && (x>ePos[e] || Begins(o,ePos[e]))) furthest=x;
+      }
       if(stage==o.Children.Count)
       {
         if(feasible) AddF(e,x) else AddR(e,x);
@@ -547,6 +556,24 @@ namespace Nemerle.Compiler
       }
     }
     private static Ambiguous : int = int.MaxValue;
+    private static Width(c : NitraOperation) : int
+    { if(c.SharedPrefix) { mutable w=0; foreach(k in c.Children) w+=Width(k); w } else 1 }
+    // The recognizer opens a region for every shared prefix of a sequence's interface; their ends count for Furthest.
+    private static Boundaries(o : NitraOperation) : array[bool]
+    {
+      unless(o.PrefixKnown)
+      {
+        mutable marks : array[bool]=null; mutable i=o.Interface;
+        while(i!=null && i.Kind=="seq" && i.Children.Count>0 && i.Children[0].SharedPrefix)
+        {
+          def prefix=i.Children[0]; def w=Width(prefix);
+          when(!prefix.Fast && w<=o.Children.Count) { when(marks==null) marks=array(o.Children.Count+1); marks[w]=true; }
+          i=prefix;
+        }
+        o.PrefixEnds=marks; o.PrefixKnown=true;
+      }
+      o.PrefixEnds
+    }
     private PathOf(e : int, x : int) : int
     { if(ePathEnd[e]==x) ePath[e] else if(ePathEnd[e]<0) -1 else pathMap.Find(e :> long,x :> long) }
     private SetPath(e : int, x : int, off : int) : void
@@ -858,7 +885,15 @@ namespace Nemerle.Compiler
           head=array(len+2); for(mutable q=0;q<head.Length;++q) head[q]= -1;
           Reserve(Math.Min(4*len+64,1048576));
           def h=Get(root,0);
-          if(!RHas(h,len) || !FHas(h,len)) { when(Explain) Console.Error.WriteLine("NITRA_HYBRID fallback: not accepted"); null }
+          if(!RHas(h,len))
+          {
+            // Rejected: the same result the full engine gives (no recognition diagnostics, furthest region end).
+            def r=NitraRecognitionResult(); r.Source=source; r.Rule=rule; r.Root= -1; r.Accepted=false; r.Complete=true; r.Furthest=furthest;
+            r.SampleCreations=entries; result.Recognition=r;
+            result.Diagnostics.Add("source does not match "+rule+" at offset "+furthest.ToString());
+            result
+          }
+          else if(!FHas(h,len)) { when(Explain) Console.Error.WriteLine("NITRA_HYBRID fallback: not feasible"); null }
           else
           {
             PushBuild(root,0,len,null);
@@ -901,6 +936,13 @@ namespace Nemerle.Compiler
     internal static Compare(a : NitraStructureResult, b : NitraStructureResult) : void
     {
       def fail(why : string) : void { throw InvalidOperationException("hybrid mismatch: "+why) }
+      unless(a.Success)
+      {
+        def x=a.Recognition; def y=b.Recognition;
+        when(b.Success || x.Accepted!=y.Accepted || x.Complete!=y.Complete || x.Furthest!=y.Furthest || string.Join("; ",a.Diagnostics)!=string.Join("; ",b.Diagnostics))
+          fail("rejection: hybrid furthest "+x.Furthest.ToString()+" ["+string.Join("; ",a.Diagnostics)+"], full engine furthest "+y.Furthest.ToString()+" ["+string.Join("; ",b.Diagnostics)+"]");
+        return;
+      }
       unless(b.Success) fail("full engine did not succeed: "+string.Join("; ",b.Diagnostics));
       when(a.Nodes.Count!=b.Nodes.Count) fail("node count "+a.Nodes.Count.ToString()+" vs "+b.Nodes.Count.ToString());
       for(mutable i=0;i<a.Nodes.Count;++i)

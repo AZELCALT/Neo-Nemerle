@@ -25,6 +25,9 @@ namespace Nemerle.Compiler
     public mutable Sure : bool;
     // Selection: first operation down a chain of pure pass-through wrappers (feasibility is identical).
     public mutable Pass : NitraOperation;
+    // Hybrid: stage counts of this sequence after which a shared-prefix region of its interface ends (null when none).
+    public mutable PrefixEnds : array[bool];
+    public mutable PrefixKnown : bool;
     // Recomputed when preparation finishes (Fast is final only then).
     public Classify() : void
     {
