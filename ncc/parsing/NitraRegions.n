@@ -842,6 +842,19 @@ namespace Nemerle.Compiler
         }
       }
     }
+    private queried : SCG.HashSet[int] = SCG.HashSet();
+    private NoteQuery(r : int) : void { when(PhasesOn && r >= 0) _=queried.Add(r) }
+    // Diagnostic: how many closed regions selection asked about, and how many a lazy computation would have needed.
+    internal QueryReport() : void
+    {
+      def seen=SCG.HashSet.[int](queried); def stack=SCG.Stack.[int](queried);
+      while(stack.Count>0)
+      {
+        def r=stack.Pop(); mutable e=rEdgeHead[r];
+        while(e >= 0) { def c=edChild[e]; when(c >= 0 && seen.Add(c)) stack.Push(c); e=edNext[e] }
+      }
+      NoteCount("q_regions",regions); NoteCount("q_asked",queried.Count); NoteCount("q_closure",seen.Count);
+    }
     internal RegionOp(r : int) : NitraOperation { rOp[r] }
     internal EdgeHead(r : int) : int { rEdgeHead[r] }
     internal EdgeNext(e : int) : int { edNext[e] }
@@ -859,13 +872,13 @@ namespace Nemerle.Compiler
         def o=ChildOf(rOp[r],edKind[e],edA[e]).Pass;
         if(o.Code<=2) true
         else if(!o.GreedyCall && (o.OpaqueValue || o.Fast && (o.Code==6 || o.Code==7))) true
-        else { def child=edChild[e]; child<0 || rFState[child]==1 && rFEnds[child].Contains(edTo[e]) }
+        else { def child=edChild[e]; NoteQuery(child); child<0 || rFState[child]==1 && rFEnds[child].Contains(edTo[e]) }
       }
     }
     internal RegionOf(o : NitraOperation, p : int) : int { memo.Find(Key((o.Interface ?? o).Id,p)) }
-    internal FeasibleState(r : int) : int { rFState[r] }
-    internal FeasibleEnds(r : int) : NitraEnds { rFEnds[r] }
-    internal FeasibleMax(r : int) : int { rFMax[r] }
+    internal FeasibleState(r : int) : int { NoteQuery(r); rFState[r] }
+    internal FeasibleEnds(r : int) : NitraEnds { NoteQuery(r); rFEnds[r] }
+    internal FeasibleMax(r : int) : int { NoteQuery(r); rFMax[r] }
 
     // ---- settlement of same-position cycles ----
     // Reached only when no queued work remains. Children never start before their

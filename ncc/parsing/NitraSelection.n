@@ -1121,6 +1121,7 @@ namespace Nemerle.Compiler
         }
         when(NitraRecognizer.PhasesOn)
         {
+          evidence.Recognizer.QueryReport();
           for(mutable k=0;k<8;++k) when(ProcCounts[k] > 0) { NitraRecognizer.NotePhase("pp"+k.ToString(),ProcTicks[k]); NitraRecognizer.NoteCount("pn"+k.ToString(),ProcCounts[k]); }
           NitraRecognizer.NoteCount("m_cell",cellMap.Hits :> int); NitraRecognizer.NoteCount("m_entry",entryMap.Hits :> int);
           NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("g_fast",FastAnswers); NitraRecognizer.NoteCount("g_verified",Verified); NitraRecognizer.NoteCount("g_fastplans",FastPlans); NitraRecognizer.NoteCount("d_calls",DbgCalls); NitraRecognizer.NoteCount("d_noregion",DbgNoRegion); NitraRecognizer.NoteCount("d_state",DbgState); NitraRecognizer.NoteCount("d_op",DbgOp); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
