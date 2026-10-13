@@ -56,6 +56,26 @@ Ends are all-ends relations: ambiguity is retained, never resolved during recogn
 * Regions are found by start position (head array plus chain), selection cells and entries likewise;
   same-position cycle settling uses shared scratch.
 
+## Hybrid fast pass (branch opt/hybrid, `NitraFast.n`)
+
+`NitraSyntax.Structure` first runs a fast pass that computes the same two relations the engine above settles:
+R(op, p), the ends of an operation at a position, and F(op, p), its feasible ends (a greedy native call keeps
+only the longest feasible end of its target). It works top-down with one memo entry per (operation, position),
+the way Nitra's memo table does, and then builds the structure exactly as `NitraStructureBuilder` would.
+
+* Pass-through wrappers share their child's entry; deterministic lexical subtrees are scanned without entries.
+* Left-recursive groups (an entry read by its own descendants while still running) settle from a worklist of
+  readers whose input grew; only unions and the first stage of a sequence may take part (both only add ends).
+  A group whose ends did not grow after they were read needs no settling.
+* Every feasible sequence end keeps the stage ends of the path that reached it, and every feasible union end the
+  alternative that produced it. Construction reads these back; a second path or alternative for the same end is
+  precisely an ambiguity.
+* Rejected input is answered by the fast pass itself (same furthest offset and message as the full engine).
+* It gives up and the full engine runs from scratch on: any ambiguity, an accepted input that is not feasible,
+  a cycle through any other operation, very deep nesting. So the result is always the full engine's result.
+* `NITRA_VERIFY=1` runs both and compares node for node (and rejections by offset and message);
+  `NITRA_NOHYBRID=1` turns the fast pass off; `NITRA_HYBRID_WHY=1` prints why it gave up.
+
 ## Results (this machine, .NET 10.0.12, sequential, 3 fresh processes per engine)
 
 See `baseline/coreclr-verification/nitra-regions-*.json`. Differential comparison against the

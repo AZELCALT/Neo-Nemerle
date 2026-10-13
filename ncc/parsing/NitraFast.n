@@ -53,6 +53,8 @@ namespace Nemerle.Compiler
     // Settling a cycle group: who reads a still-unsettled entry, and a worklist of readers whose input grew.
     private mutable consumer : int = -1;
     private mutable settling : int;
+    // Some entry grew after an unsettled reader had read it (the group must settle from its worklist).
+    private mutable stale : bool;
     private mutable depHead : array[int];
     private mutable depNext : array[int] = array(256);
     private mutable depTo : array[int] = array(256);
@@ -187,6 +189,7 @@ namespace Nemerle.Compiler
     private Grew(e : int) : void
     {
       ++grew;
+      when(depHead[e] >= 0 && eState[e]!=2) stale=true;
       when(settling>0 && eState[e]!=2)
       {
         mutable d=depHead[e];
@@ -402,9 +405,9 @@ namespace Nemerle.Compiler
       ++Runs; def saved=lowAcc; lowAcc=int.MaxValue; def reader=consumer; consumer=e;
       ++sp; when(sp==active.Length) { mutable a=active; Array.Resize(ref a,sp*2); active=a; }
       active[sp]=e; def d=sp; eDepth[e]=d; eState[e]=1; eHit[e]=false;
-      def mark=prov.Count;
+      def mark=prov.Count; def staleOuter=stale; stale=false;
       Body(e);
-      def low=lowAcc;
+      def low=lowAcc; def mine=stale; stale=staleOuter || mine;
       if(low<d)
       {
         def o=eOp[e]; unless(Incremental(o) && !o.Scanned) Bail("cycle through "+o.Kind);
@@ -416,6 +419,9 @@ namespace Nemerle.Compiler
         when(eHit[e])
         {
           def o=eOp[e]; unless(Incremental(o) && !o.Scanned) Bail("cycle through "+o.Kind);
+          // Nothing grew after an unsettled reader read it: every reader already saw the final ends.
+          when(mine)
+          {
           // Settle the group: start with every member once, then only readers whose input grew.
           def qbase=qTop; def outerBase=qBase; qBase=qbase; ++settling; ++Groups;
           Enqueue(e); for(mutable i=mark;i<prov.Count;++i) Enqueue(prov[i]);
@@ -427,6 +433,7 @@ namespace Nemerle.Compiler
             when(lowAcc<d) Bail("cycle widened");
           }
           --settling; qBase=outerBase;
+          }
           for(mutable i=mark;i<prov.Count;++i) { eState[prov[i]]=2; eInProv[prov[i]]=false; }
           prov.RemoveRange(mark,prov.Count-mark);
         }
@@ -734,9 +741,9 @@ namespace Nemerle.Compiler
         | 6 | 7 =>
           if(start==end) { when(o.Min>0) Bail("empty required repetition"); }
           else RepAdvance(n,o,start,0,end)
-        | _ when(o.Children.Count==1) =>
-          def child=o.Children[0];
-          if(FHas(Get(child,start),end)) PushBuild(child,start,end,n) else Bail("infeasible pass");
+        // A feasible span of a single-child operation is a feasible span of the child (pass-through, greedy call and
+        // longest match only narrow their child's feasible ends), so the child needs no check.
+        | _ when(o.Children.Count==1) => PushBuild(o.Children[0],start,end,n)
         | _ =>
           def h=Get(o,start);
           def known=if(h >= 0 && (o.Code==4 || o.Code==5) && !o.GreedyCall) PathOf(h,end) else -1;
@@ -882,6 +889,7 @@ namespace Nemerle.Compiler
         if(!prepared.Ready || !prepared.Entries.TryGetValue(rule,out root)) null
         else
         {
+          def started0=System.Diagnostics.Stopwatch.GetTimestamp();
           head=array(len+2); for(mutable q=0;q<head.Length;++q) head[q]= -1;
           Reserve(Math.Min(4*len+64,1048576));
           def h=Get(root,0);
@@ -896,6 +904,7 @@ namespace Nemerle.Compiler
           else if(!FHas(h,len)) { when(Explain) Console.Error.WriteLine("NITRA_HYBRID fallback: not feasible"); null }
           else
           {
+            when(NitraRecognizer.PhasesOn) NitraRecognizer.NotePhase("hybrid_eval",System.Diagnostics.Stopwatch.GetTimestamp()-started0);
             PushBuild(root,0,len,null);
             while(top>0)
             {
