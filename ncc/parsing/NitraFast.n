@@ -258,13 +258,122 @@ namespace Nemerle.Compiler
           else -1
       }
     }
-    private Get(o : NitraOperation, x : int) : int
+    // A pure pass-through wrapper (single child, not a greedy call, not an opaque value) has its child's ends and
+    // feasible ends: it shares the child's entry.
+    private static Through(o0 : NitraOperation) : NitraOperation
     {
+      mutable o=o0;
       when(o.Code<0) o.Classify();
+      while(o.Code==4 && o.Children.Count==1 && !o.GreedyCall && !o.OpaqueValue)
+      { o=o.Children[0]; when(o.Code<0) o.Classify(); }
+      o
+    }
+    private Get(o0 : NitraOperation, x : int) : int
+    {
+      def o=Through(o0);
       if(o.Code<=2) { def q=LeafEnd(o,x); if(q<0) -1 else -2-q }
-      else if(!(o.Nullable || Begins(o,x))) -1
-      else if(o.Sure && !Begins(o,x)) -2-x
-      else Eval(o,x)
+      else
+      {
+        def begins=Begins(o,x);
+        if(!(o.Nullable || begins)) -1
+        else if(o.Sure && !begins) -2-x
+        else if(o.Fast) { def h=Scan(o,x,0); if(h==int.MinValue) Eval(o,x) else h }
+        else Eval(o,x)
+      }
+    }
+    // The single end of a handle: >= 0, -1 none, -3 several.
+    private One(h : int) : int
+    { if(h== -1) -1 else if(h<= -2) -2-h else { def n=RCount(h); if(n==0) -1 else if(n==1) RItem(h,0) else -3 } }
+    // Deterministic lexical scan without memo entries: a handle, or int.MinValue when the operation has several
+    // ends somewhere (the entry-based evaluation then decides).
+    private Scan(o : NitraOperation, p : int, depth : int) : int
+    {
+      if(depth>48) int.MinValue
+      else match(o.Code)
+      {
+        | 3 =>
+          mutable x=p; mutable answer= -2; mutable i=0;
+          while(answer== -2 && i<o.Children.Count)
+          {
+            def h=Lex(o.Children[i],x,depth); ++i;
+            if(h==int.MinValue) answer=int.MinValue
+            else { def q=One(h); if(q== -1) answer= -1 else if(q== -3) answer=int.MinValue else x=q; }
+          }
+          if(answer== -2) -2-x else answer
+        | 4 | 5 =>
+          mutable best= -1; mutable answer= -2;
+          foreach(c in o.Children) when(answer== -2)
+          {
+            def h=Lex(c,p,depth);
+            if(h==int.MinValue) answer=int.MinValue
+            else
+            {
+              def q=One(h);
+              if(q== -3) answer=int.MinValue
+              else when(q >= 0) { if(best<0) best=q else when(q!=best) { if(o.Code==5) best=Math.Max(best,q) else answer=int.MinValue } }
+            }
+          }
+          if(answer== -2) (if(best<0) -1 else -2-best) else answer
+        | 6 | 7 when(!o.AllEnds && !(o.Code==7 && o.Text=="trailing")) =>
+          mutable q=p; mutable count=0; mutable best=if(o.Min==0) p else -1; mutable go=true; mutable answer= -2;
+          while(go && answer== -2)
+          {
+            if(o.Max >= 0 && count>=o.Max) go=false
+            else
+            {
+              mutable start=q;
+              when(o.Code==7 && count>0)
+              {
+                def hs=Lex(o.Children[1],q,depth);
+                if(hs==int.MinValue) answer=int.MinValue
+                else { def t=One(hs); if(t== -1) go=false else if(t== -3) answer=int.MinValue else start=t; }
+              }
+              when(go && answer== -2)
+              {
+                def hi=Lex(o.Children[0],start,depth);
+                if(hi==int.MinValue) answer=int.MinValue
+                else
+                {
+                  def last=One(hi);
+                  if(last== -1) go=false
+                  else if(last== -3 || last==q) answer=int.MinValue
+                  else { ++count; q=last; when(count>=o.Min) best=q; }
+                }
+              }
+            }
+          }
+          if(answer== -2) (if(best<0) -1 else -2-best) else answer
+        | 8 | 9 =>
+          def h=Lex(o.Children[0],p,depth);
+          if(h==int.MinValue) int.MinValue else if((One(h)!= -1)==(o.Code==8)) -2-p else -1
+        | 10 =>
+          def a=Lex(o.Children[0],p,depth);
+          if(a==int.MinValue) int.MinValue
+          else
+          {
+            def x=One(a);
+            if(x== -1) -1
+            else if(x== -3) int.MinValue
+            else
+            {
+              def b=Lex(o.Children[1],p,depth);
+              if(b==int.MinValue) int.MinValue else if(RHas(b,x)) -1 else -2-x
+            }
+          }
+        | _ => int.MinValue
+      }
+    }
+    private Lex(o0 : NitraOperation, x : int, depth : int) : int
+    {
+      def o=Through(o0);
+      if(o.Code<=2) { def q=LeafEnd(o,x); if(q<0) -1 else -2-q }
+      else
+      {
+        def begins=Begins(o,x);
+        if(!(o.Nullable || begins)) -1
+        else if(o.Sure && !begins) -2-x
+        else { def h=Scan(o,x,depth+1); if(h==int.MinValue) Eval(o,x) else h }
+      }
     }
 
     // ---- evaluation ----
@@ -746,6 +855,18 @@ namespace Nemerle.Compiler
                 | 3 => SeqAdvance(item.Node,item.Op,item.I,item.P,item.End,item.Start)
                 | _ => RepAdvance(item.Node,item.Op,item.P,item.I,item.End)
               }
+            }
+            when(Environment.GetEnvironmentVariable("NITRA_HYBRID_DUMP")=="1")
+            {
+              def hist=SCG.Dictionary.[string,int]();
+              for(mutable i=0;i<entries;++i)
+              {
+                def o=eOp[i]; def k=o.Kind+" "+(o.Label ?? "")+" code="+o.Code.ToString()+(if(o.Fast) " fast" else "")+(if(o.GreedyCall) " greedy" else "")+" ends="+RCount(i).ToString();
+                hist[k]=(if(hist.ContainsKey(k)) hist[k] else 0)+1;
+              }
+              def rows=SCG.List(hist); rows.Sort(fun(a,b) { b.Value.CompareTo(a.Value) });
+              Console.Error.WriteLine("NITRA_HYBRID_DUMP entries="+entries.ToString()+" nodes="+result.Nodes.Count.ToString());
+              for(mutable i=0;i<Math.Min(25,rows.Count);++i) Console.Error.WriteLine("  "+rows[i].Value.ToString()+"  "+rows[i].Key);
             }
             def r=NitraRecognitionResult(); r.Source=source; r.Rule=rule; r.Root= -1; r.Accepted=true; r.Complete=true; r.Furthest=len;
             r.SampleCreations=entries; r.Evaluations=Passes;
