@@ -159,45 +159,45 @@ namespace Nemerle.Compiler
     result : NitraRecognitionResult = NitraRecognitionResult();
     // Region table.
     private mutable regions : int;
-    private mutable rOp : array[NitraOperation] = array(256);
-    private mutable rStart : array[int] = array(256);
-    private mutable rClosed : array[bool] = array(256);
-    private mutable rPending : array[int] = array(256);
-    private mutable rOutstanding : array[int] = array(256);
-    private mutable rEnds : array[NitraEnds] = array(256);
-    private mutable rHeld : array[NitraEnds] = array(256);
-    private mutable rSubscribers : array[int] = array(256);
-    private mutable rOwned : array[int] = array(256);
-    private mutable rEdgeHead : array[int] = array(256);
-    private mutable rFState : array[int] = array(256);
-    private mutable rFEnds : array[NitraEnds] = array(256);
-    private mutable rFMax : array[int] = array(256);
-    private mutable edDead : array[bool] = array(512);
+    private mutable rOp : array[NitraOperation] = array(64);
+    private mutable rStart : array[int] = array(64);
+    private mutable rClosed : array[bool] = array(64);
+    private mutable rPending : array[int] = array(64);
+    private mutable rOutstanding : array[int] = array(64);
+    private mutable rEnds : array[NitraEnds] = array(64);
+    private mutable rHeld : array[NitraEnds] = array(64);
+    private mutable rSubscribers : array[int] = array(64);
+    private mutable rOwned : array[int] = array(64);
+    private mutable rEdgeHead : array[int] = array(64);
+    private mutable rFState : array[int] = array(64);
+    private mutable rFEnds : array[NitraEnds] = array(64);
+    private mutable rFMax : array[int] = array(64);
+    private mutable edDead : array[bool] = array(128);
     // Derivation edges, chained per region (newest first). Kinds: 2 sequence (a=stage), 1 alternative (a=index),
     // 9 subtract left end, 4 repeat item (a=count, b=state position), 5 repeat separator (a=count, b=state position).
     private mutable edges : int;
-    private mutable edNext : array[int] = array(512);
-    private mutable edKind : array[int] = array(512);
-    private mutable edA : array[int] = array(512);
-    private mutable edB : array[int] = array(512);
-    private mutable edFrom : array[int] = array(512);
-    private mutable edTo : array[int] = array(512);
-    private mutable edChild : array[int] = array(512);
+    private mutable edNext : array[int] = array(128);
+    private mutable edKind : array[int] = array(128);
+    private mutable edA : array[int] = array(128);
+    private mutable edB : array[int] = array(128);
+    private mutable edFrom : array[int] = array(128);
+    private mutable edTo : array[int] = array(128);
+    private mutable edChild : array[int] = array(128);
     // Consumer links: child region -> continuation of an owner region.
     private mutable links : int;
-    private mutable lChild : array[int] = array(256);
-    private mutable lOwner : array[int] = array(256);
-    private mutable lNextSubscriber : array[int] = array(256);
-    private mutable lNextOwned : array[int] = array(256);
-    private mutable lKind : array[int] = array(256);
-    private mutable lStage : array[int] = array(256);
-    private mutable lPos : array[int] = array(256);
-    private mutable lCount : array[int] = array(256);
+    private mutable lChild : array[int] = array(64);
+    private mutable lOwner : array[int] = array(64);
+    private mutable lNextSubscriber : array[int] = array(64);
+    private mutable lNextOwned : array[int] = array(64);
+    private mutable lKind : array[int] = array(64);
+    private mutable lStage : array[int] = array(64);
+    private mutable lPos : array[int] = array(64);
+    private mutable lCount : array[int] = array(64);
     private mutable workTop : int;
     private mutable workArray : array[NitraWorkItem] = array(1024);
     // Regions by position: head per start position, chained through rMemoNext (about four regions per position).
     private mutable memoHead : array[int];
-    private mutable rMemoNext : array[int] = array(256);
+    private mutable rMemoNext : array[int] = array(64);
     private MemoFind(o : NitraOperation, p : int) : int
     {
       mutable r=if(memoHead != null && p >= 0 && p<memoHead.Length) memoHead[p] else -1;
@@ -227,6 +227,11 @@ namespace Nemerle.Compiler
     private static phaseLog : SCG.Dictionary[string,SCG.List[long]] = SCG.Dictionary();
     private static mutable phaseHooked : bool;
     internal static PhasesOn : bool = Environment.GetEnvironmentVariable("NITRA_PHASES")=="1";
+    private static mutable gcRuns : int;
+    private static mutable gcPauseTicks : long;
+    private static mutable gcCount : int;
+    internal static NoteGc(pauseTicks : long, count : int) : void
+    { lock(phaseLog) { ++gcRuns; when(gcRuns>1) { gcPauseTicks+=pauseTicks; gcCount+=count; } } }
     internal static NoteCount(name : string, count : int) : void
     { NotePhase(name+"#",(count :> long)*System.Diagnostics.Stopwatch.Frequency/1000000L); }
     internal static NotePhase(name : string, ticks : long) : void
@@ -247,6 +252,7 @@ namespace Nemerle.Compiler
               v.Sort();
               _=b.Append(" "+pair.Key+"_us="+(v[v.Count/2]*1000000L/System.Diagnostics.Stopwatch.Frequency).ToString());
             }
+            _=b.Append(" gcruns="+gcRuns.ToString()+" gc0="+gcCount.ToString()+" gcpause_us_total="+(gcPauseTicks/10L).ToString());
             Console.Error.WriteLine(b.ToString());
           };
         }
@@ -260,9 +266,9 @@ namespace Nemerle.Compiler
     { ++result.Evaluations; when(result.Evaluations>5000000) throw ArgumentException("recognition convergence limit exceeded (5000000)"); }
 
     // ---- storage ----
-    private GrowRegions() : void
+    private GrowRegions() : void { GrowRegionsTo(rOp.Length*2) }
+    private GrowRegionsTo(n : int) : void
     {
-      def n=rOp.Length*2;
       mutable a=rOp; Array.Resize(ref a,n); rOp=a;
       mutable b=rStart; Array.Resize(ref b,n); rStart=b;
       mutable c=rClosed; Array.Resize(ref c,n); rClosed=c;
@@ -279,9 +285,9 @@ namespace Nemerle.Compiler
       mutable k4=rMemoNext; Array.Resize(ref k4,n); rMemoNext=k4;
       mutable k5=rLocal; Array.Resize(ref k5,n); rLocal=k5;
     }
-    private GrowLinks() : void
+    private GrowLinks() : void { GrowLinksTo(lChild.Length*2) }
+    private GrowLinksTo(n : int) : void
     {
-      def n=lChild.Length*2;
       mutable a=lChild; Array.Resize(ref a,n); lChild=a;
       mutable b=lOwner; Array.Resize(ref b,n); lOwner=b;
       mutable c=lNextSubscriber; Array.Resize(ref c,n); lNextSubscriber=c;
@@ -322,20 +328,28 @@ namespace Nemerle.Compiler
     internal mutable SubscribeCount : int;
     internal mutable LexicalCalls : int;
     internal mutable PossibleCalls : int;
+    private GrowEdgesTo(n : int) : void
+    {
+      mutable v0=edNext; Array.Resize(ref v0,n); edNext=v0;
+      mutable v1=edKind; Array.Resize(ref v1,n); edKind=v1;
+      mutable v2=edA; Array.Resize(ref v2,n); edA=v2;
+      mutable v3=edB; Array.Resize(ref v3,n); edB=v3;
+      mutable v4=edFrom; Array.Resize(ref v4,n); edFrom=v4;
+      mutable v5=edTo; Array.Resize(ref v5,n); edTo=v5;
+      mutable v6=edChild; Array.Resize(ref v6,n); edChild=v6;
+      mutable v7=edDead; Array.Resize(ref v7,n); edDead=v7;
+    }
+    // One allocation per table sized from the input (regions ~2-4 per character, edges ~6, links ~2.5) instead of repeated doubling.
+    private Reserve(len : int) : void
+    {
+      def regionsWanted=Math.Min(3*len+64,262144); def edgesWanted=Math.Min(6*len+128,1048576); def linksWanted=Math.Min(3*len+64,262144);
+      when(rOp.Length<regionsWanted) GrowRegionsTo(regionsWanted);
+      when(edNext.Length<edgesWanted) GrowEdgesTo(edgesWanted);
+      when(lChild.Length<linksWanted) GrowLinksTo(linksWanted);
+    }
     private Record(r : int, kind : int, a : int, b : int, from : int, to : int, child : int) : void
     {
-      when(edges==edNext.Length)
-      {
-        def n=edges*2;
-        mutable v0=edNext; Array.Resize(ref v0,n); edNext=v0;
-        mutable v1=edKind; Array.Resize(ref v1,n); edKind=v1;
-        mutable v2=edA; Array.Resize(ref v2,n); edA=v2;
-        mutable v3=edB; Array.Resize(ref v3,n); edB=v3;
-        mutable v4=edFrom; Array.Resize(ref v4,n); edFrom=v4;
-        mutable v5=edTo; Array.Resize(ref v5,n); edTo=v5;
-        mutable v6=edChild; Array.Resize(ref v6,n); edChild=v6;
-        mutable v7=edDead; Array.Resize(ref v7,n); edDead=v7;
-      }
+      when(edges==edNext.Length) GrowEdgesTo(edges*2);
       def id=edges; ++edges;
       edNext[id]=rEdgeHead[r]; rEdgeHead[r]=id;
       edDead[id]=false; edKind[id]=kind; edA[id]=a; edB[id]=b; edFrom[id]=from; edTo[id]=to; edChild[id]=child;
@@ -919,7 +933,7 @@ namespace Nemerle.Compiler
     private mutable sComp : array[int] = array(16);
     private mutable sOn : array[bool] = array(16);
     private mutable sLeaving : array[bool] = array(16);
-    private mutable rLocal : array[int] = array(256);
+    private mutable rLocal : array[int] = array(64);
     private Settle() : void
     {
       while(heapSize>0 && rClosed[heapId[0]]) HeapPop();
@@ -1225,6 +1239,7 @@ namespace Nemerle.Compiler
       {
         def o=root.Interface ?? root; when(o.Code<0) o.Classify();
         memoHead=array(source.Length+2); for(mutable q=0;q<memoHead.Length;++q) memoHead[q]= -1;
+        Reserve(source.Length);
         mutable accepted=false;
         if(!Possible(o,0)) ()
         else if(o.Scanned) { def ends=Lexical(o,0); when(ends.Count>0) NoteView(root,o,0); accepted=ends.Contains(source.Length); }

@@ -54,6 +54,7 @@ namespace Nemerle.Compiler
     {
       unless(experimental) throw InvalidOperationException("Nitra syntax requires explicit experimental opt-in");
       when(grammar==null) throw ArgumentNullException("grammar");
+      def gcPause0=if(NitraRecognizer.PhasesOn) GC.GetTotalPauseDuration().Ticks else 0L; def gcCount0=if(NitraRecognizer.PhasesOn) GC.CollectionCount(0) else 0;
       def recognized=grammar.Recognize(rule,source,true,false);
       {
         def started=System.Diagnostics.Stopwatch.GetTimestamp();
@@ -66,6 +67,7 @@ namespace Nemerle.Compiler
           NitraRecognizer.NoteCount("later",builder.LaterCount); NitraRecognizer.NoteCount("ask",builder.AskCount); NitraRecognizer.NoteCount("build",builder.BuildCount);
           NitraRecognizer.NotePhase("feasible",builder.FeasibleTicks); for(mutable k=1;k<=5;++k) { NitraRecognizer.NotePhase("step"+k.ToString(),builder.StepTicks[k]); NitraRecognizer.NoteCount("steps"+k.ToString(),builder.StepCounts[k]); } NitraRecognizer.NoteCount("feasible_calls",builder.FeasibleCalls); NitraRecognizer.NoteCount("frames",builder.Frames); NitraRecognizer.NoteCount("endpoint_visits",builder.EndpointVisits); NitraRecognizer.NoteCount("endpoint_builds",builder.EndpointBuilds);
         }
+        when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteGc(GC.GetTotalPauseDuration().Ticks-gcPause0,GC.CollectionCount(0)-gcCount0);
         result
       }
     }
