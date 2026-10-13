@@ -43,9 +43,18 @@ Ends are all-ends relations: ambiguity is retained, never resolved during recogn
   "close a body on its boundary and eliminate the other termination family" is realised as
   first-character elimination of requests plus shared prefix interfaces; there is no separate
   boundary-mask object. The token-level boundary example is covered by `StructuralProjection.n`.
-* Selection still re-derives feasibility from evidence. Recording child references during
-  recognition was prototyped on paper and not needed for the current numbers; it is the
-  next lever if selection stays dominant.
+* (branches design/recorded-derivations, opt/ladder) Recognition records derivation edges per region
+  (sequence stage, alternative index, subtract left end, repeat item / separator) in a flat arena.
+  When a region closes its feasible ends are settled (the native "a call takes the longest feasible end"
+  rule); the work is replayed in close order only after the input is accepted, so rejected input pays
+  nothing. Selection reads those records: feasibility asks are answered from the settled region, and
+  sequence, choice and repetition plans are built from the edges. Shared-prefix interface regions are
+  flattened into the stages of the original sequence by a backward walk from the end (edges are
+  indexed by end per region). Regions the records cannot express (invalid / nested greedy groups) fall
+  back to the original search, which is kept. `NITRA_VERIFY=1` compares every recorded answer and plan
+  with the search and throws on a difference; `NITRA_NOFAST=1` turns the recorded paths off.
+* Regions are found by start position (head array plus chain), selection cells and entries likewise;
+  same-position cycle settling uses shared scratch.
 
 ## Results (this machine, .NET 10.0.12, sequential, 3 fresh processes per engine)
 
