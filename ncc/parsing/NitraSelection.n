@@ -187,7 +187,13 @@ namespace Nemerle.Compiler
     // Cells: one per (operation, start) that selection touches. A cell carries the evidence
     // ends and the per-position answers; entries hang off a cell per end and carry
     // feasibility (0 false, 1 true, 2 being computed), the derivation plan and the node.
-    private cellMap : NitraLongMap = NitraLongMap();
+    // Cells by start position (head array plus chain) and entries by cell (chain); no hashing.
+    private mutable cellHead : array[int];
+    private mutable cNext : array[int] = array(256);
+    private mutable cOp : array[NitraOperation] = array(256);
+    private mutable cEntry : array[int] = array(256);
+    private mutable eNext : array[int] = array(256);
+    private mutable eEnd : array[int] = array(256);
     private mutable cells : int;
     private mutable cEnds : array[NitraEnds] = array(256);
     private mutable cSorted : array[array[int]] = array(256);
@@ -241,7 +247,6 @@ namespace Nemerle.Compiler
       }
     }
     private mutable epoch : int;
-    private entryMap : NitraLongMap = NitraLongMap();
     private mutable entries : int;
     private mutable eState : array[int] = array(256);
     private mutable ePlan : array[int] = array(256);
@@ -281,7 +286,13 @@ namespace Nemerle.Compiler
     // Does o span exactly (p, e) in the evidence? Leaves are answered by the scanner.
     private Cell(o : NitraOperation, p : int) : int
     {
-      def key=Pair(o,p); mutable c=cellMap.Find(key);
+      when(cellHead==null)
+      {
+        cellHead=array(evidence.Source.Length+2);
+        for(mutable q=0;q<cellHead.Length;++q) cellHead[q]= -1;
+      }
+      mutable c=if(p >= 0 && p<cellHead.Length) cellHead[p] else -1;
+      while(c >= 0 && cOp[c] != o) c=cNext[c];
       when(c<0)
       {
         c=cells; ++cells;
@@ -293,8 +304,11 @@ namespace Nemerle.Compiler
           mutable f=cTarget; Array.Resize(ref f,c*2); cTarget=f;
           mutable g=cEpoch; Array.Resize(ref g,c*2); cEpoch=g;
           mutable h=cRegion; Array.Resize(ref h,c*2); cRegion=h;
+          mutable i1=cNext; Array.Resize(ref i1,c*2); cNext=i1;
+          mutable i2=cOp; Array.Resize(ref i2,c*2); cOp=i2;
+          mutable i3=cEntry; Array.Resize(ref i3,c*2); cEntry=i3;
         }
-        cellMap.Add(key,c);
+        cOp[c]=o; cNext[c]=cellHead[p]; cellHead[p]=c; cEntry[c]= -1;
         cEnds[c]=if(IsLeaf(o)) null else Ev(o,p); cSorted[c]=null; cLongest[c]= -1; cTarget[c]= -1; cEpoch[c]=epoch;
         cRegion[c]=if(IsLeaf(o)) -1 else evidence.Recognizer.RegionOf(o,p);
       }
@@ -302,7 +316,8 @@ namespace Nemerle.Compiler
     }
     private Entry(c : int, e : int) : int
     {
-      def key=((c :> long) << 32)+(e :> long); mutable en=entryMap.Find(key);
+      mutable en=cEntry[c];
+      while(en >= 0 && eEnd[en] != e) en=eNext[en];
       when(en<0)
       {
         en=entries; ++entries;
@@ -313,8 +328,10 @@ namespace Nemerle.Compiler
           mutable d=eNode; Array.Resize(ref d,en*2); eNode=d;
           mutable g=eEpoch; Array.Resize(ref g,en*2); eEpoch=g;
           mutable h=eExpect; Array.Resize(ref h,en*2); eExpect=h;
+          mutable i1=eNext; Array.Resize(ref i1,en*2); eNext=i1;
+          mutable i2=eEnd; Array.Resize(ref i2,en*2); eEnd=i2;
         }
-        entryMap.Add(key,en); eState[en]= -1; ePlan[en]= -1; eNode[en]= -1; eEpoch[en]=epoch; eExpect[en]= -1;
+        eEnd[en]=e; eNext[en]=cEntry[c]; cEntry[c]=en; eState[en]= -1; ePlan[en]= -1; eNode[en]= -1; eEpoch[en]=epoch; eExpect[en]= -1;
       }
       Fresh(en);
       en
@@ -1123,8 +1140,8 @@ namespace Nemerle.Compiler
         {
           evidence.Recognizer.QueryReport();
           for(mutable k=0;k<8;++k) when(ProcCounts[k] > 0) { NitraRecognizer.NotePhase("pp"+k.ToString(),ProcTicks[k]); NitraRecognizer.NoteCount("pn"+k.ToString(),ProcCounts[k]); }
-          NitraRecognizer.NoteCount("m_cell",cellMap.Hits :> int); NitraRecognizer.NoteCount("m_entry",entryMap.Hits :> int);
-          NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("g_fast",FastAnswers); NitraRecognizer.NoteCount("g_verified",Verified); NitraRecognizer.NoteCount("g_fastplans",FastPlans); NitraRecognizer.NoteCount("d_calls",DbgCalls); NitraRecognizer.NoteCount("d_noregion",DbgNoRegion); NitraRecognizer.NoteCount("d_state",DbgState); NitraRecognizer.NoteCount("d_op",DbgOp); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
+          
+          NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("g_fast",FastAnswers); NitraRecognizer.NoteCount("g_verified",Verified); NitraRecognizer.NoteCount("g_fastplans",FastPlans); NitraRecognizer.NoteCount("d_calls",DbgCalls); NitraRecognizer.NoteCount("d_noregion",DbgNoRegion); NitraRecognizer.NoteCount("d_state",DbgState); NitraRecognizer.NoteCount("d_op",DbgOp);
         }
       }
       catch { | e is ArgumentException => result.Diagnostics.Add(e.Message); result.Root=null; }
