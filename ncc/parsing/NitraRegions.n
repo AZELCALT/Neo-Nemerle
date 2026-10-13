@@ -332,7 +332,7 @@ namespace Nemerle.Compiler
     }
     private Push(kind : int, owner : int, stage : int, pos : int, count : int, end : int, from : int, child : int) : void
     {
-      ++PushCount;
+      ++PushCount; ++profPush[kind];
       when(workTop==workArray.Length) { mutable a=workArray; Array.Resize(ref a,workTop*2); workArray=a; }
       mutable w=default(NitraWorkItem);
       w.Kind=kind; w.Owner=owner; w.Stage=stage; w.Pos=pos; w.Count=count; w.End=end; w.From=from; w.Child=child;
@@ -361,12 +361,12 @@ namespace Nemerle.Compiler
     private Region(original : NitraOperation, o : NitraOperation, p : int) : int
     {
       def key=Key(o.Id,p); mutable id=memo.Find(key);
-      if(id>=0) { ++result.SampleReuse; when(o.SharedPrefix) ++result.PrefixReuse; }
+      if(id>=0) { ++profRegionHit; ++result.SampleReuse; when(o.SharedPrefix) ++result.PrefixReuse; }
       else
       {
         when(regions>=500000) throw ArgumentException("recognition region limit exceeded (500000)");
         when(regions==rOp.Length) GrowRegions();
-        id=regions; ++regions;
+        id=regions; ++regions; ++profRegionNew;
         rOp[id]=o; rStart[id]=p; rClosed[id]=false; rPending[id]=0; rOutstanding[id]=0;
         rEnds[id]=NitraEnds(); rHeld[id]=null; rSubscribers[id]= -1; rOwned[id]= -1; rEdgeHead[id]= -1; rFState[id]=0; rFEnds[id]=null; rFMax[id]= -1;
         memo.Add(key,id); ++open; HeapPush(p,id);
@@ -412,6 +412,7 @@ namespace Nemerle.Compiler
       {
         def child=Region(operation,o,p);
         def pending=(!rClosed[child]);
+        when(PhasesOn && !pending) { if(rEnds[child].Count==1) ++profClosedSingle else ++profClosedMany }
         when(pending || keepChildren)
         {
           when(links==lChild.Length) GrowLinks();
@@ -507,6 +508,16 @@ namespace Nemerle.Compiler
       }
     }
     internal mutable ChunkSteps : int;
+    private profStep : array[long] = array(12);
+    private profStepN : array[int] = array(12);
+    private profPush : array[int] = array(12);
+    private mutable profClose : long;
+    private mutable profSettle : long;
+    private mutable profFinal : long;
+    private mutable profClosedSingle : int;
+    private mutable profClosedMany : int;
+    private mutable profRegionNew : int;
+    private mutable profRegionHit : int;
     internal mutable SettleClosed : int;
     internal mutable SettleGroups : int;
     internal mutable SettleMembers : int;
@@ -1169,13 +1180,30 @@ namespace Nemerle.Compiler
             if(workTop>0)
             {
               --workTop; def w=workArray[workTop]; Count();
-              Step(w);
-              --rPending[w.Owner]; TryClose(w.Owner);
+              if(PhasesOn)
+              {
+                def t0=System.Diagnostics.Stopwatch.GetTimestamp();
+                Step(w);
+                def t1=System.Diagnostics.Stopwatch.GetTimestamp();
+                profStep[w.Kind]+=t1-t0; ++profStepN[w.Kind];
+                --rPending[w.Owner]; TryClose(w.Owner);
+                profClose+=System.Diagnostics.Stopwatch.GetTimestamp()-t1;
+              }
+              else
+              {
+                Step(w);
+                --rPending[w.Owner]; TryClose(w.Owner);
+              }
             }
+            else if(PhasesOn) { def t0=System.Diagnostics.Stopwatch.GetTimestamp(); Settle(); profSettle+=System.Diagnostics.Stopwatch.GetTimestamp()-t0; }
             else Settle();
           }
           accepted=rEnds[first].Contains(source.Length);
-          when(accepted && prepared.Native) FinalizeFeasibility();
+          when(accepted && prepared.Native)
+          {
+            if(PhasesOn) { def t0=System.Diagnostics.Stopwatch.GetTimestamp(); FinalizeFeasibility(); profFinal+=System.Diagnostics.Stopwatch.GetTimestamp()-t0 }
+            else FinalizeFeasibility()
+          }
         }
         result.Complete=true; result.Accepted=accepted;
       }
@@ -1183,7 +1211,7 @@ namespace Nemerle.Compiler
       def scanned=System.Diagnostics.Stopwatch.GetTimestamp();
       result.RecognizeMicroseconds=((scanned-started)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       Export(root,retain,detailed);
-      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); NoteCount("g_fbatches",FeasibleBatches); NoteCount("g_finvalid",FeasibleInvalid); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
+      when(PhasesOn) { NoteCount("rec_push",PushCount); NoteCount("rec_subscribe",SubscribeCount); NoteCount("rec_lexical",LexicalCalls); NoteCount("rec_possible",PossibleCalls); NoteCount("rec_links",links); NoteCount("rec_chunk",ChunkSteps); NoteCount("g_settle_closed",SettleClosed); NoteCount("g_settle_groups",SettleGroups); NoteCount("g_settle_members",SettleMembers); NoteCount("g_regions",regions); NoteCount("g_edges",edges); NoteCount("g_fbatches",FeasibleBatches); NoteCount("g_finvalid",FeasibleInvalid); mutable shared=0; for(mutable q=0;q<regions;++q) when(rOp[q].SharedPrefix) ++shared; NoteCount("g_shared_regions",shared); NoteCount("rec_alloc_kb",((GC.GetAllocatedBytesForCurrentThread()-allocStart)/1024L) :> int); NoteCount("rec_hash_ops",((NitraLongMap.Finds+NitraPairMap.Finds-findStart) :> int)); for(mutable k=0;k<12;++k) when(profStepN[k] > 0 || profPush[k] > 0) { NotePhase("pr_step"+k.ToString(),profStep[k]); NoteCount("pr_n"+k.ToString(),profStepN[k]); NoteCount("pr_push"+k.ToString(),profPush[k]); } NotePhase("pr_close",profClose); NotePhase("pr_settle",profSettle); NotePhase("pr_final",profFinal); NoteCount("pr_closed1",profClosedSingle); NoteCount("pr_closedN",profClosedMany); NoteCount("pr_regnew",profRegionNew); NoteCount("pr_reghit",profRegionHit); NotePhase("recognize",scanned-started); NotePhase("export",System.Diagnostics.Stopwatch.GetTimestamp()-scanned); }
       result.ExportMicroseconds=((System.Diagnostics.Stopwatch.GetTimestamp()-scanned)*1000000L/System.Diagnostics.Stopwatch.Frequency) :> int;
       result.MatchedProductions.AddRange(matchedProductions); result.MatchedProductions.Sort();
       result

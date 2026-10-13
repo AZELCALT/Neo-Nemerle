@@ -544,6 +544,8 @@ namespace Nemerle.Compiler
     }
     private Drain() : void { while(sp>0) Step(); }
     internal StepTicks : array[long] = array(8);
+    internal ProcTicks : array[long] = array(8);
+    internal ProcCounts : array[int] = array(8);
     internal StepCounts : array[int] = array(8);
     private Step() : void
     {
@@ -1109,10 +1111,17 @@ namespace Nemerle.Compiler
         {
           --top; ++LaterCount;
           def item=items[top];
-          Process(item.Kind,item.Node,item.Parent,item.Op,item.Start,item.End,item.P,item.I,item.SeqPlan,item.RepPlan);
+          if(NitraRecognizer.PhasesOn)
+          {
+            def t0=System.Diagnostics.Stopwatch.GetTimestamp(); def kind=item.Kind;
+            Process(item.Kind,item.Node,item.Parent,item.Op,item.Start,item.End,item.P,item.I,item.SeqPlan,item.RepPlan);
+            ProcTicks[kind]+=System.Diagnostics.Stopwatch.GetTimestamp()-t0; ++ProcCounts[kind];
+          }
+          else Process(item.Kind,item.Node,item.Parent,item.Op,item.Start,item.End,item.P,item.I,item.SeqPlan,item.RepPlan);
         }
         when(NitraRecognizer.PhasesOn)
         {
+          for(mutable k=0;k<8;++k) when(ProcCounts[k] > 0) { NitraRecognizer.NotePhase("pp"+k.ToString(),ProcTicks[k]); NitraRecognizer.NoteCount("pn"+k.ToString(),ProcCounts[k]); }
           NitraRecognizer.NoteCount("m_cell",cellMap.Hits :> int); NitraRecognizer.NoteCount("m_entry",entryMap.Hits :> int);
           NitraRecognizer.NoteCount("m_back",backMap.Hits :> int); NitraRecognizer.NoteCount("g_cyclic_cuts",CyclicCuts); NitraRecognizer.NoteCount("g_fast",FastAnswers); NitraRecognizer.NoteCount("g_verified",Verified); NitraRecognizer.NoteCount("g_fastplans",FastPlans); NitraRecognizer.NoteCount("d_calls",DbgCalls); NitraRecognizer.NoteCount("d_noregion",DbgNoRegion); NitraRecognizer.NoteCount("d_state",DbgState); NitraRecognizer.NoteCount("d_op",DbgOp); NitraRecognizer.NoteCount("p_cell",cellMap.Probes :> int); NitraRecognizer.NoteCount("p_entry",entryMap.Probes :> int);
         }
