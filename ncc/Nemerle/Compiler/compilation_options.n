@@ -44,10 +44,9 @@ using Nemerle.Compiler.Utility;
     public mutable OutputPath : string;
     public mutable ProjectPath : string;
     public mutable RootNamespace : string;
-    mutable fileModules : bool;
-    /// A source file is its namespace (root-relative path) and `namespace` blocks are rejected. On by default;
-    /// -legacy-namespaces turns it off for code that is not migrated yet. Script compilation has its own scope.
-    public FileModules : bool { get { fileModules && Script == null } set { fileModules = value } }
+    /// A source file is its namespace (root-relative path); `namespace` blocks are rejected. Script compilation
+    /// has its own scope.
+    public FileModules : bool { get { Script == null } }
     /// -file-name-namespaces: a file's namespace is its file name only (no directory path); file names must be unique.
     public mutable FileNameNamespaces : bool;
     /// -assembly-version: the AssemblyVersion of the output (null: from the sources).
@@ -147,7 +146,6 @@ using Nemerle.Compiler.Utility;
       XmlDocOutputFileName = null;
       DumpTypedTree = false;
       PrintExpressionsType = false;
-      FileModules = true;
       FileNameNamespaces = false;
       AssemblyVersion = null;
       Script = null;
@@ -420,16 +418,6 @@ using Nemerle.Compiler.Utility;
                        aliases = ["-experimental-nitra-syntax"],
                        help = "Print the Nitra declarations of each source as JSON without executing or compiling them",
                        handler = fun () { this.InspectNitraSyntax = true; }),
-
-        Getopt.CliOption.Flag (name = "-file-modules",
-                       aliases = [],
-                       help = "Accepted for compatibility; every source file is a file module by default",
-                       handler = fun () { this.FileModules = true; }),
-
-        Getopt.CliOption.Flag (name = "-legacy-namespaces",
-                       aliases = [],
-                       help = "TEMPORARY: classic namespace declarations for sources not yet migrated to file modules",
-                       handler = fun () { this.FileModules = false; }),
 
         Getopt.CliOption.Flag (name = "-file-name-namespaces",
                        aliases = [],

@@ -33,7 +33,6 @@ public sealed class Server
   transport : Transport;
   references : string;
   mutable root : string;
-  legacyNamespaces : bool;
   fileNameNamespaces : bool;
   documents : SCG.Dictionary[string, Document] = SCG.Dictionary();
   jobs : BlockingCollection[Job] = BlockingCollection();
@@ -42,10 +41,10 @@ public sealed class Server
   mutable shutdownRequested : bool;
   log : TextWriter;
 
-  public this(input : Stream, output : Stream, references : string, root : string, legacyNamespaces : bool, fileNameNamespaces : bool, log : TextWriter)
+  public this(input : Stream, output : Stream, references : string, root : string, fileNameNamespaces : bool, log : TextWriter)
   {
     transport = Transport(input, output); this.references = references; this.log = log;
-    this.root = root; this.legacyNamespaces = legacyNamespaces; this.fileNameNamespaces = fileNameNamespaces;
+    this.root = root; this.fileNameNamespaces = fileNameNamespaces;
   }
 
   /// Source root for file modules: --source-root, else the first workspace folder, else the root URI.
@@ -78,7 +77,7 @@ public sealed class Server
           {
             | "initialize" =>
               when (root == null) root = RootOf(message["params"]);
-              log.WriteLine("source root: " + (root ?? "<per file>") + (if (legacyNamespaces) " (legacy namespaces)" else ""));
+              log.WriteLine("source root: " + (root ?? "<per file>"));
               transport.Respond(id, Capabilities())
             | "initialized" => ()
             | "shutdown" => shutdownRequested = true; transport.Respond(id, null)
@@ -186,7 +185,7 @@ public sealed class Server
     if (results.TryGetValue(doc.Uri, out r) && r.Version == doc.Version && r.Text == doc.Text) r
     else
     {
-      when (analyzer == null) analyzer = Analyzer(references, root, legacyNamespaces, fileNameNamespaces);
+      when (analyzer == null) analyzer = Analyzer(references, root, fileNameNamespaces);
       def started = Diagnostics.Stopwatch.StartNew();
       r = analyzer.Analyze(doc.Path, doc.Version, doc.Text);
       log.WriteLine("analyzed " + doc.Path + " v" + doc.Version.ToString() + " in " + started.ElapsedMilliseconds.ToString() + " ms");
@@ -278,7 +277,6 @@ internal module Program
     mutable references = null;
     mutable logPath = null;
     mutable root = null;
-    mutable legacy = false;
     mutable shortNames = false;
     for (mutable i = 0; i < args.Length; ++i)
       match (args[i])
@@ -286,7 +284,6 @@ internal module Program
         | "--references" when i + 1 < args.Length => ++i; references = args[i]
         | "--log" when i + 1 < args.Length => ++i; logPath = args[i]
         | "--source-root" when i + 1 < args.Length => ++i; root = Path.GetFullPath(args[i])
-        | "--legacy-namespaces" => legacy = true
         | "--file-name-namespaces" => shortNames = true
         | "--stdio" => ()
         | _ => ()
@@ -294,7 +291,7 @@ internal module Program
     when (references == null) references = DefaultReferences();
     def log = if (logPath != null) StreamWriter(logPath, true) : TextWriter else Console.Error;
     log.WriteLine("nemerle-lsp: references " + (references ?? "<none>"));
-    def server = Server(Console.OpenStandardInput(), Console.OpenStandardOutput(), references, root, legacy, shortNames, TextWriter.Synchronized(log));
+    def server = Server(Console.OpenStandardInput(), Console.OpenStandardOutput(), references, root, shortNames, TextWriter.Synchronized(log));
     def code = server.Run();
     log.Flush();
     code

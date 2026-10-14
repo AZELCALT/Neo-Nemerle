@@ -26,7 +26,7 @@ variant SimpleVariant {
   | Var2 { x : string; }
 }
 
-namespace Bug507 {
+mask Bug507 {
   interface IMyEnu ['a] : System.Collections.Generic.ICollection ['a] { }
 
   class A {

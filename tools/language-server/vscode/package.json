@@ -18,8 +18,7 @@
         "nemerle.languageServer.references": { "type": "string", "default": "", "description": "Optional .NET reference assembly directory passed as --references." },
         "nemerle.languageServer.log": { "type": "string", "default": "", "description": "Optional log file for the server." },
         "nemerle.languageServer.sourceRoot": { "type": "string", "default": "", "description": "Root directory for file module paths (default: the workspace folder)." },
-        "nemerle.languageServer.fileNameNamespaces": { "type": "boolean", "default": false, "description": "A file's namespace is its file name only (-file-name-namespaces)." },
-        "nemerle.languageServer.legacyNamespaces": { "type": "boolean", "default": false, "description": "TEMPORARY: parse classic namespace declarations (-legacy-namespaces) for code not migrated yet." }
+        "nemerle.languageServer.fileNameNamespaces": { "type": "boolean", "default": false, "description": "A file's namespace is its file name only (-file-name-namespaces)." }
       }
     }
   },

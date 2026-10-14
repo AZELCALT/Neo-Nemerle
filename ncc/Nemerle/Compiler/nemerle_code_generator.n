@@ -998,27 +998,11 @@ public class NemerleCodeGenerator : CodeGenerator
     GenerateNamespaceEnd(ns);
   }
 
-  protected override GenerateNamespaceStart (ns : CodeNamespace) : void
-  {
-    def output = Output;
-    
-    def name = ns.Name;
-    when (name != null && name != "") {
-      output.Write("namespace ");
-      output.Write(GetSafeName (name));
-      OutputBlockStart (BracingStyle);
-      ++Indent;
-    }
-  }
+  // A source file is its namespace: a namespace is written as a file module body (its imports, then its types),
+  // without a `namespace` block. The file's path names the namespace (NemerleCodeCompiler writes <Ns path>.n).
+  protected override GenerateNamespaceStart (_ns : CodeNamespace) : void { }
 
-  protected override GenerateNamespaceEnd (ns : CodeNamespace) : void
-  {
-    def name = ns.Name;
-    when (name != null && name != "") {
-      --Indent;
-      OutputBlockEnd (BracingStyle);
-    }
-  }
+  protected override GenerateNamespaceEnd (_ns : CodeNamespace) : void { }
 
   protected override GenerateNamespaceImport (import : CodeNamespaceImport) : void
   {

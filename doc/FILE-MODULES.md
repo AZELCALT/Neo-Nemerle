@@ -50,9 +50,18 @@ The compiler is written this way too: `ncc/Nemerle/Compiler/typer.n` is the modu
 module (`Nemerle.Compiler.manager_class.ManagerClass`). `ncc/Nemerle/Compiler/SYMBOLS.json` lists which module holds
 each name; `baseline/rename-compiler-references.py` and `rename-compiler-modules.py` move sources onto these paths.
 
-## Temporary: `-legacy-namespaces`
+## Nitra
 
-`-legacy-namespaces` restores classic `namespace` declarations. It exists only while the compiler,
-runtime, macros and Nitra sources are migrated, and it will be removed when that is done. Build scripts
-pass it through `baseline/ncc_flags.py`, which adds it only for compilers that know it.
-`-file-modules` is still accepted and does nothing.
+Nitra's sources follow the same rule, one file per (dll, namespace): `native-nitra/upstream/Nitra/<project>/<Ns path>.n`
+(source root = the project directory), sub-namespaces as masks. Names that moved are listed in
+`native-nitra/NITRA-SYMBOLS.json`: the root `Nitra` types are `Nitra.Runtime.*` (C# `Nitra.Runtime+Location`), the
+compiler's macros under paths other dlls own are `NitraMacros`, `Nitra.InternalMacros` and `Nitra.Serialization2Macros`.
+Grammars (`.nitra`) keep their own `namespace` syntax; the code Nitra generates nests in the source module of the
+same path, and a generated `partial` part completes the hand-written type.
+
+## Hosts
+
+Every compilation is file modules (scripts keep their own scope). A host that compiles text names each source by a path
+under `SourceRoot` that is a valid module path: NativeSourceHost's stub is `NativeGrammar_<guid>.n` under its own
+directory, and the CodeDOM compiler writes each `CodeNamespace` to `<Ns path>.n` (types outside a namespace to
+`Global.n`, source text to `Source<i>.n`) under a fresh temporary root.

@@ -579,8 +579,8 @@ public class PreParser
         | Token.Keyword ("using") => parse_using_directive (tok); loop ()
 
         | Token.Keyword ("namespace") =>
-          when (lexer.Manager.Options.FileModules)
-            Message.Error(tok.Location, "namespace declarations are not allowed: a source file is its own namespace (group members with mask; -legacy-namespaces is only for code not migrated yet)");
+          // The block is still read so that the rest of the file recovers.
+          Message.Error(tok.Location, "namespace declarations are not allowed: a source file is its own namespace (group members with mask)");
           finish_current (current_begin);
 
           def prevNsEnv = currentNsEnv;

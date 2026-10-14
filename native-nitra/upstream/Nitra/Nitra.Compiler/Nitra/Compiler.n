@@ -9944,9 +9944,11 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
       options.CompileToMemory=true; options.TargetIsLibrary=true; options.TargetIsSet=true;
       options.ProgressBar=false; options.ColorMessages=false; options.IgnoreConfusion=true;
       options.TargetReferenceDirectory=manager.Options.TargetReferenceDirectory;
-      options.OutputFileName="NativeGrammar_"+Guid.NewGuid().ToString("N")+".dll";
+      def name="NativeGrammar_"+Guid.NewGuid().ToString("N");
+      options.OutputFileName=name+".dll";
       options.DisableExternalParsers=true;
-      options.FileModules=false; // LEGACY (temporary): Nitra-generated code and the synthetic .dll.n stub use classic namespaces
+      // The stub is the file module NativeGrammar_<guid> under the host's directory; it only carries the macro call.
+      options.SourceRoot=directory;
       def refs=SCG.HashSet.[string](StringComparer.OrdinalIgnoreCase);
       def shared=SCG.HashSet.[Assembly]();
       foreach(reference in manager.ReferencedAssemblies)
@@ -9962,7 +9964,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
       options.SharedAssemblies=SCG.List(shared).ToArray();
       options.ReferencedLibraries=refs.NToList();
       options.MacrosToLoad=[typeof(NativeSourceHost).Assembly.Location];
-      options.Sources=[StringSource(Nemerle.Compiler.AST.Location.GetFileIndex(options.OutputFileName+".n"),"[assembly: NitraMacros.InvokeNitraCompiler]") : ISource];
+      options.Sources=[StringSource(Nemerle.Compiler.AST.Location.GetFileIndex(Path.Combine(directory,name+".n")),"[assembly: NitraMacros.InvokeNitraCompiler]") : ISource];
       def compiler=ManagerClass(options); def messages=StringWriter(); compiler.InitOutput(messages);
       mutable errors=0; compiler.ErrorOccured += (_,_) => ++errors;
       // InitCompiler clears UserData; populate only after that reset.

@@ -48,44 +48,72 @@ public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
   public CompileAssemblyFromDomBatch (options : CompilerParameters,
                                       ea : array [CodeCompileUnit]) : CompilerResults
   {
-    def fileNames = array (ea.Length);
-    mutable i = 0;
     def options = if (options == null) CompilerParameters () else options;
-    
     def assemblies = options.ReferencedAssemblies;
-
+    // A source file is its namespace: the namespaces of all units are merged by name and each is written to
+    // <root>/<Ns path>.n (types outside a namespace go to Global.n); assembly attributes get files of their own.
+    def root = NewSourceRoot (options);
+    def fileNames = SCG.List ();
+    def namespaces = SCG.Dictionary.[string, CodeNamespace] ();
+    def order = SCG.List ();
+    def generate (relative, write : TextWriter -> void) {
+      def path = Path.Combine (root, relative);
+      _ = Directory.CreateDirectory (Path.GetDirectoryName (path));
+      using (s = StreamWriter (path, false, Encoding.UTF8))
+        write (s);
+      options.TempFiles.AddFile (path, options.TempFiles.KeepFiles);
+      fileNames.Add (path);
+    }
+    mutable i = 0;
     foreach (e : CodeCompileUnit in ea) {
-      fileNames [i] = GetTempFileNameWithExtension (options.TempFiles,
-                                                    i.ToString () + ".n");
-      using (f = FileStream (fileNames [i], FileMode.OpenOrCreate))
-      {
-        def s = StreamWriter (f, Encoding.UTF8, 1024, false);
-        when (e.ReferencedAssemblies != null) {
-          foreach (str in e.ReferencedAssemblies) {
-            when (!assemblies.Contains (str))
-              ignore (assemblies.Add (str));
-          }
+      when (e.ReferencedAssemblies != null) {
+        foreach (str in e.ReferencedAssemblies) {
+          when (!assemblies.Contains (str))
+            ignore (assemblies.Add (str));
         }
-
-        (this : ICodeGenerator).
-          GenerateCodeFromCompileUnit (e, s, CodeGeneratorOptions());
-          
-        s.Close ();
+      }
+      when (e.AssemblyCustomAttributes.Count > 0) {
+        def attributes = CodeCompileUnit ();
+        attributes.AssemblyCustomAttributes.AddRange (e.AssemblyCustomAttributes);
+        generate ("AssemblyAttributes" + i.ToString () + ".n",
+                  s => (this : ICodeGenerator).GenerateCodeFromCompileUnit (attributes, s, CodeGeneratorOptions ()));
+      }
+      foreach (ns : CodeNamespace in e.Namespaces) {
+        def name = if (string.IsNullOrEmpty (ns.Name)) "Global" else ns.Name;
+        unless (namespaces.ContainsKey (name)) {
+          namespaces [name] = CodeNamespace (name);
+          order.Add (name);
+        }
+        def merged = namespaces [name];
+        foreach (import : CodeNamespaceImport in ns.Imports)
+          merged.Imports.Add (import);
+        merged.Types.AddRange (ns.Types);
       }
       ++i;
     }
-    CompileAssemblyFromFileBatch (options, fileNames);
+    foreach (name in order)
+      generate (name.Replace ('.', Path.DirectorySeparatorChar) + ".n",
+                s => (this : ICodeGenerator).GenerateCodeFromNamespace (namespaces [name], s, CodeGeneratorOptions ()));
+    CompileAssemblyFromFileBatch (options, fileNames.ToArray (), root);
   }
-  
+
   public CompileAssemblyFromFile (options : CompilerParameters,
                                   fileName : string) : CompilerResults
   {
     CompileAssemblyFromFileBatch (options, array [fileName]);
   }
 
-  [Requires (options != null && fileNames != null)]
+  /// The files are file modules: their namespaces are their paths under the source root (the current directory,
+  /// or -source-root in CompilerOptions).
   public CompileAssemblyFromFileBatch (options : CompilerParameters,
                                        fileNames : array [string]) : CompilerResults
+  {
+    CompileAssemblyFromFileBatch (options, fileNames, null);
+  }
+
+  [Requires (options != null && fileNames != null)]
+  CompileAssemblyFromFileBatch (options : CompilerParameters,
+                                fileNames : array [string], sourceRoot : string) : CompilerResults
   {
     def results = CompilerResults (options.TempFiles);
     mutable succeeded = false;
@@ -103,7 +131,7 @@ public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
     }
 
     def cOptions = CompilationOptions ();
-    cOptions.FileModules = false; // LEGACY (temporary): the CodeDOM generator still emits namespace declarations
+    cOptions.SourceRoot = sourceRoot;
     def man = ManagerClass (cOptions);
 
     man.ErrorOccured += fun (loc : Location, msg) {
@@ -197,19 +225,26 @@ public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
   public CompileAssemblyFromSourceBatch (options : CompilerParameters,
                                          sources : array [string]) : CompilerResults
   {
+    // Each text is a file module Source<i> under a fresh source root.
+    def root = NewSourceRoot (options);
     def fileNames = array (sources.Length);
     mutable i = 0;
     foreach (source in sources) {
-      fileNames [i] = GetTempFileNameWithExtension (
-        options.TempFiles, i.ToString () + ".n");
-      using (f = FileStream (fileNames [i], FileMode.OpenOrCreate)) {
-        def s = StreamWriter (f, UTF8Encoding(false), 1024, false);
-        s.Write (source);
-        s.Close ();
-      }
+      fileNames [i] = Path.Combine (root, "Source" + i.ToString () + ".n");
+      File.WriteAllText (fileNames [i], source, UTF8Encoding (false));
+      options.TempFiles.AddFile (fileNames [i], options.TempFiles.KeepFiles);
       ++i;
     }
-    CompileAssemblyFromFileBatch (options, fileNames);
+    CompileAssemblyFromFileBatch (options, fileNames, root);
+  }
+
+  static NewSourceRoot (options : CompilerParameters) : string
+  {
+    def temp = options.TempFiles.TempDir;
+    def root = Path.Combine (if (string.IsNullOrEmpty (temp)) Path.GetTempPath () else temp,
+                             "nemerle-codedom-" + Guid.NewGuid ().ToString ("N"));
+    _ = Directory.CreateDirectory (root);
+    root
   }
 
   static GetTempFileNameWithExtension (temp_files : TempFileCollection,

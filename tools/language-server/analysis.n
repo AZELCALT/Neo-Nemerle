@@ -124,11 +124,11 @@ public sealed class Analyzer
   }
 
   root : string;
-  public this(references : string, root : string, legacyNamespaces : bool, fileNameNamespaces : bool)
+  public this(references : string, root : string, fileNameNamespaces : bool)
   {
     this.root = root;
     def options = CompilationOptions();
-    options.FileModules = !legacyNamespaces; options.FileNameNamespaces = fileNameNamespaces;
+    options.FileNameNamespaces = fileNameNamespaces;
     options.CompileToMemory = true; options.TargetIsLibrary = true; options.TargetIsSet = true;
     options.ProgressBar = false; options.ColorMessages = false; options.IgnoreConfusion = true;
     options.DisableExternalParsers = true; options.TargetReferenceDirectory = references;
