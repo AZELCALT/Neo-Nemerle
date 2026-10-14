@@ -39,6 +39,72 @@ using SCG = System.Collections.Generic
 
 namespace Nemerle.Compiler
   class CFG
+    // ---- formerly namespace CFG (CFGArray.n) ----
+    public class Node
+      public mutable prev : list [int]
+      public mutable next : list [int]
+
+      public mutable expr : TExpr
+    
+      public this(e : TExpr)
+        prev = []
+        next = []
+        expr = e 
+      
+    public class Array
+      iNode :  System.Collections.Generic.List[Node]
+      public this()
+        iNode = System.Collections.Generic.List()
+      
+      public AddNode(expr : TExpr) : int
+        iNode.Add(Node(expr))
+        iNode.Count - 1
+      
+      public AddEdge(i1 : int, i2 : int) : int
+        def n1 = iNode[i1]
+        def n2 = iNode[i2]
+      
+        n1.next = i2 :: n1.next
+        n2.prev = i1 :: n2.prev        
+        i2
+      
+      public Iterate( f : int * Node  -> bool) : void
+        def l(x : int)
+          mutable ended = true
+          for (mutable i=0; i < iNode.Count; i++)
+            ended = f(i, iNode[i]) && ended
+          
+          assert(x<10000)
+          unless (ended)
+            l(x+1)
+        _ = l(0)
+      
+      
+      public ReverseIterate( f : int * Node  -> bool) : void
+        def l(x : int)
+          mutable ended = true
+          for (mutable i=iNode.Count-1; i>=0; i--)
+            ended = f(i, iNode[i]) && ended
+          
+          assert(x<10000)
+          unless (ended)
+            l(x+1)
+          
+        _ = l(0)
+            
+          
+          
+    
+      public GetUse(i :int) : TExpr.Use
+        match (iNode[i].expr)
+          | TExpr.Use as e => 
+              e
+          | _=>
+              null
+    
+      public Count() : int
+        iNode.Count
+
     public class DefUseInOut
       public mutable Def : Set[int]
       public mutable Use : Set[int]
