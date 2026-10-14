@@ -84,7 +84,7 @@ namespace Nemerle.Compiler
         //  _ = system_type;
         //}
 
-        when (h.Namespace == "Nemerle.Builtins" && h.Name.StartsWith ("Array"))
+        when (ClrNames.NamespaceOf(h) == "Nemerle.Builtins" && h.Name.StartsWith ("Array"))
         {
           direct_supertypes = [InternalType.Array];
           _superTypes ::= InternalType.Array;

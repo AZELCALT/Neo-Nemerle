@@ -333,7 +333,7 @@ namespace Nemerle.Compiler
             Manager.MacrosRegistry.RegisterMacro (casted_macro);
 
           | obj =>
-            def type = obj.GetType().GetInterface("Nemerle.Compiler.IMacro");
+            def type = ClrNames.Interface(obj.GetType(), "Nemerle.Compiler.IMacro");
 
             if (type == null)
               Message.Error($"instance of macro `$macro_name' from assembly $(lib.FullName) does not implement IMacro interface");
@@ -415,8 +415,8 @@ namespace Nemerle.Compiler
       }
 
       def assemblyAttributes = assembly.GetCustomAttributes(false);
-      def macroDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.ContainsMacroAttribute");
-      def operDefs  = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.OperatorAttribute");
+      def macroDefs = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.ContainsMacroAttribute");
+      def operDefs  = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.OperatorAttribute");
 
       try
       {
@@ -448,7 +448,7 @@ namespace Nemerle.Compiler
       try
       {
         def assemblyAttributes = assembly.GetCustomAttributes(false);
-        def parserDefs = assemblyAttributes.Filter(t => t.GetType().FullName == "Nemerle.Internal.RegisterParserAttribute");
+        def parserDefs = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.RegisterParserAttribute");
 
         foreach(definition in parserDefs)
         {

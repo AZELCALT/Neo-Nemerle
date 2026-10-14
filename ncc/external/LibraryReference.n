@@ -67,7 +67,7 @@ namespace Nemerle.Compiler
 
     private static load_attr_from (assembly : SR.Assembly, attr_name : string, attr : ref System.Type, attr_loc : ref string) : void
     {
-      def ext = assembly.GetType (attr_name);
+      def ext = ClrNames.GetType (assembly, attr_name);
 
       // HACK: VladD2: In .Net 4.5 ExtensionAttribute define twice.
       when (ext != null && attr != null && attr.FullName != "System.Runtime.CompilerServices.ExtensionAttribute")
@@ -206,7 +206,7 @@ namespace Nemerle.Compiler
             framework_type.GetGenericArguments().MapToList(t => TypeOfType(_tenv, t));
           else [];
 
-        if (framework_type.Namespace == "Nemerle.Builtins")
+        if (ClrNames.NamespaceOf(framework_type) == "Nemerle.Builtins")
         {
           def make_tupl(l)
           {
@@ -297,7 +297,7 @@ namespace Nemerle.Compiler
 
       foreach (attr in attrData)
       {
-        def name = PExpr.FromQualifiedIdentifier(manager, attr.Constructor.DeclaringType.FullName);
+        def name = PExpr.FromQualifiedIdentifier(manager, ClrNames.Of(attr.Constructor.DeclaringType));
         def makeArg(a : SR.CustomAttributeTypedArgument) : PExpr
         {
           def lift(value : object) : PExpr

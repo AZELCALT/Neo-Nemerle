@@ -1,0 +1,40 @@
+using SR = System.Reflection;
+
+namespace Nemerle.Compiler
+{
+  /// CLR names of types that may be nested in a file module (`Nemerle.Core+list`) compared by their Nemerle
+  /// spelling (`Nemerle.Core.list`), so the compiler finds its runtime types wherever their file puts them.
+  public module ClrNames
+  {
+    public Normal(name : string) : string { if (name == null) null else name.Replace('+', '.') }
+
+    public Of(t : System.Type) : string { if (t == null) null else Normal(t.FullName) }
+
+    /// The namespace a type is reached through in Nemerle: its CLR namespace, or the path of the file module
+    /// (declaring type) it is nested in.
+    public NamespaceOf(t : System.Type) : string { if (t.IsNested) Of(t.DeclaringType) else t.Namespace }
+
+    /// `assembly.GetType` for a Nemerle-spelled name, also trying the nested forms (A.B.C, A.B+C, A+B+C).
+    public GetType(assembly : SR.Assembly, name : string) : System.Type
+    {
+      mutable found = assembly.GetType(name);
+      mutable candidate = name;
+      mutable i = candidate.LastIndexOf('.');
+      while (found == null && i > 0)
+      {
+        candidate = candidate.Substring(0, i) + "+" + candidate.Substring(i + 1);
+        found = assembly.GetType(candidate);
+        i = candidate.LastIndexOf('.', i - 1);
+      }
+      found
+    }
+
+    /// The implemented interface with the given Nemerle-spelled name, or null.
+    public Interface(t : System.Type, name : string) : System.Type
+    {
+      mutable found = null;
+      foreach (i in t.GetInterfaces()) when (found == null && Of(i) == name) found = i;
+      found
+    }
+  }
+}
