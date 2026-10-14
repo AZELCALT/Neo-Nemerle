@@ -5,7 +5,7 @@ using System.Text;
 using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Imperative;
-using Nemerle.Compiler.NitraInactiveSyntax;
+using Nemerle.Compiler.nitra_inactive_syntax;
 using Nemerle.Compiler.NitraRecognition;
 using Nemerle.Compiler.NitraShared;
 using Nemerle.Compiler.Parsetree;

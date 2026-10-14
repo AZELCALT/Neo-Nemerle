@@ -33,7 +33,7 @@ using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Utility;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.CompilationOptions;
+using Nemerle.Compiler.compilation_options;
 using Nemerle.Compiler.Lexer;
 using Nemerle.Compiler.Utility;
 

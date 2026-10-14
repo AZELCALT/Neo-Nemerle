@@ -30,11 +30,11 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 using Nemerle.Compiler.Typedtree;
 using SRE = System.Reflection.Emit;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.LibraryReference;
-using Nemerle.Compiler.StaticTypeVar;
-using Nemerle.Compiler.TypeVar;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.library_reference;
+using Nemerle.Compiler.static_type_var;
+using Nemerle.Compiler.type_var;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 
 /// This module is used to decode and encode Nemerle specific information about types,

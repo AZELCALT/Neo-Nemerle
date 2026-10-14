@@ -1,6 +1,6 @@
 {
  "Accessibility": [
-  "TypeInfo"
+  "type_info"
  ],
  "AttributeCompilerClass": [
   "CustomAttribute"
@@ -12,19 +12,19 @@
   "Utility"
  ],
  "BindingFlags": [
-  "TypeInfo"
+  "type_info"
  ],
  "BuiltinMethod": [
-  "BuiltinMethod"
+  "builtin_method"
  ],
  "BuiltinMethodKind": [
-  "TypeInfo"
+  "type_info"
  ],
  "BuiltinWrapMethod": [
-  "BuiltinMethod"
+  "builtin_method"
  ],
  "CFG": [
-  "CFG"
+  "cfg"
  ],
  "CacheDesc": [
   "Typedtree"
@@ -33,31 +33,31 @@
   "Parsetree"
  ],
  "ClrNames": [
-  "ClrNames"
+  "clr_names"
  ],
  "Comment": [
   "Lexer"
  ],
  "CompilationAbortedException": [
-  "ManagerClass"
+  "manager_class"
  ],
  "CompilationOptions": [
-  "CompilationOptions"
+  "compilation_options"
  ],
  "CompilerComponentsFactory": [
   "ComponentsFactory"
  ],
  "CompilerEventHandler": [
-  "ManagerClass"
+  "manager_class"
  ],
  "Completion": [
   "CodeCompletionEngine"
  ],
  "CompletionResult": [
-  "Typer"
+  "typer"
  ],
  "ConstantFolder": [
-  "ConstantFolder"
+  "constant_folder"
  ],
  "Constraint": [
   "Parsetree"
@@ -69,19 +69,19 @@
   "Parsetree"
  ],
  "CustomTyperHandler": [
-  "Typer"
+  "typer"
  ],
  "DecisionTreeBuilder": [
-  "DecisionTreeBuilder"
+  "decision_tree_builder"
  ],
  "DecisionTreeCompiler": [
-  "DecisionTreeCompiler"
+  "decision_tree_compiler"
  ],
  "DeclarationBase": [
   "Parsetree"
  ],
  "Decorator": [
-  "Decorator"
+  "decorator"
  ],
  "DefaultParseResult": [
   "Parser"
@@ -99,10 +99,10 @@
   "Parser"
  ],
  "Elem": [
-  "Typer"
+  "typer"
  ],
  "ErrorMessage": [
-  "ErrorMessage"
+  "error_message"
  ],
  "EventBuilder": [
   "ClassMembers"
@@ -114,31 +114,31 @@
   "GrammarArchive"
  ],
  "ExprWalkHandler": [
-  "ExprWalker"
+  "expr_walker"
  ],
  "ExprWalkInfo": [
-  "ExprWalker"
+  "expr_walker"
  ],
  "ExprWalker": [
-  "ExprWalker"
+  "expr_walker"
  ],
  "ExtensionPattern": [
-  "ExtensionPattern"
+  "extension_pattern"
  ],
  "ExternalType": [
-  "ExternalType"
+  "external_type"
  ],
  "FieldBuilder": [
   "ClassMembers"
  ],
  "FileModuleRegistry": [
-  "FileModuleRegistry"
+  "file_module_registry"
  ],
  "FileSource": [
   "Source"
  ],
  "FixedType": [
-  "FixedType"
+  "fixed_type"
  ],
  "FunBody": [
   "AST"
@@ -177,7 +177,7 @@
   "NitraShared"
  ],
  "GRegistry": [
-  "GrammarParsing"
+  "grammar_parsing"
  ],
  "GRule": [
   "GrammarModel"
@@ -189,7 +189,7 @@
   "GrammarModel"
  ],
  "GlobalEnv": [
-  "GlobalEnv"
+  "global_env"
  ],
  "GrammarAction": [
   "GrammarModel"
@@ -201,7 +201,7 @@
   "NitraShared"
  ],
  "GrammarElement": [
-  "SyntaxDefinition"
+  "syntax_definition"
  ],
  "GrammarJson": [
   "NitraShared"
@@ -213,7 +213,7 @@
   "GrammarModel"
  ],
  "GrammarParsing": [
-  "GrammarParsing"
+  "grammar_parsing"
  ],
  "ICE": [
   "Utility"
@@ -222,25 +222,25 @@
   "CodeCompletionEngine"
  ],
  "IEvent": [
-  "TypeInfo"
+  "type_info"
  ],
  "IExprWalkerCallback": [
-  "ExprWalker"
+  "expr_walker"
  ],
  "IField": [
-  "TypeInfo"
+  "type_info"
  ],
  "ILEmitter": [
-  "ILEmitter"
+  "il_emitter"
  ],
  "IMacro": [
   "MacroClassGen"
  ],
  "IMember": [
-  "TypeInfo"
+  "type_info"
  ],
  "IMethod": [
-  "TypeInfo"
+  "type_info"
  ],
  "INitraDialectResolver": [
   "NitraDialectServices"
@@ -255,7 +255,7 @@
   "Parser"
  ],
  "IProperty": [
-  "TypeInfo"
+  "type_info"
  ],
  "ISource": [
   "Source"
@@ -264,10 +264,10 @@
   "CodeCompletionEngine"
  ],
  "IfaceMethod": [
-  "TypeBuilder"
+  "type_builder"
  ],
  "IfaceMethods": [
-  "TypeBuilder"
+  "type_builder"
  ],
  "InternalTypeClass": [
   "InternalTypes"
@@ -288,28 +288,28 @@
   "Lexer"
  ],
  "LibraryReference": [
-  "LibraryReference"
+  "library_reference"
  ],
  "LibraryReferenceManager": [
-  "LibraryReferenceManager"
+  "library_reference_manager"
  ],
  "Literal": [
   "AST"
  ],
  "LocalContext": [
-  "LocalContext"
+  "local_context"
  ],
  "LocalValue": [
-  "LocalValue"
+  "local_value"
  ],
  "LocatableTextWriter": [
-  "PrettyPrint"
+  "pretty_print"
  ],
  "Located": [
   "AST"
  ],
  "LocatingTextWriter": [
-  "PrettyPrint"
+  "pretty_print"
  ],
  "Location": [
   "AST"
@@ -327,22 +327,22 @@
   "MacroClassGen"
  ],
  "MacroRegistry": [
-  "MacroRegistry"
+  "macro_registry"
  ],
  "Macros": [
-  "Macros"
+  "macros"
  ],
  "MainParser": [
-  "MainParser"
+  "main_parser"
  ],
  "ManagerClass": [
-  "ManagerClass"
+  "manager_class"
  ],
  "MatchCase": [
   "Parsetree"
  ],
  "MatchCompilerOptions": [
-  "CompilationOptions"
+  "compilation_options"
  ],
  "Match_case": [
   "Typedtree"
@@ -354,16 +354,16 @@
   "ClassMembers"
  ],
  "MemberInfo": [
-  "TypeInfo"
+  "type_info"
  ],
  "MemberKinds": [
-  "TypeInfo"
+  "type_info"
  ],
  "Message": [
   "Utility"
  ],
  "Messenger": [
-  "Messenger"
+  "messenger"
  ],
  "MethodBuilder": [
   "ClassMembers"
@@ -375,13 +375,13 @@
   "Parsetree"
  ],
  "NameToMethodsMap": [
-  "TypeBuilder"
+  "type_builder"
  ],
  "Namespace": [
   "Parsetree"
  ],
  "NamespaceTree": [
-  "NamespaceTree"
+  "namespace_tree"
  ],
  "NamespaceTreeUtils": [
   "TopDeclPrint"
@@ -390,16 +390,16 @@
   "AST"
  ],
  "NemerleCodeCompiler": [
-  "NemerleCodeCompiler"
+  "nemerle_code_compiler"
  ],
  "NemerleCodeGenerator": [
-  "NemerleCodeGenerator"
+  "nemerle_code_generator"
  ],
  "NemerleCodeProvider": [
-  "NemerleCodeProvider"
+  "nemerle_code_provider"
  ],
  "NemerleMemberAttributeConverter": [
-  "NemerleMemberAttributeConverter"
+  "nemerle_member_attribute_converter"
  ],
  "NemerleModifiers": [
   "AST"
@@ -411,7 +411,7 @@
   "NitraSelection"
  ],
  "NitraBootstrap": [
-  "NitraBootstrap"
+  "nitra_bootstrap"
  ],
  "NitraBoundary": [
   "NitraSourceBoundaries"
@@ -426,13 +426,13 @@
   "NitraSelection"
  ],
  "NitraCompilation": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraCompilationContext": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraCompilationResult": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraDeclaration": [
   "NitraSyntaxModel"
@@ -492,10 +492,10 @@
   "NitraFast"
  ],
  "NitraInactiveConstruct": [
-  "NitraInactiveSyntax"
+  "nitra_inactive_syntax"
  ],
  "NitraInactiveSyntax": [
-  "NitraInactiveSyntax"
+  "nitra_inactive_syntax"
  ],
  "NitraLex": [
   "NitraSyntaxModel"
@@ -540,13 +540,13 @@
   "NitraDialectServices"
  ],
  "NitraSemanticProperty": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraSemanticScope": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraSemanticSymbol": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraSemanticType": [
   "NitraTypes"
@@ -588,10 +588,10 @@
   "NitraStructures"
  ],
  "NitraSyntax": [
-  "NitraSyntax"
+  "nitra_syntax"
  ],
  "NitraTableScope": [
-  "NitraCompilation"
+  "nitra_compilation"
  ],
  "NitraTypeSolver": [
   "NitraTypes"
@@ -603,19 +603,19 @@
   "NitraRegions"
  ],
  "NumericKind": [
-  "NumericKind"
+  "numeric_kind"
  ],
  "OpContext": [
-  "MainParser"
+  "main_parser"
  ],
  "OperatorDefinition": [
-  "SyntaxDefinition"
+  "syntax_definition"
  ],
  "Optimizer": [
-  "Optimizer"
+  "optimizer"
  ],
  "OverloadPossibility": [
-  "OverloadPossibility"
+  "overload_possibility"
  ],
  "PExpr": [
   "Parsetree"
@@ -642,25 +642,25 @@
   "Typedtree"
  ],
  "PreParser": [
-  "PreParser"
+  "pre_parser"
  ],
  "PreParserException": [
-  "PreParser"
+  "pre_parser"
  ],
  "PreParserIndent": [
-  "PreParserIndent"
+  "pre_parser_indent"
  ],
  "Preparer": [
-  "Preparer"
+  "preparer"
  ],
  "PreprocessorEvaluator": [
-  "PreprocessorEvaluator"
+  "preprocessor_evaluator"
  ],
  "PrettyPrint": [
-  "PrettyPrint"
+  "pretty_print"
  ],
  "Propagator": [
-  "Propagator"
+  "propagator"
  ],
  "PropertyBuilder": [
   "ClassMembers"
@@ -678,22 +678,22 @@
   "CodeCompletionEngine"
  ],
  "RestartInErrorMode": [
-  "RestartInErrorMode"
+  "restart_in_error_mode"
  ],
  "RestartRunBodyTyperException": [
   "ClassMembers"
  ],
  "SFamily": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "SProjection": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "STailNode": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "ScanTypeHierarchy": [
-  "ScanTypeHierarchy"
+  "scan_type_hierarchy"
  ],
  "ScriptCompilationData": [
   "ScriptCompilation"
@@ -705,19 +705,19 @@
   "ScriptCompilation"
  ],
  "Solver": [
-  "Solver"
+  "solver"
  ],
  "Splicable": [
   "Parsetree"
  ],
  "StageEventArgs": [
-  "Typer"
+  "typer"
  ],
  "StaticTypeVar": [
-  "StaticTypeVar"
+  "static_type_var"
  ],
  "StaticTypeVarContainer": [
-  "StaticTypeVar"
+  "static_type_var"
  ],
  "StatsClass": [
   "Stats"
@@ -726,40 +726,40 @@
   "Source"
  ],
  "StructuralForm": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralKind": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralProjection": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralProjectionPlan": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralProjectionResult": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralRegion": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralTailCompletion": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralTailRelationship": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "StructuralToken": [
-  "StructuralProjection"
+  "structural_projection"
  ],
  "Subst": [
-  "Subst"
+  "subst"
  ],
  "SubstitutingTyparms": [
   "Parsetree"
  ],
  "SyntaxDefinition": [
-  "SyntaxDefinition"
+  "syntax_definition"
  ],
  "SyntaxElement": [
   "Parsetree"
@@ -786,7 +786,7 @@
   "Lexer"
  ],
  "TokenStoppers": [
-  "MainParser"
+  "main_parser"
  ],
  "TopDeclaration": [
   "Parsetree"
@@ -813,61 +813,61 @@
   "Parsetree"
  ],
  "TypeBuilder": [
-  "TypeBuilder"
+  "type_builder"
  ],
  "TypeDeclaration": [
   "Typedtree"
  ],
  "TypeInfo": [
-  "TypeInfo"
+  "type_info"
  ],
  "TypeVar": [
-  "TypeVar"
+  "type_var"
  ],
  "TypeVarEnv": [
-  "TypeVarEnv"
+  "type_var_env"
  ],
  "TypedBase": [
   "AST"
  ],
  "Typer": [
-  "Typer"
+  "typer"
  ],
  "Typer2": [
-  "Typer2"
+  "typer2"
  ],
  "Typer3": [
-  "Typer3"
+  "typer3"
  ],
  "Typer4": [
-  "Typer4"
+  "typer4"
  ],
  "TyperBase": [
-  "Typer"
+  "typer"
  ],
  "TypesManager": [
-  "TypesManager"
+  "types_manager"
  ],
  "TypingStage": [
-  "Typer"
+  "typer"
  ],
  "Unification": [
-  "Unification"
+  "unification"
  ],
  "UseSet": [
-  "UseSet"
+  "use_set"
  ],
  "UseSetComparer": [
-  "UseSet"
+  "use_set"
  ],
  "Util": [
   "Utility"
  ],
  "WarningOptions": [
-  "CompilationOptions"
+  "compilation_options"
  ],
  "WellTyped": [
-  "ExprWalker"
+  "expr_walker"
  ],
  "XmlDoc": [
   "XmlDump"

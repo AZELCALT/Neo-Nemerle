@@ -1,0 +1,154 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.namespace_tree;
+
+/** Nodes representing a tree of syntax extension definition.
+
+    Macros contain list of elements of grammar to describe syntax extensions,
+    which they introduce.
+    Later, parser is reading those lists and merge them into current
+    tree of syntax extensions, which can have branches and contain macro call
+    definitions in leaves.
+ */
+public variant GrammarElement : System.IEquatable[GrammarElement]
+{
+  | Operator { name : string; }
+  | Keyword { name : string; }
+  | Expression
+  | Parameter
+  | RawToken 
+  | ExpressionList
+  | Optional { body : GrammarElement; }
+  | Branch { options : list [GrammarElement]; }
+  | End { define : SyntaxDefinition; }
+
+
+  /// Next element in grammar tree. It is used only in merged
+  /// trees created by parser
+  public  Next : GrammarElement;
+  internal Target : MacroTargets;
+  
+  public this () { }
+
+  internal this (next : GrammarElement) {  Next = next; }
+  
+  internal this (next : GrammarElement, target : MacroTargets)
+  {
+    this (next);
+    Target = target;
+  }
+
+  internal CloneWithNext (other : GrammarElement) : GrammarElement
+  {
+    assert(other != null);
+    match (this) {
+      | Operator (name) => Operator (other, other.Target, name)
+      | Keyword (name)  => Keyword (other, other.Target, name)
+      | Expression      => Expression (other, other.Target)
+      | Parameter       => Parameter (other, other.Target)
+      | ExpressionList  => ExpressionList (other, other.Target)
+      | RawToken        => RawToken (other, other.Target)         
+      | Optional (body) => Optional (other, other.Target, body)
+      | Branch | End    => Nemerle.Compiler.UtilMacros.ice ("tree like elements are not allowed to be cloned")
+    }
+  }
+
+  internal AddBranch (next : GrammarElement) : GrammarElement
+  {
+    match (this) {
+      | Branch (li) => Branch (null, Target | next.Target, next :: li)
+      | _ => Branch (null, Target | next.Target, [next, this])
+    }
+  }
+
+  [NemerleMacros.OverrideObjectEquals]
+  public Equals (other : GrammarElement) : bool
+    implements System.IEquatable[GrammarElement].Equals
+  {
+    if (other == null) true
+    else
+      match ((this, other)) {
+        | (Operator (n1), Operator (n2))
+        | (Keyword (n1), Keyword (n2)) => n1 == n2
+        | (ExpressionList, ExpressionList)            
+        | (Parameter, Parameter)
+        | (RawToken, RawToken)          
+        | (Expression, Expression) => true
+        | (Optional (e1), Optional (e2)) => e1.Equals (e2)
+        | _ => false
+      }
+  }
+
+  public ToStringWhole () : string
+  {
+    if (Next != null)
+      ToString () + " " + Next.ToStringWhole ()
+    else
+      ToString ()
+  }
+  
+  public override ToString () : string
+  {
+    match (this) {
+      | Operator (name) => name
+      | Keyword (name)  => name
+      | Expression      => "PExpr"
+      | Parameter       => "Parameter"
+      | ExpressionList  => "PExpr*"
+      | Optional (body) => body.ToString () + "?"
+      | RawToken        => "Token"
+      | Branch (opts)   => "(" + NList.Map (opts, fun (x) { $"`$(x)'" }).ToString (" | ") + ")"
+      | End (d)         => d.MacroNamespace.GetDisplayName ()
+    }
+  }
+}
+
+/** Definition of syntax extension, which given macro introduces.
+ */
+[Record]
+public class SyntaxDefinition {
+  public Start : string;
+  public Keywords : list [string];
+  public MacroNamespace : NamespaceTree.Node;
+  public Tree : GrammarElement;
+  public Permute : list [SyntaxElement] -> list [SyntaxElement];
+}
+
+public class OperatorDefinition : SyntaxDefinition {
+  public Left : int;
+  public Right : int;
+
+  public this (node : NamespaceTree.Node, name : string, left : int, right : int, is_unary : bool) {
+    base (name, if (is_unary) [] else null, node, null, null);
+    Left = left;
+    Right = right;
+  }
+}

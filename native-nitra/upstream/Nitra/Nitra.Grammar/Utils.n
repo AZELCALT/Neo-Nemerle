@@ -677,7 +677,7 @@ namespace Nitra
       NType.Predefined(loc, NPredefinedType.Ast)
     }
 
-    public MakeNTypeQualified(loc : Location, qid : list[string], env : Nemerle.Compiler.GlobalEnv.GlobalEnv = null) : NType
+    public MakeNTypeQualified(loc : Location, qid : list[string], env : Nemerle.Compiler.global_env.GlobalEnv = null) : NType
     {
       NType.Qualified(loc, qid.Map(id => TypeNamePart(Location.Default, id, [], env)))
     }

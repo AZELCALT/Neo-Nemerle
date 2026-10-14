@@ -2,7 +2,7 @@ using System;
 using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nitra.Model;

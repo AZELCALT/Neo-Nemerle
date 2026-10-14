@@ -1,6 +1,6 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Text;

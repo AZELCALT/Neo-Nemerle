@@ -33,9 +33,9 @@ using Nemerle.Utility;
 using System;
 using System.Xml;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.TypeInfo;
-using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.Utility;
 
 public class XmlDoc {

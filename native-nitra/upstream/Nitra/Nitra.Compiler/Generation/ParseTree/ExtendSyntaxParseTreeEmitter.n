@@ -1,7 +1,7 @@
 ﻿using Nitra.Typing;
 
 using Nemerle;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Parsetree;
 using NemerleMacros;
 

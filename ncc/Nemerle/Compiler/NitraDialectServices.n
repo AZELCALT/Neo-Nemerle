@@ -4,8 +4,8 @@ using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.NitraCompilation;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.nitra_compilation;
+using Nemerle.Compiler.typer;
 
 /// A dialect-owned type token; it need not have a CLR representation yet.
 public sealed class NitraDialectType

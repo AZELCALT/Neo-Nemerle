@@ -38,14 +38,14 @@ using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
 using Nemerle.Compiler.CodeCompletionEngine;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.global_env;
 using Nemerle.Compiler.Lexer;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.MainParser;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.main_parser;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Typedtree;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 using Nemerle.Imperative;
 using Nemerle.Utility;
@@ -107,7 +107,7 @@ macro StringTemplateGroup(tb : TypeBuilder)
 internal module Helper2
 {
   StSuffix = "__StImpl";
-  mutable _inherMap : Set[Nemerle.Compiler.TypeInfo.TypeInfo] = Set();
+  mutable _inherMap : Set[Nemerle.Compiler.type_info.TypeInfo] = Set();
   _sync : object = object();
 
   internal StringTemplateGroupBeforeInheritance(tb : TypeBuilder, _ctx : Typer) : void

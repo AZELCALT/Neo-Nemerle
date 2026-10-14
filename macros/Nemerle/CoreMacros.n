@@ -27,11 +27,11 @@
  */
 
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeInfo;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
@@ -928,8 +928,8 @@ macro Record(ty : TypeBuilder, params options : list[PExpr])
 
 public module MacrosHelper
 {
-  public  InstanceFlags : Nemerle.Compiler.TypeInfo.BindingFlags = Nemerle.Compiler.TypeInfo.BindingFlags.Instance %| Nemerle.Compiler.TypeInfo.BindingFlags.Public
-                         %| Nemerle.Compiler.TypeInfo.BindingFlags.NonPublic %| Nemerle.Compiler.TypeInfo.BindingFlags.DeclaredOnly;
+  public  InstanceFlags : Nemerle.Compiler.type_info.BindingFlags = Nemerle.Compiler.type_info.BindingFlags.Instance %| Nemerle.Compiler.type_info.BindingFlags.Public
+                         %| Nemerle.Compiler.type_info.BindingFlags.NonPublic %| Nemerle.Compiler.type_info.BindingFlags.DeclaredOnly;
   private IgnoreMapKey = "RecordIgnored-MemberIgnoreMapKey";
 
   public MakeRecord (ty : TypeBuilder, options : list[PT.PExpr]) : void

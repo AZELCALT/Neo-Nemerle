@@ -6,19 +6,19 @@ using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.MacroClassGen;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.NitraCompilation;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.nitra_compilation;
 using Nemerle.Compiler.NitraDialectServices;
-using Nemerle.Compiler.NitraInactiveSyntax;
+using Nemerle.Compiler.nitra_inactive_syntax;
 using Nemerle.Compiler.NitraRecognition;
 using Nemerle.Compiler.NitraShared;
 using Nemerle.Compiler.NitraSourceBoundaries;
 using Nemerle.Compiler.NitraStructures;
-using Nemerle.Compiler.NitraSyntax;
+using Nemerle.Compiler.nitra_syntax;
 using Nemerle.Compiler.NitraSyntaxModel;
 using Nemerle.Compiler.Source;
-using Nemerle.Compiler.SyntaxDefinition;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.syntax_definition;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 
 /// Optional legacy callbacks; the default path uses native declared mappings.

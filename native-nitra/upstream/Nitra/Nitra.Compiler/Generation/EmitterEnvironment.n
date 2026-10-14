@@ -3,10 +3,10 @@ using Nitra.Typing;
 using Nitra.ProjectSystem;
 
 using Nemerle;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.GlobalEnv;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.type_info;
 using Nemerle.Compiler.Utility;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;

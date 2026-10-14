@@ -7,8 +7,8 @@ using Nemerle.Imperative;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.MacroClassGen;
 using Nemerle.Compiler.NitraSourceCompilation;
-using Nemerle.Compiler.SyntaxDefinition;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.syntax_definition;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 
 internal sealed class NitraBoundary

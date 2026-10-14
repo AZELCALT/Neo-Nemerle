@@ -1,5 +1,5 @@
-using Nemerle.Compiler.GlobalEnv;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.manager_class;
 /*
  * Copyright (c) 2004-2008 The University of Wroclaw.
  * All rights reserved.

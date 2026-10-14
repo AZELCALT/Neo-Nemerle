@@ -1,7 +1,7 @@
 ﻿using Nitra.ProjectSystem;
 
 using Nemerle;
-using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.global_env;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 using Nemerle.Text;

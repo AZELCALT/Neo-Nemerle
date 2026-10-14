@@ -34,15 +34,15 @@ using System.Text;
 using NemerleMacros;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.ConstantFolder;
+using Nemerle.Compiler.constant_folder;
 using Nemerle.Compiler.Lexer;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.NamespaceTree;
-using Nemerle.Compiler.SyntaxDefinition;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.namespace_tree;
+using Nemerle.Compiler.syntax_definition;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Typedtree;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 
 /** Interface, which will be implemented by class encapsulating macro

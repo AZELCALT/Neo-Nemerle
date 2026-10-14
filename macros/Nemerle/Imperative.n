@@ -27,9 +27,9 @@
  */
 
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
@@ -39,7 +39,7 @@ using Nemerle.Utility;
 using PT = Nemerle.Compiler.Parsetree;
 using TT = Nemerle.Compiler.Typedtree;
 using SCG = System.Collections.Generic;
-using Nemerle.Compiler.TypeInfo.BindingFlags;
+using Nemerle.Compiler.type_info.BindingFlags;
 using Nemerle.Compiler.Parsetree;
 
 // ---- core.n (Nemerle.Imperative) ----

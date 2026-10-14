@@ -31,7 +31,7 @@ using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using System.Collections.Generic;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.NamespaceTree;
+using Nemerle.Compiler.namespace_tree;
 
 public module NamespaceTreeUtils
   {

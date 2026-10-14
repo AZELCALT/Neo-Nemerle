@@ -47,26 +47,26 @@ using PT = Nemerle.Compiler.Parsetree;
 using Nemerle.UtilityMacros;
 using Nemerle.CompilerMacros;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.ClrNames;
-using Nemerle.Compiler.ExprWalker;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.GlobalEnv;
-using Nemerle.Compiler.ILEmitter;
+using Nemerle.Compiler.clr_names;
+using Nemerle.Compiler.expr_walker;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.il_emitter;
 using Nemerle.Compiler.Lexer;
-using Nemerle.Compiler.LocalValue;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.local_value;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler.Solver;
-using Nemerle.Compiler.StaticTypeVar;
-using Nemerle.Compiler.Subst;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeInfo;
-using Nemerle.Compiler.TypeVar;
-using Nemerle.Compiler.Typer;
-using Nemerle.Compiler.Typer3;
-using Nemerle.Compiler.Typer4;
-using Nemerle.Compiler.TypesManager;
+using Nemerle.Compiler.solver;
+using Nemerle.Compiler.static_type_var;
+using Nemerle.Compiler.subst;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.type_var;
+using Nemerle.Compiler.typer;
+using Nemerle.Compiler.typer3;
+using Nemerle.Compiler.typer4;
+using Nemerle.Compiler.types_manager;
 using Nemerle.Compiler.Utility;
 
 public variant RefTo
@@ -879,7 +879,7 @@ public class PropertyBuilder : MemberBuilder, IProperty
     }
     else
     {
-      def field = Nemerle.Compiler.MainParser.MainParser.TryExpandAutoproperty(propertyAst);
+      def field = Nemerle.Compiler.main_parser.MainParser.TryExpandAutoproperty(propertyAst);
 
       when (field != null)
       {

@@ -21,6 +21,8 @@ mask helpers { public Two() : int { 2 } }   // a named group inside the file
   either: `util/other.n` reaches its sibling as `util.text`, never as `text`.
 - **No `namespace` blocks and no `partial`.** A type lives in exactly one file.
 - **Groups inside a file use `mask`.**
+- **No member has its file's name.** The file is a class, and as in C# (CS0542) a member cannot have the name
+  of its enclosing type: `typer.n` may hold `class Typer`, but `Typer.n` may not.
 - **A file may not sit beside a directory of the same name** (`a.n` with `a/b.n`). The file would be a type and
   the directory a namespace with the same name, which C# and other .NET languages reject (CS0434).
 - **The source root** is `-source-root:DIR`, else the project path (or its directory when it names a
@@ -42,11 +44,11 @@ names both files.
 
 ## The compiler's own modules
 
-The compiler is written this way too: `ncc/Nemerle/Compiler/Typer.n` is the module `Nemerle.Compiler.Typer`
-(source root `ncc`). Consumers import the modules whose names they use, `using Nemerle.Compiler.Typer;` or in
-C# `using static Nemerle.Compiler.Typer;`, and qualify a class through its module
-(`Nemerle.Compiler.ManagerClass.ManagerClass`). `ncc/Nemerle/Compiler/SYMBOLS.json` lists which module holds each
-name; `baseline/rename-compiler-references.py` moves sources onto these paths.
+The compiler is written this way too: `ncc/Nemerle/Compiler/typer.n` is the module `Nemerle.Compiler.typer`
+(source root `ncc`), holding the class `Typer`. Consumers import the modules whose names they use,
+`using Nemerle.Compiler.typer;` or in C# `using static Nemerle.Compiler.typer;`, and qualify a class through its
+module (`Nemerle.Compiler.manager_class.ManagerClass`). `ncc/Nemerle/Compiler/SYMBOLS.json` lists which module holds
+each name; `baseline/rename-compiler-references.py` and `rename-compiler-modules.py` move sources onto these paths.
 
 ## Temporary: `-legacy-namespaces`
 

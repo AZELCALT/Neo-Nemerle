@@ -29,7 +29,7 @@
 /* Macros used only inside the compiler.  */
 
 using Nemerle;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Imperative;
 using System.Diagnostics;
 

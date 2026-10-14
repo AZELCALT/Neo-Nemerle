@@ -2,7 +2,7 @@
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.macros;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;

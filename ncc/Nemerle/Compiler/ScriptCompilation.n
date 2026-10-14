@@ -5,11 +5,11 @@ using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.fixed_type;
 using Nemerle.Compiler.Lexer;
 using Nemerle.Compiler.MacroClassGen;
-using Nemerle.Compiler.SyntaxDefinition;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.syntax_definition;
+using Nemerle.Compiler.typer;
 
 // Internal compiler data; public hosting contracts live outside the compiler.
 public sealed class ScriptCompilationData

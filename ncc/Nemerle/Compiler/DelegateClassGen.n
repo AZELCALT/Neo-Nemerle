@@ -30,8 +30,8 @@ using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Assertions;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.GlobalEnv;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Utility;
 
 // stateless utility module

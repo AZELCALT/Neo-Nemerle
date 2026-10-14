@@ -33,11 +33,11 @@ using SR = System.Reflection;
 using SRC = System.Runtime.CompilerServices;
 using Nemerle.IOMacros;
 using Nemerle.CompilerMacros;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.LibraryReference;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.TypeInfo;
-using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.library_reference;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.type_var;
 
 [ManagerAccess]
 public class SystemTypeClass

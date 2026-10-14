@@ -27,9 +27,9 @@
  */
 
 using Nemerle;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 using Nemerle.Macros;
 using Nemerle.Collections;
@@ -272,12 +272,12 @@ internal module Helper {
   }
   
   public ConnectionExpr (mgr : ManagerClass, con_name : string) : Nemerle.Compiler.Parsetree.PExpr {
-    def connClass = Nemerle.Compiler.ClrNames.ClrNames.TypeFullName (connections [con_name].GetType ());
+    def connClass = Nemerle.Compiler.clr_names.ClrNames.TypeFullName (connections [con_name].GetType ());
     Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass)
   }
   
   public CommandExpr (mgr : ManagerClass, con_name : string, query : string, conn : Nemerle.Compiler.Parsetree.PExpr) : Nemerle.Compiler.Parsetree.PExpr {
-    def connClass = Nemerle.Compiler.ClrNames.ClrNames.TypeFullName (connections [con_name].GetType ());
+    def connClass = Nemerle.Compiler.clr_names.ClrNames.TypeFullName (connections [con_name].GetType ());
     def cmdExpr = Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass.Replace ("Connection", "Command"));
     def connExpr = Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass);
     
@@ -285,7 +285,7 @@ internal module Helper {
   }
   
   public ParameterChar (conName : string) : char {
-    def connClass = Nemerle.Compiler.ClrNames.ClrNames.TypeFullName (connections [conName].GetType ());
+    def connClass = Nemerle.Compiler.clr_names.ClrNames.TypeFullName (connections [conName].GetType ());
     if (connClass.EndsWith (".SqlConnection"))
       '@' 
     else if (connClass.EndsWith (".NpgsqlConnection"))

@@ -1,4 +1,4 @@
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.manager_class;
 /*
  * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.

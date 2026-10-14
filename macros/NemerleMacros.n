@@ -28,9 +28,9 @@
 
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;

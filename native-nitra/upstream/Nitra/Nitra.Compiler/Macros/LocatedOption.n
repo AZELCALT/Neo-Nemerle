@@ -1,8 +1,8 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Text;

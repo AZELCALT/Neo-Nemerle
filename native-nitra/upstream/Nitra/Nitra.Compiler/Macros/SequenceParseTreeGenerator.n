@@ -1,7 +1,7 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler.GlobalEnv;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;

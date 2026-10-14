@@ -7,7 +7,7 @@ using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Compiler.GrammarModel;
-using Nemerle.Compiler.GrammarParsing;
+using Nemerle.Compiler.grammar_parsing;
 using Nemerle.Compiler.NitraShared;
 
 

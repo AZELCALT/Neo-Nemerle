@@ -1,5 +1,5 @@
 ﻿using Nemerle;
-using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.fixed_type;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;

@@ -1,6 +1,6 @@
 ﻿using Nemerle;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.Parsetree;
 
 namespace Nitra.Compiler

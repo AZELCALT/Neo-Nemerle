@@ -45,16 +45,16 @@ using Nemerle.Utility;
 using SCG = System.Collections.Generic;
 using Nemerle.UtilityMacros;
 using NemerleMacros;
-using Nemerle.Compiler.ClrNames;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.clr_names;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.global_env;
 using Nemerle.Compiler.InternalTypes;
-using Nemerle.Compiler.MacroRegistry;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.PrettyPrint;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeInfo;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.macro_registry;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.pretty_print;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 
 [Record]

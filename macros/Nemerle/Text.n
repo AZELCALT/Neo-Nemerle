@@ -27,9 +27,9 @@
  */
 
 using Nemerle.Collections;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using System;

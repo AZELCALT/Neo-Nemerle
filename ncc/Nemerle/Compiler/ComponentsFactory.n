@@ -28,8 +28,8 @@
 
 using Nemerle.DesignPatterns;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.LibraryReferenceManager;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.library_reference_manager;
+using Nemerle.Compiler.typer;
 
 [AbstractFactory (MethodBuilder, Typer, LibraryReferenceManager)]
 public class CompilerComponentsFactory   {  }

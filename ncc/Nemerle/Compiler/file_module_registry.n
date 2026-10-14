@@ -1,0 +1,177 @@
+using System;
+using System.IO;
+using System.Text.RegularExpressions;
+using Nemerle;
+using Nemerle.Utility;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.namespace_tree;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.Utility;
+
+/// Compilation-local file ownership. Index before parsing ordinary imports.
+public sealed class FileModuleRegistry
+{
+  manager : ManagerClass;
+  paths : Hashtable[int, list[string]] = Hashtable();
+  owners : Hashtable[string, int] = Hashtable();
+
+  public this(manager : ManagerClass) { this.manager = manager; }
+
+  /// Source root: -source-root, else the project path (its directory when it names a project file), else the
+  /// current directory.
+  public Root : string
+  {
+    get
+    {
+      def options = manager.Options;
+      def project = options.ProjectPath;
+      def root = if (options.SourceRoot != null) options.SourceRoot
+                 else if (project != null && File.Exists(project)) Path.GetDirectoryName(Path.GetFullPath(project))
+                 else project ?? System.Environment.CurrentDirectory;
+      Path.GetFullPath(root)
+    }
+  }
+
+  public IndexSources() : void
+  {
+    paths.Clear(); owners.Clear();
+    def root = Root;
+    def prefix = root.TrimEnd(array[Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) + Path.DirectorySeparatorChar;
+    def shortNames = manager.Options.FileNameNamespaces;
+    def files = Hashtable.[string, string]();
+    foreach (source in manager.Options.Sources)
+    {
+      def file = Path.GetFullPath(Location.GetFileName(source.FileIndex));
+      // Only Nemerle sources are file modules; other parsers (e.g. .nitra) keep their own rules.
+      unless (String.Equals(Path.GetExtension(file), ".n", StringComparison.OrdinalIgnoreCase)) continue;
+      def loc = Location(source.FileIndex, 1, 1);
+      unless (shortNames || file.StartsWith(prefix, StringComparison.Ordinal))
+      {
+        Message.Error(loc, "file module source is outside the source root: " + file + " (root " + root + "; use -source-root)");
+        continue;
+      }
+      def relative = if (shortNames) Path.GetFileNameWithoutExtension(file) else Path.ChangeExtension(file.Substring(prefix.Length), null);
+      def parts = NString.Split(relative.Replace(Path.DirectorySeparatorChar, '.'), '.');
+      // Splitting dots would silently change a dotted filename into a directory.
+      def components = NString.Split(relative, Path.DirectorySeparatorChar);
+      unless (components.ForAll(part => Regex.IsMatch(part, "^[A-Za-z_][A-Za-z0-9_]*$")))
+      {
+        Message.Error(loc, "file module path components must be identifiers: " + relative);
+        continue;
+      }
+      def name = parts.ToString(".");
+      when (owners.Contains(name))
+      {
+        Message.Error(loc, "duplicate file module identity: " + name
+          + (if (files.Contains(name)) " (" + files[name] + " and " + file + ")" else ""));
+        continue;
+      }
+      // A module path may not also be a directory of other modules: the file would be a type and the directory a
+      // namespace of the same name, which C# and other .NET languages reject (CS0434).
+      foreach (existing in owners.Keys)
+        when (name.StartsWith(existing + ".", StringComparison.Ordinal)
+           || existing.StartsWith(name + ".", StringComparison.Ordinal))
+          Message.Error(loc, "file module conflicts with a directory module path: " + name + " and " + existing
+            + " (a file may not sit beside a directory of the same name)");
+      owners.Add(name, source.FileIndex);
+      files.Add(name, file);
+      paths.Add(source.FileIndex, parts);
+    }
+  }
+
+  /// True when the source was indexed as a file module (generated or synthetic sources are not).
+  public IsModule(fileIndex : int) : bool { manager.Options.FileModules && paths.Contains(fileIndex) }
+
+  public ModulePrefix(name : list[string]) : string
+  {
+    mutable prefix = "";
+    mutable found = null;
+    foreach (part in name)
+    {
+      prefix = if (prefix == "") part else prefix + "." + part;
+      when (owners.Contains(prefix)) found = prefix;
+    }
+    found
+  }
+
+  public IsDirectory(name : list[string]) : bool
+  {
+    def prefix = name.ToString(".") + ".";
+    ModulePrefix(name) == null && owners.Keys.NToList().Exists(_.StartsWith(prefix, StringComparison.Ordinal))
+  }
+
+  public HasClrNamespace(name : list[string]) : bool
+  {
+    def node = manager.NameTree.NamespaceTree.PassTo(name);
+    def containsExternal(current : NamespaceTree.Node) : bool
+    {
+      when (current == null) return false;
+      match (current.Value)
+      {
+        | NamespaceTree.TypeInfoCache.NotLoaded
+        | NamespaceTree.TypeInfoCache.NotLoadedList
+        | NamespaceTree.TypeInfoCache.MacroCall => return true;
+        | NamespaceTree.TypeInfoCache.Cached(t) when !(t is TypeBuilder) => return true;
+        | NamespaceTree.TypeInfoCache.CachedAmbiguous(types) when types.Exists(t => !(t is TypeBuilder)) => return true;
+        | _ => ()
+      }
+      current.Children != null && current.Children.Values.NToList().Exists(containsExternal)
+    }
+    containsExternal(node)
+  }
+
+  public Environment(fileIndex : int) : GlobalEnv
+  {
+    // Only the module itself is entered: its directories are not opened, so sibling files are reached by explicit path.
+    def core = GlobalEnv(manager.CoreEnv, ["mask"]);
+    core.EnterIntoNamespace(manager.NameTree.ExactPath(paths[fileIndex]))
+  }
+
+  public Declaration(fileIndex : int, members : list[ClassMember]) : TopDeclaration
+  {
+    def (directory, filename) = NList.DivideLast(paths[fileIndex]);
+    def env = if (directory.IsEmpty) manager.CoreEnv else manager.CoreEnv.EnterIntoNamespace(directory);
+    def name = Name.NameInCurrentColor(filename, Location(fileIndex, 1, 1), env);
+    // The file is a class: as in C# (CS0542), none of its members may have its name.
+    foreach (member when member.Name == filename in members)
+      Message.Error(member.Location, $"`$filename' names both the file module and one of its members; a member cannot "
+                                     "have the name of its enclosing type (as in C#): rename the file or the member");
+    ApplyDefaults(members);
+    def declaration = TopDeclaration.Class(Location(fileIndex, 1, 1), Splicable.Name(name),
+      AttributesAndModifiers(NemerleModifiers.Public | NemerleModifiers.Static, []),
+      Typarms.Empty, [], members);
+    foreach (member in members)
+    {
+      member._definedIn = declaration;
+      match (member)
+      {
+        | ClassMember.TypeDeclaration(td) => td._definedIn = declaration;
+        | ClassMember.Property(getter = Some(g), setter = Some(s)) =>
+          g._definedIn = declaration; s._definedIn = declaration;
+        | ClassMember.Property(getter = Some(g)) => g._definedIn = declaration;
+        | ClassMember.Property(setter = Some(s)) => s._definedIn = declaration;
+        | _ => ()
+      }
+    }
+    declaration
+  }
+
+  public static ApplyDefaults(members : list[ClassMember]) : void
+  {
+    foreach (member when member.modifiers != null in members)
+    {
+      when ((member.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
+        member.modifiers.mods |= NemerleModifiers.Public;
+      match (member)
+      {
+        | ClassMember.TypeDeclaration(td) => td.modifiers.mods = member.modifiers.mods;
+        | _ => member.modifiers.mods |= NemerleModifiers.Static;
+      }
+    }
+  }
+}

@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.Lexer;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.manager_class;
 using Nemerle.Scripting.contracts;
 using Nemerle.Scripting.facilities;
 

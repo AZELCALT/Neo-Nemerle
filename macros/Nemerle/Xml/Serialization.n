@@ -29,8 +29,8 @@
 using Nemerle;
 using System.Xml;
 using System.Xml.Serialization;
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Collections;

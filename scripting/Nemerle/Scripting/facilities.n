@@ -104,7 +104,7 @@ internal sealed class PreparedScript
 }
 internal static class ScriptCompilerOptions
 {
-  public Apply(options : Nemerle.Compiler.CompilationOptions.CompilationOptions, arguments : List[string], source : string) : void
+  public Apply(options : Nemerle.Compiler.compilation_options.CompilationOptions, arguments : List[string], source : string) : void
   {
     def allowed = array["-define", "-warn", "-nowarn", "-dowarn", "-warnaserror", "-optimize", "-optimize-options", "-checked", "-general-tail-call-opt", "-boolean-constant-matching-opt", "-ordinal-constant-matching-opt"];
     foreach (argument in arguments)

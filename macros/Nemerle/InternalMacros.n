@@ -29,12 +29,12 @@
 using Nemerle;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.ConstantFolder;
-using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.constant_folder;
+using Nemerle.Compiler.fixed_type;
 using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler.PrettyPrint;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.pretty_print;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_info;
 using Nemerle.Compiler.Utility;
 using PT = Nemerle.Compiler.Parsetree;
 

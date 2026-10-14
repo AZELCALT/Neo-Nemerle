@@ -34,16 +34,16 @@ using Nemerle.UtilityMacros;
 using NemerleMacros;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.global_env;
 using Nemerle.Compiler.Lexer;
-using Nemerle.Compiler.ManagerClass;
-using Nemerle.Compiler.NamespaceTree;
-using Nemerle.Compiler.PrettyPrint;
-using Nemerle.Compiler.StaticTypeVar;
-using Nemerle.Compiler.Subst;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.namespace_tree;
+using Nemerle.Compiler.pretty_print;
+using Nemerle.Compiler.static_type_var;
+using Nemerle.Compiler.subst;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.Utility;
 
@@ -1551,7 +1551,7 @@ using Nemerle.Compiler.Utility;
     | RawToken         { body : Token; }
 
     | ClassMember      { body : Nemerle.Compiler.Parsetree.ClassMember; }
-    | TypeBuilder      { body : Nemerle.Compiler.TypeBuilder.TypeBuilder; }
+    | TypeBuilder      { body : Nemerle.Compiler.type_builder.TypeBuilder; }
     | FieldBuilder     { body : Nemerle.Compiler.ClassMembers.FieldBuilder; }
     | MethodBuilder    { body : Nemerle.Compiler.ClassMembers.MethodBuilder; }
     | PropertyBuilder  { body : Nemerle.Compiler.ClassMembers.PropertyBuilder; }

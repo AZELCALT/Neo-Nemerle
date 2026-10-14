@@ -3,7 +3,7 @@ using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.Parser;
 using Nemerle.Compiler.Source;
 using Nemerle.Compiler.Parsetree;

@@ -26,9 +26,9 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler.Macros;
-using Nemerle.Compiler.PrettyPrint;
-using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.pretty_print;
+using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -47,7 +47,7 @@ macro Hygienic(_ : TypeBuilder, m : ParsedMethod)
 {
   def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location,
     <[
-      def colors = Nemerle.Compiler.ManagerClass.ManagerClass.Instance.MacroColors;
+      def colors = Nemerle.Compiler.manager_class.ManagerClass.Instance.MacroColors;
       colors.PushNewColor(colors.UseColor, colors.UseContext);
       def result = $(m.Body);
       colors.PopColor();
@@ -80,7 +80,7 @@ macro GetTyper()
 
 macro Manager()
 {
-  <[ Nemerle.Compiler.ManagerClass.ManagerClass.Instance ]>
+  <[ Nemerle.Compiler.manager_class.ManagerClass.Instance ]>
 }
 
 /** creates new symbol with given id and current global context */

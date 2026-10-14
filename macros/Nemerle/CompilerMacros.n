@@ -30,12 +30,12 @@
 
 using Nemerle;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.macros;
 using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler.TypeBuilder;
-using Nemerle.Compiler.TypeInfo;
-using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.Utility;
 using Nemerle.Imperative;
 using System.Diagnostics;
@@ -54,10 +54,10 @@ macro ManagerAccess (tb : TypeBuilder, params options : list [PExpr])
   match (options)
   {
     | [] => {}
-      tb.Define (<[ decl: public Manager : Nemerle.Compiler.ManagerClass.ManagerClass; ]>);
+      tb.Define (<[ decl: public Manager : Nemerle.Compiler.manager_class.ManagerClass; ]>);
     | [expr] =>
       tb.Define (<[ decl: 
-        public Manager : Nemerle.Compiler.ManagerClass.ManagerClass { get { $expr } } ]>);
+        public Manager : Nemerle.Compiler.manager_class.ManagerClass { get { $expr } } ]>);
     | _ => Message.Error ("invalid option to ManagerAccess")
   }
 
@@ -140,24 +140,24 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
   def nsRoot            = nameTree.NamespaceTree;
 
   /// TypeInfo variables:
-  def tyVarTyInfo        = manager.Lookup ("Nemerle.Compiler.TypeVar.TypeVar") :> TypeBuilder;
+  def tyVarTyInfo        = manager.Lookup ("Nemerle.Compiler.type_var.TypeVar") :> TypeBuilder;
   def locationTyInfo     = manager.Lookup ("Nemerle.Compiler.AST.Location");
   def iMacroTyInfo       = manager.Lookup ("Nemerle.Compiler.MacroClassGen.IMacro");
   def scgListTyInfo        = manager.Lookup ("System.Collections.Generic.List");
   //def stackTyInfo        = manager.Lookup ("Nemerle.Collections.Vector");
-  def nodeTyInfo         = manager.Lookup ("Nemerle.Compiler.NamespaceTree.NamespaceTree.Node");
-  def managerClassTyInfo = manager.Lookup ("Nemerle.Compiler.ManagerClass.ManagerClass");
-  def globalEnvTyInfo    = manager.Lookup ("Nemerle.Compiler.GlobalEnv.GlobalEnv");
+  def nodeTyInfo         = manager.Lookup ("Nemerle.Compiler.namespace_tree.NamespaceTree.Node");
+  def managerClassTyInfo = manager.Lookup ("Nemerle.Compiler.manager_class.ManagerClass");
+  def globalEnvTyInfo    = manager.Lookup ("Nemerle.Compiler.global_env.GlobalEnv");
   def optinTyInfo        = manager.InternalType.Nemerle_option_tc;
   def listTyInfo         = manager.InternalType.Nemerle_list_tc;
   /// The ignore list of some types.
   def ignoreTypeList     = 
-    //  manager.Lookup ("Nemerle.Compiler.TypeBuilder.TypeBuilder")
+    //  manager.Lookup ("Nemerle.Compiler.type_builder.TypeBuilder")
     //:: 
-       manager.Lookup ("Nemerle.Compiler.TypeInfo.TypeInfo")
+       manager.Lookup ("Nemerle.Compiler.type_info.TypeInfo")
     :: tyVarTyInfo :: nodeTyInfo
     :: managerClassTyInfo :: globalEnvTyInfo
-    :: manager.Lookup ("Nemerle.Compiler.TypesManager.TypesManager")
+    :: manager.Lookup ("Nemerle.Compiler.types_manager.TypesManager")
     :: tyVarTyInfo.GetAllSubTypes().Map(_ : TypeInfo);
 
   //wl("ignoreTypeList:");

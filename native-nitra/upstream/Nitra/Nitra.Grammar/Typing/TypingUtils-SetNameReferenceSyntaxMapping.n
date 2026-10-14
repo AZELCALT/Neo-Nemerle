@@ -3,7 +3,7 @@ using Nitra.ProjectSystem;
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;

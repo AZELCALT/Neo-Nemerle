@@ -29,9 +29,9 @@
 using StringTemplate;
 using Nemerle;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.ConstantFolder;
-using Nemerle.Compiler.GlobalEnv;
-using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.constant_folder;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.macros;
 using Nemerle.Compiler.Utility;
 using Nemerle.Collections;
 using Nemerle.Utility;

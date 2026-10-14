@@ -1,10 +1,10 @@
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler.AST;
-using Nemerle.Compiler.FixedType;
-using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.Source;
-using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.typer;
 using Nemerle.Compiler.Utility;
 using Nemerle.Imperative;
 using System.IO;
