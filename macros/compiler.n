@@ -27,6 +27,7 @@
  */
 
 /* Macros used only inside the compiler.  */
+using Nemerle;
 
 using Nemerle.Compiler;
 using Nemerle.Imperative;
@@ -109,8 +110,8 @@ namespace Nemerle.Compiler
   using Attr = NemerleModifiers;
   using Member = Parsetree.ClassMember;
   
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class)]
   macro ManagerAccess (tb : TypeBuilder, params options : list [PExpr])
   {
     match (options)
@@ -158,8 +159,8 @@ namespace Nemerle.Compiler
   }
 
   /// Add Relocate() method to class and all class referenced dy it fields.
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class)]
   macro SupportRelocation (typeBuilder : TypeBuilder)
   {
     //def wl(x : object) { System.Console.WriteLine(x); }
@@ -180,8 +181,8 @@ namespace Nemerle.Compiler
   }
   
   /// Add Relocate() method to class and all class referenced dy it fields.
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers,
-                       Nemerle.MacroTargets.Class)]
+  [MacroUsage (MacroPhase.BeforeTypedMembers,
+                       MacroTargets.Class)]
   macro SupportRelocation (typeBuilder : TypeBuilder)
   {
     //def wl(x : object) { System.Console.WriteLine(x); }
@@ -529,7 +530,7 @@ namespace Nemerle.Compiler.SolverMacros
     ]>
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance, Nemerle.MacroTargets.Method)]
+  [MacroUsage (MacroPhase.BeforeInheritance, MacroTargets.Method)]
   macro PossiblyLooping (_ : TypeBuilder, m : ParsedMethod, solver)
   {
     def newBody = Util.locate(m.Body.Location, <[

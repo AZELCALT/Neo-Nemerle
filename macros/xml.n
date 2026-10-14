@@ -25,6 +25,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using System.Xml;
 using System.Xml.Serialization;
@@ -36,8 +37,8 @@ using Nemerle.Utility;
 
 namespace Nemerle.Xml.Serialization
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Field,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Field,
                        Inherited = false, AllowMultiple = false)]
   macro XmlMultidimensionalArray (t : TypeBuilder, f : ParsedField)
   {
@@ -154,8 +155,8 @@ namespace Nemerle.Xml.Serialization
       _N_constant_object optimization and add appropriate XmlInclude
       attributes.
     */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.BeforeTypedMembers,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro XmlSerializable (par : TypeBuilder)
   {

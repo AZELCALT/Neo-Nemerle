@@ -43,8 +43,8 @@ using System.Text;
 
 namespace Nemerle.Utility
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = true)]
   macro ExtensionPattern (par : TypeBuilder, e)
   {

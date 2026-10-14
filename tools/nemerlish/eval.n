@@ -1,3 +1,4 @@
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
@@ -400,7 +401,7 @@ namespace Nemerle.Evaluation
       public SyntaxExtension () : GrammarElement * (list [SyntaxElement] -> 
                                                     list [SyntaxElement])
       { (null, fun (_) { [] }) }
-      public Usage : Nemerle.MacroUsageAttribute { get { null } }
+      public Usage : MacroUsageAttribute { get { null } }
     }
 
     internal class StubParser : IParser

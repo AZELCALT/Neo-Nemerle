@@ -33,7 +33,7 @@ using Nemerle.Collections;
  
 namespace Nemerle.Surround
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance, Nemerle.MacroTargets.Assembly)] 
+  [MacroUsage (MacroPhase.BeforeInheritance, MacroTargets.Assembly)] 
   macro DefineSurround(name : string, useTryFinally : bool, beforeExpr, afterExpr)
   {
     SurroundWithImpl._surroundWithMap[name] = (useTryFinally, beforeExpr, afterExpr);

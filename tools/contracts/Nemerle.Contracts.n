@@ -25,6 +25,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using Nemerle.IO;
 using Nemerle.Utility;
@@ -65,8 +66,8 @@ namespace Nemerle.Contracts
    * after inheritance, so we won't have to check if we're overriding the 
    * invariant methods or not.
    */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class,
                        Inherited = true, AllowMultiple = true)]
   macro Invariant (ty : TypeBuilder, assertion)
   syntax ("invariant", assertion)
@@ -112,8 +113,8 @@ namespace Nemerle.Contracts
       } ]> );
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class,
                        Inherited = true, AllowMultiple = true)]
   macro Invariant (ty : TypeBuilder, _assertion)
   syntax ("invariant", _assertion)
@@ -279,8 +280,8 @@ namespace Nemerle.Contracts
       requires y >= 0
       { ... }
   */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = true)]
   macro Requires (_ : TypeBuilder, m : ParsedMethod, assertion, other = null)
   syntax ("requires", assertion, Optional("otherwise", other))
@@ -415,8 +416,8 @@ namespace Nemerle.Contracts
       { when (y > 0)
           x += y; ... }
   */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = true)]
   macro Ensures (_ : TypeBuilder, m : ParsedMethod, assertion, other = null)
   syntax ("ensures", assertion, Optional("otherwise", other))
@@ -561,8 +562,8 @@ namespace Nemerle.Contracts
       public Foo ([NotNull] a : A) : A
       { a.Bar (); ...; a }
   */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Parameter,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Parameter,
                        Inherited = true, AllowMultiple = false)]
   macro NotNull (_ : TypeBuilder, m : ParsedMethod, p : ParsedParameter)
   {
@@ -584,16 +585,16 @@ namespace Nemerle.Contracts
     m.Body = newBody;
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Parameter,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Parameter,
                        Inherited = true, AllowMultiple = false)]
   macro NotNull (_ : TypeBuilder, _ : MethodBuilder, p : ParameterBuilder)
   {
     p.optional_modifiers ::= typeof (MC.NonNullType);
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = false)]
   macro NotNull (_ : TypeBuilder, m : MethodBuilder)
   {
@@ -610,16 +611,16 @@ namespace Nemerle.Contracts
     m.Body = newBody;
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Field,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Field,
                        Inherited = true, AllowMultiple = false)]
   macro NotNull (_ : TypeBuilder, f : FieldBuilder)
   {
     f.optional_modifiers ::= typeof (MC.NonNullType);
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Property,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Property,
                        Inherited = true, AllowMultiple = false)]
   macro NotNull (_ : TypeBuilder, p : PropertyBuilder)
   {
@@ -938,8 +939,8 @@ namespace Nemerle.Contracts
 
   /*---------------------- Checked exceptions ---------------------*/
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = true)]
   macro Throws (_ : TypeBuilder, m : MethodBuilder, exc)
   syntax ("throws", exc)

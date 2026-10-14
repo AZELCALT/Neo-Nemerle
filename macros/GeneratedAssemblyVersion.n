@@ -43,8 +43,8 @@ using System.Text;
 
 namespace Nemerle.Utility
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Assembly)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Assembly)]
   macro GeneratedAssemblyVersion(str, defaults = null)
   {
     def version = ExpandEnvHelper.Expand(str, defaults);

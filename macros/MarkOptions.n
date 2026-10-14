@@ -43,8 +43,8 @@ using System.Text;
 
 namespace Nemerle
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class)]
   macro MarkOptions (t : TypeBuilder, attribute)
   {
     // iterate through members of this type and select only variant options

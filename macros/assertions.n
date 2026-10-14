@@ -25,6 +25,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
@@ -125,7 +126,7 @@ namespace Nemerle.Assertions
   ///    Performs runtime check at every call to enclosing method.
   ///    
   ///    Example: Foo([NotNull] o : object) : void { ... }
-  [Nemerle.MacroUsage (MacroPhase.WithTypedMembers, MacroTargets.Parameter,
+  [MacroUsage (MacroPhase.WithTypedMembers, MacroTargets.Parameter,
                        Inherited = true, AllowMultiple = false)]
   macro NotNull(_ : TypeBuilder, m : MethodBuilder, p : ParameterBuilder)
   {
@@ -161,7 +162,7 @@ namespace Nemerle.Assertions
   ///    Performs runtime check at every call to enclosing method.
   ///    
   ///    Example: Foo([NotNullOrEmpty] s : string) : void { ... }
-  [Nemerle.MacroUsage (MacroPhase.WithTypedMembers, MacroTargets.Parameter,
+  [MacroUsage (MacroPhase.WithTypedMembers, MacroTargets.Parameter,
                        Inherited = true, AllowMultiple = false)]
   public macro NotNullOrEmpty(_ : TypeBuilder, m : MethodBuilder, p : ParameterBuilder)
   {
@@ -193,8 +194,8 @@ namespace Nemerle.Assertions
   }
 
   /// Example: foo ([Requires (value != 4)] i : int) : void { ... }
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Parameter,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Parameter,
                        Inherited = true, AllowMultiple = true)]
   macro Requires (_ : TypeBuilder, m : ParsedMethod, p : ParsedParameter, assertion, other = null)
   syntax ("requires", assertion, Optional ("otherwise", other))  
@@ -232,8 +233,8 @@ namespace Nemerle.Assertions
 
              after opening Nemerle.Assertions namespace
    */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = true)]
   macro Requires (_ : TypeBuilder, m : ParsedMethod, assertion, other = null)
   syntax ("requires", assertion, Optional ("otherwise", other))
@@ -269,8 +270,8 @@ namespace Nemerle.Assertions
 
           after opening Nemerle.Assertions namespace
    */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = true)]
   macro Ensures (_ : TypeBuilder, m : MethodBuilder, assertion, other = null)
   syntax ("ensures", assertion, Optional ("otherwise", other))
@@ -312,8 +313,8 @@ namespace Nemerle.Assertions
 
      Example: [Invariant (i > 0)] class A { mutable i : int; ... }
   */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class,
                        Inherited = true, AllowMultiple = true)]
   macro Invariant (ty : TypeBuilder, body)
   syntax ("invariant", body)

@@ -66,7 +66,7 @@ namespace Nemerle.Platform
             {
                 path = Path.GetFullPath(path);
                 var name = AssemblyName.GetAssemblyName(path);
-                if (Shared(name.Name)) return Default.LoadFromAssemblyName(name);
+                if (Shared(name.Name) && !OtherRuntimeBuild(name, path)) return Default.LoadFromAssemblyName(name);
                 Assembly previous;
                 if (loaded.TryGetValue(name.FullName, out previous))
                 {
@@ -82,6 +82,25 @@ namespace Nemerle.Platform
                 loaded[name.FullName] = assembly;
                 return assembly;
             }
+            // Bootstrapping a runtime whose types moved: a compiler running on one Nemerle.dll may compile against a
+            // different build of it. Only the runtime is treated this way; the same build (same module id) stays shared.
+            static bool OtherRuntimeBuild(AssemblyName name, string path)
+            {
+                if (name.Name != "Nemerle") return false;
+                foreach (var running in Default.Assemblies)
+                    if (running.GetName().Name == "Nemerle" && running.Location.Length > 0)
+                        return ModuleId(running.Location) != ModuleId(path);
+                return false;
+            }
+            static Guid ModuleId(string path)
+            {
+                using (var stream = File.OpenRead(path))
+                using (var pe = new System.Reflection.PortableExecutable.PEReader(stream))
+                {
+                    var metadata = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+                    return metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+                }
+            }
             static bool Shared(string name)
             {
                 return name == "Nemerle" || name == "Nemerle.Compiler" || name == "Nemerle.Platform" ||
@@ -91,9 +110,9 @@ namespace Nemerle.Platform
             }
             protected override Assembly Load(AssemblyName name)
             {
-                if (Shared(name.Name)) return Default.LoadFromAssemblyName(name);
                 Assembly assembly;
                 if (loaded.TryGetValue(name.FullName, out assembly)) return assembly;
+                if (Shared(name.Name)) return Default.LoadFromAssemblyName(name);
                 foreach (var directory in directories)
                 {
                     var path = Path.Combine(directory, name.Name + ".dll");

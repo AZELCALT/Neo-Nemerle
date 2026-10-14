@@ -25,6 +25,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using Nemerle.Compiler;
 
@@ -39,8 +40,8 @@ namespace Nemerle.InternalMacros
  
   
   // this macro is a hack for lack of type inference at class level
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers,
-                       Nemerle.MacroTargets.Field)]
+  [MacroUsage (MacroPhase.BeforeTypedMembers,
+                       MacroTargets.Field)]
   macro StaticInitializer (t : TypeBuilder, f : ParsedField, val)
   {
     match (f.ty)
@@ -77,8 +78,8 @@ namespace Nemerle.InternalMacros
     }
   }
   
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Field)]
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Field)]
   macro StaticInitializer (t : TypeBuilder, f : FieldBuilder, val)
   {
     def is_static = f.Attributes %&& NemerleModifiers.Static;
@@ -208,8 +209,8 @@ namespace Nemerle.InternalMacros
     }
   }
   
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Property,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Property,
                        Inherited = false, AllowMultiple = true)]
   macro PropertyEmbeddedField (t : TypeBuilder, p : ParsedProperty, field_box)
   {
@@ -247,8 +248,8 @@ namespace Nemerle.InternalMacros
     }
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Event,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Event,
                        Inherited = false, AllowMultiple = true)]
   macro EventEmbeddedField (t : TypeBuilder, p : EventBuilder, field_box)
   {

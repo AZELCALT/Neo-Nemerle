@@ -49,8 +49,8 @@ namespace Nemerle.Utility
   /// WantSetter, Setter, Internal, Protected, Override, Virtual.
   /// Also you can specify the property name manualy (by default the name
   /// is generated from the field name).
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Field,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Field,
                        Inherited = false, AllowMultiple = true)]
   macro Accessor (current_type : TypeBuilder, storage_field : ParsedField, params args : list [PExpr])
   {

@@ -25,6 +25,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 
 
@@ -47,7 +48,7 @@ namespace Nemerle
    * A Synchronized = true | false option is also available, to set thread safety.
    * InvalidValue = x option specifies non-cachable value.
    */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers, Nemerle.MacroTargets.Method)]
+  [MacroUsage (MacroPhase.WithTypedMembers, MacroTargets.Method)]
   macro Memoize (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr])
   {
     mutable scope = if(meth.IsStatic) MemoizeScope.Class else MemoizeScope.Instance;

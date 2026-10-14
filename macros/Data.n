@@ -25,6 +25,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using Nemerle.Compiler;
 using Nemerle.Macros;
@@ -38,8 +39,8 @@ namespace Nemerle.Data
     Define connection string, which will be used by application
     (also for compile-time verification of SQL queries by compiler)
    */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Assembly)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Assembly)]
   macro ConfigureConnection (connClass : string, con_str : string, name : string = "")
   {
     def mng = Manager ();

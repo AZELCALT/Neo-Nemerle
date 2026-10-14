@@ -25,14 +25,15 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using Nemerle.Compiler;
 using PT = Nemerle.Compiler.Parsetree;
  
 namespace Nemerle
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Parameter)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Parameter)]
   macro Lazy (_ : TypeBuilder, meth : ParsedMethod, parm : ParsedParameter)
   {
     def unique = parm.PName.NewName (Util.tmpname (parm.Name));
@@ -46,7 +47,7 @@ namespace Nemerle
     meth.Body = newBody;
     parm.name = PT.Splicable.Name (unique);
     //TODO: May be need correct location of parm.ty.
-    parm.Type = <[ Nemerle.LazyValue [$(parm.Type)] ]>;
+    parm.Type = <[ LazyValue [$(parm.Type)] ]>;
   }
   
   macro lazy (val)
@@ -54,12 +55,12 @@ namespace Nemerle
     match (val)
     {
       | PT.PExpr.Literal => <[ LazyValue.FromValue ($val) ]>
-      | _ => <[ Nemerle.LazyValue (fun () { $val }) ]>
+      | _ => <[ LazyValue (fun () { $val }) ]>
     }
   }
   
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro InheritConstructors (par : TypeBuilder)
   {
@@ -67,8 +68,8 @@ namespace Nemerle
   }
 
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeTypedMembers, // WithTypedMembers
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.BeforeTypedMembers, // WithTypedMembers
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro InheritConstructors (par : TypeBuilder)
   {

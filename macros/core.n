@@ -887,39 +887,39 @@ namespace Nemerle.Core
 
   /* NEW RECORD */
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Field,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Field,
                        Inherited = false, AllowMultiple = false)]
   macro RecordIgnore (ty : TypeBuilder, fld : ParsedField)
   {
     MacrosHelper.MarkIgnored (ty, fld);
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Property,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Property,
                        Inherited = false, AllowMultiple = false)]
   macro RecordIgnore (ty : TypeBuilder, property : ParsedProperty)
   {
     MacrosHelper.MarkIgnored (ty, property);
   }
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = false, AllowMultiple = false)]
   macro RecordIgnore (ty : TypeBuilder,  method : ParsedMethod)
   {
     MacrosHelper.MarkIgnored (ty, method);
   }
 
-  [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage(MacroPhase.BeforeInheritance,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro Record(ty : TypeBuilder, params _ : list [PExpr])
   {
     ty.DisableImplicitConstructor();
   }
 
-  [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage(MacroPhase.BeforeTypedMembers,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro Record(ty : TypeBuilder, params options : list[PExpr])
   {
@@ -1316,8 +1316,8 @@ namespace Nemerle.Core
     #endregion // Implementation
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro ExternallyVisibleOptions (t : TypeBuilder)
   {
@@ -1343,7 +1343,7 @@ namespace Nemerle.Core
 
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance, Nemerle.MacroTargets.Parameter)]
+  [MacroUsage (MacroPhase.BeforeInheritance, MacroTargets.Parameter)]
   macro _N_ExtensionMethodOnThisParameter (_tb : TypeBuilder, pm : ParsedMethod, p : ParsedParameter)
     syntax ("this")
   {
@@ -1357,8 +1357,8 @@ namespace Nemerle.Core
 
 namespace Nemerle.Macros
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = true, AllowMultiple = false)]
   macro Hygienic(_ : TypeBuilder, m : ParsedMethod)
   {
@@ -1425,8 +1425,8 @@ namespace Nemerle.Macros
 
 namespace Nemerle.Extensions
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro TupleToString (t : TypeBuilder) {
     def flds = t.GetFields (BindingFlags.Public %| BindingFlags.NonPublic %|
@@ -1442,16 +1442,16 @@ namespace Nemerle.Extensions
     ]>);
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro DisableImplicitConstructor (t : TypeBuilder)
   {
     t.DisableImplicitConstructor ();
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro LexicographicCompareTo (t : TypeBuilder)
   {
@@ -1521,8 +1521,8 @@ namespace Nemerle.Extensions
       ]>);
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class,
                        Inherited = false, AllowMultiple = false)]
   macro StructuralHashCode(tb : TypeBuilder)
   {
@@ -1658,8 +1658,8 @@ namespace Nemerle.Extensions
     <[ $(Macros.DefaultValueOfType (tty)) : $ty ]>
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Field)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Field)]
   macro CompilerMutable (_ : TypeBuilder, fld : ParsedField)
   {
     fld.Attributes = fld.Attributes | NemerleModifiers.CompilerMutable;
@@ -1676,8 +1676,8 @@ namespace Nemerle.Diagnostics
      Meaning current line number, filename, method's name, next expression
      which will be executed converted to human readable string
    */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method)]
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method)]
   macro Trace (_ : TypeBuilder, m : MethodBuilder,
                tracecall = <[
                     Nemerle.IO.printf ("Trace: %s:%d: %s --> %s\n",
@@ -1731,8 +1731,8 @@ namespace Nemerle.Diagnostics
   }
 
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Class)]
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Class)]
   macro Trace (t : TypeBuilder, tracecall) {
     def meths = t.GetMethods (BindingFlags.Public %| BindingFlags.NonPublic %|
                               BindingFlags.Instance %| BindingFlags.Static %| BindingFlags.DeclaredOnly);
@@ -1769,8 +1769,8 @@ namespace Nemerle.Diagnostics
 namespace Nemerle
 {
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method)]
   macro NotImplemented (t : TypeBuilder, m : ParsedMethod)
   {
     def ignores = m.header.Parameters.Map((x : PT.PParameter) => <[ _ = $(x.ReferencingExpr) ]>);
@@ -1783,8 +1783,8 @@ namespace Nemerle
     m.Body = newBody;
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method)]
   macro OverrideObjectEquals (t : TypeBuilder, m : ParsedMethod)
   {
     match (m.header.Parameters)
@@ -1810,8 +1810,8 @@ namespace Nemerle
     }
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method)]
   macro ForwardThis (t : TypeBuilder, m : ParsedMethod, this_expr)
   {
     def pref = $ "_FT_$(m.header.PName.Id)";

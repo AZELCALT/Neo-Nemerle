@@ -43,8 +43,8 @@ using System.Text;
 
 namespace Nemerle.Utility
 {
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Assembly)]
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Assembly)]
   macro AssemblyVersionFromSVN (val : string, fallbackToDate : bool = true)
   {
     def svnidx = val.IndexOf ("SVN", System.StringComparison.InvariantCultureIgnoreCase);

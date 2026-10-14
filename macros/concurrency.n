@@ -26,6 +26,7 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+using Nemerle;
 
 using System;
 using System.Threading;
@@ -62,7 +63,7 @@ namespace Nemerle.Concurrency
           | Some =>
             Some (
               Util.locate (expr.Location, 
-              <[ Nemerle.DelayedValue( fun() $expr) ]>))
+              <[ DelayedValue( fun() $expr) ]>))
           | _ =>
             when(lastChance)
               Message.Error("Expression type in `sync' macro cant be inferred.");
@@ -82,10 +83,10 @@ namespace Nemerle.Concurrency
         {
           |Some(FixedType.Void) => func.Body = MakeAsyncVoid(func.Body); 
           |Some(_) => 
-            func.Body = <[ Nemerle.DelayedValue( () => $(func.Body)) ]>;
+            func.Body = <[ DelayedValue( () => $(func.Body)) ]>;
             func.header.ReturnType =
               Util.locate
-                (func.header.ReturnType.Location, <[ Nemerle.DelayedValue[$(tret:typed)] ]>);
+                (func.header.ReturnType.Location, <[ DelayedValue[$(tret:typed)] ]>);
             
           | _  => Message.Error($"Can't determine type of $(func.header.ReturnType)");
         }
@@ -426,8 +427,8 @@ namespace Nemerle.Concurrency
   }
 
   /* Executes the body of the method always asynchronously */
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = true)]
   macro Async (_ : TypeBuilder, m : ParsedMethod )
   syntax ("async")
@@ -435,8 +436,8 @@ namespace Nemerle.Concurrency
       Helper.MakeAsync (ImplicitCTX(), m)
   }
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.BeforeInheritance,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.BeforeInheritance,
+                       MacroTargets.Method,
                        Inherited = true)]
   macro ChordMember (_ : TypeBuilder, m : ParsedMethod)
   {
@@ -447,8 +448,8 @@ namespace Nemerle.Concurrency
   }
   
 
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method,
                        Inherited = true)]
   macro ChordMember (tb : TypeBuilder, m : MethodBuilder)
   {
@@ -495,8 +496,8 @@ namespace Nemerle.Concurrency
   }
 
   // FIXME: if one of the members is declared after the Chord body, things can go wrong.
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method,
                        Inherited = true)]
   macro Chord (tb : TypeBuilder, m : MethodBuilder)
   syntax ("chord")
@@ -505,8 +506,8 @@ namespace Nemerle.Concurrency
   }
 
   
-  [Nemerle.MacroUsage (Nemerle.MacroPhase.WithTypedMembers,
-                       Nemerle.MacroTargets.Method,
+  [MacroUsage (MacroPhase.WithTypedMembers,
+                       MacroTargets.Method,
                        Inherited = true)]
   macro AsyncChord (tb : TypeBuilder, m : MethodBuilder)
   {
