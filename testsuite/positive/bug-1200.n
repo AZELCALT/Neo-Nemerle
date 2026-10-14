@@ -1,5 +1,6 @@
 ﻿using System;
 using Nemerle.Utility;
+using Nemerle.UtilityMacros;
 
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false)]
 public sealed class MaxLengthAttribute : Attribute {

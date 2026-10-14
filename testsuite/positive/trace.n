@@ -1,6 +1,8 @@
 // warning: line numbers are important here, watch out
 using Nemerle.IO;
 using Nemerle.Diagnostics;
+using Nemerle.DiagnosticsMacros;
+using Nemerle.IOMacros;
 
 [Trace (printf ("executing %s:%d:%s () - %s\n", A.g (_file), _line, _method, _expr))]
 module B

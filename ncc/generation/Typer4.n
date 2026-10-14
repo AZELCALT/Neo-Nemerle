@@ -37,6 +37,7 @@ using Nemerle.Logging;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
+using Nemerle.CompilerMacros;
 
 [assembly: LogFlag (STV, false)]
 
@@ -71,7 +72,7 @@ namespace Nemerle.Compiler
       when (typer != null)
         typer.RaiseBeforeStage4();
       
-      Util.locate (current_fun.Location, {
+      UtilMacros.locate (current_fun.Location, {
         match (current_fun.body) {
           | FunBody.Typed (body) =>
             label_blocks.Clear ();
@@ -87,7 +88,7 @@ namespace Nemerle.Compiler
             #if CHECK_STV
               foreach (tv in current_fun.TypeParameters)
               {
-                Util.cassert (tv.current_type == null);
+                UtilMacros.cassert (tv.current_type == null);
                 tv.current_type = current_type;
                 tv.current_method = the_method;
               }
@@ -188,16 +189,16 @@ namespace Nemerle.Compiler
               CheckSTV (t2);
 
             | StaticTypeVarRef (tv) =>
-              Util.cassert (tv.current_type != null, $"type is null for $tv");
+              UtilMacros.cassert (tv.current_type != null, $"type is null for $tv");
               def check (t : TypeInfo) {
                 if (t == null)
-                  Util.ice ($ "tv $tv defined in $(tv.current_type) and accessed from "
+                  UtilMacros.ice ($ "tv $tv defined in $(tv.current_type) and accessed from "
                                "$(current_type)");
                 else if (t : object == tv.current_type) {}
                 else check (t.DeclaringType)
               }
               check (current_type);
-              Util.cassert (tv.current_method == null ||
+              UtilMacros.cassert (tv.current_method == null ||
                             tv.current_method : object == the_method,
                             $ "tv $tv defined in $(tv.current_method) and accessed from "
                                "$(the_method)");
@@ -363,12 +364,12 @@ namespace Nemerle.Compiler
           | SelfTailCall
           | Def
           | Use =>
-            Util.cassert (Message.SeenError);
+            UtilMacros.cassert (Message.SeenError);
             false
 
           | MethodRef (e, meth, tp, _) =>
             NoThrowPlease (e);
-            Util.cassert (meth.GetHeader().TypeParameters.Length == tp.Length, $"typarms check failed for $meth $(meth.GetHeader().TypeParameters) $tp");
+            UtilMacros.cassert (meth.GetHeader().TypeParameters.Length == tp.Length, $"typarms check failed for $meth $(meth.GetHeader().TypeParameters) $tp");
             #if CHECK_STV
               foreach (tp in tp) CheckSTV (tp);
             #endif
@@ -458,7 +459,7 @@ namespace Nemerle.Compiler
             false
 
           | StaticRef (_t, meth is IMethod, tp) =>
-            Util.cassert (meth.GetHeader().TypeParameters.Length == tp.Length, $ "typarms check failed for $meth $(meth.GetHeader().TypeParameters) $tp");
+            UtilMacros.cassert (meth.GetHeader().TypeParameters.Length == tp.Length, $ "typarms check failed for $meth $(meth.GetHeader().TypeParameters) $tp");
             #if CHECK_STV
               CheckSTV (_t);
               foreach (tp in tp) CheckSTV (tp);
@@ -547,7 +548,7 @@ namespace Nemerle.Compiler
           | SelfTailCall 
           | Def
           | Use =>
-            Util.cassert (Message.SeenError);
+            UtilMacros.cassert (Message.SeenError);
             false
 
           | ArrayIndexer (obj, args) =>
@@ -632,7 +633,7 @@ namespace Nemerle.Compiler
       // Message.Debug ($"unshare $expr");
       if (expr.Visited) {
         def expr = expr.Copy ();
-        Util.cassert (!expr.Visited);
+        UtilMacros.cassert (!expr.Visited);
         UnShare (expr)
       } else {
         expr.Visited = true;
@@ -708,7 +709,7 @@ namespace Nemerle.Compiler
                 e.Type.Fix ()
                 
               | MacroEnvelope (_, _, expanded, _) => get_real_type(expanded)
-              | _ => Util.ice ($ "wrong assignment target $e")
+              | _ => UtilMacros.ice ($ "wrong assignment target $e")
             }
             
             def real_type = get_real_type(e1);
@@ -786,7 +787,7 @@ namespace Nemerle.Compiler
                 | StaticRef (from, meth is IMethod, _) => 
                   NoDeepVoid (func, from);
                   meth
-                | _ => Util.ice ($ "invalid thing called $func")
+                | _ => UtilMacros.ice ($ "invalid thing called $func")
               }
 
             unless (parms.IsEmpty) {
@@ -803,7 +804,7 @@ namespace Nemerle.Compiler
                   origfunc.FixedType().FunReturnTypeAndParms (meth) [0];
 
                 //Message.Debug ($"origfunc: $origfunc type=$(origfunc.FixedType())");
-                Util.cassert (formals.Length == parms.Length,
+                UtilMacros.cassert (formals.Length == parms.Length,
                               $ "call to $meth $parms $formals");
                 
                 foreach (parm in parms) {
@@ -827,7 +828,7 @@ namespace Nemerle.Compiler
                           Message.Error ("a ref or out argument must be an assignable variable");
                       }
                       formals = fs;
-                    | [] => Util.ice ();
+                    | [] => UtilMacros.ice ();
                   }
                 }
               }
@@ -846,7 +847,7 @@ namespace Nemerle.Compiler
             def ty =
               match (expr.Type.Fix ()) {
                 | FixedType.Array (t, _) => t.Fix ()
-                | _ => Util.ice ()
+                | _ => UtilMacros.ice ()
               }
             mutable res = [];
             foreach (parm in parms) {
@@ -884,7 +885,7 @@ namespace Nemerle.Compiler
           | DefFunctionsIn
           | Match
           | SelfTailCall =>
-            Util.cassert (Message.SeenError);
+            UtilMacros.cassert (Message.SeenError);
             null
 
           | StaticRef (_expr, meth, tp)

@@ -8,6 +8,9 @@ using Nemerle.Utility;
 using System.Console;
 
 using SCG = System.Collections.Generic;
+using Nemerle.ExtensionsMacros;
+using Nemerle.UtilityMacros;
+using Nemerle.IOMacros;
 
 module Bug_1102_A
 {
@@ -74,7 +77,7 @@ namespace PolymorphicPlusFunctionals
     f (_x : string) : int { 1 }
     g['a] (l : list['a], f : 'a -> int) : void
     {
-      Nemerle.IO.printf ("%s\n", NList.Map (l, f).ToString ())
+      Nemerle.IOMacros.printf ("%s\n", NList.Map (l, f).ToString ())
     }
 
     public Run () : void

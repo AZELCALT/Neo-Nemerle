@@ -1,0 +1,1284 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle;
+using System.Text.RegularExpressions;
+using Nemerle.Collections;
+using Nemerle.Utility;
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
+using System;
+using Nemerle.Assertions;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using System.Collections.Generic;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
+using Nemerle.Extensions; // the runtime module these macros generate calls into
+
+// ---- core.n (Nemerle.Extensions) ----
+[MacroUsage (MacroPhase.WithTypedMembers,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro TupleToString (t : TypeBuilder) {
+  def flds = t.GetFields (BindingFlags.Public %| BindingFlags.NonPublic %|
+                          BindingFlags.Instance %| BindingFlags.DeclaredOnly);
+  def appends = flds.RevMap((x : IField) => <[ ignore(str.Append($(x.Name : usesite))); ]>);
+  def body_seq =
+    appends.Tail.FoldLeft(
+      appends.Head ::[<[ ignore (str.Append (")")); str.ToString () ]>],
+      (x, acc) => x :: <[ ignore (str.Append (", ")) ]> :: acc);
+  def body_seq = <[ def str = System.Text.StringBuilder ("(") ]> :: body_seq;
+  t.Define (<[ decl:
+    public override ToString () : string { ..$body_seq }
+  ]>);
+}
+
+[MacroUsage (MacroPhase.BeforeInheritance,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro DisableImplicitConstructor (t : TypeBuilder)
+{
+  t.DisableImplicitConstructor ();
+}
+
+[MacroUsage (MacroPhase.WithTypedMembers,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro LexicographicCompareTo (t : TypeBuilder)
+{
+  def tname = t.ParsedName;
+  def flds = t.GetFields (BindingFlags.Public %| BindingFlags.NonPublic
+                       %| BindingFlags.Instance %| BindingFlags.DeclaredOnly);
+  def compareField (fld : IField)
+  {
+      def nm = Macros.UseSiteSymbol (fld.Name);
+      def hasLess =
+        match (fld.GetMemType ())
+        {
+          | FixedType.Class (ti, _) =>
+            def name = ti.FullName;
+            match (name)
+            {
+                | "Nemerle.Core.string"
+                | "System.String"
+                | "Nemerle.Core.int"
+                | "System.Int32"
+                | "System.UInt32"
+                | "Nemerle.Core.float"
+                | "System.Single"
+                | "Nemerle.Core.double"
+                | "System.Double"
+                | "Nemerle.Core.char"
+                | "System.Char" => true
+                | _ => false
+            }
+
+          | _ =>  false
+        };
+
+      if (hasLess)
+        <[
+          if (this.$(nm : name) < other.$(nm : name))      -1
+          else if (this.$(nm : name) > other.$(nm : name)) 1
+          else                                             0
+        ]>
+      else
+        <[ this.$(nm : name).CompareTo(other.$(nm : name)); ]>
+  }
+  def body =
+    flds.FoldRight(<[ 0 ]>, (x : IField, acc) =>
+        <[
+           def cmp = $(compareField (x));
+           if (cmp == 0) $acc
+           else          cmp
+        ]>);
+  def full = if (t.IsValueType) body
+             else <[
+                     if (object.ReferenceEquals (this, other))      0
+                     else if (object.ReferenceEquals (other, null)) 1
+                     else                                           $body
+                  ]>;
+  t.Define (<[ decl: public CompareTo (other : $(tname : name)) : int { $full } ]>);
+  t.Define (<[ decl:
+      public CompareTo (Oother : object) : int
+      {
+        try
+        {
+          def other = Oother :> $(tname : name);
+          this.CompareTo (other)
+        }
+        catch { | _ is System.InvalidCastException => throw System.ArgumentException() }
+      }
+    ]>);
+}
+
+[MacroUsage (MacroPhase.WithTypedMembers,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro StructuralHashCode(tb : TypeBuilder)
+{
+  match (tb.LookupMember("GetHashCode"))
+  {
+  | [] => ()
+  | _  => Nemerle.Imperative.@Return(null);
+  }
+  
+  def fields = tb.GetFields(BindingFlags.Public %| BindingFlags.NonPublic %|
+                            BindingFlags.Instance %| BindingFlags.DeclaredOnly);
+  def body = match(fields)
+  {
+    | [] => <[ 0 ]>
+    | _ =>
+      def (p1, p2) = HashCodeHelper.GetPrimePair(fields.Length);
+      def hash_body = fields.Map(fun(f : IField)
+      {
+        def gethashcode =
+          if(f.GetMemType().IsValueType)
+            <[ $(f.Name : usesite).GetHashCode() ]>
+          else
+            <[ System.Collections.Generic.EqualityComparer.Default.GetHashCode($(f.Name : usesite)) ]>;
+        <[ hash = ($(p2 : int) * hash) + $gethashcode ]>
+      });
+      <[
+        unchecked
+        {
+          mutable hash : int = $(p1 : int);
+          { ..$hash_body }
+          hash
+        }
+      ]>
+  }
+  tb.Define (<[ decl: public override GetHashCode () : int { $body } ]>);
+}
+
+internal module HashCodeHelper
+{
+  private primes : array[int] = array
+  [
+    885551, 959773, 909287, 842801,
+    791081, 966041, 728647, 967139,
+    912869, 801137, 804511, 913943,
+    914461, 700127, 940421, 962561,
+    756127, 757927, 953789, 954181
+  ];
+
+  public GetPrimePair(x : int) : int * int
+  {
+    def half_len = primes.Length / 2;
+    def pos = x % half_len;
+    (primes[pos], primes[pos + half_len])
+  }
+}
+
+/** MACROS, WHICH WE CAN DO BETTER THAN HASKELL */
+
+macro SelectFromTuple (k : int, n : int, tupl)
+{
+  def symb = Macros.NewSymbol ();
+  mutable tup = [];
+  for (mutable i = n; i > 0; --i)
+    if (i == k)
+      tup = <[ $(symb : name) ]> :: tup
+    else
+      tup = <[ _ ]> :: tup;
+
+  <[ def (.. $tup) = $tupl; $(symb : name) ]>
+}
+
+macro TupleMap (f, tup)
+{
+  match (tup)
+  {
+    | <[ (.. $elms) ]> =>
+      def mapped = elms.Map(e => <[ $f($e) ]>);
+      <[ (.. $mapped) ]>
+    | _ => MessageMacros.FatalError ("'TupleMap' macro expects function and tuple")
+  }
+}
+
+macro PrintTuple (tup, size : int)
+{
+  def symbols = array (size);
+  mutable pvars = [];
+  for (mutable i = size - 1; i >= 0; --i) {
+    symbols[i] = Macros.NewSymbol ();
+    pvars = <[ $(symbols[i] : name) ]> :: pvars;
+  }
+  mutable exps = [];
+  for (mutable i = size - 1; i >= 0; --i)
+    exps = <[ System.Console.WriteLine ($(symbols[i] : name)) ]> :: exps;
+
+  exps = <[ def (.. $pvars) = $tup ]> :: exps;
+  <[ {.. $exps } ]>
+}
+
+macro PrintTupleTyped (tup)
+{
+  def tup1 = Macros.ImplicitCTX().TypeExpr (tup);
+
+  match (tup1.Type.Hint)
+  {
+    | Some (FixedType.Tuple (args)) =>
+      def size = args.Length;
+      def symbols = array (size);
+
+      mutable pvars = [];
+
+      for (mutable i = size - 1; i >= 0; --i)
+      {
+        symbols[i] = Macros.NewSymbol ();
+        pvars = <[ $(symbols[i] : name) ]> :: pvars;
+      }
+
+      mutable exps = [];
+
+      for (mutable i = size - 1; i >= 0; --i)
+        exps = <[ System.Console.WriteLine ($(symbols[i] : name)) ]> :: exps;
+
+      exps = <[ def (.. $pvars) = $tup ]> :: exps;
+      <[ {.. $exps } ]>
+
+    | _ =>
+      MessageMacros.FatalError ("expected tuple")
+  }
+}
+
+macro DefaultValue (ty)
+{
+  def tty = Macros.ImplicitCTX().BindFixedType (ty);
+  <[ $(Macros.DefaultValueOfType (tty)) : $ty ]>
+}
+
+[MacroUsage (MacroPhase.BeforeInheritance,
+                     MacroTargets.Field)]
+macro CompilerMutable (_ : TypeBuilder, fld : ParsedField)
+{
+  fld.Attributes = fld.Attributes | NemerleModifiers.CompilerMutable;
+}
+
+// ---- AnonymousClass.n (Nemerle.Extensions) ----
+  public macro AnonymousClassNormalCtor(params ctor_def : array[expr]) 
+      syntax("new", "(", ctor_def, ")")
+  {
+      AnonymousClassImpl.MakeNormalCtor(NList.ToList(ctor_def))
+  }
+
+  public macro AnonymousClassTupleCtor(e) 
+      syntax("new", e)
+  {
+      def decorate(e) {
+          | <[ $left.$right ]> => <[ $(decorate(left)).$right ]>
+          | <[ $left.$right(..$args) ]> => <[ $(decorate(left)).$right(..$args) ]>
+          | <[ [ ..$ctor_def ] ( ..$ctor_arg ) ]> => 
+              AnonymousClassImpl.MakeTupleCtor(ctor_def, ctor_arg)
+          | _ =>
+              MessageMacros.FatalError("Usage: 'new [a, b, c](x, y, z)' or 'new [a, b, c](t)' where 't' is tuple.")
+      }
+      decorate(e)
+  }
+  
+  /// <summary>
+  /// This macros fixes Mono compilation since Mono puts macros in the reverse order.
+  /// </summary>
+  public macro AnonymousClassNormalCtor2(params ctor_def : array[expr]) 
+      syntax("new", "(", ctor_def, ")")
+  {
+      AnonymousClassImpl.MakeNormalCtor(NList.ToList(ctor_def))
+  }
+
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  public macro AnonymousClassOptions(params opts : array[expr])
+  {
+      def set_visibility(_) {
+          | <[ Public ]> =>       AnonymousClassImpl.VisibilityAttribute = NemerleModifiers.Public;
+          | <[ Internal ]> =>     AnonymousClassImpl.VisibilityAttribute = NemerleModifiers.Internal;
+          | e => Message.Error($"Invalid anonymous class visibility option '$e', allowed only 'Public' and 'Internal' (default).")
+      }
+      foreach(opt in opts) {
+          | <[ visibility = $e ]>
+          | <[ Visibility = $e ]> => set_visibility(e)
+          | e => Message.Error($"Invalid anonymous class option '$e'. Usage: 'Visibility = Public'.");
+      }
+  }
+
+  // What [ManagerAccess(ManagerClass.Instance)] would generate, written out: the macro library cannot use that macro
+  // (its module path, Nemerle.CompilerMacros, is a source module of this very compilation).
+  internal module AnonymousClassImpl {
+      Manager : ManagerClass { get { ManagerClass.Instance } }
+      InternalType : InternalTypeClass { get { Manager.InternalType } }
+      SystemTypeCache : SystemTypeClass { get { Manager.SystemTypeCache } }
+
+      AnonymousClassNamespace = "<>_N_AnonymousClasses";
+
+      [Record]
+      private class FieldInfo {
+          [Accessor] field : PT.Name;
+          [Accessor] value : PT.PExpr;
+          public PropertyName : string { get { field.ToString() } }
+          public FieldName : string { get { "_" + field.ToString() } }
+
+          [RecordIgnore] mutable generic_arg : PT.Name = null;
+          public GenericArg : PT.Name {
+              get {
+                  when(null == generic_arg)
+                      generic_arg = Macros.NewSymbol();
+                  generic_arg
+              }
+          }
+      }
+
+      public MakeNormalCtor(ctor_def : list[PT.PExpr]) : PT.PExpr {
+          def fields = ctor_def.FoldRight([], fun(cd, acc) {
+              def append_field_info(field_init) {
+                  | <[ $(field : name) = $value ]> => FieldInfo(field, value) :: acc
+                  | <[ $(field : name) ]> => FieldInfo(field, field_init) :: acc
+                  | <[ $_.$(field : name) ]> => FieldInfo(field, field_init) :: acc
+                  | _ => Message.Error($"Expected 'a = foo()' or 'foo().x' or 'foo' got '$cd'."); acc
+              }
+              match(cd) {
+                  | PT.PExpr.Member(_, member) as member_access =>
+                      append_field_info(<[ $(member.GetName() : name) = $member_access ]>)
+                  | _ => append_field_info(cd)
+              }
+          });
+          def ty = FindOrBuildClass(fields);
+          <[ $(AnonymousClassNamespace : usesite).$(ty.Name : usesite) ( ..$(fields.Map(f => f.Value) ) ) ]>
+      }
+
+      public MakeTupleCtor(ctor_def : list[PT.PExpr], args : list[PT.PExpr]) : PT.PExpr {
+          def fields = ctor_def.FoldRight([], fun(cd, acc) {
+              def append_field_info(field_init) {
+                  | <[ $(field : name) ]> => FieldInfo(field, <[ () ]>) :: acc
+                  | _ => Message.Error($"Field name expected, got '$cd'."); acc
+              }
+              match(cd) {
+                  | PT.PExpr.Member(_, member) as member_access =>
+                      append_field_info(<[ $(member.GetName() : name) = $member_access ]>)
+                  | _ => append_field_info(cd)
+              }
+          });
+          def ty = FindOrBuildClass(fields);
+          match(args, fields) {
+              | ([], []) =>
+                  <[ $(AnonymousClassNamespace : usesite).$(ty.Name : usesite) ( ) ]>
+              | ([one], fields) when (0 < fields.Length) =>
+                  <[ $(AnonymousClassNamespace : usesite).$(ty.Name : usesite) ( $one ) ]>
+              | (many, fields) when (many.Length == fields.Length) =>
+                  <[ $(AnonymousClassNamespace : usesite).$(ty.Name : usesite) ( ..$many ) ]>
+              | _ =>
+                  MessageMacros.FatalError("Invalid argument list for anonymous class constructor specified.")
+          }
+      }
+
+      public VisibilityAttribute : NemerleModifiers {
+          key : string = "Nemerle.Extensions.AnonymousClassImpl.VisibilityAttribute";
+          get {
+              match(Manager.UserData[key]) {
+                  | null => NemerleModifiers.Internal
+                  | obj => obj :> NemerleModifiers
+              }
+          }
+          set {
+              Manager.UserData[key] = value
+          }
+      }
+
+      private ClassTable : Hashtable.[string, TypeInfo] {
+          key : string = "Nemerle.Extensions.AnonymousClassImpl.ClassTable";
+          get {
+              match(Manager.UserData[key]) {
+                  | null =>
+                      def table = Hashtable();
+                      Manager.UserData[key] = table;
+                      table
+                  | obj => obj :> Hashtable.[string, TypeInfo]
+              }
+          }
+      }
+
+      private unique_name_seed : long = DateTime.Now.Ticks;
+
+      private FindOrBuildClass(fields : list[FieldInfo]) : TypeInfo {
+          def id = fields.FoldLeft("_N_Anonymous_", (f, name) => name + $"<$(f.PropertyName)>_") + "<>";
+          def name = id + unchecked((DateTime.Now.Ticks * unique_name_seed) :> uint).ToString();
+          match(ClassTable.TryGetValue(id)) {
+              | (ty, true) => ty
+              | _ =>
+                  def ty = BuildClass(name, id, fields);
+                  ClassTable[id] = ty;
+                  ty
+          }
+      }
+
+      private MIN_TUPLE_SIZE : int = 2;
+      private MAX_TUPLE_SIZE : int = 20;
+
+      private BuildClass(name : string, id : string, fields : list[FieldInfo]) : TypeInfo {
+          def generic_args = fields.Map(f => <[ $(f.GenericArg : name) ]>);
+          def ty_name = <[ $(AnonymousClassNamespace : usesite).$(name : usesite) ]>;
+          def ty_ref = match(fields) {
+              | [] => ty_name
+              | _ => <[ $ty_name [ ..$generic_args ] ]>
+          }
+          def anonymous_ref = <[ Nemerle.Extensions.IAnonymous ]>;
+          def equality_comparer(t) {
+              <[ System.Collections.Generic.EqualityComparer.[ $t ].Default ]>
+          }
+          def external_anonymous_types = Manager.CoreEnv.NameTree.NamespaceTree.LookupTypes([AnonymousClassNamespace, id], true);
+
+          def ty = {
+              // Format string for debugger view
+              def debugger_display_fmt = {
+                  def field_fmt(f) {
+                      $"$(f.PropertyName) = {$(f.PropertyName)}"
+                  }
+                  $<#\{ ..$(fields; ", "; field_fmt) \}#>
+              }
+
+              // fields and properties declaration
+              def members = fields.Map(field => <[ decl :
+                      [Nemerle.UtilityMacros.Accessor($(field.PropertyName : usesite))]
+                      private $(field.FieldName : usesite) : $(field.GenericArg : name);
+              ]>);
+
+              def attrs = AttributesAndModifiers(VisibilityAttribute %| NemerleModifiers.Sealed, [
+                  <[ Record ]>,
+                  <[ StructuralHashCode ]>,
+                  <[ System.Diagnostics.DebuggerDisplay( $(debugger_display_fmt : string), @Type = "<Anonymous Type>" )]> ]);
+
+              def env = Manager.CoreEnv.EnterIntoNamespace([AnonymousClassNamespace]);
+              env.Define(match(fields) {
+                  | [] =>
+                      <[ decl:
+                          ..$attrs
+                          class $(name : usesite) : $anonymous_ref, System.IEquatable[ $ty_ref ] {
+                              ..$members
+                          }
+                      ]>
+                  | _ =>
+                      def generic_args_decl = fields.Map(f => PT.Splicable.Name(f.GenericArg));
+                      <[ decl:
+                          ..$attrs
+                          class $(name : usesite) [ ..$generic_args_decl ] : $anonymous_ref, System.IEquatable[ $ty_ref ] {
+                              ..$members
+                          }
+                      ]>
+              })
+          }
+
+          // GetFields() implementation
+          {
+              def field_list_name = Macros.NewSymbol("field_list");
+              def field_list = fields.Map(f => <[ $(f.PropertyName : string) ]>);
+              ty.Define(<[ decl: 
+                      private static $(field_list_name : name) : System.Collections.ObjectModel.ReadOnlyCollection[string] = System.Array.AsReadOnly(array[ ..$field_list ]);
+              ]>);
+              ty.Define(<[ decl:
+                      GetFields() : System.Collections.ObjectModel.ReadOnlyCollection[string] implements $anonymous_ref.GetFields {
+                          $(field_list_name : name)
+                      }
+              ]>);
+          }
+
+
+          // Item indexer implementation
+          {
+              def body = match(fields) {
+                  | [] => <[ ignore(field); null ]>
+                  | _ =>
+                      def cases = fields.FoldRight([<[ case : | _ => null ]>],
+                          (f, cases) => <[ case: | $(f.PropertyName : string) => this.$(f.FieldName : usesite) : object ]> :: cases );
+                      <[ match(field) { ..$cases } ]>
+              }
+              ty.Define(<[ decl:
+                      Item[field : string] : object implements $anonymous_ref.Item {
+                          get { $body }
+                      }
+              ]>);
+          }
+
+          def can_be_tuple(fields) {
+              def len = fields.Length;
+              (MIN_TUPLE_SIZE <= len) && (len <= MAX_TUPLE_SIZE)
+          }
+
+          // GetContent implementation 
+          {
+              def body = match(fields) {
+                  | [] => <[ null ]>
+                  | [field] => <[ this.$(field.FieldName : usesite) ]>
+                  | fields when can_be_tuple(fields) => <[ ToTuple() ]>
+                  | _ =>
+                      def list_items = fields.Map(f => <[ this.$(f.FieldName : usesite) : object ]>);
+                      <[ [ ..$list_items ] ]>
+              }
+              ty.Define(<[ decl:
+                      GetContent() : object implements $anonymous_ref.GetContent {
+                          $body 
+                      }
+              ]>);
+          }
+
+          // Tuple interop
+          match(fields) {
+              | [] | [_] => ()
+              | fields when can_be_tuple(fields) =>
+                  // ToTuple method
+                  {
+                      def tuple_args = fields.Map(f => <[ this.$(f.FieldName : usesite) ]>);
+                      ty.Define(<[ decl:
+                          public ToTuple() : Nemerle.Builtins.Tuple.[ ..$generic_args ] {
+                              Nemerle.Builtins.Tuple( ..$tuple_args )
+                          }
+                      ]>);
+                  }
+              | _ => Message.Warning("Anonymous class contains too many fields to be convertible to tuple.");
+          }
+
+          // ToString implementation
+          {
+              def (_, sb) = fields.FoldLeft( (" ", <[System.Text.StringBuilder("{")]> ),
+                  (f, (div, sb)) => (", ", <[ $sb.Append($(div + f.PropertyName + " = " : string)).Append(this.$(f.FieldName : usesite)) ]>) );
+              ty.Define(<[ decl:
+                      public override ToString() : string {
+                          $sb.Append(" }").ToString()
+                      }
+              ]>);
+          }
+
+          def equals_generic_body = fields.FoldLeft(<[ true ]>, (f, body) => <[
+              $body && $(equality_comparer(PT.PExpr.Ref(f.GenericArg))).Equals(this.$(f.FieldName : usesite), other.$(f.FieldName : usesite))
+          ]>);
+
+
+          // Equals(other : object) implementation
+          {
+              def body = match(fields) {
+                  | [] => <[
+                          match(other) {
+                              | _ is $ty_ref => true
+                              | other is $anonymous_ref => (other.GetFields().Count == 0)
+                              | _ => false
+                          }
+                      ]>
+                  | _ => <[
+                          match(other) {
+                              | other is $ty_ref => $equals_generic_body
+                              | other is $anonymous_ref =>
+                                  Nemerle.Extensions.Anonymous.Equals(this, other)
+                              | _ => false
+                          }
+                      ]>
+              }
+              ty.Define(<[ decl:
+                  public override Equals(other : object) : bool { $body }
+              ]>);
+          }
+
+          // Typed Equals implementation
+          {
+              def body = match(fields) {
+                  | [] => <[ !ReferenceEquals(null, other) ]>
+                  | _ => <[ !ReferenceEquals(null, other) && $equals_generic_body ]>
+              }
+              ty.Define(<[ decl:
+                  Equals(other : $ty_ref) : bool implements System.IEquatable[ $ty_ref ].Equals { $body }
+              ]>);
+          }
+
+          // Equality operation
+          {
+              def define_eq(a, b, body) {
+                  ty.Define(<[ decl: public static @== (a : $a, b : $b) : bool { $body } ]>);
+                  ty.Define(<[ decl: public static @!= (a : $a, b : $b) : bool { ! $body } ]>);
+              }
+              def define_eq_b(b) {
+                  define_eq(ty_ref, b, <[ $(equality_comparer(b)).Equals(a, b) ]>)
+              }
+              def define_eq_a(a) {
+                  define_eq(a, ty_ref, <[ $(equality_comparer(a)).Equals(b, a) ]>)
+              }
+
+              define_eq_b(ty_ref);
+              define_eq_b(<[ object ]>);
+              //define_eq_b(anonymous_ref);
+
+              define_eq_a(<[ object ]>);
+              //define_eq_a(anonymous_ref);
+          }
+
+
+          // External anonymous classes implicit conversions
+          foreach(ext_ty in external_anonymous_types) {
+              def ext_ty_name = <[ $(AnonymousClassNamespace : usesite).$(ext_ty.Name : usesite) ]>;
+              def ext_ty_ref = match(fields) {
+                  | [] => ext_ty_name
+                  | _ => <[ $ext_ty_name [ ..$generic_args ] ]>
+              }
+
+              // From
+              def body = fields.Map(f => <[ this.$(f.FieldName : usesite) = e.$(f.PropertyName : usesite) ]>);
+              ty.Define(<[ decl:
+                  public this(e : $ext_ty_ref) {
+                      ..$body
+                  }
+              ]>);
+              ty.Define(<[ decl:
+                  public static @: (e : $ext_ty_ref) : $ty_ref {
+                      $ty_name(e)
+                  }
+              ]>);
+
+              // To
+              def body = fields.Map(f => <[ e.$(f.FieldName : usesite) ]>);
+              ty.Define(<[ decl:
+                  public static @: (e : $ty_ref) : $ext_ty_ref {
+                      $ext_ty_name( ..$body )
+                  }
+              ]>);
+          }
+
+
+          //unless(Message.ErrorCount > 0)
+              ty.Compile();
+          ty
+      }
+
+  }
+
+// ---- ObjectInitializer.n ----
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.ExtensionsMacros", "<-", false, 141, 140)]
+
+// ---- ObjectInitializer.n (Nemerle.Extensions) ----
+/// <summary>
+/// </summary>
+/// <example>
+/// Syntax is following:
+/// <code>
+/// &lt;[ obj &lt;- { Foo = bar; ... } ]&gt;
+/// or &gt;[ obj &gt;- ( Foo = bar, ... ) ]gt;
+/// or &lt;[ obj &gt;- [ foo, bar, ... ] ]gt;
+/// </code>
+/// </example>
+public macro @<-(obj, initializer)
+{
+  WithMacroImpl.Run(obj, initializer);
+}
+
+internal module WithMacroImpl
+{
+  public Run(obj : PExpr, initializer : PExpr) : PExpr
+  {
+    def (obj, name) = match(obj)
+    {
+      | <[ $obj as $(n : name) ]> =>
+        (obj, PExpr.Ref(n))
+
+      | <[ $obj as $n ]> =>
+        Message.Error(n.Location, $"variable name expected, but `$n' found");
+        (obj, PExpr.Ref(Macros.NewSymbol("initializedObject")))
+
+      | _ => (obj, PExpr.Ref(Macros.NewSymbol("initializedObject")))
+    };
+
+    def (statements, assignment) = match (initializer)
+    {
+      | <[ ( ..$xs ) ]>
+      | <[ { ..$xs } ]> => (MakePropertyInitializers(xs, name), <[ def $name = $obj ]>)
+      | <[ [ ..$xs ] ]> => (MakeCollectionInitializers(xs, name), <[ def $name = $obj ]>)
+      | <[ $_op($(PExpr.ToComplete(_)), $_) ]>
+      | <[ $(PExpr.ToComplete(_)) =  $_ ]>
+      | <[ $_ =   $_ ]>
+      | <[ $_ +=  $_ ]>
+      | <[ $_ -=  $_ ]>
+      | <[ $_ =>  $_ ]>
+      | <[ $_ ::= $_ ]> => (MakePropertyInitializers([initializer], name), <[ def $name = $obj ]>)
+      | _               => ([<[ $obj = $name ]>], <[ def $name = $initializer ]>)
+    };
+
+    <[
+      $assignment;
+      {..$(statements)}
+      $name
+    ]>
+  }
+
+  private MakePropertyInitializers(elements : list[PExpr], name : PExpr) : list[PExpr]
+  {
+    def createAssignment(elem)
+    {
+      // completion support
+      | PExpr.ToComplete(n)
+      | <[ $_op($(PExpr.ToComplete(n)), $_val) ]>
+      | <[ $(PExpr.ToComplete(n)) =  $_val ]> => <[ $name.$(Splicable.HalfId(n.Location, n)) ]>
+      // property initializer
+      | <[ $(prop : name) =   $val ]>        => <[ $name.$(prop : name) =  $val ]>
+      | <[ $(prop : name) +=  $val ]>        => <[ $name.$(prop : name) += $val ]>
+      | <[ $(prop : name) -=  $val ]>        => <[ $name.$(prop : name) -= $val ]>
+      | <[ $(prop : name) =>  $val ]>        => <[ $name.$("add_" + prop.Id : usesite) ((_) => $val) ]>
+      | <[ $(prop : name) ::= $val ]>        => <[ _ = $name.$(prop : name).AddRange($val) ]>
+      | <[ @<-($(prop : name), $val) ]>       => <[ _ = $(Run(<[ $name.$(prop : name) ]>, val))]>
+      | <[ _ = $(met : name) (..$parms) ]>    //todo allow return
+      | <[     $(met : name) (..$parms) ]>    => <[ _ = $name.$(met : name) (..$parms) ]>
+      | _ =>
+        Message.Error($"unrecognized syntax `$(elem.ToString())' for a property initializer");
+        <[ () ]>
+    }
+    def createLocatedAssignment(elem)
+    {
+      UtilMacros.locate(elem.Location, createAssignment(elem));
+    }
+    elements.Map(createLocatedAssignment)
+  }
+
+  private MakeCollectionInitializers(elements : list[PExpr], name : PExpr) : list[PExpr]
+  {
+    def createAssignment(elem)
+    {
+      | <[ $prop = $val ]> => <[ _ = $name.Add($prop, $val) ]> // works for some lists and most dictionaries
+      | val                => <[ _ = $name.Add($val) ]> // works on both lists and dictionaries (through tuples)
+    }
+    def createLocatedAssignment(elem)
+    {
+      UtilMacros.locate(elem.Location, createAssignment(elem));
+    }
+    elements.Map(createLocatedAssignment)
+  }
+}
+
+// ---- StructuralEquality.n (Nemerle.Extensions) ----
+/// Implements Equals and related methods, using the concept of
+/// http://everything2.com/title/structural+equality
+[MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
+public macro StructuralEquality(tb : TypeBuilder, params _options : list[PExpr])
+{
+  StructuralEqualityImpl.RunBeforeInheritance(tb, _options);
+}
+
+[MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
+public macro StructuralEquality(tb : TypeBuilder, params options : list[PExpr])
+{
+  StructuralEqualityImpl.RunWithTypedMembers(tb, options);
+}
+
+[MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Field, Inherited = false, AllowMultiple = false)]
+public macro EqualsIgnore(tb : TypeBuilder, field : ParsedField)
+{
+  StructuralEqualityImpl.Ignore(tb, field);
+}
+
+[MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Property, Inherited = false, AllowMultiple = false)]
+public macro EqualsIgnore(tb : TypeBuilder, prop : ParsedProperty)
+{
+  StructuralEqualityImpl.Ignore(tb, prop);
+}
+
+internal module StructuralEqualityImpl
+{
+  public IndexOf[T](this source : list[T], elem : T) : int
+  {
+    def loop(source, elem, index)
+    {
+      match (source)
+      {
+        | head :: _ when head.Equals(elem) => index
+        | _ :: tail => loop(tail, elem, index + 1)
+        | _ => -1
+      }
+    }
+    
+    loop(source, elem, 0)
+  }
+  
+  public NOfTypeRev[TIn, TFilter](this source : list[TIn]) : list[TFilter]
+  {
+    def loop(listIn : list[TIn], listOut : list[TFilter])
+    {
+      match (listIn)
+      {
+        | head :: tail => 
+          match (head)
+          {
+            | x is TFilter => loop(tail, x :: listOut)
+            | _            => loop(tail, listOut)
+          }
+          
+        | _            => listOut
+      }
+    }
+    
+    loop(source, [])
+  }
+  
+  // used as keys in UserData
+  public IgnoredFieldsLabel                    : string = "StructuralEquality.IgnoredFields";
+  public IgnoredPropertiesLabel                : string = "StructuralEquality.IgnoredProperties";
+  public IsEquatableImplementedLabel           : string = "StructuralEquality.IsEquatableImplemented";
+  public IsStructuralEquatableImplementedLabel : string = "StructuralEquality.IsStructuralEquatableImplemented";
+  public StructuralEquatableTypeInfoLabel      : string = "StructuralEquality.StructuralEquatableTypeInfoLabel";
+
+  // implements interfaces
+  public RunBeforeInheritance(tb : TypeBuilder, options_expr : list[PExpr]) : void
+  {
+    def type = GetTypeName(tb);
+    
+    if (tb.IsValueType || tb.IsSealed)
+      tb.Define(<[ decl:
+        private EqualsImpl($("other" : dyn) : $type) : bool
+        {
+        } ]>);
+    else
+      tb.Define(<[ decl:
+        protected virtual EqualsImpl($("other" : dyn) : $type) : bool
+        {
+        } ]>);
+        
+    when (tb.Ast is TopDeclaration.Variant)
+      foreach (vo in tb.GetVariantOptions())
+        vo.Ast.AddCustomAttribute(<[ StructuralEquality(..$options_expr) ]>);
+
+    // Nemerle doesn't build if Tuples from stdlib are changed
+    unless (tb.IsVariantOption)
+    {
+      tb.AddImplementedInterface(<[ System.IEquatable.[$type] ]>);
+      tb.UserData.Add(IsEquatableImplementedLabel, true);
+
+      // only .NET 4.0+ supports this
+      when (tb.Manager.NameTree.LookupExactType("System.Collections.IStructuralEquatable") is Some(iface))
+      {
+        tb.AddImplementedInterface(<[ System.Collections.IStructuralEquatable ]>);
+        tb.UserData.Add(IsStructuralEquatableImplementedLabel, true);
+        tb.UserData.Add(StructuralEquatableTypeInfoLabel, iface);
+      }
+    }
+  }
+
+  // parses options, defines methods
+  public RunWithTypedMembers(tb : TypeBuilder, options_expr : list[PExpr]) : void
+  {
+    def options = SEOptions.Parse(options_expr);
+
+    def get_relevant_fields(tb, ignore_fields)
+    {
+      def all_fields = tb.GetFields(BindingFlags.Public %|
+                                    BindingFlags.NonPublic %|
+                                    BindingFlags.Instance %|
+                                    BindingFlags.DeclaredOnly);
+
+      // ignored properties
+      when (tb.UserData.Contains(IgnoredPropertiesLabel))
+      {
+        def prop_list = tb.UserData[IgnoredPropertiesLabel] :> List[string];
+
+        foreach (prop in prop_list)
+        {
+          match (tb.LookupMember(prop).Find(x => x is IProperty))
+          {
+            | Some(builder is PropertyBuilder) =>
+              match (builder.AutoPropertyField)
+              {
+                | Some(field) => ignore_fields.Add(field.Name)
+                | _ => Message.Warning(builder.Location, $"$prop is not an autoproperty. No need to use EqualsIgnore")
+              }
+              
+            | _ => Message.Error($"Property $prop not found.")
+          }
+        }
+      }
+
+      ignore_fields.AddRange(options.IgnoreFields);
+      ignore_fields.Sort();
+
+      // remove ignored fields and return result
+      all_fields.Filter(x => ignore_fields.BinarySearch(x.Name) < 0);
+    }
+
+    // retrieve all ignored fields
+    def ignore_fields =
+      if (tb.UserData.Contains(IgnoredFieldsLabel))
+        tb.UserData[IgnoredFieldsLabel] :> List.[string]
+      else
+        List();
+
+    // fields that are not ignored when evaluating structural equality
+    def relevant_fields = get_relevant_fields(tb, ignore_fields);
+
+    // true if strict type equality is needed, i. e. no subtypes are allowed;
+    def typecheck_needed = !tb.IsSealed && !tb.IsVariantOption && !tb.IsValueType && options.CheckTypes;
+    DefineEquality(tb, relevant_fields, typecheck_needed, options.EmitDebugSources);
+    DefineHashCode(tb, relevant_fields, options.EmitDebugSources);
+    DefineOperators(tb);
+    DefineStructural(tb);
+  }
+
+  // adds a field to ignore list
+  public Ignore(tb : TypeBuilder, field : ClassMember.Field) : void
+  {
+      unless (tb.UserData.Contains(IgnoredFieldsLabel))
+        tb.UserData.Add(IgnoredFieldsLabel, List.[string]());
+
+      def lst = tb.UserData[IgnoredFieldsLabel] :> List[string];
+      unless (lst.Contains(field.Name))
+        lst.Add(field.Name);
+  }
+
+  // adds a property to ignore list
+  public Ignore(tb : TypeBuilder, prop : ClassMember.Property) : void
+  {
+      unless (tb.UserData.Contains(IgnoredPropertiesLabel)) tb.UserData.Add(IgnoredPropertiesLabel, List.[string]());
+
+      def lst = tb.UserData[IgnoredPropertiesLabel] :> List[string];
+      unless (lst.Contains(prop.Name)) lst.Add(prop.Name);
+  }
+
+  // represents macro options
+  [Record]
+  struct SEOptions
+  {
+    public IgnoreFields : list[string] { get }
+    public CheckTypes   : bool         { get }
+    public EmitDebugSources : bool     { get }
+
+    public static Default : SEOptions { get; default SEOptions([], true, true) }
+
+    public static Parse(options : list[PExpr]) : SEOptions
+    {
+      mutable check_types = true;
+      mutable ignore_fields = [];
+      mutable emitDebugSources = true;
+
+      foreach (opt in options)
+      {
+        | <[ CheckTypes = true ]>  => check_types = true;
+        | <[ CheckTypes = false ]> => check_types = false;
+        | <[ Ignore = [..$flds] ]>
+        | <[ Ignore = $fld  ]> with flds = [fld] =>
+
+        // add field names as strings
+        ignore_fields += flds.MapFiltered(_ is PExpr.Ref, x => (x :> PExpr.Ref).name.Id)
+        
+        | <[ EmitDebugSources = true ]> => emitDebugSources = true;
+        | <[ EmitDebugSources = false ]> => emitDebugSources = false;
+
+        | _ => Message.Error("Unknown options for StructuralEquality.")
+      }
+      
+      SEOptions(ignore_fields, check_types, emitDebugSources)
+    }
+  }
+  
+  GetEqualsImpl(typeInfoToLookup : TypeInfo, paramType : FixedType.Class) : option[IMethod]
+  {
+    def baseEqualsImpl = typeInfoToLookup
+      .LookupMember("EqualsImpl")
+      .NOfTypeRev.[_, IMethod]()
+      .Find(m => m.Header.Parameters.Length == 1 && m.Header.Parameters.Head.Type.Equals(paramType));
+        
+    baseEqualsImpl
+  }
+  
+  IsParentImplement_EqualsImpl(tb : TypeBuilder) : bool
+  {
+    GetEqualsImpl(tb.BaseType, tb.BaseClass).IsSome
+  }
+  
+  HasTypedEquals(type : FixedType) : bool
+  {
+    | Class(ti, _) =>
+      def result = ti
+        .LookupMember("Equals")
+        .NOfTypeRev.[_, IMethod]()
+        .Find(m => m.Header.Parameters.Length == 1 && m.Header.Parameters.Head.Type.Equals(type));
+    
+      result.IsSome
+      
+    | _ => false
+  }
+  
+  DefineEquality(tb : TypeBuilder, fields : Seq[IField], _check_types : bool, emitDebugSources : bool) : void
+  {
+    assert(tb.BaseType.LookupMemberAvailable);
+    def defineMember(member : ClassMember) : void
+    {
+      if (emitDebugSources) _ = tb.DefineWithSource(member)
+      else                  tb.Define(member);
+    }
+
+    // generates comparison code for a single field
+    def invokeEquals(x : IField)
+    {
+      def type = x.GetMemType();
+      def value = <[ $(x.Name : usesite) ]>;
+      
+      if (type.IsPrimitive)
+        <[ this.$value == other.$value ]> // primitive magic
+      else if (type.Equals(tb.InternalType.String))
+        <[ string.Equals(this.$value, other.$value) ]>
+      else if (type.IsValueType && !type.CanBeNull && HasTypedEquals(type))
+          <[ this.$value.Equals(other.$value) ]> // no null-checks
+          // <[ if ($value.HasValue) other.$value.HasValue && this.$value.Value.Equals(other.$value.Value); else !other.$value.HasValue; ]> // For T?
+      //else if (type is FixedType.StaticTypeVarRef) // for type parameters
+      //  <[ EqualityComparer.Default.Equals($value, other.$value) ]>
+      else
+        <[ EqualityComparer.Default.Equals(this.$value, other.$value) ]>;
+    }
+
+    def type = GetTypeName(tb);
+    //def type_checker =
+    //  if (check_types)
+    //    <[ other.GetType().Equals(this.GetType()) ]>
+    //  else
+    //    <[ true ]>;
+
+    def isParentImplement_EqualsImpl = IsParentImplement_EqualsImpl(tb);
+    def parentType = tb.BaseClass;
+    def baseCall =
+      if (isParentImplement_EqualsImpl)
+        <[ base.EqualsImpl(other : $(parentType : typed)) ]>
+      else
+        <[ true ]>;
+        
+    // core comparison code (type checker + comparison for each field)
+    def body = fields.Fold(baseCall, (f, acc) => <[ $(invokeEquals(f)) && $acc ]> );
+
+    // no null-check for structs
+    def fun_body =  if (tb.GetMemType().CanBeNull) <[ match (other) { | null => false | _ => $body } ]> else body;
+    def fun_body = <[
+          _ = other; // shut the compiler up if body degrades to "true"
+          $fun_body
+      ]>;
+
+    match (GetEqualsImpl(tb, tb.GetMemType()))
+    {
+      | Some(method is MethodBuilder) => 
+        method.Body = fun_body;
+        method.Ast.Body = fun_body;
+        when (emitDebugSources)
+          tb.TyManager.GenerateFakeSourceCode(tb, method.Ast);
+        
+      | _ => MessageMacros.FatalError($"Can't find EqualsImpl(other : $(tb.GetMemType())) in $tb");
+    }
+
+    def implementsEquatable = AskUserData(tb, IsEquatableImplementedLabel);
+    if (implementsEquatable)
+      defineMember(<[ decl:
+          public Equals(other : $type) : bool implements System.IEquatable.[$type].Equals
+          {
+            EqualsImpl(other)
+          } ]>);
+    else
+      defineMember(<[ decl:
+          public Equals(other : $type) : bool
+          {
+            EqualsImpl(other)
+          } ]>);
+        
+    when (isParentImplement_EqualsImpl)
+      defineMember(<[ decl:
+        protected override EqualsImpl(other : $(parentType : typed)) : bool
+        {
+          | x is $type => EqualsImpl(x)
+          | _          => false
+        }
+      ]>);
+    
+    // implements object.Equals
+    defineMember(<[ decl:
+      public override Equals(other : System.Object) : bool
+      {
+        | x is $type => EqualsImpl(x)
+        | _          => false
+      }
+    ]>);
+  }
+
+  // uses http://en.wikipedia.org/wiki/Jenkins_hash_function to implement GetHashCode
+  DefineHashCode(tb : TypeBuilder, fields : Seq[IField], emitDebugSources : bool) : void
+  {
+    def callBase = IsParentImplement_EqualsImpl(tb);
+    
+    def hash_body = fields.Map(
+      fun (f)
+      {
+        def type = f.GetMemType();
+        def value = <[ $(f.Name : usesite) ]>;
+        def gethashcode =
+          if (type.Equals(tb.InternalType.Int32))
+            value
+          else if (type.Equals(tb.InternalType.UInt32))
+            <[ unchecked ($value :> int) ]>
+          else if (type.IsValueType)
+            if (type.CanBeNull)
+              <[ EqualityComparer.Default.GetHashCode($value) ]> // можно оптимизировать
+            else
+              <[ this.$value.GetHashCode() ]>
+          else if (type.Equals(tb.InternalType.Int32))
+            <[ this.$value ]>
+          else if (type is FixedType.StaticTypeVarRef)
+            <[ EqualityComparer.Default.GetHashCode($value) ]>
+          else
+            <[ this.$value?.GetHashCode() ]>;
+
+        <[
+          hash += $gethashcode;
+          hash += (hash << 10);
+          hash ^= (hash >> 6);
+        ]>
+      });
+      
+    def variantOptionHash =
+      if (tb.IsVariantOption)
+      {
+        def optionNumber = tb.GetVariantOptionParent().GetVariantOptions().IndexOf(tb) + 1;
+        assert(optionNumber > 0);
+        <[ hash ^= $(optionNumber : int); ]>
+      }
+      else
+        <[ () ]>;
+        
+    def baseHash =
+      if (callBase)
+        <[ hash ^= base.GetHashCode(); ]>
+      else
+        <[ () ]>;
+
+    def body = 
+      if (hash_body.IsEmpty)
+        if (callBase) <[ base.GetHashCode() ]> else <[ 0 ]>
+      else
+        <[
+          unchecked
+          {
+            mutable hash : int;
+            { ..$hash_body }
+            //hash += (hash << 3);
+            //hash ^= (hash >> 11);
+            //hash += (hash << 15);
+            $baseHash;
+            $variantOptionHash;
+            hash
+          }
+        ]>;
+
+    def define(expr)
+    {
+      if (emitDebugSources) _ = tb.DefineWithSource(expr)
+      else                  tb.Define(expr)
+    }
+    define(<[ decl: public override GetHashCode() : int { $body } ]>);
+  }
+
+  DefineOperators(tb : TypeBuilder) : void
+  {
+    def type = GetTypeName(tb);
+
+    if (tb.IsValueType)
+    {
+      tb.Define(<[ decl:
+        public static @==(first : $type, second : $type) : bool
+        {
+          first.Equals(second)
+        }
+      ]>);
+    }
+    else
+    {
+      tb.Define(<[ decl:
+        public static @==(first : $type, second : $type) : bool
+        {
+          if (first is null) second is null else first.Equals(second)
+        }
+      ]>);
+    }
+
+    tb.Define(<[ decl:
+      public static @!= (first : $type, second : $type) : bool
+      {
+        !(first == second)
+      }
+    ]>);
+  }
+
+  DefineStructural(tb : TypeBuilder) : void
+  {
+    when (AskUserData(tb, IsStructuralEquatableImplementedLabel))
+    unless (tb.BaseType?.IsDerivedFrom(tb.UserData[StructuralEquatableTypeInfoLabel] :> TypeInfo))
+    {
+      tb.Define(<[ decl:
+        public Equals(other : object, _comparer : System.Collections.IEqualityComparer) : bool
+        {
+          Equals(other);
+        }
+      ]>);
+
+      tb.Define(<[ decl:
+        public GetHashCode(_comparer : System.Collections.IEqualityComparer) : int
+        {
+          GetHashCode();
+        }
+      ]>);
+    }
+  }
+
+  //MarkCompilerGenerated(cm : ClassMember) : ClassMember
+  //{
+  //  cm.AddCustomAttribute(<[System.Runtime.CompilerServices.CompilerGenerated]>);
+  //  cm
+  //}
+
+  // no api to get type name with params; 'this' keyword in this context is bugged
+  GetTypeName(tb : TypeBuilder) : PExpr
+  {
+    //<[ $(tb.GetMemType() : typed) ]>
+    def splicable_to_ref(s : Splicable)
+    {
+      | Name(n)
+      | HalfId(n) => PExpr.Ref(n)
+      | Expression(e) => e
+    }
+
+    def qname = PExpr.FromQualifiedIdentifier(tb.Manager, tb.Ast.FullQualifiedName);
+    if (tb.Ast.TypeParameters is null)
+      <[ $qname ]>
+    else
+    {
+      def args = tb.Ast.TypeParameters.tyvars.Map(splicable_to_ref);
+      <[ $qname.[..$args] ]>
+    }      
+  }
+
+  AskUserData(tb : TypeBuilder, question : string, defaultAnswer : bool = false) : bool
+  {
+    if (!tb.UserData.Contains(question)) defaultAnswer else tb.UserData[question] :> bool
+  }
+}

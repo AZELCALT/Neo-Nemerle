@@ -38,6 +38,8 @@ using System;
 using System.Diagnostics;
 
 using SCG   = System.Collections.Generic;
+using Nemerle.CompilerMacros;
+using Nemerle.IOMacros;
 
 namespace Nemerle.Compiler {
 

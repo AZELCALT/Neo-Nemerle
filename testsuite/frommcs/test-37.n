@@ -13,7 +13,7 @@ class X {
   static test_int_single_dim () :  int
   {
     mutable  a =  array(10);
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
     
     for (i = 0; i < 10; i++)
       a [i] = i;
@@ -33,7 +33,7 @@ class X {
 
     a [0] = 0;
     {
-    mutable temp_2_return_ = Nemerle.Extensions.DefaultValue(int);
+    mutable temp_2_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
     mutable temp_1_break_loop_ = false;
     for (i = 9; i >= 0 && !temp_1_break_loop_; i--){
       when (a [i] != i)
@@ -91,8 +91,8 @@ class X {
   
     static dd (mutable  b :  array [2,int]) :  void
     {
-      mutable  i = Nemerle.Extensions.DefaultValue (int);
-      mutable  j = Nemerle.Extensions.DefaultValue (int);
+      mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
+      mutable  j = Nemerle.ExtensionsMacros.DefaultValue (int);
 
       for (i = 0; i < 10; i++)
         for (j = 0; j < 10; j++)
@@ -102,8 +102,8 @@ class X {
     static test_int_double_dim () :  int
     {
       mutable  b =  array(10,10);
-      mutable  i = Nemerle.Extensions.DefaultValue (int);
-      mutable  j = Nemerle.Extensions.DefaultValue (int);
+      mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
+      mutable  j = Nemerle.ExtensionsMacros.DefaultValue (int);
       
       for (i = 0; i < 10; i++)
         for (j = 0; j < 10; j++)
@@ -113,14 +113,14 @@ class X {
       
       {
       
-      mutable temp_8_return_ = Nemerle.Extensions.DefaultValue(int);
+      mutable temp_8_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
       
       mutable temp_7_break_loop_ = false;
       
       for (i = 0; i < 10 && !temp_7_break_loop_; i++)
       
       {
-        mutable temp_5_return_ = Nemerle.Extensions.DefaultValue(int);
+        mutable temp_5_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
         mutable temp_4_break_loop_ = false;
         for (j = 0; j < 10 && !temp_4_break_loop_; j++)
           when (b [i,j] != i *10 + j + 1){
@@ -164,11 +164,11 @@ class X {
     static test_jagged () :  int
     {
       mutable  a =  array(10);
-      mutable  i = Nemerle.Extensions.DefaultValue (int);
+      mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
       
       {
       
-      mutable temp_14_return_ = Nemerle.Extensions.DefaultValue(int);
+      mutable temp_14_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
       
       mutable temp_13_break_loop_ = false;
       
@@ -185,12 +185,12 @@ class X {
 
         {
 
-        mutable temp_11_return_ = Nemerle.Extensions.DefaultValue(int);
+        mutable temp_11_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
 
         mutable temp_10_break_loop_ = false;
 
         for (mutable  j = 0; j < 10 && !temp_10_break_loop_; j++){
-          mutable  q = Nemerle.Extensions.DefaultValue (int);
+          mutable  q = Nemerle.ExtensionsMacros.DefaultValue (int);
           a [i][j] = j * 10;
           q =({  a [i][j] = j * 10;  a [i][j] });
           
@@ -242,7 +242,7 @@ class X {
 
   static Main () :  int
   {
-    mutable  v = Nemerle.Extensions.DefaultValue (int);
+    mutable  v = Nemerle.ExtensionsMacros.DefaultValue (int);
     
     Console.WriteLine ("hello");
 
@@ -280,7 +280,7 @@ class X {
   {
 
     mutable  a =  array(10);
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
     for (i = 0; i < 10; i++){
       a [i] = i;
             a [i]++;

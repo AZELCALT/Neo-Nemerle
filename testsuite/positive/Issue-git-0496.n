@@ -1,6 +1,7 @@
 using Nemerle;
 using Nemerle.Imperative;
 using System.Console;
+using NemerleMacros;
 
 module Program
 {

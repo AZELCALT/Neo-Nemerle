@@ -1,5 +1,6 @@
 using Nemerle;
 using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
 
 [Record, StructuralEquality]
 public abstract class A

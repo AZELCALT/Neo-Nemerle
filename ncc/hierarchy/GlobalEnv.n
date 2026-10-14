@@ -38,6 +38,8 @@ using Nemerle.Utility;
 using NSTree = Nemerle.Compiler.NamespaceTree;
 using PT     = Nemerle.Compiler.Parsetree;
 using SCG    = System.Collections.Generic;
+using Nemerle.UtilityMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -281,7 +283,7 @@ namespace Nemerle.Compiler
 
     public BindType(expr : Parsetree.PExpr) : TypeVar
     {
-      def t = Util.locate(expr.Location,
+      def t = UtilMacros.locate(expr.Location,
         Manager.emptyTEnv.Bind(this, null, expr, true, false)
         );
       t
@@ -659,7 +661,7 @@ namespace Nemerle.Compiler
 
           AddOpenNamespace (possible_expansions, loc)
 
-        | _ => Util.ice ("empty or null namespace cannot be opened")
+        | _ => UtilMacros.ice ("empty or null namespace cannot be opened")
       }
     }
 
@@ -770,9 +772,20 @@ namespace Nemerle.Compiler
         }
         else
         {
+          // As for macro lookup: a source module hides syntax extensions of its path, except the standard
+          // macros' (and operator definitions, which carry no macro of their own).
+          def standard(d : SyntaxDefinition)
+          {
+            | _ is OperatorDefinition => true
+            | _ => match (d.MacroNamespace?.Value)
+                   {
+                     | NamespaceTree.TypeInfoCache.MacroCall(m) => m.GetType().Assembly.GetName().Name == "Nemerle.Macros"
+                     | _ => false
+                   }
+          }
           def ext = if (Manager.Options.FileModules
                 && Manager.FileModuleRegistry.ModulePrefix(x.FullName) != null)
-              []
+              Manager.MacrosRegistry.GetSyntaxExtensions(x).Filter(standard)
             else Manager.MacrosRegistry.GetSyntaxExtensions(x);
           when (ext : object != [])
             exts ::= ext;

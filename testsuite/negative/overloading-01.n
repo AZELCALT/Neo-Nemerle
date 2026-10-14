@@ -15,6 +15,7 @@ module M {
 
 using M1;
 using M2;
+using Nemerle.IOMacros;
 
 interface I1 {}
 interface I2 {}

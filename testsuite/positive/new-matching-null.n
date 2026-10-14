@@ -20,7 +20,7 @@ public variant Color : System.IEquatable[Color]
   | G 
   | B 
   
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (c : Color) : bool
     implements System.IEquatable[Color].Equals
   {

@@ -24,7 +24,7 @@ class X : System.IEquatable[X]
 {
   val : int;
   
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (x : X) : bool
     implements System.IEquatable[X].Equals
   {
@@ -41,7 +41,7 @@ class Y {
     get { Y (val + 3) }
   }
 
-  [Nemerle.ForwardThis (Plus3)]
+  [NemerleMacros.ForwardThis (Plus3)]
   public SomeMeth (a : int, b : string) : string
   {
     $ "$val $a $b"
@@ -76,7 +76,7 @@ public class TypeOfTest
         assert((x1 : object).Equals (x2));
         assert(!(x1 : object).Equals (x3));
         
-        Nemerle.IO.print (Y (39).SomeMeth (42, "42") + "\n");
+        Nemerle.IOMacros.print (Y (39).SomeMeth (42, "42") + "\n");
         
         System.Console.WriteLine (typeof (System.Collections.Generic.List[_]));
         System.Console.WriteLine (typeof (System.Collections.Generic.Dictionary[_,_]));

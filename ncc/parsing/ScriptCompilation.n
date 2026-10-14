@@ -57,7 +57,7 @@ namespace Nemerle.Compiler
           def data = ctx.Manager.Options.Script;
           foreach (field is FieldBuilder in ctx.CurrentType.LookupMember(name)) field.InferScriptType(ctx);
           <[ $(data.TypedInitializers[name] : typed) ]>;
-        | _ => Message.FatalError("Invalid internal script initializer"); null
+        | _ => MessageMacros.FatalError("Invalid internal script initializer"); null
       }
     }
   }
@@ -92,7 +92,7 @@ namespace Nemerle.Compiler
           }
           else
             <[ def value = $(typed : typed); this.$(resultName : usesite) = array[false : object, (value : object), typeof($(ty : typed)) : object] ]>;
-        | _ => Message.FatalError("Invalid internal script result capture"); null
+        | _ => MessageMacros.FatalError("Invalid internal script result capture"); null
       }
     }
   }

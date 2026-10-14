@@ -71,6 +71,19 @@ namespace Nemerle.Platform
                 protected override Assembly Load(AssemblyName name) { return owner.Resolve(name); }
             }
             TargetRuntimeContext target;
+            // Macro libraries run inside the compiler: another build of the standard macros binds to the running
+            // compiler and runtime (never to a target runtime loaded for compilation).
+            sealed class PluginContext : AssemblyLoadContext
+            {
+                readonly string directory;
+                internal PluginContext(string directory) : base("Nemerle macro plugin") { this.directory = directory; }
+                protected override Assembly Load(AssemblyName name)
+                {
+                    if (Shared(name.Name)) return Default.LoadFromAssemblyName(name);
+                    var path = Path.Combine(directory, name.Name + ".dll");
+                    return File.Exists(path) ? LoadFromAssemblyPath(path) : null;
+                }
+            }
             internal Assembly LoadReference(string path)
             {
                 path = Path.GetFullPath(path);
@@ -80,6 +93,12 @@ namespace Nemerle.Platform
                 {
                     if (!OtherRuntimeBuild(name, path)) return Default.LoadFromAssemblyName(name);
                     if (loaded.TryGetValue(name.FullName, out previous)) return previous;
+                    if (name.Name == "Nemerle.Macros")
+                    {
+                        var plugin = new PluginContext(Path.GetDirectoryName(path)).LoadFromAssemblyPath(path);
+                        loaded[name.FullName] = plugin;
+                        return plugin;
+                    }
                     directories.Add(Path.GetDirectoryName(path));
                     if (target == null) target = new TargetRuntimeContext(this);
                     var other = target.LoadFromAssemblyPath(path);
@@ -109,7 +128,10 @@ namespace Nemerle.Platform
                 foreach (var running in Default.Assemblies)
                     if (running.GetName().Name == name.Name && running.Location.Length > 0)
                         return ModuleId(running.Location) != ModuleId(path);
-                return false;
+                // Not loaded by the running compiler (e.g. -no-stdmacros -macros:<path>): another build than the
+                // compiler's own copy is loaded from its path.
+                var own = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll");
+                return File.Exists(own) && ModuleId(own) != ModuleId(path);
             }
             static Guid ModuleId(string path)
             {

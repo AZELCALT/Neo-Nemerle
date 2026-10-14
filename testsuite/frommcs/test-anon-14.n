@@ -14,7 +14,7 @@ class X {
 
   static Main () :  void
   {
-    mutable  t = Nemerle.Extensions.DefaultValue (T);
+    mutable  t = Nemerle.ExtensionsMacros.DefaultValue (T);
 
     // Method group assignment
     t = Method;

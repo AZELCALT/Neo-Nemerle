@@ -8,6 +8,7 @@ using Nitra.Declarations;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NemerleMacros;
 
 namespace Nitra
 {

@@ -10,6 +10,7 @@ using Nemerle.Compiler.Parsetree;
 
 using System;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {
@@ -55,7 +56,7 @@ namespace Nitra.Compiler
     {
       assert(!IsTypesDefined);
 
-      Util.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
       {
         _baseTb = defineType(<[decl:
           public new abstract partial class $(this.RuleSymbol.Name : usesite) : $(Environment.ParseTreeTypeVar : typed)
@@ -103,7 +104,7 @@ namespace Nitra.Compiler
     {
       assert(IsTypesDefined);
 
-      Util.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
       {
         DefineCreateMethod();
 

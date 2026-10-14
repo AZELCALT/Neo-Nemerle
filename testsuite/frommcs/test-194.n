@@ -8,7 +8,7 @@ public class TestParams
 {
   public static Main ( _args :  array [string]) :  int
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int) :int;
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int) :int;
     
     i = Params (null);
     if (i != 0)

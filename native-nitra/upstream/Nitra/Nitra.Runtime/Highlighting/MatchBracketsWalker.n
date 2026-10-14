@@ -11,6 +11,7 @@ using Nitra.Runtime.Reflection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra.Runtime.Highlighting
 {

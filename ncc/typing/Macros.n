@@ -39,6 +39,8 @@ using System.Text;
 
 using SCG = System.Collections.Generic;
 using TT  = Nemerle.Compiler.Typedtree;
+using Nemerle.CompilerMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler {
 
@@ -246,13 +248,13 @@ public partial module Macros
           | "dyn"     => <[ Splicable.Name (Name ($e, -1, ManagerClass.Instance.MacroColors.UseContext)) ]>
           | "usesite" => <[ Splicable.Name (Name ($e, ManagerClass.Instance.MacroColors.UseColor,
                                                          ManagerClass.Instance.MacroColors.UseContext)) ]>
-          | x => Message.FatalError ("unsupported splicing type `" + x + "' in splicable expression")
+          | x => MessageMacros.FatalError ("unsupported splicing type `" + x + "' in splicable expression")
         }
 
       | Splicable.Expression (e) => e
 
       | Splicable.HalfId =>
-        Util.ice ("completion not supported here")
+        UtilMacros.ice ("completion not supported here")
         
       | null => <[ null ]>
     }
@@ -547,7 +549,7 @@ public partial module Macros
         <[ TopDeclaration.Delegate (name = $qn, modifiers = $qattr, typarms = $qtparms, header = $qhd) ]>
 
       | TopDeclaration.Macro =>
-        Message.FatalError ("quoting macro is not supported - macros should not create macros, it is Bad(TM)");
+        MessageMacros.FatalError ("quoting macro is not supported - macros should not create macros, it is Bad(TM)");
     }
   }
 
@@ -601,13 +603,13 @@ public partial module Macros
         match (Util.QidOfExpr(tycon))
         {
           | Some((s, _)) => Lift(s, Lift)
-          | _ => Message.FatalError("type constructor must be qualified id");
+          | _ => MessageMacros.FatalError("type constructor must be qualified id");
         };
       def findTypeInfo = <[
         match (Nemerle.Macros.ImplicitCTX().Env.LookupType($tyco, null, $(argsCount : int)))
         {
           | Some(x) => x
-          | None    => Message.FatalError("unbound type " + $tyco.ToString("."))
+          | None    => MessageMacros.FatalError("unbound type " + $tyco.ToString("."))
         }
       ]>;
       
@@ -641,15 +643,15 @@ public partial module Macros
           // it doesn't make much sense here, as it is the same as <[ $v ]>,
           // but we put it here for consistency
           | "typed" => val
-          | x => Message.FatalError("unsupported type of spliced special token `" + x + "' in typed type")
+          | x => MessageMacros.FatalError("unsupported type of spliced special token `" + x + "' in typed type")
         }
 
       | PExpr.Spliced(e)    => e
       | PExpr.Wildcard      => <[ Nemerle.Macros.ImplicitCTX().Manager.Solver.FreshTypeVar() ]>
       | PExpr.Ellipsis (ar) => <[ FixedType.Tuple($(quoted_ttype(ar))) ]>
-      | PExpr.Typed         => Util.ice ("You've got beer from me for generating such a code...");
+      | PExpr.Typed         => UtilMacros.ice ("You've got beer from me for generating such a code...");
       
-      | _ => Util.ice ("quoted code not supported: " + PrettyPrint.SprintExpr (None (), t));
+      | _ => UtilMacros.ice ("quoted code not supported: " + PrettyPrint.SprintExpr (None (), t));
     } 
   }
 
@@ -703,7 +705,7 @@ public partial module Macros
               | PExpr.Ellipsis (e) =>
                 <[ PExpr.Match ($(quoted_expr (expr)), $(quoted_expr (e))) ]>
               | _ =>
-                Util.ice ("parser generated strange match_case")
+                UtilMacros.ice ("parser generated strange match_case")
             }
           | _ => <[ PExpr.Match ($(quoted_expr (expr)),
                                  $(Lift (cases, QuotedMatchCase))) ]>
@@ -735,7 +737,7 @@ public partial module Macros
                                $(quoted_expr (exn_ty)),
                                $(quoted_expr (filter)),
                                $(quoted_expr (handler))) ]>
-          | TryCase.Ellipsis => Util.ice ("you can have either none or only TryCase.Ellipsis")
+          | TryCase.Ellipsis => UtilMacros.ice ("you can have either none or only TryCase.Ellipsis")
         }
         def qbody = quoted_expr (body);
         match (cases) {
@@ -743,7 +745,7 @@ public partial module Macros
             match (e) {
               | PExpr.Ellipsis (e) =>
                 <[ PExpr.Try ($qbody, $(quoted_expr (e))) ]>
-              | _ => Util.ice ("parser generated strange try_case")
+              | _ => UtilMacros.ice ("parser generated strange try_case")
             }
           | _ =>
             <[ PExpr.Try ($qbody, [.. $(cases.Map (quoted_case))]) ]>
@@ -811,7 +813,7 @@ public partial module Macros
           | SyntaxElement.FieldBuilder
           | SyntaxElement.PropertyBuilder
           | SyntaxElement.EventBuilder
-          | SyntaxElement.ParameterBuilder => Util.ice("syntax elements shouldn't appear in quotations")
+          | SyntaxElement.ParameterBuilder => UtilMacros.ice("syntax elements shouldn't appear in quotations")
         };
         assert(name.context != null);
         <[ PExpr.MacroCall($(quoted_name(name, name.context.GetMacroContext())),
@@ -819,7 +821,7 @@ public partial module Macros
                            $(Lift(parms, quoted_syntax))) ]>
 
       | PExpr.Error      => <[ PExpr.Error() ]>
-      | PExpr.ToComplete => Util.ice ("completion not supported here")
+      | PExpr.ToComplete => UtilMacros.ice ("completion not supported here")
       | PExpr.Spliced (PExpr.TypeEnforcement (val, <[ $(ty : name) ]>)) =>
         match (ty.Id)
         {
@@ -843,16 +845,16 @@ public partial module Macros
           | "decimal" => <[ PExpr.Literal(Literal.Decimal       ($val)) ]>
           | "enum"    => <[ PExpr.Literal(Literal.FromObject    ($val)) ]>
           | "typed"   => <[ Nemerle.Compiler.Macros.TypedChoose ($val) ]>
-          | x         => Message.FatalError("unsupported type `" + x + "' of spliced literal in expression")
+          | x         => MessageMacros.FatalError("unsupported type `" + x + "' of spliced literal in expression")
         }
 
       | PExpr.Spliced (e) when !Manager.Macros_in_pattern => <[ Nemerle.Compiler.Macros.QuotationChoose($e) ]>
       | PExpr.Spliced => expr
-      | PExpr.Lambda => Util.ice ("this kind of quoted fun () ... is not supported")
-      | PExpr.Quoted => Message.FatalError("compound of several <[ ... ]> macro scopes is not allowed");
+      | PExpr.Lambda => UtilMacros.ice ("this kind of quoted fun () ... is not supported")
+      | PExpr.Quoted => MessageMacros.FatalError("compound of several <[ ... ]> macro scopes is not allowed");
       | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => 
-        Util.ice ("You've got beer from me for generating such a code (and me to)...");
-      | PExpr.Ellipsis => Message.FatalError(expr.Location, "List of expression parameters outside of quoted sequence: use <[ { .. $x } ]> pattern")
+        UtilMacros.ice ("You've got beer from me for generating such a code (and me to)...");
+      | PExpr.Ellipsis => MessageMacros.FatalError(expr.Location, "List of expression parameters outside of quoted sequence: use <[ { .. $x } ]> pattern")
     }
   } // end quoted_expr
 
@@ -938,7 +940,7 @@ public partial module Macros
                   PExpr.Where(name_expr, PExpr.Tuple.Create(convert_params(pars, flds, [])))
 
               | Typedtree.TypeDeclaration.Alias (FixedType.Class (tc, _)) => unalias (tc)
-              | _ => Util.ice ("expression generated from quotation has neither variant nor class constructor")
+              | _ => UtilMacros.ice ("expression generated from quotation has neither variant nor class constructor")
             }
           }
 
@@ -958,7 +960,7 @@ public partial module Macros
                               = Some ($(patternize_quotation (NList.Head (pars))))) ]>
           
         | None =>
-          //Util.ice ($ "expression generated from quotation has broken constructor $exp")
+          //UtilMacros.ice ($ "expression generated from quotation has broken constructor $exp")
           Message.Error ($"expression generated from quotation has broken constructor $exp");
           <[ () ]>
       }
@@ -994,7 +996,7 @@ public partial module Macros
   {
     if (expr == null) null
     else
-      Util.locate (expr.Location, {
+      UtilMacros.locate (expr.Location, {
         def expr = 
           match (ctx) {
             | Some (c) => MacroRegistry.expand_macro (c, expr) [0]
@@ -1216,7 +1218,7 @@ public partial module Macros
 
             | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => expr
 
-            | PExpr.Lambda => Util.ice ("Bad construction of PExpr.Lambda")
+            | PExpr.Lambda => UtilMacros.ice ("Bad construction of PExpr.Lambda")
           };
         call (in_pattern, true, recursed)
       })
@@ -1267,7 +1269,7 @@ public partial module Macros
         }
       else e
     }
-    Util.locate (expr.Location, {
+    UtilMacros.locate (expr.Location, {
       TraverseExpr (None (), expr, false, rename_expr)
     });
   }

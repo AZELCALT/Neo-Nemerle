@@ -16,6 +16,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reflection;
 using System.Linq;
+using NemerleMacros;
 
 namespace Nitra.ProjectSystem
 {

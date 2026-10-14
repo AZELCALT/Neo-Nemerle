@@ -9,7 +9,7 @@ class X {
         public static Test1() :  int
   {
                 {
-                mutable temp_2_return_ = Nemerle.Extensions.DefaultValue(int);
+                mutable temp_2_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
                 mutable temp_1_break_loop_ = false;
                 try {
                         {
@@ -37,7 +37,7 @@ class X {
 
     {
 
-    mutable temp_6_return_ = Nemerle.Extensions.DefaultValue(void);
+    mutable temp_6_return_ = Nemerle.ExtensionsMacros.DefaultValue(void);
 
     mutable temp_7_continue_ = false;
 
@@ -45,7 +45,7 @@ class X {
 
     foreach ( _a :> int in vars) {
       {
-      mutable temp_4_return_ = Nemerle.Extensions.DefaultValue(void);
+      mutable temp_4_return_ = Nemerle.ExtensionsMacros.DefaultValue(void);
       mutable temp_3_break_loop_ = false;
       try {
         temp_7_continue_ = true;
@@ -75,7 +75,7 @@ class X {
 
     {
 
-    Nemerle.Extensions.DefaultValue(void);
+    Nemerle.ExtensionsMacros.DefaultValue(void);
 
     }
 
@@ -88,7 +88,7 @@ class X {
 
                 {
 
-                mutable temp_9_return_ = Nemerle.Extensions.DefaultValue(void);
+                mutable temp_9_return_ = Nemerle.ExtensionsMacros.DefaultValue(void);
 
                 mutable temp_8_break_loop_ = false;
 

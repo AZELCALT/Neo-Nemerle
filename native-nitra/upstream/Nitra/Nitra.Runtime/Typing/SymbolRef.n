@@ -1,5 +1,6 @@
 ﻿using Nemerle;
 using Nitra.ProjectSystem;
+using NemerleMacros;
 
 namespace Nitra.Typing
 {

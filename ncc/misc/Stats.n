@@ -54,19 +54,19 @@ namespace Nemerle.Compiler
 
     public Run (Manager : ManagerClass) : void {
       def dump () {
-        IO.print ("------------- STATS ---------------\n");
-        IO.print ("  AllTypeBuilders:     $AllTypeBuilders\n");
-        IO.print ("  FirstClassFunctions: $FirstClassFunctions\n");
-        IO.print ("  FunctionClosures:    $FunctionClosures\n");        
-        IO.print ("  RealRunningTime:     $(System.Environment.TickCount - TimeStarted)ms\n");
+        IOMacros.print ("------------- STATS ---------------\n");
+        IOMacros.print ("  AllTypeBuilders:     $AllTypeBuilders\n");
+        IOMacros.print ("  FirstClassFunctions: $FirstClassFunctions\n");
+        IOMacros.print ("  FunctionClosures:    $FunctionClosures\n");        
+        IOMacros.print ("  RealRunningTime:     $(System.Environment.TickCount - TimeStarted)ms\n");
   
         when (Temp1 != 0 || Temp2 != 0 || Temp3 != 0 || PrintTemps) {
-          IO.print ("\n");
-          IO.print ("  Temp1: $Temp1\n");
-          IO.print ("  Temp2: $Temp2\n");
-          IO.print ("  Temp3: $Temp3\n");
+          IOMacros.print ("\n");
+          IOMacros.print ("  Temp1: $Temp1\n");
+          IOMacros.print ("  Temp2: $Temp2\n");
+          IOMacros.print ("  Temp3: $Temp3\n");
         }
-        IO.print ("------------- END STATS ---------------\n");
+        IOMacros.print ("------------- END STATS ---------------\n");
       }
       when (Manager.Options.DoPrintStats)
         dump ();

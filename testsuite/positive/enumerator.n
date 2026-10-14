@@ -1,6 +1,7 @@
 
 using Nemerle.IO;
 using Nemerle.Collections;
+using Nemerle.IOMacros;
 
 module M {
   public Main () : void {

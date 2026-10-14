@@ -32,6 +32,7 @@ using Nemerle.Collections;
 using Nemerle.Compiler.SolverMacros;
 using Nemerle.Imperative;
 using Nemerle.Surround;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler 
 {
@@ -140,7 +141,7 @@ namespace Nemerle.Compiler
     /// Enforce this particular overloading possibility in the current solver.
     public Compile() : TExpr
     {
-      Util.locate (Location, {
+      UtilMacros.locate (Location, {
         def is_ok = 
           CheckGenericSpecifier () &&
           (is_static || {
@@ -218,7 +219,7 @@ namespace Nemerle.Compiler
       member.ToString () + if (VarArgs) " #VarArg" else ""
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (o : OverloadPossibility) : bool
       implements System.IEquatable[OverloadPossibility].Equals
     {
@@ -305,11 +306,11 @@ namespace Nemerle.Compiler
                         {
                           | FixedType.Array (t, 1) =>
                             loop (t :: acc, n - 1, formals)
-                          | _ => Util.ice ()
+                          | _ => UtilMacros.ice ()
                         }
                       | x :: xs =>
                         loop (x :: acc, n - 1, xs)
-                      | [] => Util.ice ()
+                      | [] => UtilMacros.ice ()
                     }
                 }
                 formals = loop ([], res.Length, formals)
@@ -397,7 +398,7 @@ namespace Nemerle.Compiler
                   else match (expr.Type)
                   {
                     | FixedType.Fun(FixedType.Tuple([_]), _) 
-                    | FixedType.Fun(FixedType.Tuple([]), _)   => Util.ice("FixedType.Fun has inconsistent state!")
+                    | FixedType.Fun(FixedType.Tuple([]), _)   => UtilMacros.ice("FixedType.Fun has inconsistent state!")
                     | FixedType.Fun(FixedType.Tuple as from1,            to) when from1.TryUnify(ext.Type) with (cnt = 0, head = from1, from = FixedType.Void())
                     | FixedType.Fun(FixedType.Tuple(head :: last :: []), to) with (from = last,                  cnt = 1)
                     | FixedType.Fun(FixedType.Tuple(head :: tail),       to) with (from = FixedType.Tuple(tail), cnt = tail.Length)

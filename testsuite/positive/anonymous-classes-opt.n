@@ -1,5 +1,6 @@
 ﻿using System.Console;
 using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
 
 [assembly: AnonymousClassOptions( Visibility = Public )]
 

@@ -9,6 +9,7 @@ using Nemerle.Utility;
 using System;
 using System.Diagnostics;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nitra.Declarations
 {

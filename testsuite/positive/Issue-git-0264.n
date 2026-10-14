@@ -1,6 +1,7 @@
 using System;
 using System.Console;
 using Nemerle;
+using NemerleMacros;
 
 partial variant V
 {

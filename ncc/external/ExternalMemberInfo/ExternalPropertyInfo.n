@@ -38,6 +38,7 @@ using PT = Nemerle.Compiler.Parsetree;
 using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
 using SCG = System.Collections.Generic;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler 
 {
@@ -101,7 +102,7 @@ namespace Nemerle.Compiler
 
       public DeclaringType : TypeInfo
       {
-        //[Nemerle.Memoize (InvalidValue = null)]
+        //[NemerleMacros.Memoize (InvalidValue = null)]
         get { library.TypeInfoOfType (handle.DeclaringType) }
       }
       
@@ -120,7 +121,7 @@ namespace Nemerle.Compiler
 
       public IsIndexer : bool
       {
-        //[Nemerle.Memoize]
+        //[NemerleMacros.Memoize]
         get
         {
           def index_parms = handle.GetIndexParameters ();

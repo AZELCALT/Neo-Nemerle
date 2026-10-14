@@ -13,7 +13,7 @@ struct MonoEnumInfo {
 
         static Main() :  int
   {
-    mutable  m = Nemerle.Extensions.DefaultValue (MonoEnumInfo) :MonoEnumInfo;
+    mutable  m = Nemerle.ExtensionsMacros.DefaultValue (MonoEnumInfo) :MonoEnumInfo;
 
     if (GetInfo (out m) != 1)
 

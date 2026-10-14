@@ -6,12 +6,12 @@
 class X {
    Property : int {
     get {
-      mutable  get = Nemerle.Extensions.DefaultValue (int);
+      mutable  get = Nemerle.ExtensionsMacros.DefaultValue (int);
       get = 1;
        get;
     }
     set {
-      mutable  set = Nemerle.Extensions.DefaultValue (int);
+      mutable  set = Nemerle.ExtensionsMacros.DefaultValue (int);
       set = value;
     }
   }

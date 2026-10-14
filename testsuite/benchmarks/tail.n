@@ -26,6 +26,6 @@ module Test {
       count = 0;
       foo ();
     }
-    Nemerle.IO.printf ("%d %d\n", count, i);
+    Nemerle.IOMacros.printf ("%d %d\n", count, i);
   }
 }

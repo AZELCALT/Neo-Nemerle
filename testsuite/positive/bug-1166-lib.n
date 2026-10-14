@@ -2,5 +2,5 @@
 
 macro testMacro () {<[
   def x = 4;
-  Nemerle.IO.sprint ("test$x")
+  Nemerle.IOMacros.sprint ("test$x")
 ]>}

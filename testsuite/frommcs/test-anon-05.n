@@ -7,7 +7,7 @@ delegate S () :  void;
 class X {
   static Main () :  int
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
     mutable  b = null : S;
     
     for (i = 0; i < 10; i++){

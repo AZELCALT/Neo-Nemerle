@@ -1,5 +1,6 @@
 using System;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 namespace Nemerle.Compiler
 {
   /// Nitra syntax APIs: declaration inspection is kept separate from execution.

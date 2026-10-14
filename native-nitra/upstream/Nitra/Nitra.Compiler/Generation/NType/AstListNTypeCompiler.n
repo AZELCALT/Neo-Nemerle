@@ -9,6 +9,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 
 using System;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {
@@ -45,7 +46,7 @@ namespace Nitra.Compiler
         match (_immutableArrayOpt)
         {
           | Some(ti) => FixedType.Class(ti, [itemType])
-          | None     => Message.FatalError("Missing reference to 'System.Collections.Immutable.dll' assembly.");
+          | None     => MessageMacros.FatalError("Missing reference to 'System.Collections.Immutable.dll' assembly.");
         }
 
       | _ => _compiler.CompileDependentPropertyType(propertySymbol);

@@ -6,7 +6,7 @@ namespace R {
       when (x)
         return;
 
-      Nemerle.IO.printf ("to_void %s\n", x.ToString ());
+      Nemerle.IOMacros.printf ("to_void %s\n", x.ToString ());
     }
     public to_int (x : bool) : int {
       when (x)
@@ -16,7 +16,7 @@ namespace R {
 
     public to_string (x : bool) : string {
       when (x) return ("a");
-      Nemerle.IO.print ("$x\n");
+      Nemerle.IOMacros.print ("$x\n");
       "b"
     }
   }
@@ -105,7 +105,7 @@ module M {
     when (x) {
       Nemerle.Imperative.Return ();
     }
-    Nemerle.IO.printf ("a\n");
+    Nemerle.IOMacros.printf ("a\n");
   }
 }
 
@@ -135,7 +135,7 @@ z = "ss";
 i = 1.2;
 i = 1.0;
 w = "aa";
-Nemerle.IO.print ("x=$x, z=$z, i=$i, y=$y, w=$w\n");
+Nemerle.IOMacros.print ("x=$x, z=$z, i=$i, y=$y, w=$w\n");
 
 
 /*

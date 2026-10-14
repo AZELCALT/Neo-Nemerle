@@ -10,7 +10,7 @@ namespace Nemerle.Compiler
       catch
       {
         | error is System.InvalidOperationException =>
-          Message.FatalError(error.Message);
+          MessageMacros.FatalError(error.Message);
       }
     }
   }

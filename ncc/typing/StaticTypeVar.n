@@ -35,6 +35,8 @@ using Nemerle.Collections;
 using SRE = System.Reflection.Emit;
 using NC = Nemerle.Compiler;
 using PT = Nemerle.Compiler.Parsetree;
+using NemerleMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler 
 {
@@ -280,7 +282,7 @@ namespace Nemerle.Compiler
       get { constraints != null }
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals(o : StaticTypeVar) : bool
       implements System.IEquatable[StaticTypeVar].Equals
     {
@@ -312,8 +314,8 @@ namespace Nemerle.Compiler
 
     internal SetGenericBuilder(x : SRE.GenericTypeParameterBuilder) : void
     {
-      Util.cassert(gtype == null);
-      Util.cassert(x != null);
+      UtilMacros.cassert(gtype == null);
+      UtilMacros.cassert(x != null);
       x.SetGenericParameterAttributes(special);
       gtype = x;
     }

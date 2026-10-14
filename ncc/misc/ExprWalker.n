@@ -39,6 +39,8 @@ using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 using T     = Nemerle.Compiler.Typedtree;
 using TExpr = Nemerle.Compiler.Typedtree.TExpr;
 using SCG   = System.Collections.Generic;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {
@@ -688,7 +690,7 @@ namespace Nemerle.Compiler
         | DebugInfo
         | This                       => ()
         | Def
-        | Use                        => Util.ice("wrong node type")
+        | Use                        => UtilMacros.ice("wrong node type")
         }
 
         _info.Pop();

@@ -23,7 +23,7 @@ namespace Nitra.Model
 
     public CompareTo(that : Identifier) : int { StringComparer.Ordinal.Compare(this.Value, that.Value) }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals(that : Identifier)   : bool { Value.Equals(that.Value, StringComparison.Ordinal) }
     public EqualsToName(name : string) : bool { Value.Equals(name, StringComparison.Ordinal) }
 

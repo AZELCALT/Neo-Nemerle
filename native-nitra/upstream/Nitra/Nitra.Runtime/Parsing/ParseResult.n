@@ -20,6 +20,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Threading;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nitra
 {

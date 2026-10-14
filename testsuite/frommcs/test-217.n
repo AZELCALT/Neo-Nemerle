@@ -7,7 +7,7 @@ public class Test {
         mutable  val4  = compare_lte(0, 0);
         mutable  val5  = compare_lte(1, 0);
         mutable  val6  = compare_lte(0, 1);
-        mutable  b = Nemerle.Extensions.DefaultValue (bool) :bool;
+        mutable  b = Nemerle.ExtensionsMacros.DefaultValue (bool) :bool;
        
   b = (true == ( val1 :> bool));
   if (b == false)

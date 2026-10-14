@@ -11,6 +11,7 @@ using System;
 using System.Linq;
 
 using SCG = System.Collections.Generic;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra.Internal.Recovery
 {

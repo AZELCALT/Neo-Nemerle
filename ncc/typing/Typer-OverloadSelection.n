@@ -202,7 +202,7 @@ namespace Nemerle.Compiler
                 {
                   | [o] => print_error_message(o);
                   | _ =>
-                    Util.locate(exprLocation,
+                    UtilMacros.locate(exprLocation,
                     {
                       surroundwith (related_messages)
                       {
@@ -491,8 +491,8 @@ namespace Nemerle.Compiler
 
       System.Diagnostics.Debug.Assert(f1 != null && f2 != null, null, null);
       System.Diagnostics.Debug.Assert(f1.Length == f2.Length, null, null);
-      Util.cassert (f1 != null && f2 != null);
-      Util.cassert (f1.Length == f2.Length, 
+      UtilMacros.cassert (f1 != null && f2 != null);
+      UtilMacros.cassert (f1.Length == f2.Length, 
                     $"$o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");
                     
       def getBetterList(f1, f2)

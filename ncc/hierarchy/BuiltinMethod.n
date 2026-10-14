@@ -60,7 +60,7 @@ namespace Nemerle.Compiler
   class BuiltinMethod : IMethod
   {
     id : int;
-    [Nemerle.Utility.Accessor]
+    [Nemerle.UtilityMacros.Accessor]
     protected header : TFunHeader;
     declaring : TypeInfo;
     special_kind : BuiltinMethodKind;

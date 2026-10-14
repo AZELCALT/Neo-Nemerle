@@ -104,7 +104,7 @@ namespace Nemerle.Compiler
             
             try {
               GEnv.Manager.MacroColors.PushNewColor (name.color, env);
-              def res = Util.locate (Expression.Location,
+              def res = UtilMacros.locate (Expression.Location,
                                      imacro.Run (GEnv.Manager.ComponentsFactory.CreateTyper (TBuilder, tenv, CurrentMethod, env), parms));
               assert(res == null);
             } finally {
@@ -251,7 +251,7 @@ namespace Nemerle.Compiler
         else
         {
           ti.phase = working_on;
-          Util.locate(ti.Location,
+          UtilMacros.locate(ti.Location,
             {
               when (ti.iterate_first != null)
                 foreach (x in ti.iterate_first)
@@ -296,7 +296,7 @@ namespace Nemerle.Compiler
       def wrap (x : TypeBuilder) : void
       {
         when (x.DeclaringType == null)
-          Util.locate (x.Location, f (x))
+          UtilMacros.locate (x.Location, f (x))
       };
 
       Iter(wrap);
@@ -323,11 +323,11 @@ namespace Nemerle.Compiler
       ExpandMacros();
 
       foreach (x in infos.Reverse())
-        Util.locate(x.Location, x.process_macro_attributes(MacroPhase.BeforeInheritance));
+        UtilMacros.locate(x.Location, x.process_macro_attributes(MacroPhase.BeforeInheritance));
 
       run_phase = 1;
       foreach (x in TopTypeBuilders())
-        Util.locate(x.Location, x.make_tyenvs());
+        UtilMacros.locate(x.Location, x.make_tyenvs());
 
       run_phase = 2;
       // We can't call bind_types() recursively, because we yet not receive a list of super-types for top-level types.
@@ -337,7 +337,7 @@ namespace Nemerle.Compiler
       while (types.Count > 0)
       {
         foreach (x in types)
-          Util.locate(x.Location, x.bind_types());
+          UtilMacros.locate(x.Location, x.bind_types());
 
         def nestedTypes = SCG.List();
 
@@ -447,7 +447,7 @@ namespace Nemerle.Compiler
         Iter(fun (x : TypeBuilder) {
             when (x.type_builder != null)
             if (x.CannotFinalize)
-                Message.FatalError ($ "the type $(x) was not finalized, forgot the "
+                MessageMacros.FatalError ($ "the type $(x) was not finalized, forgot the "
                                     "TypeBuilder.Compile () on it?")
             else
                 x.FinalizeType ();

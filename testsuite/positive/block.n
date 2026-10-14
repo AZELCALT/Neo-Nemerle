@@ -57,7 +57,7 @@ module M {
   Exceptions () : void {
     ret: {
       try {
-        Nemerle.IO.print ("try 1\n");
+        Nemerle.IOMacros.print ("try 1\n");
         ret ();
       }
       catch {
@@ -67,33 +67,33 @@ module M {
 
     ret: {
       try {
-        Nemerle.IO.print ("catch 1\n");
+        Nemerle.IOMacros.print ("catch 1\n");
         throw System.Exception ();
       }
       catch {
         | _ =>
-          Nemerle.IO.print ("catch 2\n");
+          Nemerle.IOMacros.print ("catch 2\n");
           ret ();
       }
     }
     double_ret: {
       try {
         try {
-          Nemerle.IO.print ("try try 1\n");
+          Nemerle.IOMacros.print ("try try 1\n");
           double_ret ();
         }
         catch { _ => () }
-        Nemerle.IO.print ("try try 2\n");
+        Nemerle.IOMacros.print ("try try 2\n");
       }
       catch { _ => () }
     }
     ret: {
       try {
-        Nemerle.IO.print ("try-fin 1\n");
+        Nemerle.IOMacros.print ("try-fin 1\n");
         ret ();
       }
       finally {
-        Nemerle.IO.print ("try-fin 2\n");
+        Nemerle.IOMacros.print ("try-fin 2\n");
         // returns are not allowed from finally
       }
     }
@@ -108,7 +108,7 @@ module M {
           ret(42);
         24
       } finally {
-        Nemerle.IO.print ("must be finally\n");
+        Nemerle.IOMacros.print ("must be finally\n");
       }
     }
   }

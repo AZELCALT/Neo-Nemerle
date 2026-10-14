@@ -35,6 +35,8 @@ using Nemerle.Compiler.Typedtree
 using Nemerle.Compiler.SolverMacros
 // using Nemerle.Compiler.Parsetree
 using Nemerle.IO
+using Nemerle.IOMacros
+using Nemerle.IOMacros
 
 namespace Nemerle.Compiler
   public class Optimizer

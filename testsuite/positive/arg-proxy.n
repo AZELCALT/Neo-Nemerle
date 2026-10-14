@@ -1,4 +1,5 @@
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 
 variant foo {
@@ -33,7 +34,7 @@ module M {
       def (x, y) = a;
       if (x > 3)
         f (x - 3, y)
-      else Nemerle.IO.printf ("%d %d\n", x, y)
+      else Nemerle.IOMacros.printf ("%d %d\n", x, y)
     }
 
     f (5, 1);
@@ -46,7 +47,7 @@ module M {
       def (x, y) = a;
       if (x > 3)
         f (x - 3, y)
-      else Nemerle.IO.printf ("%d %d\n", x, y)
+      else Nemerle.IOMacros.printf ("%d %d\n", x, y)
     }
 
     f (5, 1);
@@ -59,7 +60,7 @@ module M {
       if (x > 3) {
         f (x - 2, y);
         f (x - 3, y)
-      } else Nemerle.IO.printf ("%d %d\n", x, y)
+      } else Nemerle.IOMacros.printf ("%d %d\n", x, y)
     }
 
     f (5, 1);

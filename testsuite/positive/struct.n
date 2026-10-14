@@ -1,5 +1,6 @@
 using System;
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 // ------------ DEPENDANT STRUCTS ----------------
 struct DependantStruct {
@@ -109,7 +110,7 @@ class Singularity : AI {
     knowledge == "42"
   }
 
-  [Nemerle.NotImplemented]
+  [NemerleMacros.NotImplemented]
   public f (x : int) : int;
 }
 

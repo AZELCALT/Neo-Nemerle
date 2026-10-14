@@ -15,8 +15,8 @@ class Driver
 {
   public static Main () :  void
   {
-    mutable  _a_int = Nemerle.Extensions.DefaultValue (A[int]);
-    mutable  _b_stuff = Nemerle.Extensions.DefaultValue (B[int,A[int]]); ()
+    mutable  _a_int = Nemerle.ExtensionsMacros.DefaultValue (A[int]);
+    mutable  _b_stuff = Nemerle.ExtensionsMacros.DefaultValue (B[int,A[int]]); ()
   }
 }
 /*

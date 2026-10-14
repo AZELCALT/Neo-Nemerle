@@ -34,7 +34,7 @@ class A
         def foo = Foo ();
         foo.Hello = 42;
         assert(foo.Hello == 42);
-        Nemerle.IO.printf("%d\n",foo.Hello);
+        Nemerle.IOMacros.printf("%d\n",foo.Hello);
         
         def foo () {
           try { 4242 } finally { System.Console.WriteLine ("foo"); }

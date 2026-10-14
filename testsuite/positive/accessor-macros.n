@@ -1,5 +1,6 @@
 using Nemerle.Utility;
 using Nemerle.Builtins.Function;
+using Nemerle.UtilityMacros;
 
 [System.Flags]
 enum SomeFlags {

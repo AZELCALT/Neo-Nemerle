@@ -34,7 +34,7 @@ class X {
     mutable  l = 100;
 
     mutable  d = fun() {
-      mutable  b = Nemerle.Extensions.DefaultValue (int);
+      mutable  b = Nemerle.ExtensionsMacros.DefaultValue (int);
       b = 1;
       Console.WriteLine ("Inside d");
       e = fun() {

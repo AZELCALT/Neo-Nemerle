@@ -21,7 +21,7 @@ class M
           }, <[ [] ]>);
           <[ array [$expr : object, array $values] ]>
 
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 

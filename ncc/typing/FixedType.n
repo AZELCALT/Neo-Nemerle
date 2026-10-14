@@ -220,7 +220,7 @@ namespace Nemerle.Compiler
                 formals = fs;
                 f.CheckConstraints (arg, this);
 
-              | [] => Util.ice ()
+              | [] => UtilMacros.ice ()
             }
 
             typedargs [idx] = arg.GetSystemType ();
@@ -238,13 +238,13 @@ namespace Nemerle.Compiler
         | Array (et, rank)      =>
           def et_SystemType = et.GetSystemType ();
           when (et_SystemType.Equals (SystemTypeCache.Void))
-            Message.FatalError ("array element type cannot be void");
+            MessageMacros.FatalError ("array element type cannot be void");
           if (rank == 1)
             et_SystemType.MakeArrayType ()
           else
             et_SystemType.MakeArrayType (rank)
 
-        | Intersection(types)   => Message.FatalError($"The intersection of types has detect. Please, specify type manually. Intersected types: ..$(types)");
+        | Intersection(types)   => MessageMacros.FatalError($"The intersection of types has detect. Please, specify type manually. Intersected types: ..$(types)");
       }
     }
     #endregion
@@ -865,9 +865,9 @@ namespace Nemerle.Compiler
             | _ => ()
           }
 
-          Util.ice($"not found for member $(member) with dt $(member.DeclaringType) -- am in $(this)")
+          UtilMacros.ice($"not found for member $(member) with dt $(member.DeclaringType) -- am in $(this)")
 
-        | _ => Util.ice($"unsupported type: for member $(member) with dt $(member.DeclaringType) -- am in $(this)")
+        | _ => UtilMacros.ice($"unsupported type: for member $(member) with dt $(member.DeclaringType) -- am in $(this)")
       }
     }
 
@@ -905,7 +905,7 @@ namespace Nemerle.Compiler
           (s2.Apply(s1.Apply(method.GetMemType()).Fix()), vars)
 
         | StaticTypeVarRef => (TypeOfMember(method), []) // i'm not sure that this is safe operation
-        | _ => Util.ice($ "unsupported type: for member $(method) with dt $(method.DeclaringType) -- am in $(this)")
+        | _ => UtilMacros.ice($ "unsupported type: for member $(method) with dt $(method.DeclaringType) -- am in $(this)")
       }
     }
 
@@ -921,7 +921,7 @@ namespace Nemerle.Compiler
           def (s3, _vars) = Subst.Fresh(method.GetHeader().TypeParameters);
           s2.AddSubst(s3);
           // FIXME we use it for method implementation
-          // Util.cassert (method.GetHeader ().typarms.IsEmpty,
+          // UtilMacros.cassert (method.GetHeader ().typarms.IsEmpty,
           //              $ "TypeOfMethod used for $method");
           s2.Apply(s1.Apply(method.GetMemType()).Fix())
 
@@ -1023,7 +1023,7 @@ namespace Nemerle.Compiler
         | Array (t, n) =>
           FixedType.Class (InternalType.GetArrayType (n), [t]).GetInstantiatedSuperType (super_type)
 
-        | _ => Util.ice ($ "GIST: $this for $super_type")
+        | _ => UtilMacros.ice ($ "GIST: $this for $super_type")
       }
     }
 
@@ -1052,7 +1052,7 @@ namespace Nemerle.Compiler
           def froms = from.ToList(meth);
           (froms, to)
 
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 
@@ -1061,7 +1061,7 @@ namespace Nemerle.Compiler
       match (this)
       {
         | Fun (from, _) => from.ToList(meth)
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 

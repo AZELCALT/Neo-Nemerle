@@ -1,5 +1,6 @@
 using System.Console;
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 struct A {
   public x : int;

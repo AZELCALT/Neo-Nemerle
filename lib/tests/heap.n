@@ -6,6 +6,7 @@ using SCG = System.Collections.Generic;
 
 #if NUNIT
 using NUnit.Framework;
+using Nemerle.IOMacros;
 
 [TestFixture]
 public class HeapTest : Assertion

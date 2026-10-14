@@ -9,7 +9,7 @@ public class Application
     }
     else
     {
-      mutable  thisDoesnt = Nemerle.Extensions.DefaultValue (string);
+      mutable  thisDoesnt = Nemerle.ExtensionsMacros.DefaultValue (string);
       System.Console.WriteLine();
       thisDoesnt = "not so";
       System.Console.WriteLine(thisDoesnt);

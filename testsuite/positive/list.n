@@ -1,5 +1,6 @@
 using Nemerle.IO;
 using Nemerle.Collections.NList;
+using Nemerle.IOMacros;
 
 module M {
   /** Entry point */

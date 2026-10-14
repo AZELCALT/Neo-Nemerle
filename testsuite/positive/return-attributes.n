@@ -14,7 +14,7 @@ public class A {
 }
 
 def mth = typeof(A).GetMethod("foo").ReturnTypeCustomAttributes.GetCustomAttributes (false);
-Nemerle.IO.print ("..$mth")
+Nemerle.IOMacros.print ("..$mth")
 /*
 BEGIN-OUTPUT
 testAttr

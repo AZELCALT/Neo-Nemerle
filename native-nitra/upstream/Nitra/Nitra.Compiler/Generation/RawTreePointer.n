@@ -10,6 +10,7 @@ using SCG = System.Collections.Generic;
 using System.Linq;
 
 using Nitra.Model;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {

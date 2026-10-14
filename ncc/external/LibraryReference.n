@@ -41,6 +41,8 @@ using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
 using SCG = System.Collections.Generic;
+using Nemerle.UtilityMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -194,7 +196,7 @@ namespace Nemerle.Compiler
           | None =>
             // TODO: VladD2: Add autoload of referenced assembly
 //                _tenv.Iter(fun(x,y) { Message.Debug($"$x - $y") });
-            Util.ice($"$framework_type from $(framework_type.DeclaringType)")
+            UtilMacros.ice($"$framework_type from $(framework_type.DeclaringType)")
         }
       }
       else
@@ -319,7 +321,7 @@ namespace Nemerle.Compiler
             | value is System.Guid    => <[ System.Guid($(value.ToString() : string)) ]>
             | value is System.Type    => <[ typeof($(library.TypeOfType(null, value) : typed)) ]>
             | col is ReadOnlyCollection[SR.CustomAttributeTypedArgument] => <[ array[..$(col.MapToList(e => lift(e.Value)))] ]>
-            | value => Message.FatalError($"Custom atribute value ($value) of type $(value.GetType()) not suported yet.")
+            | value => MessageMacros.FatalError($"Custom atribute value ($value) of type $(value.GetType()) not suported yet.")
           }
 
           lift(a.Value)

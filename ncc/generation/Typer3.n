@@ -189,7 +189,7 @@ namespace Nemerle.Compiler
       when (ptyper != null)
         ptyper.RaiseBeforeStage3();
       
-      Util.locate (current_local_fun.Location, {
+      UtilMacros.locate (current_local_fun.Location, {
         //Message.Debug ($"T3::run: $(current_local_fun.name)");
         start_label = Manager.GetNewId();
 
@@ -197,7 +197,7 @@ namespace Nemerle.Compiler
 
         match (current_local_fun.body) {
           | FunBody.Typed (originalBody) =>
-            Util.locate (originalBody.Location, {
+            UtilMacros.locate (originalBody.Location, {
             // FIXME?: Typed3
             def body = BuildRevSequence (Walk(originalBody) :: initializers);
             def expr = TExpr.Label (body.Type, start_label, body);
@@ -258,11 +258,11 @@ namespace Nemerle.Compiler
     {
       match (tb.LookupMember (name)) {
         | [mem] => mem
-        | [] => Util.ice ()
+        | [] => UtilMacros.ice ()
         | lst =>
           match (lst.Filter (fun (mem) { mem.DeclaringType.Equals (tb) })) {
             | [mem] => mem
-            | lst => Util.ice ($ "mulitple members $name in $tb $lst")
+            | lst => UtilMacros.ice ($ "mulitple members $name in $tb $lst")
           }
       }
     }
@@ -318,11 +318,11 @@ namespace Nemerle.Compiler
         def types =
           match (tupled.FixedType()) {
             | Tuple (lst) => lst
-            | _ => Util.ice ()
+            | _ => UtilMacros.ice ()
           }
 
         def len = types.Length;
-        Util.cassert (fh_len == len);
+        UtilMacros.cassert (fh_len == len);
         mutable pos = -1;
         def parms = types.Map (fun (ty) {
           pos++;
@@ -347,7 +347,7 @@ namespace Nemerle.Compiler
       else
       {
         assert(parms.Length == fh_len);
-        Util.cassert(parms.Length == fh_len, $"parms length mismatch, $(fh.Name) $parms $(fh.Parameters)");
+        UtilMacros.cassert(parms.Length == fh_len, $"parms length mismatch, $(fh.Name) $parms $(fh.Parameters)");
         (parms, [])
       }
     }
@@ -507,8 +507,8 @@ namespace Nemerle.Compiler
       else
       {
         def hd2 = if (hd.Name == "_N_yielding_function") hd.decl.DefinedIn else hd;
-        Util.cassert (closure_fields != null);
-        Util.cassert (closure_fields.Contains (hd2.id), $ "no closure for $(hd2.Name) from $(current_local_fun.Name)");
+        UtilMacros.cassert (closure_fields != null);
+        UtilMacros.cassert (closure_fields.Contains (hd2.id), $ "no closure for $(hd2.Name) from $(current_local_fun.Name)");
         def field = closure_fields [hd2.id];
         // Message.Debug ($"cloref: $(hd2.name) from $(current_local_fun.name) $(field.GetMemType()) $field");
         TExpr.FieldMember (field.GetMemType (),
@@ -946,7 +946,7 @@ namespace Nemerle.Compiler
               dispose_expr);
           dispose_meth.GetHeader ().body = FunBody.Typed (dispose_expr);
 
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 
@@ -976,14 +976,14 @@ namespace Nemerle.Compiler
             def assigns = meth.Body :: parm_field_names.Map (fun (name) {
               <[ this . $(name : dyn) = other . $(name : dyn) ]>
             });
-            def newBody = Util.locate(meth.Body.Location, <[ { .. $assigns } ]>);
+            def newBody = UtilMacros.locate(meth.Body.Location, <[ { .. $assigns } ]>);
             meth.Body = newBody;
           }
 
           current_local_fun.body = FunBody.Typed (PlainRef (current_closure));
 
         | FunBody.Typed (t)
-        | _ with t = null => Util.ice ($ "oops, t=$t")
+        | _ with t = null => UtilMacros.ice ($ "oops, t=$t")
       }
     }
 
@@ -1013,7 +1013,7 @@ namespace Nemerle.Compiler
               | Class (tc, _) =>
                 tc.Equals (InternalType.Generic_IEnumerable_tc) ||
                 tc.Equals (InternalType.IEnumerable_tc)
-              | _ => Util.ice ()
+              | _ => UtilMacros.ice ()
             }
           else false;
 
@@ -1226,7 +1226,7 @@ namespace Nemerle.Compiler
              | TExpr.CacheRef
              | TExpr.Error
              | TExpr.Def
-             | TExpr.Use => Util.ice("invalid expression in Typer3")
+             | TExpr.Use => UtilMacros.ice("invalid expression in Typer3")
            }
       }
     }
@@ -1410,7 +1410,7 @@ namespace Nemerle.Compiler
           | TExpr.Error
           | TExpr.Def
           | TExpr.Use
-           => Util.ice ("invalid expression in Typer3")
+           => UtilMacros.ice ("invalid expression in Typer3")
         }
       }
       inject (e, beforeBase, afterThis);
@@ -1450,7 +1450,7 @@ namespace Nemerle.Compiler
       {
         def e = match (current_local_fun.body) {
           | FunBody.Typed (e) => e
-          | _ => Util.ice ("bad function body")
+          | _ => UtilMacros.ice ("bad function body")
         }
         if (CurrentType.IsValueType)
         {
@@ -1514,7 +1514,7 @@ namespace Nemerle.Compiler
                   match (q)
                   {
                     | PT.PExpr.Typed (e) => e
-                    | _ => Util.ice ("bad field initializers");
+                    | _ => UtilMacros.ice ("bad field initializers");
                   }
 
               | _ => null
@@ -1665,7 +1665,7 @@ namespace Nemerle.Compiler
 
     internal static ClosureParmCount (fn : TFunHeader) : int
     {
-      Util.cassert (fn.used_closures != null || fn.decl == null,
+      UtilMacros.cassert (fn.used_closures != null || fn.decl == null,
                     $ "closures not computed for $(fn.Name)");
       if (fn.static_method == null) 0
       else fn.used_closures.Length
@@ -1783,7 +1783,7 @@ namespace Nemerle.Compiler
       def identityInstanceMember = match(identityClassInfo.LookupMember("Instance"))
       {
         | [one] => one
-        | _ => Util.ice("not one Nemerle.Util.Identity.Instance?")
+        | _ => UtilMacros.ice("not one Nemerle.Util.Identity.Instance?")
       };
 
       TExpr.StaticRef(fnty, identityClass, identityInstanceMember, [])
@@ -1794,7 +1794,7 @@ namespace Nemerle.Compiler
       Manager.Stats.FirstClassFunctions++;
       def closures = fn.used_closures;
 
-      Util.cassert (fn.TypeParameters.IsEmpty, $"should be handled in T2, $(fn.Name)");
+      UtilMacros.cassert (fn.TypeParameters.IsEmpty, $"should be handled in T2, $(fn.Name)");
 
       // Message.Debug ($ "emit 1st class $(fn.name) acc=$(accumulated_typarms)");
       def (new_tp, subst) = CopyFunTyparms (add_class_tyvars = true);
@@ -1858,7 +1858,7 @@ namespace Nemerle.Compiler
           fun (hd)
           {
             def name = Macros.NewSymbol(hd.Name + "_closure");
-            Util.cassert(hd.closure_type != null, $"null closure for $(hd.Name)");
+            UtilMacros.cassert(hd.closure_type != null, $"null closure for $(hd.Name)");
             def clo_type = hd.closure_type;
             //Message.Debug ($"add field $name to $lambda_name : $clo_type --> $(fix_type (clo_type)) new_tp=$new_tp $local_function_type->$(local_function_type.TypeParameters) $current_method->$(current_method.typarms)");
             def field = builder.DefineAndReturn(<[ decl: mutable $(name : name) : $(fix_type(clo_type) : typed) ]>) :> IField;
@@ -1904,7 +1904,7 @@ namespace Nemerle.Compiler
         match (from_type.TypeOfMember(ctor).Fix())
         {
           | FixedType.Fun(from = from, argsCount = argsCount) => FixedType.Fun(from, argsCount, fnty)
-          | _ => Util.ice()
+          | _ => UtilMacros.ice()
         };
 
       if(isCaching)
@@ -2001,7 +2001,7 @@ namespace Nemerle.Compiler
           match (mems)
           {
             | [one] => one.GetParameters ().Length
-            | _ => Util.ice ("not exactly one Invoke method?")
+            | _ => UtilMacros.ice ("not exactly one Invoke method?")
           }
         };
       def properApply(mtype : FixedType)
@@ -2020,7 +2020,7 @@ namespace Nemerle.Compiler
 
             TExpr.MethodAddress (mtype, meth, true, [])
 
-          | _ => Util.ice("nonfunction type?")
+          | _ => UtilMacros.ice("nonfunction type?")
         }
       }
       def (parm2, pexpr) =
@@ -2107,7 +2107,7 @@ namespace Nemerle.Compiler
           just_call (meth,
                      TExpr.MethodRef (func.ty, Walk(obj), meth, tp, notvirt), [])
 
-        | TExpr.ConstantObjectRef => Util.ice ()
+        | TExpr.ConstantObjectRef => UtilMacros.ice ()
 
         | TExpr.Base (meth)
         | TExpr.StaticRef (_, meth is IMethod, _) =>
@@ -2116,7 +2116,7 @@ namespace Nemerle.Compiler
         | TExpr.OpCode => TExpr.Call (func, parms, false)
 
         | TExpr.LocalRef (LocalValue where (ValKind = LocalValue.Kind.Function)) =>
-          Util.ice ()
+          UtilMacros.ice ()
 
         | TExpr.LocalFunRef (LocalValue where
                           (ValKind = LocalValue.Kind.Function (hd, _)), type_parms) =>
@@ -2362,7 +2362,7 @@ namespace Nemerle.Compiler
 
             BuildRevSequence (goto :: beg)
 
-          | TExpr.ConstantObjectRef => Util.ice ();
+          | TExpr.ConstantObjectRef => UtilMacros.ice ();
 
           | TExpr.Match as m =>
             CompileMatch (m)
@@ -2554,7 +2554,7 @@ namespace Nemerle.Compiler
         | Block
         | Def
         | Use =>
-          Util.cassert (Message.SeenError);
+          UtilMacros.cassert (Message.SeenError);
           null
       }
     }

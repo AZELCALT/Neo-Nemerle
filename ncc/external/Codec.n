@@ -121,11 +121,11 @@ module TyCodec
         match (tenv.Find (no))
         {
           | Some (tv) => FixedType.StaticTypeVarRef (tv)
-          | None => Util.ice ("unboud type variable in encoded type " + no)
+          | None => UtilMacros.ice ("unboud type variable in encoded type " + no)
         }
 
       | Term.App (".p", types) => FixedType.Tuple(types.Map(self))
-      | Term.App (name, _)     => Util.ice ("invalid encoded type opcode " + name)
+      | Term.App (name, _)     => UtilMacros.ice ("invalid encoded type opcode " + name)
     }
   }
 

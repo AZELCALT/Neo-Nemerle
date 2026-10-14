@@ -35,6 +35,8 @@ using Nemerle.Compiler.SolverMacros;
 
 using SCG = System.Collections.Generic;
 using PT = Nemerle.Compiler.Parsetree;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler
 {
@@ -94,7 +96,7 @@ namespace Nemerle.Compiler
                                $ "$this does not contain a field named `$n'");
                   acc
                 }
-              | _ => Util.ice ()
+              | _ => UtilMacros.ice ()
             }
           });
         add_wildcards (remaining, map)
@@ -235,7 +237,7 @@ namespace Nemerle.Compiler
       {
         if (current_pattern_variables.Contains (name))
         {
-          Util.locate(name.Location, 
+          UtilMacros.locate(name.Location, 
             ReportError (messenger,  $"pattern variable `$(name)' already seen in this pattern"));
           current_pattern_variables.Get(name)
         }
@@ -317,7 +319,7 @@ namespace Nemerle.Compiler
                             Manager.MarkAsUsed (field, expr.Location, typer.TriggerObsoleteWarning);
 
                             unless(field.CanAccess(typer.CurrentTypeBuilder))
-                              Util.locate(name.Location, ReportError (messenger, $"`$field' is not accessible"));
+                              UtilMacros.locate(name.Location, ReportError (messenger, $"`$field' is not accessible"));
 
                             def ty = matched_value_type.FixedValue.TypeOfMember (field);
                             (field, TypePattern (ty, pat))
@@ -345,7 +347,7 @@ namespace Nemerle.Compiler
                 def explain (expr) 
                 {
                   | PT.PExpr.Assign (t, _) =>
-                    Util.locate (expr.Location, ReportError (messenger, 
+                    UtilMacros.locate (expr.Location, ReportError (messenger, 
                       $"expression ``$t'' cannot be used as fieldname in (fieldname = ...) pattern"))
 
                   | _ => assert(false)
@@ -406,7 +408,7 @@ namespace Nemerle.Compiler
 
       TypePattern (matched_value_type : TypeVar, pattern : PT.PExpr) : Pattern
       {
-        Util.locate (pattern.Location, {
+        UtilMacros.locate (pattern.Location, {
           def typed = DoTypePattern (matched_value_type, pattern);
           when (typed.ty == null)
             typed.ty = matched_value_type;
@@ -827,14 +829,14 @@ namespace Nemerle.Compiler
                   | PT.SyntaxElement.Function    (e) => Macros.quoted_fundecl (e)
                   | PT.SyntaxElement.Parameter   (e) => Macros.quoted_fparam (e)
                   | PT.SyntaxElement.ClassMember (e) => Macros.quoted_member (e)
-                  | PT.SyntaxElement.TType => Message.FatalError("matching over typed types not supported")
+                  | PT.SyntaxElement.TType => MessageMacros.FatalError("matching over typed types not supported")
                   | PT.SyntaxElement.RawToken
                   | PT.SyntaxElement.TypeBuilder
                   | PT.SyntaxElement.MethodBuilder
                   | PT.SyntaxElement.EventBuilder
                   | PT.SyntaxElement.FieldBuilder
                   | PT.SyntaxElement.PropertyBuilder
-                  | PT.SyntaxElement.ParameterBuilder => Util.ice("strange syntax element appeared in quotation")
+                  | PT.SyntaxElement.ParameterBuilder => UtilMacros.ice("strange syntax element appeared in quotation")
                 };
 
               TypePattern (matched_value_type, Macros.patternize_quotation (lifted))
@@ -843,7 +845,7 @@ namespace Nemerle.Compiler
 
           | PT.PExpr.Spliced    => ReportError (messenger, "$ operator may appear only within <[ ... ]> quotation"); Pattern.Error ()
           | PT.PExpr.Ellipsis   => ReportError(messenger, ".. arguments list may appear only within <[ ... ]> quotation"); Pattern.Error()
-          | PT.PExpr.ToComplete => Util.ice("The completion tokens allowed only if Manager.IsCompletionInProgress is true.")
+          | PT.PExpr.ToComplete => UtilMacros.ice("The completion tokens allowed only if Manager.IsCompletionInProgress is true.")
           | PT.PExpr.TypeConversion =>
             match (typer.TypeExpr(pattern))
             {

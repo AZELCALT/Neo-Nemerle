@@ -15,6 +15,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using NemerleMacros;
 
 #pragma warning disable 10003
 

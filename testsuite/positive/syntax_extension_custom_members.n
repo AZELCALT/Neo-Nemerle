@@ -1,5 +1,6 @@
 // REFERENCE: macrolib.dll
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 public class AttrA : System.Attribute { }
 

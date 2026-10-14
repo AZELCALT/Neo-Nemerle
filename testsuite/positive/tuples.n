@@ -1,4 +1,5 @@
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 class A {
   public this () {}
@@ -19,7 +20,7 @@ class A {
     }
     def ListFoo(list){
       | pair::rest =>
-        Nemerle.IO.printf ("%s\n", pair.ToString ());
+        Nemerle.IOMacros.printf ("%s\n", pair.ToString ());
         PairFoo(pair) || ListFoo(rest);
       | [] => false;
     }
@@ -53,24 +54,24 @@ module M {
     def y = (2, "aa");
     def z = (1, "aa");
     def w = (2, "ab");
-    when (x.Equals (y)) Nemerle.IO.printf ("1\n");
-    when (x.Equals (z)) Nemerle.IO.printf ("2\n");
-    when (x.Equals (w)) Nemerle.IO.printf ("3\n");
-    when (y.Equals (z)) Nemerle.IO.printf ("4\n");
-    when (y.Equals (w)) Nemerle.IO.printf ("5\n");
-    when (z.Equals (w)) Nemerle.IO.printf ("6\n");
-    Nemerle.IO.printf ("%s %s %s %s\n", x.ToString (), y.ToString (), z.ToString (), w.ToString ());
+    when (x.Equals (y)) Nemerle.IOMacros.printf ("1\n");
+    when (x.Equals (z)) Nemerle.IOMacros.printf ("2\n");
+    when (x.Equals (w)) Nemerle.IOMacros.printf ("3\n");
+    when (y.Equals (z)) Nemerle.IOMacros.printf ("4\n");
+    when (y.Equals (w)) Nemerle.IOMacros.printf ("5\n");
+    when (z.Equals (w)) Nemerle.IOMacros.printf ("6\n");
+    Nemerle.IOMacros.printf ("%s %s %s %s\n", x.ToString (), y.ToString (), z.ToString (), w.ToString ());
     
     def a = A();
-    Nemerle.IO.printf ("%s\n", a.Y.ToString ());
+    Nemerle.IOMacros.printf ("%s\n", a.Y.ToString ());
     a.Y = (41, 41);
-    Nemerle.IO.printf ("%s\n", a.Y.ToString ());
+    Nemerle.IOMacros.printf ("%s\n", a.Y.ToString ());
 
     mutable x1 = 5;
     mutable x2 = "6";
-    Nemerle.IO.printf ("%d %s\n", x1, x2);
+    Nemerle.IOMacros.printf ("%d %s\n", x1, x2);
     (x1, x2) = (7, "3");
-    Nemerle.IO.printf ("%d %s\n", x1, x2);
+    Nemerle.IOMacros.printf ("%d %s\n", x1, x2);
     _ = 5;
 
     PairParameters.Run ();

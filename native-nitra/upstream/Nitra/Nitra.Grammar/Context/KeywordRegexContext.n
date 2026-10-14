@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 using G = NitraSyntaxParseTree;
+using NemerleMacros;
 
 namespace Nitra.Typing
 {

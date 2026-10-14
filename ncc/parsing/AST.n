@@ -34,6 +34,8 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using SCG = System.Collections.Generic;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler {
 
@@ -315,7 +317,7 @@ namespace Nemerle.Compiler {
           File + ": "
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (other : Location) : bool
       implements System.IEquatable[Location].Equals
     {
@@ -1202,7 +1204,7 @@ namespace Nemerle.Compiler {
             def tyname = NString.Split (ClrNames.TypeFullName (o.GetType ()), '+', '.');
             def tc = match (ManagerClass.Instance.NameTree.LookupExactType (tyname)) {
               | Some (tc) => tc
-              | None => Message.FatalError ($"type `$(tyname.ToString (\".\"))' is not available - it is either not public or not referenced properly");
+              | None => MessageMacros.FatalError ($"type `$(tyname.ToString (\".\"))' is not available - it is either not public or not referenced properly");
             }
             def t = tc.GetMemType ();
             def int_lit =
@@ -1214,7 +1216,7 @@ namespace Nemerle.Compiler {
             Enum (int_lit, tc, null)
 
           | _ =>
-            Util.ice ($ "cannot create literal from $o")
+            UtilMacros.ice ($ "cannot create literal from $o")
         }
     }
   }

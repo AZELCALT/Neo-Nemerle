@@ -32,7 +32,7 @@ namespace Nitra.Compiler
       {
         def newField = Util.tmpname("bitField");
         _fields.Add(newField);
-        _tb.Define(<[ decl: [RecordIgnore, Nemerle.Extensions.EqualsIgnore] private mutable $(newField : usesite) : int ]>);
+        _tb.Define(<[ decl: [RecordIgnore, Nemerle.ExtensionsMacros.EqualsIgnore] private mutable $(newField : usesite) : int ]>);
       }
       def index     = _bitsAllocated;
       def fieldName = _fields.Last();

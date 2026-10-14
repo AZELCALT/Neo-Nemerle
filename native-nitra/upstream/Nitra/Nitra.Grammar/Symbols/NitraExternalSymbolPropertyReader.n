@@ -5,6 +5,7 @@ using Nitra.Serialization;
 
 using Nemerle;
 using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
 using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Compiler;

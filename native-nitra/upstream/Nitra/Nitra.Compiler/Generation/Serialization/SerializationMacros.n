@@ -90,7 +90,7 @@ namespace Nitra.Serialization2
           else
             table.Add(type, compiler => UserDefinedTypeSerializationBuilder(compiler, type, writeFunc, readFunc))
 
-        | _ => Message.FatalError("Invalid macro arguments. Usage: DefineSerialization(TypeName, Write = writeCode, Read = readCode)");
+        | _ => MessageMacros.FatalError("Invalid macro arguments. Usage: DefineSerialization(TypeName, Write = writeCode, Read = readCode)");
       }
     }
 

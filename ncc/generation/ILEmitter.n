@@ -43,6 +43,7 @@ namespace Nemerle.Compiler
   using Nemerle.Logging;
 
   using NC = Nemerle.Compiler;
+using Nemerle.CompilerMacros;
 
   [assembly: LogFlag (EMIT, 0)]
   [assembly: DefineSurround("inScope", false, _ilg.BeginScope(), _ilg.EndScope())]
@@ -133,7 +134,7 @@ namespace Nemerle.Compiler
 
           // let GC take it
           _method_builder.GetHeader ().body = FunBody.ILed ();
-        | _ => Util.ice ($"method $_method_name is already ILed")
+        | _ => UtilMacros.ice ($"method $_method_name is already ILed")
       }
       
       foreach ((id, v) in _label_usage.KeyValuePairs)
@@ -163,7 +164,7 @@ namespace Nemerle.Compiler
       | _ => false
     }
 
-    [Nemerle.Memoize(Scope=Instance, Synchronized=true)]
+    [NemerleMacros.Memoize(Scope=Instance, Synchronized=true)]
     private DefineDebugDocument (fileIndex : int) : ISymbolDocumentWriter
     {
       if (fileIndex != 0) // not Location.Default
@@ -400,7 +401,7 @@ namespace Nemerle.Compiler
     store_local (decl : LocalValue) : void
     {
       if (decl.IsParm) {
-        Util.cassert (! decl.IsByRefParm);
+        UtilMacros.cassert (! decl.IsByRefParm);
         store_argument (decl.ParmIndex)
       } else
         // simply skip assignment here
@@ -445,7 +446,7 @@ namespace Nemerle.Compiler
         if (member is IMethod)
           match (t.Fix ()) {
             | FixedType.Fun (_, t) => t
-            | _ => Util.ice ()
+            | _ => UtilMacros.ice ()
           }
         else t
       }
@@ -506,8 +507,8 @@ namespace Nemerle.Compiler
     private emit (expr : TExpr) : void
     {
       log (EMIT, $"{ emit: $expr");
-      Util.cassert (expr != null);
-      Util.locate (expr.Location,
+      UtilMacros.cassert (expr != null);
+      UtilMacros.locate (expr.Location,
       match (expr)
       {
         /* -- SEQUENCING --------------------------------------------------- */
@@ -605,7 +606,7 @@ namespace Nemerle.Compiler
                     | ">=.s"   | ">=.f" => (OpCodes.Blt,    OpCodes.Bge)
                     | ">=.u"            => (OpCodes.Blt_Un, OpCodes.Bge_Un)
                     | "bool.!"          => (OpCodes.Brtrue, OpCodes.Brfalse)
-                    | _ => Util.ice ("invalid opcode '" + opcode +
+                    | _ => UtilMacros.ice ("invalid opcode '" + opcode +
                                      "' in optimized TExpr.If pattern")
                   };
 
@@ -916,7 +917,7 @@ namespace Nemerle.Compiler
             emit_ldind_for_value_type (cast_to_stype)
           }
           else
-            Util.ice($"$_method_name: failed to convert non-value type $type_of_expr to a value type $cast_to_type");
+            UtilMacros.ice($"$_method_name: failed to convert non-value type $type_of_expr to a value type $cast_to_type");
 
         /* -- REFERENCES --------------------------------------------------- */
 
@@ -1106,7 +1107,7 @@ namespace Nemerle.Compiler
           emit_method_call (expr, true, method);
 
         | Assign (This, val) =>
-          Util.cassert (_this_is_value_type,
+          UtilMacros.cassert (_this_is_value_type,
                         "we can assign to 'this' only in valuetypes");
           def vars = emit_exprs_prepare ([val]);
           _ilg.Emit (OpCodes.Ldarg_0);
@@ -1205,7 +1206,7 @@ namespace Nemerle.Compiler
         | Call (StaticRef (_t, mi is IMethod, tparms), method_parms, _) =>
           def method_info = GetMethodInfo (_t, mi, tparms);
         
-          Util.cassert (method_info.IsStatic,
+          UtilMacros.cassert (method_info.IsStatic,
                         $ "Call TExpr.GlobalRef to a non-static field: $(method_info.Name)");
 
           emit_parms (method_parms);
@@ -1241,7 +1242,7 @@ namespace Nemerle.Compiler
                   else
                     _ilg.Emit(OpCodes.Sub);
 
-                | _ => Util.ice(_method_name + ": incorrect args for TExpr.Opcode (" + opcode + ")")
+                | _ => UtilMacros.ice(_method_name + ": incorrect args for TExpr.Opcode (" + opcode + ")")
               }
               
             | "<<.s" | "<<.f"                
@@ -1299,7 +1300,7 @@ namespace Nemerle.Compiler
                   else
                     _ilg.Emit(OpCodes.Sub);
 
-                | _ => Util.ice (_method_name + ": incorrect args for TExpr.Opcode (" + opcode + ")")
+                | _ => UtilMacros.ice (_method_name + ": incorrect args for TExpr.Opcode (" + opcode + ")")
               }
               
             | "unary.~.f"                 =>
@@ -1307,7 +1308,7 @@ namespace Nemerle.Compiler
               when (ClrNames.TypeFullName (type_of_parm) == "System.Single" ||
                     ClrNames.TypeFullName (type_of_parm) == "System.Double" ||
                     ClrNames.TypeFullName (type_of_parm) == "System.Decimal")
-                Util.ice ("float, double or decimal as an argument for binary negation in CGIL");
+                UtilMacros.ice ("float, double or decimal as an argument for binary negation in CGIL");
               _ilg.Emit (OpCodes.Not);
 
             | "*.s"                       => _ilg.Emit (OpCodes.Mul_Ovf)
@@ -1333,7 +1334,7 @@ namespace Nemerle.Compiler
             | ">=.s"                      => _ilg.Emit(OpCodes.Clt);    InversBool();
             | ">=.f"                      => _ilg.Emit(OpCodes.Clt_Un); InversBool();
             | ">=.u"                      => _ilg.Emit(OpCodes.Clt_Un); InversBool();
-            | _                           => Util.ice (_method_name + ": unmatched TExpr.Opcode (" + opcode + ")")
+            | _                           => UtilMacros.ice (_method_name + ": unmatched TExpr.Opcode (" + opcode + ")")
           }
           
           when (expr.GenerateTail)
@@ -1476,7 +1477,7 @@ namespace Nemerle.Compiler
 
         /* loads the 'this' pointer on the evaluation stack */
         | This =>
-          Util.cassert (!_method_builder.IsStatic, "This is a static method");
+          UtilMacros.cassert (!_method_builder.IsStatic, "This is a static method");
           _ilg.Emit (OpCodes.Ldarg_0);
           
           // when we are in value type, this contains address of current
@@ -1488,7 +1489,7 @@ namespace Nemerle.Compiler
 
         /* loads a literal on the evaluation stack */
         | Literal (l) => 
-          Util.cassert (l != null);
+          UtilMacros.cassert (l != null);
           if (l is Literal.Null)
             match (expr.FixedType()) {
               | StaticTypeVarRef 
@@ -1526,7 +1527,7 @@ namespace Nemerle.Compiler
           def element_type =
             match (expr.Type.Fix ()) {
               | FixedType.Array (t, _) => t.GetSystemType ()
-              | _ => Util.ice ()
+              | _ => UtilMacros.ice ()
             }
           emit (size);
           _ilg.Emit (OpCodes.Newarr, element_type);
@@ -1582,7 +1583,7 @@ namespace Nemerle.Compiler
             match (expr.Type.Fix ())
             {
               | FixedType.Array (t, _) => t.GetSystemType ()
-              | _ => Util.ice ()
+              | _ => UtilMacros.ice ()
             };
 
           def size = dimensions.Length;
@@ -1609,7 +1610,7 @@ namespace Nemerle.Compiler
               dimensions_array [i] = it;
               ++i;
             }
-            Util.cassert (i == size,
+            UtilMacros.cassert (i == size,
                           "dimensions must be literals when initializes are supplied");
 
             def need_empty_stack = initializers.Exists (_.NeedsEmptyStack);
@@ -1881,17 +1882,17 @@ namespace Nemerle.Compiler
       }
 
       def cases = cases.Sort(compare_cases);
-      Util.cassert (cases.Head [0] == 0);
+      UtilMacros.cassert (cases.Head [0] == 0);
 
       // step three: generate the jump labels for the switch cases
       mutable reversed_labels = [];
 
       def make_labels (index : int, cases : list [int * TExpr]) : list [Label * TExpr] 
       {
-        Util.cassert (index >= 0);
+        UtilMacros.cassert (index >= 0);
         match (cases) {
           | (case_index, case_expr) :: rest =>
-            Util.cassert (index <= case_index);
+            UtilMacros.cassert (index <= case_index);
 
             // insert jumps to the default expression where appropriate
             if (case_index == index) {
@@ -2205,7 +2206,7 @@ namespace Nemerle.Compiler
             | "Single"                   => OpCodes.Stelem_R4
             | "Double"                   => OpCodes.Stelem_R8
             | "IntPtr" | "UIntPtr"       => OpCodes.Stelem_I
-            | _ => Util.ice ("System.Type IsPrimitive has lied")
+            | _ => UtilMacros.ice ("System.Type IsPrimitive has lied")
           }
           _ilg.Emit (opcode);
       }
@@ -2337,7 +2338,7 @@ namespace Nemerle.Compiler
               | "Single"            => OpCodes.Ldelem_R4
               | "Double"            => OpCodes.Ldelem_R8
               | "IntPtr" | "UIntPtr" => OpCodes.Ldelem_I
-              | _ => Util.ice ("System.Type.IsPrimitive has lied")
+              | _ => UtilMacros.ice ("System.Type.IsPrimitive has lied")
             }
           else
             OpCodes.Ldelem_Ref;
@@ -2369,7 +2370,7 @@ namespace Nemerle.Compiler
             | "Double"                => OpCodes.Ldind_R8
             | "IntPtr" | "UIntPtr"    => OpCodes.Ldind_I
             | _ =>
-              Util.ice (_method_name + ": not a recognized value type: " + ClrNames.TypeFullName (ty));
+              UtilMacros.ice (_method_name + ": not a recognized value type: " + ClrNames.TypeFullName (ty));
           }
 
         _ilg.Emit (opcode)

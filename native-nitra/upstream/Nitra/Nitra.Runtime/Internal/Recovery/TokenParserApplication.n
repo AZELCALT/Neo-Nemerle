@@ -1,5 +1,6 @@
 ﻿using Nemerle.Extensions;
 using Nitra.Runtime;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra.Internal.Recovery
 {

@@ -12,7 +12,7 @@ namespace Baulig
   {
     static Main () :  void
     {
-      mutable  _foo = Nemerle.Extensions.DefaultValue (M.Foo[int]); ()
+      mutable  _foo = Nemerle.ExtensionsMacros.DefaultValue (M.Foo[int]); ()
     }
   }
 }

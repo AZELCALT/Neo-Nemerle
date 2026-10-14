@@ -28,6 +28,7 @@
 
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Collections;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -74,7 +75,7 @@ namespace Nemerle.Compiler
         else
           assigns.FoldRight (effect_expr, fun (assign, acc) {
           def (name, value) = assign;
-          Util.locate (value.Location,
+          UtilMacros.locate (value.Location,
             TExpr.Sequence (effect_expr.Type,
               TExpr.Assign (TExpr.LocalRef (name.Type, name),
                             value),
@@ -210,7 +211,7 @@ namespace Nemerle.Compiler
             TExpr.Goto (id, 1)
         }
 
-      | _ => Util.locate (decision.Location, compile2 (decision))
+      | _ => UtilMacros.locate (decision.Location, compile2 (decision))
     }
 
 
@@ -253,7 +254,7 @@ namespace Nemerle.Compiler
 
                         typer3.EmitStaticLocalFunction(hd);
 
-                      | FunctionUsage.NotUsed          => Util.ice()
+                      | FunctionUsage.NotUsed          => UtilMacros.ice()
                       | FunctionUsage.Used
                       | FunctionUsage.UsedAsFirstClass => ()
                     }
@@ -386,7 +387,7 @@ namespace Nemerle.Compiler
                             def true_expr  = compile(decision.if_true);
                             compile_variant(var, path_expr, true_expr, default, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
 
-                          | _ => Util.ice($"unexpected decision tree node `$decision'")
+                          | _ => UtilMacros.ice($"unexpected decision tree node `$decision'")
                         }
                       }
                   ) // compile_switch
@@ -442,7 +443,7 @@ namespace Nemerle.Compiler
                             def true_expr  = compile(decision.if_true);
                             compile_literal(lit, switchExpr, true_expr, default, get_debug_loc(decision.if_true), get_debug_loc(decision.if_false))
 
-                          | _ => Util.ice($"unexpected decision tree node `$decision'")
+                          | _ => UtilMacros.ice($"unexpected decision tree node `$decision'")
                         }
                       }
                   ) // compile_switch
@@ -545,7 +546,7 @@ namespace Nemerle.Compiler
           match(cases)
           {
             | [] =>
-              Util.ice("got empty list of switch cases");
+              UtilMacros.ice("got empty list of switch cases");
 
             | lst when lst.Length < minSwitchSize =>
               // don't create switch when too few cases
@@ -680,7 +681,7 @@ namespace Nemerle.Compiler
         {
           def len = f.DeclaringType.TyparmsCount;
           mutable pos = int ();
-          Nemerle.IO.sscanf (f.Name, "Field%i", pos);
+          Nemerle.IOMacros.sscanf (f.Name, "Field%i", pos);
           TExpr.TupleIndexer (path.Type, val, pos, len)
         }
         else build_record_field_ref (path.Type, val, f)
@@ -795,7 +796,7 @@ namespace Nemerle.Compiler
             TExpr.MethodRef (FixedType.ConstructFunctionType ([], ty), val, meth, [], false);
           TExpr.Call (ty, methref, [], false)
 
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 
@@ -862,7 +863,7 @@ namespace Nemerle.Compiler
           Some ((ty, constant_object_field))
 
         | _ =>
-          Util.ice ("get_constant_object: expected zero or exactly one _N_constant_object fields")
+          UtilMacros.ice ("get_constant_object: expected zero or exactly one _N_constant_object fields")
       }
     }
 

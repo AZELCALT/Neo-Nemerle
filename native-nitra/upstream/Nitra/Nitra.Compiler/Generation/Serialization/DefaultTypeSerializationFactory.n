@@ -8,6 +8,7 @@ using Nemerle.Utility;
 
 using System;
 using System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nitra.Serialization
 {
@@ -58,7 +59,7 @@ namespace Nitra.Serialization
           else
             parseDeclaration(ti)
 
-        | _ => Message.FatalError(type.Location, $"Type '$type' is not suppported in serialization compiler.")
+        | _ => MessageMacros.FatalError(type.Location, $"Type '$type' is not suppported in serialization compiler.")
       }
     }
 

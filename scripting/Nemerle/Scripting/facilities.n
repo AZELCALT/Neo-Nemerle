@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using Nemerle.Scripting.contracts;
 using Nemerle.Scripting.dependencies;
+using NemerleMacros;
 
 public sealed class ScriptSourceFragment
 {

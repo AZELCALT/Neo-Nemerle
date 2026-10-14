@@ -13,7 +13,7 @@ class Foo
 
     {
 
-    mutable temp_2_return_ = Nemerle.Extensions.DefaultValue(int);
+    mutable temp_2_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
 
     mutable temp_1_break_loop_ = false;
 

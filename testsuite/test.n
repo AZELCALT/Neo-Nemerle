@@ -45,6 +45,7 @@
   using Nemerle.Text;
   using Nemerle.IO;
   using Nemerle.Compiler;
+  using Nemerle.IOMacros;
 
   public class End_test : System.Exception
   {

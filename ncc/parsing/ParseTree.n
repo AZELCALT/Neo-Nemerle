@@ -33,6 +33,8 @@ using Nemerle.Utility;
 using System.Diagnostics;
 
 using T = Nemerle.Compiler.Typedtree;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler.Parsetree
 {
@@ -463,13 +465,13 @@ namespace Nemerle.Compiler.Parsetree
           {
             match (parameters)
             {
-              | [parm]     => Util.locate(parm.Location + returnType.Location,
+              | [parm]     => UtilMacros.locate(parm.Location + returnType.Location,
                                 <[ $(parm.Type) -> $returnType ]>)
 
               | [] | null  => returnType
 
               | first :: _ => def input_parms = parameters.Map(_.Type);
-                              Util.locate(first.Location + returnType.Location,
+                              UtilMacros.locate(first.Location + returnType.Location,
                                 <[ @*(..$input_parms) -> $returnType ]>)
             }
           }
@@ -481,11 +483,11 @@ namespace Nemerle.Compiler.Parsetree
           {
             match (parsedParameters)
             {
-              | [parm]     => Util.locate(parm.Location + parsedReturnType.Location,
+              | [parm]     => UtilMacros.locate(parm.Location + parsedReturnType.Location,
                                 <[ $(parm.Type) -> $parsedReturnType ]>)
               | []         => parsedReturnType
               | first :: _ => def input_parms = parsedParameters.Map(_.Type);
-                              Util.locate(first.Location + parsedReturnType.Location,
+                              UtilMacros.locate(first.Location + parsedReturnType.Location,
                                 <[ @*(..$input_parms) -> $parsedReturnType ]>)
             }
           }
@@ -890,7 +892,7 @@ namespace Nemerle.Compiler.Parsetree
       unchecked (idl.GetHashCode () * (color + 1))
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (other : Name) : bool
       implements System.IEquatable[Name].Equals
     {
@@ -1136,7 +1138,7 @@ namespace Nemerle.Compiler.Parsetree
       }
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (other : Splicable) : bool
       implements System.IEquatable[Splicable].Equals
     {

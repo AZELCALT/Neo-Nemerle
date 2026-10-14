@@ -33,6 +33,7 @@ using Nemerle.Imperative;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Assertions;
 using Nemerle.Utility;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler
 {

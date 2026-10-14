@@ -78,7 +78,7 @@ namespace Nemerle.Compiler
         | ExpressionList  => ExpressionList (other, other.Target)
         | RawToken        => RawToken (other, other.Target)         
         | Optional (body) => Optional (other, other.Target, body)
-        | Branch | End    => Util.ice ("tree like elements are not allowed to be cloned")
+        | Branch | End    => UtilMacros.ice ("tree like elements are not allowed to be cloned")
       }
     }
 
@@ -90,7 +90,7 @@ namespace Nemerle.Compiler
       }
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (other : GrammarElement) : bool
       implements System.IEquatable[GrammarElement].Equals
     {
@@ -192,7 +192,7 @@ namespace Nemerle.Compiler
             if (s2 != null) s2.AddBranch (end)
             else end
 
-          | _ => Util.ice ("no macro")
+          | _ => UtilMacros.ice ("no macro")
         }
       else if (s2 == null) {
         def end = MergeSyntax (s1.Next, null, ext);
@@ -263,7 +263,7 @@ namespace Nemerle.Compiler
                       when (el.Target %&& target)
                         eat_definition (definition)
                     
-                  | _ => Message.FatalError (tok.Location, $"unable to parse syntax rule, stopped at: $end")
+                  | _ => MessageMacros.FatalError (tok.Location, $"unable to parse syntax rule, stopped at: $end")
                 }
 
                 extensions ()
@@ -365,7 +365,7 @@ namespace Nemerle.Compiler
         assert(x != null);
 
         unless (x.Target %&& target)
-          Message.FatalError (last_tok.Location, "parse error, none of syntax definitions"
+          MessageMacros.FatalError (last_tok.Location, "parse error, none of syntax definitions"
                               " matches input");
         
         def next = x.Next;
@@ -444,7 +444,7 @@ namespace Nemerle.Compiler
             def expr = parse_expr (stop);
             loop (SyntaxElement.Expression (expr) :: acc, next)
 
-          | GrammarElement.ExpressionList => Util.ice ("expr list?")
+          | GrammarElement.ExpressionList => UtilMacros.ice ("expr list?")
 
           | GrammarElement.Parameter =>
             def p = parse_parameter ();
@@ -471,7 +471,7 @@ namespace Nemerle.Compiler
             def check (_) {
               | [] => 
                 if (end == null) {
-                  Message.FatalError (last_tok.Location, "parse error, none of syntax definitions"
+                  MessageMacros.FatalError (last_tok.Location, "parse error, none of syntax definitions"
                                        " matches input: " + opts.ToString ())
                 }
                 else (end, NList.Rev (acc))

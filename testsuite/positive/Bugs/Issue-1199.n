@@ -2,6 +2,7 @@ using System;
 using System.Console;
 using Nemerle;
 using Nemerle.Utility;
+using NemerleMacros;
 
 module Program {
 

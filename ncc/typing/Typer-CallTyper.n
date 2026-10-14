@@ -37,6 +37,8 @@ using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
 
 using PT = Nemerle.Compiler.Parsetree;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler
 {
@@ -280,7 +282,7 @@ namespace Nemerle.Compiler
 
           | ((fparm : TParameter) :: fparms, ftype :: ftypes, (aparm : Parm) :: aparms) =>
             log (TYPING, $"loop with header: $ftype $(aparm.expr.Type)");
-            Util.locate (aparm.expr?.Location,//)
+            UtilMacros.locate (aparm.expr?.Location,//)
             {
               if (fparm.kind == aparm.kind) 
               {
@@ -311,7 +313,7 @@ namespace Nemerle.Compiler
 
           | x =>
             unless (Manager.IsCompletionInProgress)
-              Util.ice(x.ToString())
+              UtilMacros.ice(x.ToString())
         }
 
         loop (header.Parameters, formals_types, call_parms)
@@ -478,7 +480,7 @@ namespace Nemerle.Compiler
       /** [formal_types[n]] is type used for parameter [perm[n]]. */
       public GetPermutationArray () : array [int]
       {
-        Util.cassert (reordered_parms != null);
+        UtilMacros.cassert (reordered_parms != null);
         def perm = array (reordered_parms.Length);
 
         if (reordered_parms : object == orig_parms) {
@@ -639,7 +641,7 @@ namespace Nemerle.Compiler
               def expr = fp.DefaultValueAsTExpr(solver);
               reorder_parms (rest_of_names, Parm(expr, true) :: acc)
             } else
-              Util.ice ("reorder_named_parms: reorder")
+              UtilMacros.ice ("reorder_named_parms: reorder")
 
           | ([], _) =>
             NList.Rev (acc)

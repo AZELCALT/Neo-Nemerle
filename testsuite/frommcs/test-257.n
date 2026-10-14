@@ -1,7 +1,7 @@
 class X {
         static Main () :  void
         {
-                mutable  a = Nemerle.Extensions.DefaultValue (int) :int;
+                mutable  a = Nemerle.ExtensionsMacros.DefaultValue (int) :int;
 
                 call (out a);
                 assert(a == 1);

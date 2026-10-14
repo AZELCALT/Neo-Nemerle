@@ -2,6 +2,7 @@
 // We do not actually check VB, see comment below
 
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 enum Foo {
   | A = -7

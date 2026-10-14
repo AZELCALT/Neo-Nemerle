@@ -7,7 +7,7 @@ class X {
   //
   static Main () :  int
   {
-    mutable  a = Nemerle.Extensions.DefaultValue (int) :int;
+    mutable  a = Nemerle.ExtensionsMacros.DefaultValue (int) :int;
 
     mutable  _b = fun() {
       a = 2;

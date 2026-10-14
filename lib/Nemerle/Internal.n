@@ -30,6 +30,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 using System.AttributeTargets;
 using System;
+using Nemerle.UtilityMacros;
 
 // ---- internal.n (Nemerle.Internal) ----
 public class NemerleAttribute : System.Attribute { }

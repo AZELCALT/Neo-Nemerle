@@ -39,6 +39,8 @@ using System.Diagnostics;
 using NCL = Nemerle.Collections.NList;
 using SCG = System.Collections.Generic;
 using System.IO;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 // ---- AssemblyInfo.n ----
 [assembly: AssemblyTitle("Nemerle Library")]
@@ -119,8 +121,8 @@ public type char = System.Char;
     from head element and tail.
  */
 [System.Serializable]
-[Nemerle.MarkOptions (System.Serializable)]
-[Nemerle.MarkOptions (DebuggerNonUserCode)]
+[NemerleMacros.MarkOptions (System.Serializable)]
+[NemerleMacros.MarkOptions (DebuggerNonUserCode)]
 [System.Runtime.InteropServices.ComVisible(false)]
 [DebuggerDisplay("Length = {Length}: {ToString()}"), DebuggerNonUserCode]
 public variant list[T] :
@@ -134,7 +136,7 @@ public variant list[T] :
       [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
       hd : T;
       [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-      [Nemerle.Extensions.CompilerMutable]
+      [Nemerle.ExtensionsMacros.CompilerMutable]
       tl : list [T];
 
       // For debugging purpose.
@@ -172,7 +174,7 @@ public variant list[T] :
       !x.Equals(y)
   }
 
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (other : list [T]) : bool
     implements System.IEquatable[list[T]].Equals
   {
@@ -783,8 +785,8 @@ public variant list[T] :
  */
 [DebuggerNonUserCode]
 [System.Serializable]
-[Nemerle.MarkOptions (System.Serializable)]    
-[Nemerle.MarkOptions (DebuggerNonUserCode)]    
+[NemerleMacros.MarkOptions (System.Serializable)]    
+[NemerleMacros.MarkOptions (DebuggerNonUserCode)]    
 public variant option[T] : System.IEquatable[option[T]]
 {
   | None
@@ -805,7 +807,7 @@ public variant option[T] : System.IEquatable[option[T]]
   /**
    * Typesafe equality checks.
    */
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (o : option [T]) : bool
     implements System.IEquatable[option[T]].Equals
   {
@@ -1030,7 +1032,7 @@ public interface ICloneable ['a]
 
 // ---- LazyValue.n (Nemerle) ----
 /// class representing a lazy value (delayed computation of some function)
-/// it is constructed using Nemerle.lazy(complex_code()) macro
+/// it is constructed using NemerleMacros.lazy(complex_code()) macro
 public class LazyValue ['a] 
 {
   /// memoized value

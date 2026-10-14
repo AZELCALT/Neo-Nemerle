@@ -4,6 +4,7 @@ using Nemerle.IO;
 
 #if NUNIT
 using NUnit.Framework;
+using Nemerle.IOMacros;
 
 [TestFixture]
 public class LinkedList_UnitTest : Assertion {

@@ -30,6 +30,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 using Nemerle.IO;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -104,7 +105,7 @@ namespace Nemerle.Compiler
                     def expanded =
                       try {
                         ctx.Manager.MacroColors.PushNewColor (name.color, name.GetEnv (ctx.Env));
-                        Util.locate (expr.Location, x.Run (ctx, x.CallTransform (args)));
+                        UtilMacros.locate (expr.Location, x.Run (ctx, x.CallTransform (args)));
                       } finally {
                         ctx.Manager.MacroColors.PopColor ();
                       }
@@ -122,13 +123,13 @@ namespace Nemerle.Compiler
                   try
                   {
                     ctx.Manager.MacroColors.PushNewColor(name.color, name.GetEnv(ctx.Env));
-                    Util.locate (expr.Location, m.Run(ctx, parms));
+                    UtilMacros.locate (expr.Location, m.Run(ctx, parms));
                   }
                   finally { ctx.Manager.MacroColors.PopColor(); };
 
                 (expanded, Some ((m, expr)))
 
-              | _ => Util.ice ("failed to resolve macro name `" + namespc.GetDisplayName () + "'")
+              | _ => UtilMacros.ice ("failed to resolve macro name `" + namespc.GetDisplayName () + "'")
             }
 
           | _ => (expr, None ())
@@ -194,7 +195,7 @@ namespace Nemerle.Compiler
                 None ()
               
             | _ =>
-              Util.ice ("failed to resolve macro name `" + ns.GetDisplayName () + "'")
+              UtilMacros.ice ("failed to resolve macro name `" + ns.GetDisplayName () + "'")
           }
             
         | _ => None ()

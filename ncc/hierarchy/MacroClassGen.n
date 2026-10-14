@@ -32,6 +32,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using System.Text;
+using NemerleMacros;
  
 namespace Nemerle.Compiler
 {
@@ -80,7 +81,7 @@ namespace Nemerle.Compiler
         match (header.SplicableName)
         {
           | Splicable.Name (n) => n.Id
-          | _ => Message.FatalError(loc, "spliced name in macro name is not allowed")
+          | _ => MessageMacros.FatalError(loc, "spliced name in macro name is not allowed")
         };
       def synt   = decl.synt;
       def expr   = decl.expr;
@@ -104,7 +105,7 @@ namespace Nemerle.Compiler
                   when ty.FullName == "Nemerle.MacroPhase" || ty.FullName == "Nemerle.Core.MacroPhase" =>
                   x :> MacroPhase
                 | folded =>
-                  Message.FatalError ($"invalid value on MacroPhase position: $ph (folded to $folded"
+                  MessageMacros.FatalError ($"invalid value on MacroPhase position: $ph (folded to $folded"
                     + (match (folded) { | PExpr.Literal(Literal.Enum(_, ty, _)) => $", enum type $(ty.FullName)" | _ => "" }) + ")")
               };
               
@@ -115,7 +116,7 @@ namespace Nemerle.Compiler
                   when ty.FullName == "System.AttributeTargets" =>
                   x :> MacroTargets
                 | _ =>
-                  Message.FatalError ("invalid value on MacroTargets position: " + tar.ToString ())
+                  MessageMacros.FatalError ("invalid value on MacroTargets position: " + tar.ToString ())
               };
 
           | <[ TailRecursionTransparent (true) ]>
@@ -314,8 +315,8 @@ namespace Nemerle.Compiler
               (<[ SyntaxElement.Expression (PExpr.Literal (Literal.Bool ($(va : name)))) ]>,
                "bool" :: types, MacroParm.Expr)
 
-            | <[ $(n : name) ]> => Message.FatalError(loc, $"type $(n.Id) not supported for macro parameter")
-            | _ => Message.FatalError(loc, $"complex types are not supported for macro parameters: $t")
+            | <[ $(n : name) ]> => MessageMacros.FatalError(loc, $"type $(n.Id) not supported for macro parameter")
+            | _ => MessageMacros.FatalError(loc, $"complex types are not supported for macro parameters: $t")
           }
         }
 
@@ -344,7 +345,7 @@ namespace Nemerle.Compiler
             // runtime variable containing parameters of macro
             def len = parms.Length;
             def types = parms.ToString (", ");
-            Message.FatalError ("macro `" + $(name : string) +
+            MessageMacros.FatalError ("macro `" + $(name : string) +
                                  "' expects following list of arguments: (" + 
                                  $(plist : string) + ") got some " +
                                  len.ToString () + " parameters [" + types + "]")
@@ -407,7 +408,7 @@ namespace Nemerle.Compiler
                 (pats, exps, NList.Rev(MacroParm.Exprs :: accmp))
 
               | _ =>
-                Message.FatalError(loc, "only array of expr or parm are supported in params")
+                MessageMacros.FatalError(loc, "only array of expr or parm are supported in params")
             }
 
           | PParameter where (name = Splicable.Name(va), Type = t, DefaultValue = Some(e)) :: xs =>
@@ -439,11 +440,11 @@ namespace Nemerle.Compiler
                 def (p, str, macroparm) = normal_parm(t, va);
                 analyze_params(xs, p :: acc, accs, macroparm :: accmp, defaults, str)
               | _ =>
-                Message.FatalError(loc, "parameters with default values must not be mixed with normal")
+                MessageMacros.FatalError(loc, "parameters with default values must not be mixed with normal")
             }
 
-          | PParameter where(name = Splicable.Expression) :: _ => Util.ice("wrong spliced in macro parameters")
-          | PParameter where(name = Splicable.HalfId)     :: _ => Util.ice("completion not supported here")
+          | PParameter where(name = Splicable.Expression) :: _ => UtilMacros.ice("wrong spliced in macro parameters")
+          | PParameter where(name = Splicable.HalfId)     :: _ => UtilMacros.ice("completion not supported here")
         }    
       }; // end analize_parms
 
@@ -455,7 +456,7 @@ namespace Nemerle.Compiler
           | ([], []) => acc
           | (x :: xs, y :: ys) => 
             consolide_cases(xs, ys, <[ case: $x => $y ]> :: acc)
-          | _ => Util.ice()
+          | _ => UtilMacros.ice()
         }
       };
 
@@ -467,11 +468,11 @@ namespace Nemerle.Compiler
           | [] => map
           | PParameter where (name = Splicable.Name(Name where(idl = x)), Type = t) :: xs => 
             when (map.Contains(x)) 
-              Message.FatalError(loc, "parameter names cannot repeat");
+              MessageMacros.FatalError(loc, "parameter names cannot repeat");
             mapparams(xs, n + 1, map.Add(x, (n, t)))
 
-          | PParameter where(name = Splicable.Expression) :: _ => Util.ice("wrong Splicable in macro params")
-          | PParameter where(name = Splicable.HalfId)     :: _ => Util.ice("completion not supported here")
+          | PParameter where(name = Splicable.Expression) :: _ => UtilMacros.ice("wrong Splicable in macro params")
+          | PParameter where(name = Splicable.HalfId)     :: _ => UtilMacros.ice("completion not supported here")
         }
       }
 
@@ -486,7 +487,7 @@ namespace Nemerle.Compiler
               if      (phase == MacroPhase.BeforeInheritance)  ":postscan"
               else if (phase == MacroPhase.BeforeTypedMembers) ":preadd"
               else if (phase == MacroPhase.WithTypedMembers)   ":postadd"
-              else Message.FatalError(loc, "macro operating on type declaration parts must have phase modifier");
+              else MessageMacros.FatalError(loc, "macro operating on type declaration parts must have phase modifier");
 
             def use_suff = 
               match (target)
@@ -513,7 +514,7 @@ namespace Nemerle.Compiler
             name + target_type_suff + phase_suf
           }
           else
-            Message.FatalError(loc, "macro with phase modifier must operate on type declaration parts")
+            MessageMacros.FatalError(loc, "macro with phase modifier must operate on type declaration parts")
         else
           name;
 
@@ -599,7 +600,7 @@ namespace Nemerle.Compiler
       def file = decl.Location.File;
           
       // build macro class
-      Util.locate (expr.Location, 
+      UtilMacros.locate (expr.Location, 
       {
         attrs.custom_attrs ::= <[ Nemerle.Internal.MacroInfo($(name : string), $(syntactical : bool), 
           array[..$paramNames], array[..$paramTypes], array[..$paramDefaultValues], array[..$isParamArrays], 
@@ -611,7 +612,7 @@ namespace Nemerle.Compiler
         def (keys, rules, positions) = analyze_syntax (synt, paramsmap);
                       
         def macro_class_name = header.PName.NewName(convert_to_valid_type_name (retname) + "Macro");
-        def macroDeclaration = Util.locate(loc, <[ decl:
+        def macroDeclaration = UtilMacros.locate(loc, <[ decl:
             ..$attrs class $(macro_class_name : name) : IMacro
             {
             }]>);
@@ -688,7 +689,7 @@ namespace Nemerle.Compiler
             --count;
             create_transform_tree (xs)
 
-          | _ => Util.ice ("corrupted macro parameters")
+          | _ => UtilMacros.ice ("corrupted macro parameters")
         };
 
         td.Define (<[ decl:
@@ -770,7 +771,7 @@ namespace Nemerle.Compiler
           | GrammarElement.Parameter => <[ GrammarElement.Parameter ($next) ]>
           | GrammarElement.Optional (g) => <[ GrammarElement.Optional ($next, $(lift_ge (g))) ]>
           | GrammarElement.Branch (li) => <[ GrammarElement.Branch ($next, $(Macros.Lift (li, lift_ge))) ]>
-          | GrammarElement.End => Util.ice ("invalid node")
+          | GrammarElement.End => UtilMacros.ice ("invalid node")
         }
       }
     };
@@ -798,7 +799,7 @@ namespace Nemerle.Compiler
             def inside = NList.FoldRight (els, null, analyze_one);
             match (inside)
              {
-              | GrammarElement.Optional => Message.FatalError (tok.Location, "nested Optional tokens not allowed in syntax definition")
+              | GrammarElement.Optional => MessageMacros.FatalError (tok.Location, "nested Optional tokens not allowed in syntax definition")
               | tok => GrammarElement.Optional (acc, tok)
             }
 
@@ -819,10 +820,10 @@ namespace Nemerle.Compiler
                 grammar_token
                 
               | None =>
-                Message.FatalError (tok.Location, "parameters from syntax description doesn't"
+                MessageMacros.FatalError (tok.Location, "parameters from syntax description doesn't"
                                      " match macro's")
             }
-          | _ => Message.FatalError (tok.Location, "unsupported syntax token")
+          | _ => MessageMacros.FatalError (tok.Location, "unsupported syntax token")
         }
       };
       def rule = NList.FoldRight (toks, null, analyze_one);
@@ -856,7 +857,7 @@ namespace Nemerle.Compiler
                    | x :: xs => 
                      pararr[i] = x;
                      li = xs;
-                   | _ => Util.ice ("not enough elements")
+                   | _ => UtilMacros.ice ("not enough elements")
                  }
                }
              ]>
@@ -867,7 +868,7 @@ namespace Nemerle.Compiler
                  pararr[$(p : int)] = x;
                  li = xs;
                   
-               | _ => Util.ice ("not enough elements")
+               | _ => UtilMacros.ice ("not enough elements")
              }
            ]>
           ) :: exprs;

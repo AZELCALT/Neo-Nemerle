@@ -43,6 +43,7 @@ using SSP = System.Security.Permissions;
 #endif
 using SCG = System.Collections.Generic;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -75,7 +76,7 @@ namespace Nemerle.Compiler
         match (l) {
           | [x] => [x + suff]
           | x :: xs => x :: add_end (xs, suff)
-          | _ => Util.ice ("empty")
+          | _ => UtilMacros.ice ("empty")
         }
       }
 
@@ -104,20 +105,20 @@ namespace Nemerle.Compiler
                         if (is_attribute (t))
                           Some ((t, parms))
                         else if (expect_exact == null)
-                               Message.FatalError ($"`$(t.FullName)' is not an attribute class");
+                               MessageMacros.FatalError ($"`$(t.FullName)' is not an attribute class");
                              else None ()
 
                     | (Some (t1), Some (t2)) =>
                         if (is_attribute (t1))
                           if (is_attribute (t2))
-                            Message.FatalError ($"ambiguous attribute type name,"
+                            MessageMacros.FatalError ($"ambiguous attribute type name,"
                                                  " it could be `$(t1)' or `$(t2)'");
                           else
                             Some ((t1, parms))
                         else
                           if (is_attribute (t2)) Some ((t2, parms))
                           else if (expect_exact == null)
-                                 Message.FatalError ($"neither `$(t1)' nor `$(t2)' is an attribute class");
+                                 MessageMacros.FatalError ($"neither `$(t1)' nor `$(t2)' is an attribute class");
                                else None ()
 
                     | _ => None ()
@@ -131,12 +132,12 @@ namespace Nemerle.Compiler
 
     internal CheckAttribute (env : GlobalEnv, expr : PT.PExpr) : TypeInfo * list [PT.PExpr]
     {
-      Util.locate (expr.Location,
+      UtilMacros.locate (expr.Location,
                    match (ResolveAttribute(env, expr))
                    {
                      | Some ((t, parms)) => (t, parms.Map(parm => ConstantFolder.FoldConstants(env, parm)))
                      | None =>
-                         Message.FatalError ($"the custom attribute `$(PrettyPrint.SprintExpr(None(), expr))' could not be found or is invalid")
+                         MessageMacros.FatalError ($"the custom attribute `$(PrettyPrint.SprintExpr(None(), expr))' could not be found or is invalid")
                    })
     }
 
@@ -178,7 +179,7 @@ namespace Nemerle.Compiler
                 def perm_set = SS.PermissionSet (SSP.PermissionState.None);
                 _ = perm_set.AddPermission (sa.CreatePermission ());
                 result ::= (sa.Action, perm_set)
-            | _ => Message.FatalError (attr.Location, "given attribute must be a System.Security.Permissions.SecurityAttribute")
+            | _ => MessageMacros.FatalError (attr.Location, "given attribute must be a System.Security.Permissions.SecurityAttribute")
           }
         }
       }
@@ -372,7 +373,7 @@ namespace Nemerle.Compiler
         match(mb.GetModifiers().FindAttribute(InternalType.Conditional_tc, mb.GlobalEnv))
         {
           | Some(expr) => expr.Location
-          | _ => Util.ice($"Conditional attribute not found in `$mb'")
+          | _ => UtilMacros.ice($"Conditional attribute not found in `$mb'")
         }
       }
 
@@ -436,7 +437,7 @@ namespace Nemerle.Compiler
           unless (found) current = current.BaseType;
         }
         when (found && !Nemerle.Platform.ClrAssemblySession.LegacySecurityAvailable)
-          Message.FatalError("Declarative security attributes are not supported by the CoreCLR backend");
+          MessageMacros.FatalError("Declarative security attributes are not supported by the CoreCLR backend");
         found
       }
       else false
@@ -455,7 +456,7 @@ namespace Nemerle.Compiler
           | FixedType.Void => 
             (fixedType.GetSystemType(), InternalType.Type)
           | _ => 
-            Message.FatalError(loc, "invalid type in attribute parameter")
+            MessageMacros.FatalError(loc, "invalid type in attribute parameter")
         }
       }
 
@@ -469,14 +470,14 @@ namespace Nemerle.Compiler
       {
         | TExpr.Error => throw Recovery() // the typer already report error
         | TExpr.DebugInfo(subExpr, _) => convert(subExpr)
-        | TExpr.Literal(Literal.Decimal) => Message.FatalError(tExpr.Location, "An attribute argument cannot be number of type decimal");
+        | TExpr.Literal(Literal.Decimal) => MessageMacros.FatalError(tExpr.Location, "An attribute argument cannot be number of type decimal");
         | TExpr.Literal(lit) => (lit.AsObject(InternalType), lit.GetInternalType(InternalType))
         | TExpr.TypeConversion(subExpr, t, ConversionKind.UpCast, _) when subExpr.Type.TryRequire(t) => convert(subExpr)
         | TExpr.TypeConversion(TExpr.Literal(lit) as e, t, ConversionKind.UpCast, _) => 
             match (ConstantFolder.ConvertLiteral(lit, t.Fix()))
             {
               | Some(convertedLit) => convert(TExpr.Literal(e.Location, t, convertedLit))
-              | _ => Message.FatalError(tExpr.Location, $"Type conversion from $(e.Type) to $t in attribute a argument is unsupported.");
+              | _ => MessageMacros.FatalError(tExpr.Location, $"Type conversion from $(e.Type) to $t in attribute a argument is unsupported.");
             }
 
         | TExpr.TypeOf(type) => compile_type(tExpr.Location, type.Fix())
@@ -485,8 +486,8 @@ namespace Nemerle.Compiler
             def elemType     = tExpr.Type.Fix();
             (objects : object, elemType)
 
-        | TExpr.Array => Message.FatalError(tExpr.Location, "only single-dimensional arrays allowed in attributes")
-        | _ => Message.FatalError(tExpr.Location, $"only constant expressions allowed in attributes: $expr ($(tExpr.Type))")
+        | TExpr.Array => MessageMacros.FatalError(tExpr.Location, "only single-dimensional arrays allowed in attributes")
+        | _ => MessageMacros.FatalError(tExpr.Location, $"only constant expressions allowed in attributes: $expr ($(tExpr.Type))")
       }
 
       convert(tExpr)
@@ -511,7 +512,7 @@ namespace Nemerle.Compiler
               def name = n.Id;
               def expr = ConstantFolder.FoldConstants(env, expr);
               def (obj, ty) = compile_expr(env, expr, typer);
-              def problem() { Message.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
+              def problem() { MessageMacros.FatalError($"the type $(attr.FullName) has no field nor property named `$name'") };
               def (is_prop, mem) =
                                     match (attr.LookupMember(name))
                                     {
@@ -545,7 +546,7 @@ namespace Nemerle.Compiler
                   fields ::= obj;
                 }
               else
-                Message.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
+                MessageMacros.FatalError ($"the member `$name' has type $(mem.GetMemType()) while the value assigned has type $ty")
 
           | _ =>
               def (obj, ty) = compile_expr(env, parm, typer);
@@ -576,7 +577,7 @@ namespace Nemerle.Compiler
 
                          match(typer.ResolveOverload(overloads, parms, Manager.InternalType.Void, false, LocationStack.Top()))
                          {
-                           | [] => Message.FatalError($"none of the constructors of `$(attr.FullName)'matches positional argument types $(ctor_parm_types.Rev())");
+                           | [] => MessageMacros.FatalError($"none of the constructors of `$(attr.FullName)'matches positional argument types $(ctor_parm_types.Rev())");
                            | [one] => one.Member :> IMethod
                            | lst =>
                                Message.Error( $"ambiguity between custom attribute constructors $lst");
@@ -649,9 +650,9 @@ namespace Nemerle.Compiler
       }
       catch {
         | _ is DirectoryNotFoundException =>
-          Message.FatalError (loc, "could not find directory of `" + name + "' with key pair for assembly")
+          MessageMacros.FatalError (loc, "could not find directory of `" + name + "' with key pair for assembly")
         | _ is FileNotFoundException =>
-          Message.FatalError (loc, "could not find file `" + name + "' with key pair for assembly")
+          MessageMacros.FatalError (loc, "could not find file `" + name + "' with key pair for assembly")
       }
     }
 
@@ -694,7 +695,7 @@ namespace Nemerle.Compiler
         def take_string (pars) {
           | [ <[ $(x : string) ]> ] => x
           | _ =>
-              Message.FatalError (attr.Location, "given attribute must have single string as parameter")
+              MessageMacros.FatalError (attr.Location, "given attribute must have single string as parameter")
         }
 
         def addAttributeForType(type)
@@ -819,7 +820,7 @@ namespace Nemerle.Compiler
         def take_string (pars) {
           | [ <[ $(x : string) ]> ] => x
           | _ =>
-              Message.FatalError (attr.Location, "given attribute must have single string as parameter")
+              MessageMacros.FatalError (attr.Location, "given attribute must have single string as parameter")
         }
         if (tc.Equals (InternalType.AssemblyVersionAttribute_tc))
         {         
@@ -908,7 +909,7 @@ namespace Nemerle.Compiler
                             match (MacroRegistry.lookup_macro (ti.GlobalEnv, expr, suff))
                             {
                               | Some ((_, m, parms)) => (m, parms)
-                              | _ => Util.ice ("macro is not a macro?" +
+                              | _ => UtilMacros.ice ("macro is not a macro?" +
                                                PrettyPrint.SprintExpr (None (), expr))
                             };
 

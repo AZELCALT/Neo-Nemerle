@@ -149,6 +149,7 @@ namespace DelayedTyping {
 
 
 using System.Text;
+using Nemerle.IOMacros;
 
  public class Cxyz
 {
@@ -223,8 +224,8 @@ public class Bug552 {
      
      def pr(xs)
      {
-       | [] => Nemerle.IO.printf("\n");
-       | x::xs => Nemerle.IO.printf("%i",x); pr(xs);
+       | [] => Nemerle.IOMacros.printf("\n");
+       | x::xs => Nemerle.IOMacros.printf("%i",x); pr(xs);
      }
      
      pr(quick([1,8,2,3,4,7]));

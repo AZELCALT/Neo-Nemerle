@@ -30,7 +30,7 @@ class A [T] {
   }
 
   public Default : T {
-    get { Nemerle.Extensions.DefaultValue (T) }
+    get { Nemerle.ExtensionsMacros.DefaultValue (T) }
   }
   
   public this () {

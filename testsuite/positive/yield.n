@@ -230,7 +230,7 @@ System.Console.WriteLine ("------------");
 def fst = [1,2,3];
 def snd = [4,5,6];
 foreach (x in Sequence.Concat (fst, snd))
-   Nemerle.IO.printf ("%d\n", x);
+   Nemerle.IOMacros.printf ("%d\n", x);
 
 def seq = Sequence ();
 def list = System.Collections.ArrayList ();

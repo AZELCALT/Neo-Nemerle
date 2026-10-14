@@ -1,5 +1,6 @@
 using Nemerle.Assertions;
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 class A
 invariant i < 10 invariant i >= 0

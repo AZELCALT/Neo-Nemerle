@@ -7,6 +7,7 @@ using Nitra.Typing.RuleMethod;
 using System;
 
 using G = NitraSyntaxParseTree;
+using NemerleMacros;
 
 namespace Nitra.Typing
 {

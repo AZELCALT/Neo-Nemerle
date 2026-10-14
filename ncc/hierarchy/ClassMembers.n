@@ -38,6 +38,8 @@ using SCG = System.Collections.Generic;
 using SR  = System.Reflection;
 using SRE = System.Reflection.Emit;
 using PT  = Nemerle.Compiler.Parsetree;
+using Nemerle.UtilityMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler {
 
@@ -200,7 +202,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
 
   public OverloadName : string
   {
-    get { Util.ice ("OverloadName not implemented for non-external members") }
+    get { UtilMacros.ice ("OverloadName not implemented for non-external members") }
   }
 
   public abstract MemberKind : MemberKinds {  get; }
@@ -215,7 +217,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
     get { Env }
   }
 
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (o : IMember) : bool
     implements System.IEquatable[IMember].Equals
   {
@@ -538,7 +540,7 @@ public partial class FieldBuilder : MemberBuilder, IField
     def script = DeclaringType.Manager.Options.Script;
     when (script != null && DeclaringType.FullName == script.TypeName && script.InferredInitializers.ContainsKey(Name) && !script.TypedInitializers.ContainsKey(Name))
     {
-      when (scriptInferring) Message.FatalError(Ast.Location, "Recursive script binding needs a type annotation: " + Name);
+      when (scriptInferring) MessageMacros.FatalError(Ast.Location, "Recursive script binding needs a type annotation: " + Name);
       scriptInferring = true;
       try
       {
@@ -788,7 +790,7 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
       | Some (fn) =>
         when (fn.Env == null)
           fn.SetEnv(this.Env);
-        Util.locate (fn.Location, UpdateEmbeddedModifiers (attributes, ref fn.modifiers.mods));
+        UtilMacros.locate (fn.Location, UpdateEmbeddedModifiers (attributes, ref fn.modifiers.mods));
         def method = Manager.ComponentsFactory.CreateMethodBuilder (par, fn, is_property = true);
         method.MarkWithSpecialName ();
         declaring_type.AddMember (method);
@@ -1077,7 +1079,7 @@ public partial class MethodBuilder : MemberBuilder, IMethod
       match (fun_header.body)
       {
         | FunBody.Parsed (e) => e
-        | _ => Message.FatalError ("No parsetree body accessible")
+        | _ => MessageMacros.FatalError ("No parsetree body accessible")
       }
     }
 

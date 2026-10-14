@@ -1,6 +1,7 @@
 ﻿using Nemerle.IO;
 using System;
 using System.Console;
+using Nemerle.IOMacros;
 
 class A {}
 class B : A {}

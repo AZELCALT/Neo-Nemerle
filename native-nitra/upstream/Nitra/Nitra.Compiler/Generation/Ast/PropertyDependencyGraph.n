@@ -49,7 +49,7 @@ namespace Nitra.Compiler
         {
           | Compiled(methodName)         => methodName
           | Source(tb, returnType, expr) =>
-            Util.locate(code.Location,
+            UtilMacros.locate(code.Location,
             {
               def methodName = node.CreateMethodName();
               tb.Define(<[ decl:

@@ -1,5 +1,6 @@
 
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 partial public class HU { }
 partial class HU { } // It's OK. See 10.2.2 Modifiers of C# spec.

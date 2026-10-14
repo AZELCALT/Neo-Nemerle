@@ -73,7 +73,7 @@ class X
 
   static test1 () :  void
   {
-    mutable  x = Nemerle.Extensions.DefaultValue (A);
+    mutable  x = Nemerle.ExtensionsMacros.DefaultValue (A);
 
     x.a = 5;
     Console.WriteLine (x.a);
@@ -81,7 +81,7 @@ class X
 
   static test2 () :  void
   {
-    mutable  y = Nemerle.Extensions.DefaultValue (B);
+    mutable  y = Nemerle.ExtensionsMacros.DefaultValue (B);
 
     y.a = 5;
     Console.WriteLine (y.a);
@@ -112,7 +112,7 @@ class X
 
   static test7 () :  void
   {
-    mutable  e = Nemerle.Extensions.DefaultValue (E);
+    mutable  e = Nemerle.ExtensionsMacros.DefaultValue (E);
     e.e = true;
     e.d.foo = 5;
 
@@ -121,7 +121,7 @@ class X
 
   static test8 () :  void
   {
-    mutable  f = Nemerle.Extensions.DefaultValue (F);
+    mutable  f = Nemerle.ExtensionsMacros.DefaultValue (F);
     f.e.e = true;
     f.e.d.foo = 5;
     f.f = 3.14F;
@@ -137,7 +137,7 @@ class X
 
   static test10 () :  void
   {
-    mutable  f = Nemerle.Extensions.DefaultValue (F);
+    mutable  f = Nemerle.ExtensionsMacros.DefaultValue (F);
     f.e =  E (10);
     Console.WriteLine (f.e.d.foo);
     Console.WriteLine (f.e.d);

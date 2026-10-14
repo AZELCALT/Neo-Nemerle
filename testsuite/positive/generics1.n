@@ -57,7 +57,7 @@ class FAGEN ['a] where 'a : I2 {
 [Record]
 class FOGEN ['a, 'b] where 'a : I1 ['b] {
   public Run () : void {
-    Nemerle.IO.printf ("%s\n", fld.foo ().ToString ());
+    Nemerle.IOMacros.printf ("%s\n", fld.foo ().ToString ());
   }
 
   fld : 'a;

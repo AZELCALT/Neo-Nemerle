@@ -1,6 +1,8 @@
 using Nemerle.IO;
 using Nemerle.Concurrency;
 using System.Console;
+using Nemerle.ConcurrencyMacros;
+using Nemerle.IOMacros;
 
 module Test
 {

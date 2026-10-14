@@ -37,7 +37,7 @@ class Y : X { }
 
 
 // test inherited static fields from externa lib
-Nemerle.IO.printf ("%d %d\n", Child.X, Child.Y);
+Nemerle.IOMacros.printf ("%d %d\n", Child.X, Child.Y);
 
 
 /*

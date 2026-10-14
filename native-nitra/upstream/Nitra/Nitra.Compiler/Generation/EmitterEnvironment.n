@@ -13,6 +13,7 @@ using Nemerle.Utility;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {
@@ -171,7 +172,7 @@ namespace Nitra.Compiler
           if (SequenceParseTreeTypeInfo.TryGetValue(len, out typeInfo))
             FixedType.Class(typeInfo, types.Map(GetParseTreeType(_)))
           else
-            Message.FatalError($"Sequence of size '$len' is not supported");
+            MessageMacros.FatalError($"Sequence of size '$len' is not supported");
       }
     }
 

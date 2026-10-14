@@ -5,21 +5,21 @@ public class F
 {
   name : string;
 
-  [Nemerle.Memoize]
+  [NemerleMacros.Memoize]
   public Method1(a : void -> int) : int
   {
     Write($"$name.Method1(): ");
     a()
   }
 
-  [Nemerle.Memoize(Scope = Class, Synchronized = true)]
+  [NemerleMacros.Memoize(Scope = Class, Synchronized = true)]
   public Method2(a : void -> int) : int
   {
     Write($"$name.Method2(): ");
     a()
   }
 
-  [Nemerle.Memoize(Synchronized = true)]
+  [NemerleMacros.Memoize(Synchronized = true)]
   public Method3(a : void -> int) : int
   {
     Write($"$name.Method3(): ");
@@ -28,7 +28,7 @@ public class F
 
   [RecordIgnore] private mutable method4_switch : bool;
 
-  [Nemerle.Memoize(InvalidValue = 0)]
+  [NemerleMacros.Memoize(InvalidValue = 0)]
   public Method4(x : int) : int
   {
     if(method4_switch) {
@@ -39,7 +39,7 @@ public class F
     }
   }
 
-  [Nemerle.Memoize]
+  [NemerleMacros.Memoize]
   public static Method5(a : void -> int) : int
   {
     Write("static Method5(): ");

@@ -173,7 +173,7 @@ namespace Nemerle.Compiler
                 match (tv.Fix ()) {
                   | FixedType.StaticTypeVarRef (of) =>
                     replace_targets (of, t).Replace (of.Id, t)
-                  | x => Util.ice ($"$x")
+                  | x => UtilMacros.ice ($"$x")
                 }
               | None => map
             }
@@ -210,7 +210,7 @@ namespace Nemerle.Compiler
             def lb = v.LowerBound;
             when (!lb.Equals (tv.Manager.InternalType.Object) && !lb.Equals (tv.Manager.InternalType.ValueType)) {
               def ok = tv.Require (res.Apply (lb));
-              Util.cassert (was_error || ok, $ "req fail, $tv $(res.Apply (v.LowerBound))");
+              UtilMacros.cassert (was_error || ok, $ "req fail, $tv $(res.Apply (v.LowerBound))");
             }
           });
         (res, vars2)

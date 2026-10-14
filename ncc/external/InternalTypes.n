@@ -33,6 +33,8 @@ using Nemerle.Compiler.Typedtree;
 
 using SR  = System.Reflection;
 using SRC = System.Runtime.CompilerServices;
+using Nemerle.IOMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler {
 
@@ -161,7 +163,7 @@ namespace Nemerle.Compiler {
     {
       match (Manager.NameTree.LookupSystemType (type_name)) {
         | Some (t) => t
-        | _ => Util.ice ("cannot reflect `" + type_name + "'")
+        | _ => UtilMacros.ice ("cannot reflect `" + type_name + "'")
       }
     }
 
@@ -267,7 +269,7 @@ namespace Nemerle.Compiler {
         | Tuple (types) =>
             def inst = ty.Manager.InternalType.GetTupleType (types.Length);
             FixedType.Class (inst.tycon, types)
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 
@@ -356,7 +358,7 @@ namespace Nemerle.Compiler {
               FixedType.Class (inst.VoidTyCon, parms)
             else
               FixedType.Class (inst.TyCon, parms + [ret])
-        | None => Util.ice ()
+        | None => UtilMacros.ice ()
       }
     }
 
@@ -513,7 +515,7 @@ namespace Nemerle.Compiler {
 
     public IntegralTypes : array [FixedType.Class]
     {
-    //[Nemerle.Memoize (InvalidValue = null)]
+    //[NemerleMacros.Memoize (InvalidValue = null)]
       get {
       array [InternalType.Int32, InternalType.SByte, InternalType.Byte,
             InternalType.Int16, InternalType.UInt16, InternalType.UInt32,
@@ -523,7 +525,7 @@ namespace Nemerle.Compiler {
 
     public NewMatchFailureException_ctor : IMethod
     {
-    //[Nemerle.Memoize (InvalidValue = null)]
+    //[NemerleMacros.Memoize (InvalidValue = null)]
       get {
         get_single_method (MatchFailureException_tc, ".ctor");
       }
@@ -536,7 +538,7 @@ namespace Nemerle.Compiler {
 
     public String_opEquality : IMethod
     {
-    //[Nemerle.Memoize (InvalidValue = null)]
+    //[NemerleMacros.Memoize (InvalidValue = null)]
       get {
         get_single_method (String_tc, "op_Equality");
       }
@@ -544,7 +546,7 @@ namespace Nemerle.Compiler {
 
     public Decimal_opEquality : IMethod
     {
-    //[Nemerle.Memoize (InvalidValue = null)]
+    //[NemerleMacros.Memoize (InvalidValue = null)]
       get {
         get_single_method (Decimal_tc, "op_Equality");
       }
@@ -554,14 +556,14 @@ namespace Nemerle.Compiler {
     {
       match (tc.LookupMember (name)) {
         | [x] => x :> IMethod
-        | _ => Util.ice ()
+        | _ => UtilMacros.ice ()
       }
     }
 
     public GetFunctionType (len : int) : FunctionType
     {
       when (function_types.Length <= len)
-        Message.FatalError ($ "function types only up to $(function_types.Length - 1) "
+        MessageMacros.FatalError ($ "function types only up to $(function_types.Length - 1) "
                             "parameters are supported, sorry (got $len)");
       when (function_types [len] == null)
         function_types [len] = FunctionType (Manager, len);
@@ -572,7 +574,7 @@ namespace Nemerle.Compiler {
     public GetTupleType (len : int) : TupleType
     {
       when (tuple_types.Length <= len)
-        Message.FatalError ($ "tuple types only up to $(tuple_types.Length - 1) "
+        MessageMacros.FatalError ($ "tuple types only up to $(tuple_types.Length - 1) "
                             "parameters are supported, sorry (got $len)");
       when (tuple_types [len] == null)
         tuple_types [len] = TupleType (Manager, len);

@@ -13,15 +13,15 @@ class T {
     flags = ((word %& 0xff00) :> OpFlags);
   }
   static get_struct (mutable  s : out S) :  void {
-    mutable  ss = Nemerle.Extensions.DefaultValue (S);
+    mutable  ss = Nemerle.ExtensionsMacros.DefaultValue (S);
     ss.a = 1;
     ss.b = 2;
     s = ss;
   }
   static Main() :  int {
-    mutable  op = Nemerle.Extensions.DefaultValue (OpCode);
-    mutable  flags = Nemerle.Extensions.DefaultValue (OpFlags);
-    mutable  s = Nemerle.Extensions.DefaultValue (S);
+    mutable  op = Nemerle.ExtensionsMacros.DefaultValue (OpCode);
+    mutable  flags = Nemerle.ExtensionsMacros.DefaultValue (OpFlags);
+    mutable  s = Nemerle.ExtensionsMacros.DefaultValue (S);
     DecodeOp ((0x0203 :> ushort), out op, out flags);
     if (op != (0x3 :> OpCode))
     {

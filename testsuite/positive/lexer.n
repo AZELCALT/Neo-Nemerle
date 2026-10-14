@@ -1,5 +1,6 @@
 using Nemerle.IO;
 using A;
+using Nemerle.IOMacros;
 
 class A {
   public static @+-+ (x : int, y : int) : int

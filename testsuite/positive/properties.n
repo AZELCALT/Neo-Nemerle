@@ -194,6 +194,7 @@ namespace Bug906 {
 }
 
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 module M {
   Main () : void

@@ -5,6 +5,7 @@ using Nemerle.Utility;
 using System;
 using System.Runtime;
 using System.Runtime.ConstrainedExecution;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra
 {

@@ -13,6 +13,7 @@ using Nemerle.Utility;
 using System;
 using System.Linq;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {

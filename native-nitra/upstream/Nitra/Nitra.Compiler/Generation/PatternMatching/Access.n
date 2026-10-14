@@ -8,6 +8,7 @@ using Nemerle.Utility;
 
 using System;
 using System.Text;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra.Compiler.PatternMatching
 {

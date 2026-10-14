@@ -17,7 +17,7 @@ module M
 {
   print (x : X) : void
   {
-    Nemerle.IO.printf ("%d %lf\n", x.x, x.y)
+    Nemerle.IOMacros.printf ("%d %lf\n", x.x, x.y)
   }
 
   public Main ()  : void

@@ -39,7 +39,7 @@ class T {
   static Main () :  void
   {
     mutable  e = E.E1;
-    mutable  s = Nemerle.Extensions.DefaultValue (string) :string;
+    mutable  s = Nemerle.ExtensionsMacros.DefaultValue (string) :string;
     match (e) {
     | E.E0=>  s = "case 0"; ();
     | E.E1=>  s = "case 1"; ();

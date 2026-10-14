@@ -9,6 +9,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 
 using System;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {

@@ -7,6 +7,7 @@ using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Extensions;
 using Nemerle.Utility;
+using NemerleMacros;
 
 namespace Nitra
 {

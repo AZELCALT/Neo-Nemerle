@@ -1,6 +1,7 @@
 using System.Console;
 using Nemerle.Assertions;
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 module M
 {

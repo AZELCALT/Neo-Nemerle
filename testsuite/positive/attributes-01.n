@@ -3,6 +3,7 @@ using Nemerle.IO;
 using Nemerle.Collections;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Nemerle.IOMacros;
 
 [assembly: AssemblyTitle("Attributes Test")]
 [assembly: AssemblyKeyFile ("")]

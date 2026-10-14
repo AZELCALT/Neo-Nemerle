@@ -6,5 +6,5 @@ using Nemerle.Compiler;
 [Nemerle.MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class)]
 public macro Persistent (typeBuilder : TypeBuilder)
 {
-  typeBuilder.AddMacroAttribute(<[ Nemerle.Extensions.StructuralEquality ]>);
+  typeBuilder.AddMacroAttribute(<[ Nemerle.ExtensionsMacros.StructuralEquality ]>);
 }

@@ -29,6 +29,7 @@
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {

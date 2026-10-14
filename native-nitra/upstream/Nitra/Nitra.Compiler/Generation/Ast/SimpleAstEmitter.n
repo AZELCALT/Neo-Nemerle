@@ -34,7 +34,7 @@ namespace Nitra.Compiler
 
     public override DefineTypes() : void
     {
-      Util.locate(_symbol.FirstLocation.NLocation(),
+      UtilMacros.locate(_symbol.FirstLocation.NLocation(),
       {
         assert(_tb == null);
 

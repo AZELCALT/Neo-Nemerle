@@ -1,4 +1,5 @@
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 internal class ClassFormatError {
  internal this(_msg : string , params _p : array[object]) {}

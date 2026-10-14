@@ -38,6 +38,7 @@ using PT = Nemerle.Compiler.Parsetree;
 using SR = System.Reflection;
 using SRE = System.Reflection.Emit;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {
@@ -445,7 +446,7 @@ namespace Nemerle.Compiler
 
       public override Name : string
       {
-        //[Nemerle.Memoize (InvalidValue = null)]
+        //[NemerleMacros.Memoize (InvalidValue = null)]
         get { Util.StripGenericMark (system_type.Name) }
       }
 
@@ -453,7 +454,7 @@ namespace Nemerle.Compiler
 
       public override IsDelegate : bool
       {
-        //[Nemerle.Memoize]
+        //[NemerleMacros.Memoize]
         get { system_type.IsSubclassOf (SystemTypeCache.MulticastDelegate) }
       }
 
@@ -461,7 +462,7 @@ namespace Nemerle.Compiler
 
       public override DeclaringType : TypeInfo
       {
-        //[Nemerle.Memoize]
+        //[NemerleMacros.Memoize]
         get
         {
           if (system_type.DeclaringType == null)
@@ -525,7 +526,7 @@ namespace Nemerle.Compiler
             | SR.TypeAttributes.NestedPublic      => Accessibility.Public
             | SR.TypeAttributes.NestedPrivate
             | SR.TypeAttributes.NotPublic         => Accessibility.Internal
-            | _ => Util.ice ("system type returned invalid attributes")
+            | _ => UtilMacros.ice ("system type returned invalid attributes")
           }
         }
       }
@@ -558,7 +559,7 @@ namespace Nemerle.Compiler
 
       public override BaseType : TypeInfo
       {
-        //[Nemerle.Memoize]
+        //[NemerleMacros.Memoize]
         get
         {
           if (system_type.BaseType == null) null
@@ -576,7 +577,7 @@ namespace Nemerle.Compiler
         {
           | FixedType.Class(tc, _) :: _ => Some(tc)
           | [] => None()
-          | _ => Util.ice()
+          | _ => UtilMacros.ice()
         }
       }
 
@@ -761,7 +762,7 @@ namespace Nemerle.Compiler
 
       public override UnderlyingType : TypeInfo
       {
-        //[Nemerle.Memoize (InvalidValue = null)]
+        //[NemerleMacros.Memoize (InvalidValue = null)]
         get
         {
           assert(system_type.IsEnum);

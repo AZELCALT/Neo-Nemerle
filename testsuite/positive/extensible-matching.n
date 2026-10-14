@@ -1,5 +1,6 @@
 #pragma indent
 using Nemerle.Utility
+using Nemerle.UtilityMacros
 
 [ExtensionPattern ( Node (t1, el, t2) = SNode (t1, el, t2, _) )] \
 [ExtensionPattern ( t1 ::: t2 = SNode (t1, _, t2, _) )] \

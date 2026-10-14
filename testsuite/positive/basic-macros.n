@@ -4,6 +4,8 @@ using Nemerle.Extensions;
 using Nemerle.Collections;
 using System.Console;
 using SCG = System.Collections.Generic;
+using Nemerle.ExtensionsMacros;
+using Nemerle.IOMacros;
 
 class ClassForColors {
   x : int = 66;
@@ -260,14 +262,14 @@ module BasicMacrosTest
     }
 
     foreach (x in [A.B(), A.C(), A.D()]) {
-      | A.B => Nemerle.IO.print ("B\n");
-      | A.C => Nemerle.IO.print ("C\n");
-      | A.D => Nemerle.IO.print ("D\n");
+      | A.B => Nemerle.IOMacros.print ("B\n");
+      | A.C => Nemerle.IOMacros.print ("C\n");
+      | A.D => Nemerle.IOMacros.print ("D\n");
     }
     foreach ((x, y) in [(A.B(), A.C()), (A.D(), A.B())]) {
-      | (A.B, A.C) => Nemerle.IO.print ("BC\n");
-      | (A.D, A.B) => Nemerle.IO.print ("DB\n");
-      | _ => Nemerle.IO.print ("other\n");
+      | (A.B, A.C) => Nemerle.IOMacros.print ("BC\n");
+      | (A.D, A.B) => Nemerle.IOMacros.print ("DB\n");
+      | _ => Nemerle.IOMacros.print ("other\n");
     }
   }
 

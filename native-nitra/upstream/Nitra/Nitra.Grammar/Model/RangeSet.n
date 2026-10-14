@@ -8,6 +8,7 @@ using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Extensions;
 using Nemerle.Utility;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra.Model
 {

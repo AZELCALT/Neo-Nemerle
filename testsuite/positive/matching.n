@@ -1520,6 +1520,7 @@ public module TestRunner
 
 namespace Bug826 {
 using System;
+using Nemerle.IOMacros;
 
 interface ITest {}
 class Class1 : ITest {}

@@ -6,6 +6,8 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using System;
 using System.Collections.Generic;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {
@@ -184,7 +186,7 @@ namespace Nemerle.Compiler
       
       if (expr == null) null
       else
-        Util.locate (expr.Location,
+        UtilMacros.locate (expr.Location,
         {
                        def expr = match (ctx)
                                   {
@@ -373,7 +375,7 @@ namespace Nemerle.Compiler
                                                     PExpr.Quoted (inner)
 
                                                 | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => expr
-                                                | PExpr.Lambda => Util.ice ("Bad construction of PExpr.Lambda")
+                                                | PExpr.Lambda => UtilMacros.ice ("Bad construction of PExpr.Lambda")
                                                 | PExpr.Base(ty) => PExpr.Base(ty.Map(traverse))
                                               }
                                if (context.IsBreaked) recursed else call(context, true, recursed);

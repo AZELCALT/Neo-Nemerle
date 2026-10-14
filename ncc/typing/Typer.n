@@ -42,6 +42,8 @@ using System.Diagnostics;
 using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 using PT    = Nemerle.Compiler.Parsetree;
 using SCG   = System.Collections.Generic;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
 
 type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
@@ -335,7 +337,7 @@ namespace Nemerle.Compiler
         solver.dt_store = Map ();
         solver.InUse = true;
 
-        Util.locate(current_method_builder.Location,
+        UtilMacros.locate(current_method_builder.Location,
         {
           mutable typer_done = false;
           assert(messenger.IsTopLevel);
@@ -390,7 +392,7 @@ namespace Nemerle.Compiler
               current_fun.yield_type = GetYieldType ();
               def errorCount = Message.ErrorCount;
               // just in case
-              def newBody = Util.locate(current_method_builder.Body.Location, WrapYieldingFunction (current_method_builder.Body));
+              def newBody = UtilMacros.locate(current_method_builder.Body.Location, WrapYieldingFunction (current_method_builder.Body));
               current_method_builder.Body = newBody;
               inside_yielding_function = true;
               when (Manager.IsIntelliSenseMode || errorCount == Message.ErrorCount)
@@ -462,7 +464,7 @@ namespace Nemerle.Compiler
 
       foreach (p : TParameter in current_fun.Parameters)
       {
-        Util.locate (p.Location,
+        UtilMacros.locate (p.Location,
         {
           def is_mutable = p.modifiers.mods %&& NemerleModifiers.Mutable || p.kind != ParmKind.Normal;
           def local = LocalValue (current_fun, p.name, p.NameLocation,
@@ -487,7 +489,7 @@ namespace Nemerle.Compiler
     {
       when (inside_yielding_function && current_fun.Name == "_N_yielding_function")
       {
-        Util.cassert (yield_labels == null);
+        UtilMacros.cassert (yield_labels == null);
         yield_labels = [];
       }
 
@@ -550,7 +552,7 @@ namespace Nemerle.Compiler
             if (GetLastTExpr(e2) is TExpr.Goto)
               e2
             else
-              Util.locate(current_fun.ReturnTypeLocation, 
+              UtilMacros.locate(current_fun.ReturnTypeLocation, 
                 AddCastTo(e2, current_fun.ReturnType, "function body (" + current_fun.Name + ")"));
 
           def e4 = if (skip_n_return) e3
@@ -562,14 +564,14 @@ namespace Nemerle.Compiler
 
         | FunBody.ILed
         | FunBody.Typed =>
-          Util.ice ($"$(current_fun.body)")
+          UtilMacros.ice ($"$(current_fun.body)")
       }
 
       when (inside_yielding_function &&
             current_fun.Name == "_N_yielding_function")
         match (current_fun.body) {
           | FunBody.Typed (t) => AddYieldStateMachine (t)
-          | _ => Util.ice ()
+          | _ => UtilMacros.ice ()
         }
     }
 
@@ -657,7 +659,7 @@ namespace Nemerle.Compiler
 
             surroundwith (related_messages)
             {
-              Util.locate (loc, ReportError (messenger, $"typing fails on $msg"));
+              UtilMacros.locate (loc, ReportError (messenger, $"typing fails on $msg"));
 
               foreach ((locHint, hint) in errors.Tail)
                 Message.Hint (locHint, hint);
@@ -1135,7 +1137,7 @@ namespace Nemerle.Compiler
               def overload = ConstructMethodOverload(null, one).Head;
               method = overload.Compile() :> TExpr.StaticRef;
               def ok = method.Type.Require(needed);
-              Util.cassert(ok);
+              UtilMacros.cassert(ok);
               true
 
             | [] => false
@@ -1567,7 +1569,7 @@ namespace Nemerle.Compiler
       when (solver.dt_store == null)
         solver.dt_store = Map();
 
-      def texpr = Util.locate(expr.Location,
+      def texpr = UtilMacros.locate(expr.Location,
       {
         def e1 = InterceptSpecialMacros(expr, expected);
         def e2 =
@@ -1796,7 +1798,7 @@ namespace Nemerle.Compiler
                     create_single (nm, PExpr.TypeEnforcement (v, ty), acc)
 
                   | _ =>
-                    Message.FatalError (n.Location, "expected simple variable name in mutable definition")
+                    MessageMacros.FatalError (n.Location, "expected simple variable name in mutable definition")
                 }
               }
               _ = NList.FoldLeft2 (names, vals, top, create_single);
@@ -1819,7 +1821,7 @@ namespace Nemerle.Compiler
           exp.SetParsedObject(expression); // TODO: VladD2: Проверить под отладчиком что это работает корреткно
           exp;
 
-        | PExpr.DefMutable => Message.FatalError ($"incorrect mutable variables definition: $expression")
+        | PExpr.DefMutable => MessageMacros.FatalError ($"incorrect mutable variables definition: $expression")
 
         | PExpr.Define (pat, expr) =>
           if (Expect (expected, InternalType.Void, "definition ``result''"))
@@ -2008,7 +2010,7 @@ namespace Nemerle.Compiler
                         | _ => None()
                       }
 
-                    | PT.TryCase.Ellipsis => Util.ice("List of expression parameters out of quotation")
+                    | PT.TryCase.Ellipsis => UtilMacros.ice("List of expression parameters out of quotation")
                   }
               }
             }
@@ -2237,7 +2239,7 @@ namespace Nemerle.Compiler
           foreach (field in fields)
             field.HasBeenAssigned = true;
 
-          TypeExpr(Util.locate(expression.Location, <[ () ]>), expected);
+          TypeExpr(UtilMacros.locate(expression.Location, <[ () ]>), expected);
 
         | PExpr.Call(fnc, parms) => 
           if (parms.Exists(
@@ -2270,7 +2272,7 @@ namespace Nemerle.Compiler
         | PExpr.Assign (PExpr.Wildcard as wildcard, e2) =>
           if (Expect (expected, InternalType.Void, "assignment ``result''"))
           {
-            def e = Util.locate(wildcard.Location, <[ def _ = $e2 ]>);
+            def e = UtilMacros.locate(wildcard.Location, <[ def _ = $e2 ]>);
             TypeExpr(e, expected)
           }
           else
@@ -2280,9 +2282,9 @@ namespace Nemerle.Compiler
           if (Expect(expected, InternalType.Void, "assignment ``result''"))
           {
             def et1 = TypeExpr(e1);
-            Util.locate(e1.Location, CheckLValue(et1, need_ref = false, desc = "assignment target"));
+            UtilMacros.locate(e1.Location, CheckLValue(et1, need_ref = false, desc = "assignment target"));
             def et2 = TypeExpr(e2);
-            TExpr.Assign(et1, Util.locate(e2.Location, AddCastTo(et2, et1.Type, "assigned value")))
+            TExpr.Assign(et1, UtilMacros.locate(e2.Location, AddCastTo(et2, et1.Type, "assigned value")))
           }
           else
             TExpr.Error();
@@ -2508,7 +2510,7 @@ namespace Nemerle.Compiler
               | PT.SyntaxElement.FieldBuilder
               | PT.SyntaxElement.EventBuilder
               | PT.SyntaxElement.PropertyBuilder
-              | PT.SyntaxElement.ParameterBuilder => Util.ice("strange syntax element appeared in quotation")
+              | PT.SyntaxElement.ParameterBuilder => UtilMacros.ice("strange syntax element appeared in quotation")
             };
           TypeExpr(lifted, expected)
 
@@ -2537,15 +2539,15 @@ namespace Nemerle.Compiler
 
 
         | PExpr.MacroCall  =>
-          Util.ice ("Macrocalls should have been expanded already") // This can happen if user enter incorrect syntax of a macro.
+          UtilMacros.ice ("Macrocalls should have been expanded already") // This can happen if user enter incorrect syntax of a macro.
 
 
         | PExpr.TypedPattern  =>
-          Util.ice ("typed pattern in raw expr")
+          UtilMacros.ice ("typed pattern in raw expr")
 
 
         | PExpr.ToComplete =>
-          Util.ice ("The completion tokens allowed only if Manager.IsCompletionInProgress is true.")
+          UtilMacros.ice ("The completion tokens allowed only if Manager.IsCompletionInProgress is true.")
       }
 
       texpr.SetParsedObject(expression);
@@ -3076,7 +3078,7 @@ namespace Nemerle.Compiler
                       | fa :: fas =>
                         fa.ForceUnify (pa);
                         fas
-                      | [] => Util.ice ()
+                      | [] => UtilMacros.ice ()
                     }
                   })
             } else
@@ -3218,7 +3220,7 @@ namespace Nemerle.Compiler
               NList.Iter2 (from.args, declaring.Typarms, fun (d, s) {
                 when (type_tyvars [s.Id] != null) {
                   def res = d.Unify (FixedType.StaticTypeVarRef (s));
-                  Util.cassert (res);
+                  UtilMacros.cassert (res);
                 }
               })
 
@@ -3318,7 +3320,7 @@ namespace Nemerle.Compiler
                 else
                   single (field)
               } else single (mem)
-            | _ => Util.ice (mem.ToString ())
+            | _ => UtilMacros.ice (mem.ToString ())
           }
       }
     }
@@ -4203,7 +4205,7 @@ namespace Nemerle.Compiler
             }
             else
             {
-              Message.FatalError ($"generic parameter $name cannot be used to create new instance, "
+              MessageMacros.FatalError ($"generic parameter $name cannot be used to create new instance, "
                                   "because it doesn't have `struct' or `new ()' constraint");
             }
 
@@ -4670,9 +4672,9 @@ namespace Nemerle.Compiler
     InterceptSpecialMacros (expr : PExpr, expected : TypeVar) : TExpr
     {
       when (Manager.Typer_checked_macro == null) {
-        Manager.Typer_checked_macro = Manager.NameTree.ExactPath (["Nemerle", "Core", "checked"]);
-        Manager.Typer_unchecked_macro = Manager.NameTree.ExactPath (["Nemerle", "Core", "unchecked"]);
-        Manager.Typer_yield_macro = Manager.NameTree.ExactPath (["Nemerle", "Core", "yield"]);
+        Manager.Typer_checked_macro = Manager.NameTree.ExactPath (["Nemerle", "CoreMacros", "checked"]);
+        Manager.Typer_unchecked_macro = Manager.NameTree.ExactPath (["Nemerle", "CoreMacros", "unchecked"]);
+        Manager.Typer_yield_macro = Manager.NameTree.ExactPath (["Nemerle", "CoreMacros", "yield"]);
       }
 
       match (expr) {
@@ -4766,7 +4768,7 @@ namespace Nemerle.Compiler
 
     HandleYield (expr : PExpr) : TExpr
     {
-      Util.cassert (solver.IsTopLevel);
+      UtilMacros.cassert (solver.IsTopLevel);
       def label_no = Manager.GetNewId("YieldLabel");
       def state_no = AddYieldLabel(label_no);
       def label = TExpr.Label(InternalType.Void, label_no, VoidLiteral());
@@ -4810,7 +4812,7 @@ namespace Nemerle.Compiler
             Match_case ([(cntpat, yes, [])], TExpr.Goto (m.Type, id, 1), false)
           });
           s.e1 = TExpr.Match (m.Type, m.expr, cases + m.cases)
-        | _ => Util.ice ($ "e = $e")
+        | _ => UtilMacros.ice ($ "e = $e")
       }
     }
     #endregion
@@ -4854,7 +4856,7 @@ namespace Nemerle.Compiler
           def (lambda_parms, parms) = transform_parms (parms);
           <[ fun (.. $lambda_parms) { $fn (.. $parms) } ]>
 
-        | _ => Util.ice ($ "$expr")
+        | _ => UtilMacros.ice ($ "$expr")
       }
     }
     #endregion

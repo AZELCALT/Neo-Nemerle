@@ -1,6 +1,7 @@
 //REFERENCE: Issue-git-0427-lib
 using Nemerle;
 using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
 
 [Record, StructuralEquality]
 public sealed class B : A

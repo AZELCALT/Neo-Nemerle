@@ -6,6 +6,8 @@ using System.Console;
 using SCG = System.Collections.Generic;
 using Nemerle.Extensions;
 using Nemerle.Utility;
+using Nemerle.ExtensionsMacros;
+using Nemerle.UtilityMacros;
 
 module Program
 {

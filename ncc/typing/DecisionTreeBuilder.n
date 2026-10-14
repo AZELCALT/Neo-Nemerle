@@ -75,6 +75,9 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
 
 using PT = Nemerle.Compiler.Parsetree;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {

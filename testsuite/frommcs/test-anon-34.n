@@ -30,7 +30,7 @@ namespace Delegates
 
       if(useArray)
       { 
-        mutable  work = Nemerle.Extensions.DefaultValue ( array [int]);
+        mutable  work = Nemerle.ExtensionsMacros.DefaultValue ( array [int]);
         
         one = fun() 
               { work = array(max);

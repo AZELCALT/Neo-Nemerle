@@ -2,6 +2,7 @@ using Nemerle.Collections;
 using Nemerle.IO;
 using Nemerle.Utility;
 using System;
+using Nemerle.IOMacros;
 
 module a {
  public Main () : void {

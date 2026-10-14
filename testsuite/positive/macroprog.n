@@ -206,6 +206,7 @@ class MyFoo
 }
 
 using Nemerle.Logging;
+using Nemerle.IOMacros;
 
 [assembly: LogCondition (LogEnabled)]
 

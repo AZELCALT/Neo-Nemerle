@@ -4,6 +4,7 @@ using Nitra.Typing.RuleMethod;
 
 using Nemerle;
 using System;
+using NemerleMacros;
 
 namespace Nitra.Typing
 {

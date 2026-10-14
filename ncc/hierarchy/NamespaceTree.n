@@ -33,6 +33,9 @@ using Nemerle.Utility;
 
 using PT = Nemerle.Compiler.Parsetree;
 using SCG = System.Collections.Generic;
+using Nemerle.UtilityMacros;
+using Nemerle.CompilerMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {
@@ -141,7 +144,7 @@ namespace Nemerle.Compiler
         result.ToArray ();
       }
       
-      [Nemerle.OverrideObjectEquals]
+      [NemerleMacros.OverrideObjectEquals]
       public Equals (other : Node) : bool
         implements System.IEquatable[Node].Equals
       {
@@ -677,14 +680,14 @@ namespace Nemerle.Compiler
     internal LookupInternalType (name : list[string]) : TypeInfo {
       match (LookupExactType (name)) {
         | Some (t) => t
-        | None => Util.ice ("unbound internal type " + name.ToString("."))
+        | None => UtilMacros.ice ("unbound internal type " + name.ToString("."))
       }
     }
 
     internal LookupInternalType (name : list[string], args_count : int) : TypeInfo {
       match (LookupExactType (name, args_count)) {
         | Some (t) => t
-        | None => Util.ice ("unbound internal type " + name.ToString (".") + "`" + 
+        | None => UtilMacros.ice ("unbound internal type " + name.ToString (".") + "`" + 
                             args_count.ToString ())
       }
     }
@@ -808,7 +811,7 @@ namespace Nemerle.Compiler
     {
       def ty = macro_context_class;
       when (ty != null) {
-        Util.locate (ty.Location,
+        UtilMacros.locate (ty.Location,
           ty.Define (<[ decl:
             this ()
             {

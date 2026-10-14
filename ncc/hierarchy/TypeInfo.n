@@ -38,6 +38,9 @@ using Nemerle.Utility;
 using SC  = System.Collections;
 using SCS = System.Collections.Specialized;
 using SCG = System.Collections.Generic;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {
@@ -592,7 +595,7 @@ public abstract class TypeInfo : MemberInfo, IMember,
     the_other != null && id == the_other.id
   }
 
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (t : IMember) : bool
     implements System.IEquatable[IMember].Equals
   {

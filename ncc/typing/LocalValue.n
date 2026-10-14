@@ -32,6 +32,7 @@ using Nemerle.Utility;
 
 using SC = System.Collections;
 using SCS = System.Collections.Specialized;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler
 {
@@ -114,7 +115,7 @@ namespace Nemerle.Compiler
       this.used_in = Set ();
     }
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (other : LocalValue) : bool
       implements System.IEquatable[LocalValue].Equals
     {
@@ -170,7 +171,7 @@ namespace Nemerle.Compiler
 
     public Register() : void
     {
-      Util.cassert (!IsRegistered, this.ToString ());
+      UtilMacros.cassert (!IsRegistered, this.ToString ());
       is_registered = true;
       DefinedIn.all_locals = this :: DefinedIn.all_locals;
 
@@ -216,7 +217,7 @@ namespace Nemerle.Compiler
           declare();
       }
       assert(!(ilkind is ILKind.None));
-      Util.cassert(!(ilkind is ILKind.None), $"ilkind is none for $this (id=$id)");
+      UtilMacros.cassert(!(ilkind is ILKind.None), $"ilkind is none for $this (id=$id)");
     }
 
     internal IsByRefParm : bool
@@ -235,7 +236,7 @@ namespace Nemerle.Compiler
           | Parm
           | ByRefParm => true
           | Local => false
-          | None => Util.ice ()
+          | None => UtilMacros.ice ()
         }
       }
     }
@@ -249,7 +250,7 @@ namespace Nemerle.Compiler
         match (ilkind)
         {
           | Local (slot) => slot
-          | _ => Util.ice()
+          | _ => UtilMacros.ice()
         }
       }
       set
@@ -258,7 +259,7 @@ namespace Nemerle.Compiler
         {
           assert(true);
         }
-        Util.cassert (ilkind is ILKind.None);
+        UtilMacros.cassert (ilkind is ILKind.None);
         ilkind = ILKind.Local (value);
       }
     }
@@ -270,14 +271,14 @@ namespace Nemerle.Compiler
         match (ilkind) {
           | Parm (id)
           | ByRefParm (id) => id
-          | _ => Util.ice ()
+          | _ => UtilMacros.ice ()
         }
       }
     }
 
     internal SetParmIndex (idx : int, is_by_ref : bool) : void
     {
-      Util.cassert (ilkind is ILKind.None);
+      UtilMacros.cassert (ilkind is ILKind.None);
       ilkind = 
         if (is_by_ref)
           ILKind.ByRefParm (idx);

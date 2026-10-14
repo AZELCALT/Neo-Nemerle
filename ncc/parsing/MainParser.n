@@ -32,6 +32,7 @@ using Nemerle.Imperative;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Assertions;
 using Nemerle.Utility;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -176,7 +177,7 @@ namespace Nemerle.Compiler
         if (allowEmpty)
           []
         else
-          Message.FatalError("expression without content is not allowed here");
+          MessageMacros.FatalError("expression without content is not allowed here");
       else
       {
         if (tokens.Child.Next == null)
@@ -205,7 +206,7 @@ namespace Nemerle.Compiler
         if (allow_empty)
           null
         else
-          Message.FatalError("expression without content is not allowed here");
+          MessageMacros.FatalError("expression without content is not allowed here");
       else
       {
         if (tokens.Child.Next == null)
@@ -413,7 +414,7 @@ namespace Nemerle.Compiler
           {
             def seq = parser.parse_expr_sequence (topstream);
             def class_name = Util.Escape (System.IO.Path.GetFileNameWithoutExtension(lex.Location.File));
-            def decl = Util.locate (topstream.Location + lex.Location, <[ decl:
+            def decl = UtilMacros.locate (topstream.Location + lex.Location, <[ decl:
               public class $(parser.MkNameGenerated(class_name) : name)
               {
                 public static Main () : void
@@ -859,7 +860,7 @@ namespace Nemerle.Compiler
           stream = parent.Child;
       }
       else
-        Util.ice ("cannot jump to sibling, some tokens are still here")
+        UtilMacros.ice ("cannot jump to sibling, some tokens are still here")
     }
 
     shift_sibling () : void {
@@ -1370,7 +1371,7 @@ namespace Nemerle.Compiler
             | "interface" => TopDeclaration.Interface (locAll, name, mods, typarms, t_extends, members2)
             | "variant" => TopDeclaration.Variant (locAll, name, mods, typarms, t_extends, members2)
             | "enum" => TopDeclaration.Enum (locAll, name, mods, typarms, t_extends, members2)
-            | _ => Util.ice ()
+            | _ => UtilMacros.ice ()
           };
 
         when (key == "mask" && Manager.Options.Script != null)
@@ -1799,7 +1800,7 @@ namespace Nemerle.Compiler
         match (getterOrSetterFunc)
         {
           | Some(ClassMember.Function(_, _, FunBody.Parsed(bodyExpr)) as func) =>
-            def newBody = Util.locate(bodyExpr.Location,
+            def newBody = UtilMacros.locate(bodyExpr.Location,
               <[ InternalMacros.RedirectName($(parsedFieldName : name), $(uniqueFieldName : name), $bodyExpr) ]>);
 
             func.body = FunBody.Parsed(newBody);
@@ -1842,7 +1843,7 @@ namespace Nemerle.Compiler
               | Token.Identifier (i) as nametok =>
                 def genLoc = nametok.Location.AsGenerated();
 
-                Util.locate (loc2,
+                UtilMacros.locate (loc2,
                   match (i)
                   {
                     | "get" =>
@@ -1949,7 +1950,7 @@ namespace Nemerle.Compiler
                           parsedField.Initializer = val;
 
                           //TODO: Convert this approach (with Custom Attribute) to yield multiple members
-                          Util.locate (bodyLocation,
+                          UtilMacros.locate (bodyLocation,
                             attrs.AddCustomAttribute (<[
                               $(MkNameGenerated("Nemerle") : name).InternalMacros.StaticInitializer ($val)
                             ]>)
@@ -2002,7 +2003,7 @@ namespace Nemerle.Compiler
           val.Location = bodyLocation; // correct location
 
           //TODO: Convert this approach (with Custom Attribute) to yield multiple members
-          Util.locate (bodyLocation,
+          UtilMacros.locate (bodyLocation,
             mods.AddCustomAttribute (<[
               $(MkNameGenerated("Nemerle") : name).InternalMacros.StaticInitializer ($val)
             ]>)
@@ -2425,7 +2426,7 @@ namespace Nemerle.Compiler
                 pop_stream (); // there are still some unparsed tokens here, ignore them
               }
 
-            | _ => Util.ice ("broken brackets in attribute")
+            | _ => UtilMacros.ice ("broken brackets in attribute")
           }
 
           leave
@@ -2865,7 +2866,7 @@ namespace Nemerle.Compiler
           | x :: xs =>
             result = x :: result;
             exprs = xs;
-          | _ => Util.ice ("invalidated expressions stack")
+          | _ => UtilMacros.ice ("invalidated expressions stack")
         }
       }
       result
@@ -2898,7 +2899,7 @@ namespace Nemerle.Compiler
                       | e1 :: e2 :: rest =>
                         exprs = rest;
                         make_operator_call (x.Name, op_loc, e2, e1)
-                      | _ => Util.ice ("not enough parms for binary")
+                      | _ => UtilMacros.ice ("not enough parms for binary")
                     }
                   | _ =>
                     def e = NList.Head (exprs);
@@ -3030,11 +3031,11 @@ namespace Nemerle.Compiler
               | Token.StringLiteral =>
                 match (_expr_stack)
                 {
-                  | (<[ $_ + Nemerle.IO.sprint($_) ]>) :: _
-                  | (<[ Nemerle.IO.sprint($_) ]>)      :: _ =>
+                  | (<[ $_ + Nemerle.IOMacros.sprint($_) ]>) :: _
+                  | (<[ Nemerle.IOMacros.sprint($_) ]>)      :: _ =>
                     // Emulate '+' operator for $-str.
                     rpn_op_stack ::= (env.FetchOperator ("+"), Location.Default.AsGenerated());
-                    _expr_stack  ::= <[ Nemerle.IO.sprint($(parse_literal())) ]>;
+                    _expr_stack  ::= <[ Nemerle.IOMacros.sprint($(parse_literal())) ]>;
                     parsePostfix()
 
                   | (<[ $_ + $x ]>) :: _ =>
@@ -3073,7 +3074,7 @@ namespace Nemerle.Compiler
             match (_expr_stack)
             {
               | [x] => x
-              | _ => Util.ice("something different than one expression after rolling")
+              | _ => UtilMacros.ice("something different than one expression after rolling")
             }
           }
           else
@@ -3163,7 +3164,7 @@ namespace Nemerle.Compiler
       match (id)
       {
         | Splicable.Expression (e) => PExpr.Spliced (id.Location, e)
-        | _ => Message.FatalError (id.Location, "expected spliced expression");
+        | _ => MessageMacros.FatalError (id.Location, "expected spliced expression");
       }
     }
 
@@ -3438,7 +3439,7 @@ namespace Nemerle.Compiler
                   def lit = Literal.String(str);
                   lit.RawString = rawStr;
                   def expr = PExpr.Literal (stok.Location, lit);
-                  def sprintMacro = <[ $(MkNameGenerated("Nemerle") : name).IO.sprint ($expr) ]>;
+                  def sprintMacro = <[ $(MkNameGenerated("Nemerle") : name).IOMacros.sprint ($expr) ]>;
                   sprintMacro.Location = loc + stok.Location; // Make lacation as parsed (not generated)!
                   sprintMacro
 
@@ -3454,7 +3455,7 @@ namespace Nemerle.Compiler
                   def conds = parse_expr_sequence (TokenStoppers.None);
                   def all = expr + conds;
                   pop_stream ("list comprehension");
-                  Util.locate (grp.Location, <[ $(MkNameGenerated("Nemerle") : name).Utility.ExpandListComprehension (..$all) ]>)
+                  UtilMacros.locate (grp.Location, <[ $(MkNameGenerated("Nemerle") : name).UtilityMacros.ExpandListComprehension (..$all) ]>)
 
                 | _ =>
                   push_back ();
@@ -3489,7 +3490,7 @@ namespace Nemerle.Compiler
                     | Some (e) =>
                       pop_stream ("match body");
                       PExpr.Match (loc, expr, [MatchCase ([], e)], expr_loc);
-                    | _        => Util.ice ()
+                    | _        => UtilMacros.ice ()
                   }
 
                 | Token.BracesGroup (group, _, _, _) as tok =>
@@ -3568,7 +3569,7 @@ namespace Nemerle.Compiler
                       | Some (e) =>
                         pop_stream ("catch body");
                         body = PExpr.Try (loc, body, [TryCase.Ellipsis (e)]);
-                      | _ => Util.ice ()
+                      | _ => UtilMacros.ice ()
                     }
                     
                   | Token.BracesGroup (group, _, _, _) as x =>

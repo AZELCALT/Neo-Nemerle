@@ -24,7 +24,7 @@ namespace Nitra.Compiler
     {
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        Util.locate(method.FirstLocation.NLocation(),
+        UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.AbstractSymbol(Signature = signature, IsCached = isCached) =>
@@ -49,7 +49,7 @@ namespace Nitra.Compiler
     {
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        Util.locate(method.FirstLocation.NLocation(),
+        UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.DefSymbol       (Signature = signature, IsCached = isCached, Body = body) =>
@@ -69,7 +69,7 @@ namespace Nitra.Compiler
     {
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        Util.locate(method.FirstLocation.NLocation(),
+        UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.DefSymbol(Signature = signature, IsCached = isCached, Body = body) =>
@@ -105,7 +105,7 @@ namespace Nitra.Compiler
 
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        Util.locate(method.FirstLocation.NLocation(),
+        UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.AbstractSymbol  (Signature = signature, AstType = astType, IsCached = isCached)
@@ -162,7 +162,7 @@ namespace Nitra.Compiler
       def result = SCG.List();
       foreach (p in signature.Params)
       {
-        Util.locate(p.Location.NLocation(),
+        UtilMacros.locate(p.Location.NLocation(),
         {
           result.Add(<[ parameter: $(p.Name.Value : usesite) : $(TypeCompiler.Compile(p.Type)) ]>);
         });

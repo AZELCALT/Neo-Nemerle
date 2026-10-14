@@ -40,6 +40,7 @@ using System.Security;
 using NC = Nemerle.Compiler;
 using SRE = System.Reflection.Emit;
 using NC = Nemerle.Compiler;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -91,7 +92,7 @@ namespace Nemerle.Compiler
 
       def dir = Path.GetDirectoryName(Path.GetFullPath (_OutputFileName));
       unless (Directory.Exists(dir))
-        Message.FatalError($"specified output directory `$dir' does not exist");
+        MessageMacros.FatalError($"specified output directory `$dir' does not exist");
       try
       {
         _assembly_session = Nemerle.Platform.ClrAssemblySession(_assembly_name,
@@ -99,7 +100,7 @@ namespace Nemerle.Compiler
           if (Nemerle.Platform.ClrAssemblySession.LegacySecurityAvailable)
             GetLegacyAssemblyPermissions() else null);
       }
-      catch { | e is System.NotSupportedException => Message.FatalError(e.Message) }
+      catch { | e is System.NotSupportedException => MessageMacros.FatalError(e.Message) }
       _assembly_builder = _assembly_session.Builder;
       _module_builder = _assembly_session.Module;
       GetInformationalAssemblyAttributes().Iter(_assembly_builder.SetCustomAttribute);
@@ -122,7 +123,7 @@ namespace Nemerle.Compiler
           | Permissions.SecurityAction.RequestMinimum => required = perm_set
           | Permissions.SecurityAction.RequestOptional => optional = perm_set
           | Permissions.SecurityAction.RequestRefuse => refused = perm_set
-          | _ => Message.FatalError($"$action is not valid here")
+          | _ => MessageMacros.FatalError($"$action is not valid here")
         }
       array [required : object, optional : object, refused : object]
 #endif
@@ -718,7 +719,7 @@ namespace Nemerle.Compiler
         assert(type_builder != null);
 
         def mb = GetMethodInfo ();
-        Util.cassert (mb != null, $"method builder is null for $this");
+        UtilMacros.cassert (mb != null, $"method builder is null for $this");
 
         /* update the entry point settings, if necessary */
         when (emitter._need_entry_point && Name == "Main"
@@ -785,11 +786,11 @@ namespace Nemerle.Compiler
 
           // Message.Debug (Location, $ "compile: $this");
 
-          Util.locate(Location,
+          UtilMacros.locate(Location,
           {
             match (fun_header.body)
             {
-              | FunBody.ILed | FunBody.Parsed => Util.ice (fun_header.body.GetType().ToString ())
+              | FunBody.ILed | FunBody.Parsed => UtilMacros.ice (fun_header.body.GetType().ToString ())
 
               | FunBody.Typed when Message.SeenError =>
                 // just skip it
@@ -1026,7 +1027,7 @@ namespace Nemerle.Compiler
                 when (defaultValue != null || !type.IsValueType)
                   p.builder.SetConstant(defaultValue);
                 
-              | Some(e) => Util.ice($"complex expr $e");
+              | Some(e) => UtilMacros.ice($"complex expr $e");
               | None => {}
             }
             name_parms (pos + 1, ps)
@@ -1085,7 +1086,7 @@ namespace Nemerle.Compiler
                 when (defaultValue != null || !type.IsValueType)
                   p.builder.SetConstant(defaultValue);
                 
-              | Some(e) => Util.ice($"complex expr $e");
+              | Some(e) => UtilMacros.ice($"complex expr $e");
               | None => ()
             }
             name_parms (pos + 1, ps)

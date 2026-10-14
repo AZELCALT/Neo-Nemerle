@@ -19,7 +19,7 @@ class Run {
 
   static Main () :  int
   {
-    mutable  iface = Nemerle.Extensions.DefaultValue (Iface) :Iface;
+    mutable  iface = Nemerle.ExtensionsMacros.DefaultValue (Iface) :Iface;
     mutable  i =  Implementor ();
 
     iface = i;

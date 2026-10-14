@@ -7,7 +7,7 @@ class Test
 {
         static Main () :  void
         {
-                mutable  Foo = Nemerle.Extensions.DefaultValue (Foo);
+                mutable  Foo = Nemerle.ExtensionsMacros.DefaultValue (Foo);
     Foo = Foo.x;
         }
 }

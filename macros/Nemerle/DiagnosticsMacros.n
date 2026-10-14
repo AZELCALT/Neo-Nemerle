@@ -1,0 +1,135 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle;
+using System.Text.RegularExpressions;
+using Nemerle.Collections;
+using Nemerle.Utility;
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
+using Nemerle.Diagnostics; // the runtime module these macros generate calls into
+
+// ---- core.n (Nemerle.Diagnostics) ----
+/**
+   Insert given expression before every expression in every sequence
+   of method's body.
+   Implicitly visible variables are [_line : int], [_file : string],
+   [_method : string], [_expr : string]
+   Meaning current line number, filename, method's name, next expression
+   which will be executed converted to human readable string
+ */
+[MacroUsage (MacroPhase.WithTypedMembers,
+                     MacroTargets.Method)]
+macro Trace (_ : TypeBuilder, m : MethodBuilder,
+             tracecall = <[
+                  Nemerle.IOMacros.printf ("Trace: %s:%d: %s --> %s\n",
+                                     $("_file" : usesite),
+                                     $("_line" : usesite),
+                                     $("_method" : usesite),
+                                     $("_expr" : usesite))
+                          ]>) {
+  def exps_strings = Stack ();
+  def add (in_pattern, is_post, x)
+  {
+    if (in_pattern)
+      x
+    else if (is_post)
+      match (x)
+      {
+        | <[ {.. $seq } ]> =>
+          // we must process seqence in reversed order, because
+          // stack was filled this way  {push 1; 2; 3; push last 4}
+          def nseq = seq.Rev().RevMap((e : PT.PExpr) =>
+            [<[
+               def $("_line" : usesite) = $(e.Location.Line : int);
+               def $("_expr" : usesite) = $(exps_strings.Pop () : string);
+               $tracecall;
+             ]>, e]).Flatten();
+          <[ { ..$nseq } ]>
+        | _ => x
+      }
+    else
+    {
+      match (x)
+      {
+        | <[ { .. $seq } ]> =>
+          foreach (e in seq)
+            exps_strings.Push (PrettyPrint.SprintExpr (None (), e));
+
+        | _ => ()
+      }
+
+      x
+    }
+  }
+  def bod = Macros.TraverseExpr (None (), m.Body, false, add);
+  def newBody = UtilMacros.locate(m.Body.Location, <[
+    def $("_file" : usesite) = $(m.Body.Location.File : string);
+    def $("_method" : usesite) = $(m.Name : string);
+    $bod;
+  ]>);
+
+  m.Body = newBody;
+}
+
+
+[MacroUsage (MacroPhase.WithTypedMembers,
+                     MacroTargets.Class)]
+macro Trace (t : TypeBuilder, tracecall) {
+  def meths = t.GetMethods (BindingFlags.Public %| BindingFlags.NonPublic %|
+                            BindingFlags.Instance %| BindingFlags.Static %| BindingFlags.DeclaredOnly);
+  foreach (x :> MethodBuilder in meths) {
+    x.AddMacroAttribute (<[ $("Nemerle" : usesite).Diagnostics.Trace ($tracecall) ]>);
+  }
+}
+
+
+macro @time (code)
+syntax ("time", code)
+{
+  def loc = code.Location.ToString ();
+  <[
+     def timer = System.Diagnostics.Stopwatch.StartNew();
+     try
+     {
+       $code;
+     }
+     finally
+     {
+       def took = timer.Elapsed;
+       System.Console.Write($(loc : string) + ": execution took ");
+       def oldColor = System.Console.ForegroundColor;
+       System.Console.ForegroundColor = System.ConsoleColor.Yellow;
+       System.Console.WriteLine(took);
+       System.Console.ForegroundColor = oldColor;
+     }
+  ]>
+}

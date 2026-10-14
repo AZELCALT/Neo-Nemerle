@@ -213,7 +213,7 @@ namespace Nemerle.Compiler
           | "<<" => ConvertSignTo (val1u << (val2u & 0x3F) :> int, lit1.treat_as)
 
           | _ => null
-          // Util.ice ("wrong operator " + op);
+          // UtilMacros.ice ("wrong operator " + op);
         }
 
       if (res != null) {
@@ -642,7 +642,7 @@ namespace Nemerle.Compiler
             null
           }
           else
-            Util.ice("overflow exception")
+            UtilMacros.ice("overflow exception")
       }
     }
 
@@ -663,7 +663,7 @@ namespace Nemerle.Compiler
             null
           }
           else
-            Util.ice ("overflow exception")
+            UtilMacros.ice ("overflow exception")
       }
     }
 

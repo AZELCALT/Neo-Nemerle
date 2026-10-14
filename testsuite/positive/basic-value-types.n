@@ -1,5 +1,6 @@
 
 using Nemerle.IO;
+using Nemerle.IOMacros;
 variant X { | Y | Z }
 type Q = X.Y;
 

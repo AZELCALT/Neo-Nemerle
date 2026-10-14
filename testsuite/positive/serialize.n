@@ -70,7 +70,7 @@ public class TestSimpleObject  {
         Console.WriteLine("member1 = '{0}'", member1);
         Console.WriteLine("member2 = '{0}'", member2);
         Console.WriteLine("member3 = '{0}'", member3);
-        Nemerle.IO.printf ("member4 = '%lf'\n", member4);
+        Nemerle.IOMacros.printf ("member4 = '%lf'\n", member4);
         Console.WriteLine("member5 = '{0}'", member5);
         Console.WriteLine("member6 = '{0}'", member6);
         Console.WriteLine("member7 = '{0}'", member7);

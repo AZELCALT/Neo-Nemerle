@@ -77,7 +77,7 @@ class Stress {
   static Main (mutable  args :  array [string]) :  void
   {
     {
-    mutable temp_2_return_ = Nemerle.Extensions.DefaultValue(void);
+    mutable temp_2_return_ = Nemerle.ExtensionsMacros.DefaultValue(void);
     mutable temp_1_break_loop_ = false;
     foreach ( arg : string in args)
     when (!temp_1_break_loop_ ){{

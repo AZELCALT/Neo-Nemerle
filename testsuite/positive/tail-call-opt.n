@@ -1,5 +1,6 @@
 using Nemerle.IO;
 using System.Console;
+using Nemerle.IOMacros;
 
 class Tailed {
   public foo (x : int, y : int) : int {

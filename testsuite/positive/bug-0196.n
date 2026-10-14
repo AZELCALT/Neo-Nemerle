@@ -1,5 +1,6 @@
 
 using Nemerle.IO;
+using Nemerle.IOMacros;
 
 public class A
 {

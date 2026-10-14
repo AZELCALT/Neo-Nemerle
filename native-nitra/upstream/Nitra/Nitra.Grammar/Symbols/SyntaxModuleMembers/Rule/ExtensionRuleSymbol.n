@@ -6,6 +6,7 @@ using Nitra.Utils;
 using Nemerle;
 
 using G = NitraSyntaxParseTree;
+using NemerleMacros;
 
 namespace Nitra.Typing
 {

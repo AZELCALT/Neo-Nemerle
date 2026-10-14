@@ -1,0 +1,1822 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Compiler;
+using Nemerle.Compiler.Typedtree;
+using Nemerle;
+using System.Text.RegularExpressions;
+using Nemerle.Collections;
+using Nemerle.Utility;
+using PT = Nemerle.Compiler.Parsetree;
+using TT = Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
+using Nemerle.Imperative;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.IO;
+using Nemerle.Macros;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+using Splicable = Nemerle.Compiler.Parsetree.Splicable;
+using Nemerle.Text;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.UtilityMacros;
+
+// ---- core.n ----
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "!",     true, 281, 280)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "~",     true, 281, 280)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "++",    true, 283, 284)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "?",     true, 283, 284)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "--",    true, 283, 284)]
+
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "in",    false, 120, 121)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "when",  false, 130, 131)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "with",  false, 130, 131)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "=",     false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "*=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "/=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "%=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "+=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "-=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "<<=",   false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">>=",   false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "&=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "^=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "|=",    false, 141, 140)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "=>",    false, 145, 120)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "??",    false, 146, 145)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "||",    false, 150, 151)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "&&",    false, 160, 161)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "==",    false, 165, 166)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "!=",    false, 165, 166)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "|",     false, 170, 171)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "%|",    false, 170, 171)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "^",     false, 180, 181)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "%^",    false, 180, 181)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "&",     false, 190, 191)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "%&",    false, 190, 191)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "%&&",   false, 190, 191)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "is",    false, 210, 211)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "<",     false, 210, 211)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">",     false, 210, 211)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "<=",    false, 210, 211)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">=",    false, 210, 211)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "as",    false, 215, 301)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "::",    false, 221, 220)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "<|",    false, 226, 225)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "|>",    false, 227, 228)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "<<",    false, 230, 231)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">>",    false, 230, 231)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "..",    false, 230, 231)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "+",     false, 240, 241)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "-",     false, 240, 241)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "->",    false, 251, 250)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "/",     false, 260, 261)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "%",     false, 260, 261)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "*",     false, 261, 260)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ":",     false, 270, 246)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ":>",    false, 270, 246)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "where", false, 284, 300)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "?.",    false, 285, 285)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ".",     false, 285, 301)]
+
+ // Nemerle.Imperative namespace
+
+ // Nemerle.Core namespace
+
+ // Nemerle.Macros namespace
+
+ // Nemerle.Extensions namespace
+
+ // Nemerle.Diagnostics namespace
+
+
+ // Nemerle namespace
+
+// ---- AssemblyInfo.n ----
+[assembly: System.Reflection.AssemblyTitle("Nemerle Language Macros Library")]
+[assembly: System.Reflection.AssemblyDescription("Nemerle (http://nemerle.org) Language Macros Library")]
+[assembly: System.Reflection.AssemblyCompany("University of Wroclaw")]
+[assembly: System.Reflection.AssemblyProduct("Nemerle Macros Library")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright @ University of Wroclaw 2003-2008, Nemerle Project Team 2008-2013")]
+[assembly: GeneratedAssemblyVersion("$GitTag.0.$GitRevision", Defaults(GitTag="1.2", GitRevision="9999"))]
+[assembly: System.Runtime.InteropServices.ComVisible (false)]
+
+// ---- core.n (Nemerle.Core) ----
+macro default(ty)
+{
+  def tty = Macros.ImplicitCTX().BindFixedType (ty);
+  <[ $(Macros.DefaultValueOfType (tty)) : $ty ]>
+}
+
+macro @debudhelper(expr)
+syntax ("debudhelper", expr)
+{
+  expr
+}
+
+/** MACROS EXTENDING SYNTAX OF LANGUAGE */
+
+/**
+ * The 'unchecked' macro, it is only a syntax-extension place holder.
+ * All the real work is done inside the typer.
+ */
+macro @unchecked (expr)
+syntax ("unchecked", expr)
+{
+  <[ dont_use_me ($expr) ]>
+}
+
+/**
+ * The 'checked' macro, it is only a syntax-extension place holder.
+ * All the real work is done inside the typer.
+ */
+macro @checked (expr)
+syntax ("checked", expr)
+{
+  <[ dont_use_me ($expr) ]>
+}
+
+
+/// Yet another syntax extender.
+macro @yield (expr = null)
+  syntax ("yield", expr)
+{
+  <[ dont_use_me ($expr) ]>
+}
+
+/** specialized macro for [if] condition with good warning messages,
+    it performs typing of given expressions to check their type
+    correctness
+ */
+macro @if (cond, e1, e2)
+syntax ("if", "(", cond, ")", e1, Optional (";"), "else", e2)
+{
+  Internal.IfImpl.Impl(cond, e1, e2)
+}
+
+/** shortcut for [if (cond) body else ()] */
+macro whenmacro (cond, body)
+syntax ("when", "(", cond, ")", body)
+{
+  Internal.IfImpl.Impl(cond, <[ $body : void ]>, <[ () ]>)
+}
+
+public module Internal
+{
+  public module IfImpl
+  {
+    public Impl(cond : PT.PExpr, e1 : PT.PExpr, e2 : PT.PExpr) : PT.PExpr
+    {
+      def res = UtilMacros.locate(cond.Location,
+        match (cond)
+        {
+          | <[ $subCond is $pattern ]>             =>
+            if (Typer.CanBeTypeName(pattern))         <[ match ($subCond)     { | _ is $pattern             => $e1  | _ => $e2 } ]>
+            else                                      <[ match ($subCond)     { |      $pattern             => $e1  | _ => $e2 } ]>
+          | <[ $subCond is $pattern when $guard ]> =>
+            if (Typer.CanBeTypeName(pattern))         <[ match ($subCond)     { | _ is $pattern when $guard => $e1  | _ => $e2 } ]>
+            else                                      <[ match ($subCond)     { |      $pattern when $guard => $e1  | _ => $e2 } ]>
+          | _                                      => <[ match ($cond : bool) { | true                      => $e1  | _ => $e2 } ]>
+        });
+      match (res.cases)
+      {
+        | [_, case2] =>
+          case2.patterns.Iter(x => x.Location = e2.Location);
+        | _ => assert(false);
+      }
+      res
+    }
+  }
+}
+
+/** this macro provides convenient way to write a simple while loop,
+    which performs execution of [body] parameter as long as
+    [condition] is true
+  */
+macro @while (cond, body)
+syntax ("while", "(", cond, ")", body)
+{
+  <[
+    ($("_N_break" : global) : {
+      def loop () : void
+      {
+        when ($cond)
+        {
+          ($("_N_continue" : global) : {
+            $body
+          }) : void;
+          loop ()
+        }
+      }
+
+      loop ();
+    }) : void
+  ]>
+}
+
+/**
+ * while .. otherwise macro.
+ * else block is called when while block was not called.
+ */
+macro WhileOtherwise(cond, body, otherwiseBody)
+syntax ("while", "(", cond, ")", body, "otherwise", otherwiseBody)
+{
+  <[
+    mutable firstHit = false;
+
+    while ($cond)
+    {
+      firstHit = true;
+      $body
+    }
+
+    when (!firstHit)
+      $otherwiseBody;
+  ]>
+}
+
+macro repeatmacro (times, body)
+syntax ("repeat", "(", times, ")", body)
+{
+  <[ for (mutable t = $times; t > 0; --t) $body ]>
+}
+
+macro @for(init, cond, change, body)
+syntax ("for", "(", Optional(init), ";", Optional(cond), ";", Optional(change), ")", body)
+{
+  def init   = if (init != null)   init   else <[ () ]>;
+  def cond   = if (cond != null)   cond   else <[ true ]>;
+  def change = if (change != null) change else <[ () ]>;
+
+  <[
+    $init;
+    ($("_N_break" : global) :
+    {
+      def loop() : void
+      {
+        when ($cond)
+        {
+          ($("_N_continue" : global) :
+          {
+            $body
+          }) : void;
+          $change;
+          loop()
+        }
+      }
+
+      loop();
+    }) : void
+  ]>
+}
+
+/**
+ * for .. otherwise macro.
+ * else block is called when for block was not called.
+ */
+macro ForOtherwise(init, cond, change, body, otherwiseBody)
+syntax ("for", "(", Optional(init), ";", Optional(cond), ";", Optional(change), ")", body, "otherwise", otherwiseBody)
+{
+  <[
+    mutable firstHit = false;
+
+    for ($init; $cond; $change)
+    {
+      firstHit = true;
+      $body
+    }
+
+    when (!firstHit)
+      $otherwiseBody;
+  ]>
+}
+
+/** shortcut for [if (cond) () else body] */
+macro @unless (cond, body)
+syntax ("unless", "(", cond, ")", body)
+{
+  <[ match ($cond) { | false => $body : void | _ => () } ]>
+}
+
+/** macro providing C# 'using' functionality
+    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/csspec/html/vclrfcsharpspec_8.asp
+    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/csref/html/vclrfusingstatement.asp
+ */
+macro @using (body, params args : array [expr])
+syntax ("using", "(", args, ")", body)
+{
+  def (preexps, postexps) = UsingMacroGenerator.ProcessUsingArgs (args);
+  UsingMacroGenerator.OutputExpression (preexps, postexps, body, null);
+}
+
+macro using_catch (body, catch_block, params args : array [expr])
+syntax ("using", "(", args, ")", body, "catch", catch_block)
+{
+  def (preexps, postexps) = UsingMacroGenerator.ProcessUsingArgs(args);
+  def cases = UsingMacroGenerator.ConvertMatchToCatchCases(catch_block, Macros.ImplicitCTX());
+  UsingMacroGenerator.OutputExpression(preexps, postexps, body, cases);
+}
+
+internal module UsingMacroGenerator
+{
+  public ConvertMatchToCatchCases(cases : PT.PExpr, typer : Typer) : list[PT.TryCase]
+  {
+    match (cases)
+    {
+      | <[ match ($_) { ..$cases } ]> =>
+        cases.Map(
+          fun(c)
+          {
+            | <[ case: $(x : name) => $exp ]> with exc = <[ System.Exception ]>
+            | <[ case: $(x : name) is $exc => $exp ]> =>
+              PT.TryCase.Catch(c.Location, PT.Splicable.Name(x), exc, exp)
+
+            | <[ case: $(PT.PExpr.Wildcard as wc) => $exp ]> with exc = <[ System.Exception ]>
+            | <[ case: $(PT.PExpr.Wildcard as wc) is $exc => $exp ]> =>
+              def loc = wc.Location;
+              def name = PT.Splicable.Name(loc, PT.Name.NameInCurrentColor(Util.tmpname("wildcard"), "_", loc, typer.Env));
+              PT.TryCase.Catch(c.Location, name, exc, exp)
+
+            | _ =>
+              Message.Error ("expected simple catch pattern: '| x is Exception => body'");
+              null
+          })
+
+      | _ => null
+    }
+  }
+
+  public ProcessUsingArgs (args : array [PT.PExpr]) : list [PT.PExpr] * list [PT.PExpr]
+  {
+    def len = args.Length;
+    def store_exprs (i, preexprs, postexprs)
+    {
+      if (i < len) {
+        match (args[i]) {
+          | <[ mutable $(str : name) = $e ]> =>
+            store_exprs (i + 1, <[ mutable $(str : name) = $e ]> :: preexprs,
+                         <[ maybe_valuetype_dispose ($(str : name)) ]> :: postexprs)
+
+          | <[ def $(str : name) = $e ]>
+          | <[ $(str : name) = $e ]> =>
+            store_exprs (i + 1, <[ def $(str : name) = $e ]> :: preexprs,
+                         <[ maybe_valuetype_dispose ($(str : name)) ]> :: postexprs)
+          | e =>
+            def x = Macros.NewSymbol ();
+            store_exprs (i + 1, <[ def $(x : name) = $e ]> :: preexprs,
+                         <[ maybe_valuetype_dispose ($(x : name)) ]> :: postexprs)
+        }
+      }
+      else
+        (preexprs, postexprs)
+    }
+    store_exprs (0, [], []);
+  }
+
+  public OutputExpression (preexps : list[PT.PExpr], postexps : list [PT.PExpr],
+                           body : PT.PExpr, catch_cases : list [PT.TryCase]) : PT.PExpr
+  {
+    def body = if (catch_cases == null) body
+      else <[
+        try { $body }
+        catch { ..$catch_cases }
+      ]>;
+    preexps.FoldLeft2(postexps, body,
+      (pre, post, acc) => <[ $pre; try { $acc } finally { $post } ]>);
+  }
+}
+
+// disposes given value, if it is reference type then check nullness before disposing
+macro maybe_valuetype_dispose (val)
+{
+  // this should also work
+  <[
+    def disp = $val : System.IDisposable;
+    when (disp != null)
+      disp.Dispose ();
+  ]>
+
+  /*
+  def tval = Tyexpr.ty_expr (Nemerle.Macros.ImplicitCTX (), val);
+  def tc = Tyutil.GetTypeTypeInfo (Tyexpr.type_of (tval));
+  if (tc != null && tc.IsValueType)
+    <[ ($(tval : typed) :> System.IDisposable).Dispose () ]>
+  else
+    <[
+      when ($(tval : typed) != null)
+        ($(tval : typed) :> System.IDisposable).Dispose ()
+    ]>
+  */
+}
+
+macro @lock(lockOnExpr, body)
+syntax ("lock", "(", lockOnExpr, ")", body)
+{
+  def typer = Macros.ImplicitCTX();
+  def lockOnTExpr = typer.TypeExpr(lockOnExpr);
+
+  typer.DelayMacro(lastTry =>
+    match (lockOnTExpr.Type.Hint)
+    {
+      | Some(Class(typeInfo, _)) when typeInfo.IsValueType =>
+        when (lastTry)
+          Message.Error (lockOnExpr.Location,
+            $"`$typeInfo' is not a reference type as required by the lock expression");
+        None()
+
+      | None =>
+        when (lastTry)
+          Message.Error (lockOnExpr.Location,
+            "compiler was unable to analyze type of locked object, but it "
+            "must verify that it is reference type");
+        None()
+
+      | _ =>
+        def result =
+          <[
+            def toLock = $(lockOnTExpr : typed);
+            System.Threading.Monitor.Enter(toLock);
+            try { $body }
+            finally { System.Threading.Monitor.Exit(toLock); }
+          ]>;
+
+        Some(result)
+    }
+  );
+}
+
+macro dowhile (cond, body)
+syntax ("do", body, "while", "(", cond, ")")
+{
+  def loop = Nemerle.Macros.Symbol (Util.tmpname ("do_while"));
+
+  <[
+    (($("_N_break" : global) : {
+      def $(loop : name) () : void {
+        ($("_N_continue" : global) : {
+          $body
+        }) : void;
+        when ($cond)
+          $(loop : name) ();
+      }
+      $(loop : name) ()
+    }) : void)
+  ]>
+}
+
+internal module ForeachModule
+{
+  public ParseInExpr(inexpr : PT.PExpr) : PT.PExpr * PT.PExpr * PT.Name
+  {
+    | <[ $i in $c ]> =>
+      match (c)
+      {
+        | <[ $c with $(index : name) ]>  => (i, c, index) //Message.Hint($"Index is $index ($(index.GetType()))");
+        | _                              => (i, c, null)
+      }
+
+    | e => MessageMacros.FatalError($<#the syntax is ' "foreach" "(" name "in" collection (with indexName)? ")" body ', got $e#>);
+  }
+}
+
+/**
+ * The 'foreach' macro introduces a construction equivalent
+ * to C#'s 'foreach' keyword, iterating over a collection.
+ */
+macro @foreach (inexpr, body)
+syntax ("foreach", "(", inexpr, ")", body)
+{
+  when (ListComprehensionHelper.ExpandRange(inexpr, body) is Some(expr))
+    return expr;
+
+  def (iter, collection, index) = ForeachModule.ParseInExpr(inexpr);
+
+  def typer = Macros.ImplicitCTX();
+  def tcollection = typer.TypeExpr(collection);
+
+  // build the body of loop (may contain additional matching)
+  def build_definition(val)
+  {
+    match (body)
+    {
+      | <[ match ($(null)) { ..$cases } ]> =>
+        match (iter)
+        {
+          | <[ $(x : name) ]> when char.IsLower(x.Id[0]) | <[ (..$_) ]> => ()
+          | _ => MessageMacros.FatalError("only simple names available in pattern of foreach with direct matching")
+        }
+
+        <[ def $iter = $val;
+           match ($iter) { ..$cases } ]>
+
+      | _ =>
+        def mat =
+          match (iter)
+          {
+            | <[ $pat :> $ty ]> => <[ match ($val :> $ty) { | $pat  => $body; () | _ => () } ]>
+            | _                 => <[ match ($val)        { | $iter => $body; () | _ => () } ]>
+          };
+        mat.cases.Iter (fun (x : PT.MatchCase) { x.disable_warnings = true });
+        mat
+    }
+  }
+
+  // here we choose if we want to use enumerator pattern
+  // of access GetEnumerator through IEnumarable
+  // http://www.jaggersoft.com/csharp_standard/15.8.4.htm
+  def decide_enumerator_pattern (tyinfo)
+  {
+    def all = tyinfo.LookupMember ("GetEnumerator");
+
+    def choosen = all.Exists(
+      fun(mem : IMember)
+      {
+        | meth is IMethod when !meth.IsStatic && meth.GetParameters().IsEmpty =>
+          match (meth.ReturnType.Fix())
+          {
+            // FIXME: do additional conservative checks
+            | FixedType.Class(tc, _) when
+              !tc.LookupMember("MoveNext").IsEmpty &&
+              !tc.LookupMember("Current").IsEmpty => true
+
+            | _ => false
+          }
+        | _ => false
+      });
+
+    if (choosen)
+      <[ $(tcollection : typed).GetEnumerator () ]>
+    else
+    {
+        Macros.DefineCTX(typer);
+        def iEnumerableType = <[ ttype: System.Collections.Generic.IEnumerable[_] ]>;
+
+        def ty = tcollection.Type;
+        if (ty.TryRequire(iEnumerableType))
+        {
+          ty.ForceRequire(iEnumerableType);
+          <[ ($(tcollection : typed) : System.Collections.Generic.IEnumerable[_]).GetEnumerator () ]>
+        }
+        else
+          <[ ($(tcollection : typed) : System.Collections.IEnumerable).GetEnumerator () ]>
+    }
+  }
+
+  def afterObtainCollectionType(lastAttempt)
+  {
+    def error(t)
+    {
+      when (lastAttempt)
+      {
+        def guess =
+          match (t)
+          {
+            | Some(t) => $"current best guess about the type is $t"
+            | None    => "the compiler has no idea what the type might be"
+          };
+        Message.Error($"collection in foreach must be an array or type implementing enumerator pattern, $guess");
+        Message.Hint("try specifing the type directly using 'expr : SomeType'");
+      }
+
+      None()
+    }
+
+    def make_for_enumerator(tc : TypeInfo)
+    {
+      def init_body = decide_enumerator_pattern (tc);
+
+      def (is_disposable, isValueType) = typer.JustTry(
+        fun ()
+        {
+          def expr = typer.TypeExpr(init_body);
+          (expr.Type.Require(<[ ttype: System.IDisposable ]>), expr.Type.IsValueType)
+        });
+
+      def finally_body =
+        if (is_disposable)
+          <[ (enumerator : System.IDisposable).Dispose() ]>
+        else if (isValueType)
+          <[ () ]>
+        else
+          <[
+            when (enumerator is System.IDisposable)
+              (enumerator :> System.IDisposable).Dispose();
+          ]>;
+
+      def definition = build_definition (<[ enumerator.Current ]>);
+      def wrapInTryFinally(body : PT.PExpr, finally_body : PT.PExpr) : PT.PExpr
+      {
+        if (finally_body is <[ () ]>)
+          body
+        else
+          <[
+            try     { $body }
+            finally { $finally_body }
+          ]>
+      }
+
+      if (index == null)
+        Some(<[
+          def enumerator = $init_body;
+
+          ($("_N_break" : global) :
+          {
+            def loop() : void
+            {
+              when (enumerator.MoveNext())
+              {
+                ($("_N_continue" : global) : { $definition; }) : void;
+                loop();
+              }
+            }
+            $(wrapInTryFinally(<[ loop() ]>, finally_body))
+          }) : void
+        ]>)
+      else
+        Some(<[
+          def enumerator = $init_body;
+
+          ($("_N_break" : global) :
+          {
+            def loop($(index : name) : int) : void
+            {
+              when (enumerator.MoveNext())
+              {
+                ($("_N_continue" : global) : { $definition; }) : void;
+                loop($(index : name) + 1);
+              }
+            }
+            $(wrapInTryFinally(<[ loop(0) ]>, finally_body))
+          }) : void
+        ]>)
+    }
+
+    def make_for_list(args)
+    {
+      def arg = args.Head;
+      def definition = build_definition (<[ x ]>);
+      if (index == null)
+        Some(<[
+          // we explicitly set parameter type to list, because collection's type
+          // can be more specific (list.Cons, etc.)
+          ($("_N_break" : global) : {
+            def foreach_loop (_ : list [$(arg : typed)]) : void
+            {
+              | x :: xs =>
+                ($("_N_continue" : global) : { $definition; }) : void;
+                foreach_loop (xs)
+              | _ => ()
+            }
+
+            foreach_loop ($(tcollection : typed))
+          }) : void
+        ]>)
+      else
+        Some(<[
+          // we explicitly set parameter type to list, because collection's type
+          // can be more specific (list.Cons, etc.)
+          ($("_N_break" : global) :
+          {
+            def foreach_loop(lst : list[$(arg : typed)], $(index : name) : int) : void
+            {
+              match (lst)
+              {
+                | x :: xs =>
+                  ($("_N_continue" : global) : { $definition; }) : void;
+                  foreach_loop(xs, $(index : name) + 1)
+
+                | _ => ()
+              }
+            }
+
+            foreach_loop ($(tcollection : typed), 0)
+          }) : void
+        ]>)
+    }
+
+    def make_for_array(rank)
+    {
+      def one_dim_case()
+      {
+        def index = if(index != null) <[ $(index : name) ]> else <[ index ]>;
+        def definition = build_definition(<[ cached_collection[$index] ]>);
+        <[
+          // accessing to Length property like here
+          // should trigger CLR to enable "remove of array bounds checking" optimization
+          for (mutable $index = 0; $index < cached_collection.Length; ++ $index)
+            $definition;
+        ]> :: []
+      }
+
+      def multi_dim_case()
+      {
+        def indices = array(rank);
+        def lengths = array(rank);
+
+        for (mutable i = 0; i < rank; ++i)
+        {
+          indices[i] = Macros.NewSymbol();
+          lengths[i] = Macros.NewSymbol();
+        }
+
+        def indices_list = indices.AsList().RevMap(x => <[ $(x : name) ]>);
+        def build_loops(depth)
+        {
+          /// build expression defining iteration symbols
+          | 0 =>
+            def definition = build_definition(<[ cached_collection[..$indices_list] ]>);
+            def definition = <[ ($("_N_continue" : global) : { $definition }) : void; ]>;
+            if(index != null)
+              <[ $definition; ++ $(index : name); ]>
+            else
+              definition;
+
+          | n =>
+            def idx = indices[n - 1];
+
+            // 'for' cycle implementation
+            <[
+              mutable $(idx : name) = 0;
+              def loop() : void
+              {
+                when($(idx : name) < $(lengths[n - 1] : name))
+                {
+                  $(build_loops(n - 1));
+                  ++ $(idx : name);
+                  loop()
+                }
+              }
+              loop();
+            ]>
+        }
+
+        mutable sequence =
+          <[
+            ($("_N_break" : global) : { $(build_loops(rank)) }) : void
+          ]>
+          :: [];
+
+        for (mutable i = rank - 1; i >= 0; --i)
+          sequence ::= <[ def $(lengths[(rank - 1) - i] : name) = cached_collection.GetLength($(i : int)) ]>;
+
+        when (index != null)
+          sequence ::= <[ mutable $(index : name) : int = 0; ]>;
+
+        sequence
+      }
+
+      def sequence =
+        <[ def cached_collection = $(tcollection : typed) ]>
+        :: if(rank == 1) one_dim_case() else multi_dim_case();
+
+      Some(<[ { .. $sequence } ]>)
+    }
+
+    def make(t)
+    {
+      | Some (FixedType.Class (tc, args)) =>
+        if (tc.InternalType.Nemerle_list_tc != null && tc.IsDerivedFrom(tc.InternalType.Nemerle_list_tc))
+          make_for_list(args)
+        else
+          make_for_enumerator(tc)
+
+      | Some (FixedType.Array (_ , rank)) => make_for_array(rank)
+      | Some(ty) => // It can happen if type, for example, "type parameter" (MTypwe.StaticTypeVarRef(StaticTypeVar)).
+        Macros.DefineCTX(typer);
+        def iEnumerableType = <[ ttype: System.Collections.Generic.IEnumerable[_] ]>;
+
+        if (ty.TryRequire(iEnumerableType))
+        {
+          ty.ForceRequire(iEnumerableType);
+          make(iEnumerableType.Hint)
+        }
+        else error(t)
+
+      | _ => error(t)
+    }
+
+    make(tcollection.Type.Hint)
+  }
+
+  typer.DelayMacro(afterObtainCollectionType)
+}
+
+/**
+ * foreach .. otherwise macro.
+ * otherwise block is called when foreach block was not called.
+ */
+public macro ForeachOtherwise(inexpr, body, otherwiseBody)
+syntax ("foreach", "(", inexpr, ")", body, "otherwise", otherwiseBody)
+{
+  def (iter, _, _) = ForeachModule.ParseInExpr(inexpr);
+
+  match (body)
+  {
+    // Implicit match case
+    | <[ match ($(null)) { ..$cases } ]> with newBody = <[match ($iter) { ..$cases } ]>
+    // Other cases
+    | _ with newBody = body =>
+      <[
+        mutable firstHit = false;
+
+        foreach ($inexpr)
+        {
+          firstHit = true;
+          $newBody
+        }
+
+        when (!firstHit)
+          $otherwiseBody;
+      ]>
+  }
+}
+
+macro ignore(params exprs : list[PExpr])
+{
+  def exprs = exprs.Map(e => <[ def _ = $e; ]>);
+  <[ { ..$exprs } ]>
+}
+
+macro IgnoreParams()
+{
+  foreach (p in Macros.ImplicitCTX().CurrentFunction.Parameters)
+    p.decl.EverUsed = true;
+
+  <[ {} ]>
+}
+
+macro abort (message = <[ "" ]>)
+{
+  <[ throw AssertionException ($(message.Location.File : string),
+                               $(message.Location.Line : int), "", $message) ]>
+}
+
+/** MACROS EXTENDING TYPE SYSTEM OF LANGUAGE */
+
+/* NEW RECORD */
+
+[MacroUsage (MacroPhase.BeforeInheritance,
+                     MacroTargets.Field,
+                     Inherited = false, AllowMultiple = false)]
+macro RecordIgnore (ty : TypeBuilder, fld : ParsedField)
+{
+  MacrosHelper.MarkIgnored (ty, fld);
+}
+
+[MacroUsage (MacroPhase.BeforeInheritance,
+                     MacroTargets.Property,
+                     Inherited = false, AllowMultiple = false)]
+macro RecordIgnore (ty : TypeBuilder, property : ParsedProperty)
+{
+  MacrosHelper.MarkIgnored (ty, property);
+}
+[MacroUsage (MacroPhase.BeforeInheritance,
+                     MacroTargets.Method,
+                     Inherited = false, AllowMultiple = false)]
+macro RecordIgnore (ty : TypeBuilder,  method : ParsedMethod)
+{
+  MacrosHelper.MarkIgnored (ty, method);
+}
+
+[MacroUsage(MacroPhase.BeforeInheritance,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro Record(ty : TypeBuilder, params _ : list [PExpr])
+{
+  ty.DisableImplicitConstructor();
+}
+
+[MacroUsage(MacroPhase.BeforeTypedMembers,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro Record(ty : TypeBuilder, params options : list[PExpr])
+{
+  MacrosHelper.MakeRecord (ty, options);
+}
+
+public module MacrosHelper
+{
+  public  InstanceFlags : Nemerle.Compiler.BindingFlags = Nemerle.Compiler.BindingFlags.Instance %| Nemerle.Compiler.BindingFlags.Public
+                         %| Nemerle.Compiler.BindingFlags.NonPublic %| Nemerle.Compiler.BindingFlags.DeclaredOnly;
+  private IgnoreMapKey = "RecordIgnored-MemberIgnoreMapKey";
+
+  public MakeRecord (ty : TypeBuilder, options : list[PT.PExpr]) : void
+  {
+    if (ty.IsDelegate)
+      Message.Error(ty.Location, "The Record macro not support a delegate. See http://nemerle.org/wiki/Record_macro.");
+    else if (ty.IsEnum)
+      Message.Error(ty.Location, "The Record macro not support a enum. See http://nemerle.org/wiki/Record_macro.");
+    else if (ty.IsInterface)
+      Message.Error(ty.Location, "The Record macro not support a interface. See http://nemerle.org/wiki/Record_macro.");
+    else if (ty.IsModule)
+      Message.Error(ty.Location, "The Record macro not support a module. See http://nemerle.org/wiki/Record_macro.");
+    else
+    {
+      def (patterns, modifer) = AnalyseNameInclusionPatterns (options);
+      def fields = CollectFields(ty, patterns);
+      InheritConstructorsAddingFields (ty, fields, modifer);
+    }
+  }
+
+  public InheritConstructorsAddingFields (ty : TypeBuilder, fields : list[PT.ClassMember.Field * bool], modifier : NemerleModifiers) : void
+  {
+    def define_ctor (base_ctor : BaseConstructor) : void
+    {
+      def has_empty_ctor (ty) {
+        def predicate(member) {
+          | PT.ClassMember.Function as func =>
+            func.Name == ".ctor" && func.header.Parameters.IsEmpty;
+          | _ => false;
+        }
+        ty.GetParsedMembers (true).Exists (predicate);
+      }
+
+      // Build parameters declarations
+      def (lead_base_parms, trail_base_parms) = base_ctor.BaseParameters (ty);
+      def getNewName(parm)
+      {
+        def newName = parm.name.GetIdentifier();
+        def newNameFixed =
+          if (newName.StartsWith("_N_"))
+          {
+            def lastIndex = newName.LastIndexOf('_');
+            if(lastIndex > 2)
+              newName.Substring(3, lastIndex - 3);
+            else
+              newName.Substring(3);
+          }
+          else if (newName.StartsWith("_"))
+          {
+            newName.TrimStart(array['_']);
+          }
+          else
+            newName;
+
+        def firstCharLowered = char.ToLower(newNameFixed[0]).ToString() + newNameFixed.Substring(1);
+        PT.Splicable.Name(parm.name.GetName().NewName(firstCharLowered));
+      }
+
+
+      def this_parms = fields.Map ((parm, _) => {
+        def realName = parm.name.GetIdentifier();
+        def newName  = getNewName(parm);
+        <[ parameter: [Nemerle.Internal.MappedMemberAttribute($realName)] $(newName) : $(parm.ty) ]>
+      });
+      def parms = lead_base_parms + this_parms + trail_base_parms;
+
+      // Build base constructor call
+      def base_call = base_ctor.BaseCall;
+
+      // Deduce constructor attributes
+      def modifiers =
+        match (ty.GetTydecl ()) {
+          | TypeDeclaration.Variant => NemerleModifiers.Protected
+          | _ => modifier;
+        }
+      def attrs = AttributesAndModifiers(modifiers, [<[ Nemerle.Internal.RecordCtorAttribute ]>]);
+
+      // Skip generation of empty constructor if it exists
+      when (!parms.IsEmpty || !has_empty_ctor (ty))
+      {
+        def assigns = base_call :: fields.Map(
+          (parm : PT.ClassMember.Field, notNull) =>
+          {
+            def newName = getNewName(parm);
+            if (notNull)
+              <[
+                 when ($(newName.GetName() : name) : object == null)
+                   throw System.ArgumentNullException($(newName.ToString() : string));
+                 this.$(parm.Name : usesite) = $(newName.GetName() : name);
+              ]>
+            else
+              <[ this.$(parm.Name : usesite) = $(newName.GetName() : name); ]>
+        });
+        def ctor = <[ decl: ..$attrs this (..$(parms)) { ..$assigns } ]>;
+        ty.Define (ctor);
+      }
+    }
+
+    def ctors = CollectBaseConstructors (ty);
+    ctors.Iter (define_ctor);
+  }
+
+  public AnalyseNameInclusionPatterns (options : list[PT.PExpr]) : (Regex * Regex * Regex) * NemerleModifiers
+  {
+    mutable inclusion = null;
+    mutable exclusion = null;
+    mutable notNull   = null;
+    mutable modifier:NemerleModifiers = NemerleModifiers.Public;
+    foreach (e in options) {
+      | <[ Include = [..$names] ]> =>
+        inclusion = Regex ("^" + names.ToString("$|^") + "$")
+      | <[ Include = $(pattern : string) ]> =>
+        inclusion = Regex (pattern)
+      | <[ Exclude = [..$names] ]> =>
+        exclusion = Regex ("^" + names.ToString ("$|^") + "$")
+      | <[ Exclude = $(pattern : string) ]> =>
+        exclusion = Regex (pattern)
+      | <[ NotNull = [..$names] ]> =>
+        notNull = Regex ("^" + names.ToString("$|^") + "$")
+      | <[ NotNull = $(pattern : string) ]> =>
+        notNull = Regex (pattern)
+      | <[ Modifier = $(parsedModifer) ]> =>
+         modifier = match(parsedModifer)
+         {
+         | <[Public]>              => NemerleModifiers.Public;
+         | <[Internal]>            => NemerleModifiers.Internal;
+         | <[InternalProtected]>   => (NemerleModifiers.Internal | NemerleModifiers.Protected);
+         | <[Protected]>           => NemerleModifiers.Protected;
+         | <[Private]>             => NemerleModifiers.Private;
+         | _                       => NemerleModifiers.Public;
+         }
+      | e =>
+        Message.Error (e.Location, $"unsupported argument `$e' in macro, please specify 'Include/Exclude = [name1,name2]/pattern")
+    }
+    ((inclusion, exclusion, notNull), modifier)
+  }
+
+  public NameMatchesPatterns (name : string, patterns : Regex * Regex * Regex) : bool
+  {
+    def (inclusion, exclusion, _) = patterns;
+    (inclusion == null || inclusion.Match (name).Success) &&
+    (exclusion == null || !exclusion.Match (name).Success)
+  }
+
+  public MarkIgnored (ty : TypeBuilder, member : PT.ClassMember) : void
+  {
+    match(member)
+    {
+      | PT.ClassMember.Function when member.Name == ".ctor" =>
+          member.AddCustomAttribute(<[ Nemerle.Internal.IgnoreConstructorAttribute ]>);
+          
+      | PT.ClassMember.Field
+      | PT.ClassMember.Property =>
+        member.AddCustomAttribute(<[ Nemerle.Internal.IgnoreFieldAttribute ]>);
+        
+      | _ => MessageMacros.FatalError("Invalid usage for RecordIgnore");
+    }
+    
+    
+    def saveMarkInUserData(ty : TypeBuilder, member : PT.ClassMember) : void
+    {
+      mutable ignoreMap = ty.UserData[IgnoreMapKey] :> SCG.Dictionary[PT.ClassMember, byte];
+    
+      when (ignoreMap == null)
+      {
+        ignoreMap = SCG.Dictionary();
+        ty.UserData[IgnoreMapKey] = ignoreMap;
+      }
+
+      ignoreMap[member] = 1;
+    }
+    
+    saveMarkInUserData(ty, member);
+  }
+
+  #region Implementation
+
+  private CollectFields(tb : TypeBuilder, patterns : Regex * Regex * Regex) : list[PT.ClassMember.Field * bool]
+  {
+    def ignoreMap = tb.UserData[IgnoreMapKey] :> SCG.Dictionary[PT.ClassMember, byte];
+    def isIgnored(member : PT.ClassMember) : bool
+    {
+      ignoreMap != null && ignoreMap.ContainsKey(member);
+    }
+    def filter_type(member)
+    {
+      | PT.ClassMember.Field
+      | PT.ClassMember.Property(parameters = [],
+          getter = Some(PT.ClassMember.Function(_, _, FunBody.Abstract)),
+          setter = Some(PT.ClassMember.Function(_, _, FunBody.Abstract)))
+      | PT.ClassMember.Property(parameters = [],
+          getter = Some(PT.ClassMember.Function(_, _, FunBody.Abstract)),
+          setter = None())
+        when !(member.modifiers.mods %&& NemerleModifiers.Abstract) =>
+        // Automatic generated properties are used in constructor too.
+        // Since it is allowed to write in constructor: "MyAutoProperty = initValue;"
+        // Get-only properties are automatic generated only when they are not abstract.
+        !(member.modifiers.mods %&& NemerleModifiers.Static)
+        && NameMatchesPatterns(member.Name, patterns)
+        && !isIgnored(member)
+        
+      | _ => false;
+    }
+    def (_, _, notNull) = patterns;
+    def matchNotNull(name)
+    {
+      notNull != null && notNull.Match(name).Success
+    }
+
+    tb.GetParsedMembers (true)
+      .MapFiltered (filter_type, fun(_)
+      {
+        | PT.ClassMember.Field    as f => (f, matchNotNull(f.Name))
+        | PT.ClassMember.Property as p => (<[ decl: $(p.Name : usesite) : $(p.returnType) ]>, matchNotNull(p.Name))
+        | _ => assert(false)
+      })
+  }
+
+  private CollectBaseConstructors (ty : TypeBuilder) : list[BaseConstructor]
+  {
+    def collect_ctors (ty : TypeInfo)
+    {
+      | ty is TypeBuilder => // Base class is defined in the same assembly and is available in parsed form
+        def filter (member)
+        {
+          | PT.ClassMember.Function as func =>
+            func.Name == ".ctor" && !func.GetCustomAttributes().Map(_.ToString()).Contains("Nemerle.Internal.IgnoreConstructorAttribute") &&
+            !(func.modifiers.mods %&& NemerleModifiers.Private);
+          | _ => false;
+        }
+        ty.GetParsedMembers (true)
+          .MapFiltered(filter, ctor => BaseConstructor.Parsed(ctor :> PT.ClassMember.Function));
+      | _ =>  // Base class is not available in parsed form because it is defined in some other assembly
+        ty.GetConstructors (InstanceFlags)
+          .MapFiltered (ctor => !ctor.IsPrivate &&
+          // FIXME: VladD2: Это явный баг! В макросах нельзя использовать рефлексию! 
+          ctor.GetConstructorInfo()
+          .GetCustomAttributes(typeof(Nemerle.Internal.IgnoreConstructorAttribute),false).Length == 0
+          , ctor => BaseConstructor.Compiled (ctor));
+    }
+    if (ty.IsValueType)
+      [BaseConstructor.Implicit (false)];
+    else match (collect_ctors (ty.BaseType)) {
+           | [] => [BaseConstructor.Implicit (true)];
+           | ctors => ctors;
+         };
+  }
+
+  variant BaseConstructor
+  {
+    | Parsed {
+        Ctor : PT.ClassMember.Function;
+        public override BaseParameters(target_ty : TypeBuilder) : list[PT.PParameter] * list[PT.PParameter]
+        {
+          // Split leading and trailing parameters
+          def is_param_array (parm)
+          {
+            parm.modifiers.custom_attrs.Exists(attr => attr is <[ System.ParamArrayAttribute ]>)
+          }
+          def (trail, lead) = Ctor.header.Parameters.Partition (is_param_array);
+
+          def base_tb = target_ty.BaseType :> TypeBuilder;
+          def subst   = target_ty.SubtypingSubst(base_tb);
+          // Build base ctor parameter based on type substitution
+          def bind_to_target(parm)
+          {
+            def bound_type = match(parm.Type)
+            {
+              | PT.PExpr.ParmByRef(t)
+              | PT.PExpr.ParmOut(t)
+              | t                     => base_tb.BindFixedType(t)
+            };
+            def this_type = subst.Apply(bound_type);
+            match (parm.Type)
+            {
+              | PT.PExpr.ParmByRef => <[ parameter: ..$(parm.modifiers) $(parm.Name : usesite) : ref $(this_type : typed) ]>
+              | PT.PExpr.ParmOut   => <[ parameter: ..$(parm.modifiers) $(parm.Name : usesite) : out $(this_type : typed) ]>
+              | _                  => <[ parameter: ..$(parm.modifiers) $(parm.Name : usesite) :     $(this_type : typed) ]>
+            }
+          }
+
+          (lead.Map(bind_to_target(_)), trail.Map(bind_to_target(_)))
+        }
+
+        public override BaseCall : PT.PExpr
+        {
+          get
+          {
+            def make_base_call_parm (parm : PT.PParameter)
+            {
+              match (parm.Type)
+              {
+                | PT.PExpr.ParmByRef => <[ ref $(parm.Name : usesite) ]>;
+                | PT.PExpr.ParmOut   => <[ out $(parm.Name : usesite) ]>;
+                | _                  => <[     $(parm.Name : usesite) ]>;
+              }
+            }
+
+            def base_call_parms = Ctor.header.Parameters.Map (make_base_call_parm);
+            <[ base(..$base_call_parms); ]>
+          }
+        }
+      }
+    | Compiled {
+        Ctor : IMethod;
+        public override BaseParameters(target_ty : TypeBuilder) : list[PT.PParameter] * list[PT.PParameter]
+        {
+          def parms = Ctor.GetParameters ();
+          def (lead, trail) =
+            if (Ctor.IsVarArgs && !parms.IsEmpty)
+            {
+              def (parms, last) = parms.DivideLast();
+              (parms, [last]);
+            }
+            else
+              (parms, []);
+
+          def base_ty = target_ty.BaseType;
+          def subst = target_ty.SubtypingSubst(base_ty);
+
+          def bind_to_target(parm) {
+            def bound_type = parm.ty.Fix();
+            def this_type  = subst.Apply (bound_type);
+            <[parameter: ..$(parm.AttributesAndModifiers) $(parm.Name : usesite) : $(this_type : typed)]>
+          }
+          (lead.Map(bind_to_target(_)), trail.Map (bind_to_target(_)));
+        }
+        public override BaseCall : PT.PExpr
+        {
+          get
+          {
+            def make_base_call_parm (parm : TT.TParameter)
+            {
+              match (parm.kind)
+              {
+                | TT.ParmKind.Ref =>
+                  <[ ref $(parm.Name : usesite) ]>;
+                | TT.ParmKind.Out =>
+                  <[ out $(parm.Name : usesite) ]>;
+                | TT.ParmKind.Normal =>
+                  <[ $(parm.Name : usesite) ]>;
+              }
+            }
+            def base_call_parms = Ctor.GetParameters ().Map (make_base_call_parm);
+            <[ base(..$base_call_parms); ]>
+          }
+        }
+      }
+    | Implicit {
+        CallBase : bool;
+        public override BaseParameters(_ : TypeBuilder) : list[PT.PParameter] * list[PT.PParameter]
+        {
+          ([], []);
+        }
+        public override BaseCall : PT.PExpr
+        {
+          get
+          {
+            if (CallBase) <[ base(); ]>;
+            else            <[ () ]>;
+          }
+        }
+      }
+    public abstract BaseParameters(target_ty : TypeBuilder) : list[PT.PParameter] * list[PT.PParameter];
+    public abstract BaseCall : PT.PExpr { get; }
+    //public Mods : NemerleModifiers
+    //{
+    //  get
+    //  {
+    //    match (this)
+    //    {
+    //      | Parsed (ctor) =>
+    //        if (ctor.modifiers.mods %&& NemerleModifiers.Internal)
+    //          NemerleModifiers.Internal
+    //        else
+    //          NemerleModifiers.Public;
+    //      | Compiled
+    //      | Implicit =>
+    //        NemerleModifiers.Public;
+    //    }
+    //  }
+    //}
+  }
+  #endregion // Implementation
+}
+
+[MacroUsage (MacroPhase.BeforeInheritance,
+                     MacroTargets.Class,
+                     Inherited = false, AllowMultiple = false)]
+macro ExternallyVisibleOptions (t : TypeBuilder)
+{
+  match (t.ParsedDeclaration) {
+    | PT.TopDeclaration.Variant (_, decls) as v =>
+      def tyvars = v.typarms.tyvars.Map (x => PT.PExpr.Ref (x.GetName ()));
+      foreach (PT.ClassMember.TypeDeclaration (PT.TopDeclaration.VariantOption as vo) in decls) {
+        def name = PT.Splicable.Name (PT.Name (vo.Name));
+        def mods = AttributesAndModifiers(t.Attributes, []);
+        def tyname = NString.Split (t.FullName, array ['.']) + [vo.Name];
+        def tyalias = <[ $(Util.ExprOfList (tyname)) [ ..$tyvars] ]>;
+        def decl = PT.ClassMember.TypeDeclaration
+          (t.Location, null, null, PT.TopDeclaration.Alias (t.Location, name,
+                                                            mods, v.typarms, tyalias));
+        match (t.DeclaringType) {
+          | null => _ = t.ParsedName.context.Define (decl);
+          | parent => _ = (parent :> TypeBuilder).DefineNestedType (decl);
+        }
+      }
+    | _ =>
+      MessageMacros.FatalError ("ExternallyVisibleOptions attribute can only be applied to variant types.")
+  }
+
+}
+
+[MacroUsage (MacroPhase.BeforeInheritance, MacroTargets.Parameter)]
+macro _N_ExtensionMethodOnThisParameter (_tb : TypeBuilder, pm : ParsedMethod, p : ParsedParameter)
+  syntax ("this")
+{
+  match (pm.header.Parameters)
+  {
+    | first :: _ when first : object == p => pm.IsExtension = true;
+    | _ => Message.Error(p.Location, "'this' modifier (for extension method) can only be used on the first parameter");
+  }
+}
+
+// ---- assertions.n (Nemerle.Core) ----
+macro DebugPrint(expression, printFunction = <[ System.Console.WriteLine ]>)
+{
+  def code = expression.ToString() + " ==> ";
+  <[
+      def result = $expression;
+      $printFunction($(code : string) + result.ToString());
+  ]>
+}
+
+macro assert(cond, message = <[ "" ]>) 
+{
+  def preparedMessage = AssertionUtils.PrepareMessage(message);
+  match (cond) {
+    | <[ false ]> =>
+      // skip cond in this case so it gets 'a type
+      <[ throw AssertionException ($(cond.Location.File : string), 
+                                   $(cond.Location.Line : int),
+                                   "", $preparedMessage) ]>
+    | _ =>
+      <[ unless ($cond) 
+           throw AssertionException ($(cond.Location.File : string), 
+                                     $(cond.Location.Line : int),
+                                     $(cond.ToString () : string),
+                                     $preparedMessage) ]>
+  }
+}
+
+/// <summary>Checks for a condition; if the condition is false, outputs a specified message and displays a message 
+/// box that shows the call stack. The message include code of condition.</summary>
+/// <param name="condition">The conditional expression to evaluate. If the condition is true, the specified message is not sent and the message box is not displayed.</param>
+/// <param name="message">The message to send to the <see cref="P:System.Diagnostics.Trace.Listeners"/> collection.</param>
+/// <remark>Used System.Diagnostics.Debug.Assert() to display message</remark>
+macro assert2(condition, message = <[ "" ]>)
+{
+  def preparedMessage = AssertionUtils.PrepareMessage(message);
+  match (condition)
+  {
+    | <[ false ]> => // skip condition in this case so it gets 'a type
+      <[ System.Diagnostics.Debug.Assert(false, $preparedMessage) ]>
+      
+    | _ => <[ 
+      unless ($condition) 
+      {
+        def msg = "Assertion: " + $(condition.ToString() : string)
+                  + "\nAt: " + $(condition.Location.File : string) + " failed.";
+        System.Diagnostics.Debug.Fail(msg, $preparedMessage)
+      } ]>
+  }
+}
+
+macro assert3(condition, message = <[ "" ]>)
+{
+  def preparedMessage = AssertionUtils.PrepareMessage(message);
+  match (condition)
+  {
+    | <[ false ]> => // skip condition in this case so it gets 'a type
+      <[ System.Diagnostics.Debug.Assert(false, $preparedMessage);
+         throw AssertionException ($(condition.Location.File : string), 
+                                   $(condition.Location.Line : int),
+                                   "", $preparedMessage);
+      ]>
+      
+    | _ => <[ 
+      unless ($condition) 
+      {
+        def msg = "Assertion: " + $(condition.ToString() : string)
+                  + "\nAt: " + $(condition.Location.File : string) + " failed.";
+        System.Diagnostics.Debug.Fail(msg, $preparedMessage);
+        throw AssertionException ($(condition.Location.File : string), 
+                                  $(condition.Location.Line : int),
+                                  $(condition.ToString () : string),
+                                  $preparedMessage);
+      } ]>
+  }
+}
+
+internal module AssertionUtils
+{
+  public PrepareMessage(message : PExpr) : PExpr
+  {
+    | <[ $(_ : string) ]> => message
+    | _ => <[ $message.ToString() ]>
+  }
+}
+
+// ---- operators.n (Nemerle.Core) ----
+internal module Operators
+{
+  [Hygienic]
+  public CacheAssignExpr (e : PT.PExpr) : PT.PExpr * PT.PExpr
+  {
+    def desc =
+      match (e)
+      {
+        | <[ $tab [$idx] ]> =>
+          def new_idx = <[ $(Macros.NewSymbol () : name) ]>;
+          CacheDesc (<[ $tab [$new_idx] ]>, <[ def $new_idx = $idx ]>)
+
+        | <[ $tab [.. $idxes] ]> =>
+          def idx_exprs = idxes.Map(_ => <[ $(Macros.NewSymbol () : name) ]>);
+          CacheDesc (<[ $tab [.. $idx_exprs] ]>, <[ def (.. $idx_exprs) = (.. $idxes) ]>)
+
+        | _ => CacheDesc(e, null)
+      };
+
+    ( <[ $(TExpr.Cache (desc, null) : typed) ]>,
+      <[ $(TExpr.CacheRef (desc) : typed) ]> )
+  }
+
+  public HandlePartialApplication(e1 : PT.PExpr, e2 : PT.PExpr, transform : PT.PExpr * PT.PExpr -> PT.PExpr) : PT.PExpr
+  {
+    match((e1, e2))
+    {
+      | (Wildcard, Wildcard) => <[ fun (e1, e2) { $(transform(<[ e1 ]>,  <[ e2 ]>)) } ]>
+      | (e1,       Wildcard) => <[ fun     (e2) { $(transform(   e1,     <[ e2 ]>)) } ]>
+      | (Wildcard,       e2) => <[ fun (e1)     { $(transform(<[ e1 ]>,     e2   )) } ]>
+      | (e1,             e2) => transform(e1, e2)
+    }
+  }
+}
+
+macro @&& (e1, e2)
+{
+  Operators.HandlePartialApplication(e1, e2,
+    (e1, e2) => <[ match ($e1)
+                   {
+                    | true => $e2
+                    | _    => false
+                   }
+                 ]>)
+}
+
+macro @|| (e1, e2)
+{
+  Operators.HandlePartialApplication(e1, e2,
+    (e1, e2) => <[ match ($e1)
+                   {
+                    | true => true
+                    | _    => $e2
+                   }
+                 ]>)
+}
+
+macro @%|| (e1, e2)
+{
+  Operators.HandlePartialApplication(e1, e2,
+    (e1, e2) => <[ ($e1 | $e2) != 0 ]>)
+}
+
+macro @%&& (e1, e2)
+{
+  Operators.HandlePartialApplication(e1, e2,
+    (e1, e2) => <[ ($e1 & $e2) != 0 ]>)
+}
+
+macro @%^^ (e1, e2)
+{
+  Operators.HandlePartialApplication(e1, e2,
+    (e1, e2) => <[ ($e1 ^ $e2) != 0 ]>)
+}
+
+macro @++ (e)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = _N_op_Increment ($safe) ]>
+}
+
+macro @-- (e)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = _N_op_Decrement ($safe) ]>
+}
+
+macro @+= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe + $val ]>
+}
+
+macro @-= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe - $val ]>
+}
+
+macro @*= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe * $val ]>
+}
+
+macro @/= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe / $val ]>
+}
+
+macro @<<= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe << $val ]>
+}
+
+macro @>>= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe >> $val ]>
+}
+
+macro @%= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe % $val ]>
+}
+
+macro @|= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe %| $val ]>
+}
+
+macro @&= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe %& $val ]>
+}
+
+macro @^= (e, val)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e);
+  <[ $cached; $safe = $safe %^ $val ]>
+}
+
+macro @<-> (e1, e2)
+{
+  def (cached1, safe1) = Operators.CacheAssignExpr(e1);
+  def (cached2, safe2) = Operators.CacheAssignExpr(e2);
+  <[
+    $cached1;
+    $cached2;
+    def tmp = $safe1;
+    $safe1 = $safe2;
+    $safe2 = tmp;
+  ]>
+}
+
+macro @::= (e1, e2)
+{
+  def (cached, safe) = Operators.CacheAssignExpr(e1);
+  <[ $cached; $safe = $e2 :: $safe ]>
+}
+
+macro @=> (parmsExpr, body)
+{
+  def convert_to_parm (x)
+  {
+    mutable tyLoc   = Location.Default;
+    mutable nameLoc = x.Location;
+    def param = UtilMacros.locate(x.Location, match (x)
+    {
+      | <[ _ ]>                  => <[ parameter: $(Util.tmpname ("wildcard") : dyn) ]>
+      | <[ $(nm : name) ]>       => nameLoc = nm.Location;
+                                    <[ parameter: $(nm : name) ]>
+
+      | <[ _ : $ty ]> as tyEnf   => tyLoc = ty.Location;
+                                    nameLoc = tyEnf.expr.Location;
+                                    def nm = Util.tmpname ("wildcard");
+                                    <[ parameter: $(nm : dyn) : $ty ]>
+
+      | <[ $(nm : name) : $ty ]> => tyLoc = ty.Location;
+                                    nameLoc = nm.Location;
+                                    <[ parameter: $(nm : name) : $ty ]>
+
+      | PT.PExpr.Tuple(_args) as pattern =>
+        def ty = PT.PExpr.Wildcard (tyLoc);
+        def name = PT.Splicable.Name (pattern.Location, Macros.NewSymbol("pat"));
+        nameLoc  = tyLoc;
+        PT.PParameter (nameLoc, name, ty, AttributesAndModifiers(0, []), pattern)
+
+      | _ =>
+        Message.Error (x.Location, $"unsupported syntax for parameter of 'parms => body' lambda expression: $x");
+        <[ parameter: $(Util.tmpname ("wildcard") : dyn) ]>
+    });
+    param.Location = x.Location;
+    param.name.Location = nameLoc;
+    param.Type.Location = tyLoc;
+    param
+  }
+
+  def convert_to_ref (x)
+  {
+    | <[ parameter: $(nm : name) ]> => PT.PExpr.Ref (x.Location, nm)
+    | _ => MessageMacros.FatalError (x.Location, "illegal spliced parameter?")
+  }
+
+  def convert_body (body, parms, loc)
+  {
+    match(body)
+    {
+      | <[ match($(null)) { ..$cases } ]> =>
+        def match_val = match (parms)
+        {
+          | [] => null
+          | [<[ parameter: $(nm : name) ]> as x] => PT.PExpr.Ref (x.Location, nm)
+          | _ :: _ :: _ => PT.PExpr.Tuple.Create (loc, parms.Map (convert_to_ref))
+          | x :: _ => MessageMacros.FatalError (x.Location, "illegal spliced parameter?")
+        }
+        PT.PExpr.Match (body.Location, match_val, cases)
+      | _ => body
+    }
+  }
+
+  def loc = parmsExpr.Location;
+  def generatedParms = match (parmsExpr)
+  {
+    | PT.PExpr.Tuple as tuple when tuple.argsCount == 1 => [convert_to_parm (parmsExpr)]
+    | <[ () ]> => []
+    | <[ (..$parmsList) ]> => parmsList.Map (convert_to_parm)
+    | _ => [convert_to_parm (parmsExpr)]
+  }
+
+  def decomposedPatternParams = generatedParms.FoldLeft([], fun (p : PT.PParameter, acc : list[PT.PExpr]) {
+      if (p.PatternHack == null) acc
+      else
+      {
+        def res = <[ def $(p.PatternHack) = $(p.name.GetName () : name); ]>;
+        p.ResetPatternHack();
+        res :: acc
+      }
+    });
+
+  def newBody = if (decomposedPatternParams.IsEmpty) body
+                else UtilMacros.locate(body.Location, <[ { ..$(decomposedPatternParams + [body]) } ]>);
+
+  def func = <[ fun (..$generatedParms) $(convert_body (newBody, generatedParms, loc)) ]>;
+  func.decl.header.Location = loc;
+  func
+}
+
+macro @?? (exprA, exprB)
+{
+  def typer = Macros.ImplicitCTX ();
+  def toption = typer.InternalType.Nemerle_option_tc;
+
+  def isOption (t)
+  {
+    toption.Equals (t)
+    || (t.BaseType != null && toption.Equals(t.BaseType))
+  }
+  def hasValuePattern(ti : TypeInfo) : bool
+  {
+    def isBoolPropertyOrField(members : list[IMember]) : bool
+    {
+      | [_ is IField] | [_ is IProperty] => true
+      | _ => false
+    }
+    isBoolPropertyOrField(ti.LookupMember("Value",    false)) &&
+    isBoolPropertyOrField(ti.LookupMember("HasValue", false))
+  }
+
+  def tExprA = typer.TypeExpr(exprA);
+  def tExprB = typer.TypeExpr(exprB);
+  def tR = typer.FreshTypeVar(); // result type
+
+  def resolve(aExprIsOption : bool, check, lastTry)
+  {
+    match (tExprB.Type.Hint)
+    {
+      | Some (Class(tiB, _)) when aExprIsOption =>
+          if (check(tiB))
+            Some(<[ match ($exprA) { | Some as x => x | _ => $exprB } ]>)
+          else
+            Some(<[ match ($exprA) { | Some(x)   => x | _ => $exprB } ]>)
+
+      | Some (Class(tiB, _)) =>
+        match (exprA)
+        {
+          | PExpr.Ref | Base | This => 
+            def v = if (check(tiB)) <[ $exprA ]> else <[ $exprA.Value ]>;
+            Some(<[ match ($exprA.HasValue) { | true => $v | _ => $exprB } ]>)
+            
+          | _ =>
+            def v = if (check(tiB)) <[ x ]> else <[ x.Value ]>;
+            Some(<[ def x = $exprA; match (x.HasValue) { | true => $v | _ => $exprB } ]>)
+        }
+
+      | None =>
+          when (lastTry)
+            Message.Error(exprB.Location, $"Can't infer type of right operand ($exprB) of the `??' operator");
+          None()
+      | _ => Some(<[ match ($exprA) { null => $exprB | x => x } ]>)
+    }
+  }
+
+  def checkTypes(lastTry)
+  {
+    match (tExprA.Type.Hint)
+    {
+      | None when !lastTry => None()
+      | None  =>
+          Message.Error(exprA.Location, $"Can't infer type of left operand ($exprA) of the `??' operator");
+          None()
+
+      | Some (Class(tiA, [_])) when isOption(tiA)        => resolve(true,  isOption,        lastTry)
+      | Some (Class(tiA, _))   when hasValuePattern(tiA) => resolve(false, hasValuePattern, lastTry)
+      | Some (Class(tiA, _))   when tiA.IsValueType =>
+          Message.Error(exprA.Location, $"Left operand ($exprA) of the `??' operator should be reference type or has Value and HasValue members (ie support option or Nulable idiom).");
+          None()
+
+      | _ => Some(<[ match ($exprA) { null => $exprB | x => x } ]>)
+    }
+  }
+
+  typer.DelayMacro(checkTypes, tR);
+}
+
+macro @** (e1, e2)
+{
+  <[ System.Math.Pow($e1, $e2) ]>
+}
+
+macro @?. (expr1, expr2)
+{
+  def makeMemberAccess(loc, n) { PExpr.Member(loc,  <[ e1 ]>, Splicable.Name(loc, n)) }
+  def makeComplation  (loc, n) { PExpr.Member(loc,  <[ e1 ]>, Splicable.HalfId(loc, n)) }
+  def loc = expr2.Location;
+  def e2 =
+    match (expr2)
+    {
+      | Ref(n)                    => makeMemberAccess(loc, n)
+      | Call(Ref(n), parms)       => PExpr.Call(loc, makeMemberAccess(loc, n), parms)
+      | Indexer(Ref(n), parms)    => PExpr.Indexer(loc, makeMemberAccess(loc, n), parms)
+      | ToComplete(n)             => makeComplation(loc, n)
+      | Call(ToComplete(n), _)    => makeComplation(loc, n)
+      | Indexer(ToComplete(n), _) => makeMemberAccess(loc, n)
+      | _ => MessageMacros.FatalError(expr2.Location, $"The expression of this ($(expr2.GetType())) type not supported with operator '?.'");
+    };
+
+  <[
+    def e1 = $expr1;
+    mutable result;
+
+    when (e1 != null)
+      result = $e2;
+
+    result
+  ]>
+}
+
+// ---- sizeof.n (Nemerle.Core) ----
+macro sizeof(type : PExpr)
+{
+  sizeofImpl.DoTransform(Macros.ImplicitCTX(), type)
+}
+
+internal module sizeofImpl
+{
+  public DoTransform(typer : Typer, type : PExpr) : PExpr
+  {
+    Macros.DefineCTX(typer);
+    def builtin = typer.InternalType;
+    def ty = typer.BindFixedType(type);
+    
+    if      (ty.Equals(builtin.SByte) || ty.Equals(builtin.Byte)   || ty.Equals(builtin.Boolean)) <[ 1 ]>
+    else if (ty.Equals(builtin.Int16) || ty.Equals(builtin.UInt16) || ty.Equals(builtin.Char))    <[ 2 ]>
+    else if (ty.Equals(builtin.Int32) || ty.Equals(builtin.UInt32) || ty.Equals(builtin.Single))  <[ 4 ]>
+    else if (ty.Equals(builtin.Int64) || ty.Equals(builtin.UInt64) || ty.Equals(builtin.Double))  <[ 8 ]>
+    else if (ty.Equals(builtin.Decimal))                                                          <[ 16 ]>
+    else MessageMacros.FatalError(type.Location, "`sizeof' of `$type' unsupported yet")
+  }
+}

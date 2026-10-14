@@ -10,7 +10,7 @@ class X {
     }
     else
   {
-    Nemerle.Extensions.DefaultValue(void);
+    Nemerle.ExtensionsMacros.DefaultValue(void);
   }
   }
 }

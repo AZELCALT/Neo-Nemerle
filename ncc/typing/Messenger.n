@@ -28,6 +28,7 @@
 
 using Nemerle.Logging;
 using Nemerle.Utility;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler 
 {

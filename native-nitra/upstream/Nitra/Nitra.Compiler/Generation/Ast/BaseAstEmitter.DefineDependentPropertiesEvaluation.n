@@ -26,7 +26,7 @@ namespace Nitra.Compiler
 
     protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol) : void
     {
-      Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+      UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
         def evalMethod = CompileStatements(tb, symbol, <[ decl:
           public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
@@ -43,7 +43,7 @@ namespace Nitra.Compiler
 
     protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[PropertySymbol, FixedType]) : void
     {
-      Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+      UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
         def evalMethod = CompileStatements(tb, symbol, <[ decl:
           ..$(GetDependentEvaluationModifiers()) EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
@@ -95,7 +95,7 @@ namespace Nitra.Compiler
 
       foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
       {
-        Util.locate(statement.NLocation(),
+        UtilMacros.locate(statement.NLocation(),
         {
           match (statement)
           {
@@ -171,17 +171,17 @@ namespace Nitra.Compiler
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
     {
-      Message.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
+      MessageMacros.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
     }
 
     private static ErrorAssignOfDependentPropertyExpected(loc : Nemerle.Compiler.Location) : void
     {
-      Message.FatalError(loc, "Only assign of a dependent property is allowed.")
+      MessageMacros.FatalError(loc, "Only assign of a dependent property is allowed.")
     }
 
     private static ErrorDelayedTypingDetected(expr : TExpr.Delayed) : void
     {
-      Message.FatalError(expr.Location, "Delayed typing detected: " + expr)
+      MessageMacros.FatalError(expr.Location, "Delayed typing detected: " + expr)
     }
 
     private static ValidateEvalFieldsCode(expr : TExpr) : TExpr
@@ -411,7 +411,7 @@ namespace Nitra.Compiler
               if (nodesMap.TryGetValue(path, out existingNode))
               {
                 Message.Warning(existingNode.Location, "Related message: First assingment of dependent property.");
-                Message.FatalError(e.Location, "Multiple assign of dependent property.");
+                MessageMacros.FatalError(e.Location, "Multiple assign of dependent property.");
               }
               else
               {
@@ -550,7 +550,7 @@ namespace Nitra.Compiler
       {
         match(code)
         {
-          | Compiled(methodName) => Util.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this, context) ]>)
+          | Compiled(methodName) => UtilMacros.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this, context) ]>)
           | Source(_, _, expr)   => expr
         }
       }
@@ -651,7 +651,7 @@ namespace Nitra.Compiler
         | Assign(code) =>
           def (predicate, checkedPaths)         = makeIsEvaluatedCheck(node.Path, dependentProperties);
           def (properties, collectorProperties) = collectDependendOn(node, checkedPaths);
-          def expr1 = Util.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)); context.CalculatedCountInc(); ]>);
+          def expr1 = UtilMacros.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)); context.CalculatedCountInc(); ]>);
           def expr2 = makeCondition(properties, collectorProperties, expr1, <[ context.DeferredCountInc() ]>);
           def expr3 = TryAddStageCheck(node.Path, expr2);
           def expr4 = <[ when ($predicate) $expr3; ]>;

@@ -9,7 +9,7 @@ class A{
   }
 }
 
-[Nemerle.InheritConstructors]
+[NemerleMacros.InheritConstructors]
 class B : A {
   mutable x : string;
 }

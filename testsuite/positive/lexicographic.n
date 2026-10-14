@@ -1,5 +1,7 @@
 using Nemerle.IO;
 using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
+using Nemerle.IOMacros;
 
 [Record, LexicographicCompareTo]
 public class A : System.IComparable

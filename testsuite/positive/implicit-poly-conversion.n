@@ -55,9 +55,9 @@ class Implicit
   {
      def x = B() : C[B];
      def y = B() : C2;
-     Nemerle.IO.print("$x $y\n");
+     Nemerle.IOMacros.print("$x $y\n");
      def bar : Bar1.[IFoo] = Bar2();
-     Nemerle.IO.print("$bar\n");
+     Nemerle.IOMacros.print("$bar\n");
 
      def y = Y.[int](42);
      System.Console.WriteLine (y :> int);

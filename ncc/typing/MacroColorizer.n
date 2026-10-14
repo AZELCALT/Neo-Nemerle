@@ -115,7 +115,7 @@ namespace Nemerle.Compiler
           UseColor = use_col;
           UseContext = use_ctx;
         | [] =>
-          Util.ice ("pop from empty stack of macro colors...")
+          UtilMacros.ice ("pop from empty stack of macro colors...")
       }
     }
   }

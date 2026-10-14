@@ -7,7 +7,7 @@ public struct KeyValuePair[K,V]
 
   public this(mutable  k : K,mutable  v :  V) { key = k; value = v; }
 
-  public this(mutable  k : K) { key = k; value =Nemerle.Extensions.DefaultValue(V); }
+  public this(mutable  k : K) { key = k; value =Nemerle.ExtensionsMacros.DefaultValue(V); }
 }
 
 public class Collection[T]

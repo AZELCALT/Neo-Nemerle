@@ -20,7 +20,7 @@ def justRun (x : object)
 _ = justRun (Foo ())
 _ = justRun (Bar ())
 late
-  Nemerle.IO.print ("Macros work\n")
+  Nemerle.IOMacros.print ("Macros work\n")
   _ = System.String ('A', 5)
   Gen[System.Int32].Run ()
   Gen.[System.Int64].Run ()

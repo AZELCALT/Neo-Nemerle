@@ -34,6 +34,7 @@ using Nemerle.Compiler;
 using PT = Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.SolverMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -119,10 +120,10 @@ namespace Nemerle.Compiler
                  current_type.init_list = PT.PExpr.Typed(Walk(Context.TopLevel, e)) :: [];
                  field_inits_typed = true
 
-              | _ => Util.ice("bad field initializers");
+              | _ => UtilMacros.ice("bad field initializers");
             }
           | [] => ()
-          | _ => Util.ice("bad field initializers");
+          | _ => UtilMacros.ice("bad field initializers");
         }
 
       match (current_fun.body)
@@ -154,7 +155,7 @@ namespace Nemerle.Compiler
     internal Walk(ctx : Context, expr : TExpr) : TExpr
     {
       assert(expr != null);
-      Util.locate(expr.Location,
+      UtilMacros.locate(expr.Location,
       {
         messenger.CleanLocalError();
         def expr = PushConversionDown(expr);
@@ -253,7 +254,7 @@ namespace Nemerle.Compiler
                 TExpr.Error()
               }
               else
-                Util.ice($"unresolved expression: $dt");
+                UtilMacros.ice($"unresolved expression: $dt");
           }
         | TExpr.CacheRef(d)    => Unfold(d.RefIs)
         | TExpr.TypeConversion => PushConversionDown(expr)
@@ -772,7 +773,7 @@ namespace Nemerle.Compiler
         match (decl.ValKind)
         {
           | LocalValue.Kind.BlockReturn(res, lab) => (res, lab)
-          | _ => Util.ice()
+          | _ => UtilMacros.ice()
         };
 
       match (parms)
@@ -955,7 +956,7 @@ namespace Nemerle.Compiler
                     hd.usage = FunctionUsage.Used;
                     PolyLocalToLambdaTransform(e)
 
-                  | _ => Util.ice()
+                  | _ => UtilMacros.ice()
                 }
 
               | _ => null
@@ -1007,7 +1008,7 @@ namespace Nemerle.Compiler
             {
               | Fun(_, FixedType.Class(tycon, _))
               | Class(tycon, _) => MarkAsUsed(tycon, expr.Location)
-              | t => Util.ice($"unexpected type $t")
+              | t => UtilMacros.ice($"unexpected type $t")
             }
 
             null
@@ -1031,7 +1032,7 @@ namespace Nemerle.Compiler
                   Message.Warning(10009, $"Using a constant object reference directly. You probably have meant to write `$(mem.DeclaringType.FullName)()'");
                   TExpr.StaticRef(expr.Location, expr.ty, to, meth, [])
 
-                | _ => Util.ice("Wrong type of constant object!")
+                | _ => UtilMacros.ice("Wrong type of constant object!")
               };
             res
 
@@ -1176,7 +1177,7 @@ namespace Nemerle.Compiler
                 else // typing was infer new parameters expressions (for example, when typing extension methods). See teg: SetResolvedCallParameters
                   TExpr.Call(expr.Location, expr.Type, expr3, parms2, is_tail);
 
-              | _ => Util.ice("not resolved delayed typing?");
+              | _ => UtilMacros.ice("not resolved delayed typing?");
             };
             DoWalk(ctx, res)
 
@@ -1193,7 +1194,7 @@ namespace Nemerle.Compiler
                     match (mems)
                     {
                       | [one] => one.GetParameters().Length
-                      | _ => Util.ice("not exactly one Invoke method?")
+                      | _ => UtilMacros.ice("not exactly one Invoke method?")
                     }
                   };
 
@@ -1215,7 +1216,7 @@ namespace Nemerle.Compiler
 
                       | _ => parm.expr = Walk(parm.expr)
                     }
-                  | _ => Util.ice()
+                  | _ => UtilMacros.ice()
                 }
 
               | TExpr.MethodRef(_, IMethod where (BuiltinKind = ExtensionMethod), _, _) => ()
@@ -1428,11 +1429,11 @@ namespace Nemerle.Compiler
                         match (tupled.FixedType())
                         {
                           | Tuple(lst) => lst
-                          | _ => Util.ice()
+                          | _ => UtilMacros.ice()
                         };
 
                       def len = types.Length;
-                      Util.cassert(lst.Length == len + 1);
+                      UtilMacros.cassert(lst.Length == len + 1);
                       mutable pos = -1;
                       def PlainRef(decl : LocalValue) : TExpr
                       {

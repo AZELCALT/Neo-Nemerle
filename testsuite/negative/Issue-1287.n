@@ -1,5 +1,6 @@
 ﻿using Nemerle.Utility;
 using System.Console;
+using Nemerle.UtilityMacros;
 
 [Record]
 public class Identifier

@@ -6,6 +6,7 @@ using System.Text;
 using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Imperative;
+using NemerleMacros;
 namespace Nemerle.Compiler
 {
   /// Append-only set of end positions with first-seen order.

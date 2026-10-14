@@ -24,7 +24,7 @@ class X {
   
   static FillSingle () :  void
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
     
     for (i = 0; i < 10; i++){
       a_single [i].a = i + 1;
@@ -33,8 +33,8 @@ class X {
 
   static FillDouble () :  void
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
-    mutable  j = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
+    mutable  j = Nemerle.ExtensionsMacros.DefaultValue (int);
     
     for (i = 0; i < 10; i++)
       for (j = 0; j < 10; j++)
@@ -43,7 +43,7 @@ class X {
 
   static FillObject () :  void
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
     
     for (i = 0; i < 10; i++){
       o_single [i] =  Y ();
@@ -53,8 +53,8 @@ class X {
 
   static FillDoubleObject () :  void
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
-    mutable  j = Nemerle.Extensions.DefaultValue (int);
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
+    mutable  j = Nemerle.ExtensionsMacros.DefaultValue (int);
     
     for (i = 0; i < 10; i++)
       for (j = 0; j < 10; j++){
@@ -65,11 +65,11 @@ class X {
   
   static TestSingle () :  int
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);{
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);{
     
     mutable temp_1_break_loop_ = false;
     
-    mutable temp_2_return_ = Nemerle.Extensions.DefaultValue(int);
+    mutable temp_2_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
     
     if( temp_1_break_loop_ )
     
@@ -93,12 +93,12 @@ class X {
 
   static TestDouble () :  int
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
-    mutable  j = Nemerle.Extensions.DefaultValue (int);{
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
+    mutable  j = Nemerle.ExtensionsMacros.DefaultValue (int);{
 
     mutable temp_5_break_loop_ = false;
 
-    mutable temp_6_return_ = Nemerle.Extensions.DefaultValue(int);
+    mutable temp_6_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
 
     if( temp_5_break_loop_ )
 
@@ -112,7 +112,7 @@ class X {
 
     for (i = 0; i < 10 && !temp_5_break_loop_; i++){{    
       mutable temp_3_break_loop_ = false;    
-      mutable temp_4_return_ = Nemerle.Extensions.DefaultValue(int);    
+      mutable temp_4_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);    
       when( temp_3_break_loop_ )    
       {    
       temp_5_break_loop_ = true;    
@@ -134,11 +134,11 @@ class X {
 
   static TestObjectSingle () :  int
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);{
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);{
     
     mutable temp_7_break_loop_ = false;
     
-    mutable temp_8_return_ = Nemerle.Extensions.DefaultValue(int);
+    mutable temp_8_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
     
     if( temp_7_break_loop_ )
     
@@ -162,12 +162,12 @@ class X {
 
   static TestObjectDouble () :  int
   {
-    mutable  i = Nemerle.Extensions.DefaultValue (int);
-    mutable  j = Nemerle.Extensions.DefaultValue (int);{
+    mutable  i = Nemerle.ExtensionsMacros.DefaultValue (int);
+    mutable  j = Nemerle.ExtensionsMacros.DefaultValue (int);{
 
     mutable temp_11_break_loop_ = false;
 
-    mutable temp_12_return_ = Nemerle.Extensions.DefaultValue(int);
+    mutable temp_12_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);
 
     if( temp_11_break_loop_ )
 
@@ -181,7 +181,7 @@ class X {
 
     for (i = 0; i < 10 && !temp_11_break_loop_; i++){{    
       mutable temp_9_break_loop_ = false;    
-      mutable temp_10_return_ = Nemerle.Extensions.DefaultValue(int);    
+      mutable temp_10_return_ = Nemerle.ExtensionsMacros.DefaultValue(int);    
       when( temp_9_break_loop_ )    
       {    
       temp_11_break_loop_ = true;    

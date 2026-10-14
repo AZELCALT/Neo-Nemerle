@@ -39,6 +39,7 @@ using System.Reflection;
 
 using SCG = System.Collections.Generic;
 using NC = Nemerle.Compiler;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler
 {
@@ -70,7 +71,7 @@ namespace Nemerle.Compiler
     
     public BindFixedType (env : GlobalEnv, currentType : TypeBuilder, t : PExpr, check_parms : bool) : FixedType
     {
-      def t = Util.locate(t.Location, 
+      def t = UtilMacros.locate(t.Location, 
         Bind (env, currentType, t, 
               allow_tyvars = false, 
               check_parms = check_parms));
@@ -259,10 +260,10 @@ namespace Nemerle.Compiler
                 
                   | FixedType.Class (_, args') =>
                   def args = args' + args;
-                  Util.cassert (args.Length == ti.TyparmsCount);
+                  UtilMacros.cassert (args.Length == ti.TyparmsCount);
                   FixedType.Class (ti, args)
                 
-                  | _ => Util.ice ()
+                  | _ => UtilMacros.ice ()
                 }
               }
             | _ =>
@@ -331,7 +332,7 @@ namespace Nemerle.Compiler
                 $"the type `$base_type' does not contain a nested type named `$name' $seen_typeinfo");
               InternalType.Object
 
-            | l => Util.ice ($ "$l");
+            | l => UtilMacros.ice ($ "$l");
           }
         | t =>
           ReportLocatedError(loc, Manager.Solver.CurrentMessenger, $"won't lookup nested types in $t");
@@ -452,7 +453,7 @@ namespace Nemerle.Compiler
             ReportError (Manager.Solver.CurrentMessenger, $"array type must take form `array [T]' or `array [rank, T]' or `array.[rank][T]', not $t");
             InternalType.Void
             
-          | PExpr.Ellipsis => Util.ice ("Type arguments list survived to typying.")
+          | PExpr.Ellipsis => UtilMacros.ice ("Type arguments list survived to typying.")
           | x =>
             ReportError (Manager.Solver.CurrentMessenger, $ "`$x' is not a legal type expression");
             InternalType.Void
@@ -530,7 +531,7 @@ namespace Nemerle.Compiler
                   match (ti)
                   {
                     | tb is TypeBuilder => tb.bind_types(); mekeSubst(ti)
-                    | _ => Util.ice("TypeDeclaration.Alias(null) can be only in TypeBuilder")
+                    | _ => UtilMacros.ice("TypeDeclaration.Alias(null) can be only in TypeBuilder")
                   }
 
                 | Typedtree.TypeDeclaration.Alias(t) =>
@@ -559,7 +560,7 @@ namespace Nemerle.Compiler
         res2
       }
 
-      Util.locate(t.Location, f(t))
+      UtilMacros.locate(t.Location, f(t))
     }
     
     static SetTypedObjects(typeExpr : PExpr, node : NamespaceTree.Node) : void

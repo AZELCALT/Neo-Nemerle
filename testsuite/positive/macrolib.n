@@ -5,6 +5,7 @@ using Nemerle.Compiler;
 using Nemerle.IO;
 using System;
 using System.Xml;
+using Nemerle.IOMacros;
 
 
 public interface IFoo
@@ -48,7 +49,7 @@ syntax ("forpermutation", "(", i_in_n, "to", m, ")", body)
   def (i, n) =
     match (i_in_n) {
       | <[ $i in $(n : int) ]> => (i, n)
-      | _ => Message.FatalError ("syntax error")
+      | _ => MessageMacros.FatalError ("syntax error")
     }
   def a = array (m - n + 1);
   for (mutable j = 0; j < m - n + 1; j = j + 1)
@@ -176,9 +177,9 @@ macro Serializable (t : TypeBuilder)
         else
           /// and finally, we encounter case when there is no easy way to serialize
           /// given field
-          Message.FatalError ("field `" + x.Name + "' cannot be serialized");
+          MessageMacros.FatalError ("field `" + x.Name + "' cannot be serialized");
     else
-      Message.FatalError ("field `" + x.Name + "' cannot be serialized");
+      MessageMacros.FatalError ("field `" + x.Name + "' cannot be serialized");
   }
 
   // after analyzing fields, we create method in our type, to execute created expressions
@@ -306,7 +307,7 @@ macro permute'(data, p_expr)
 macro MyRequire (_ : TypeBuilder, m : ParsedMethod, expr, thor = null)
 syntax ("requ", expr, Optional ("otherwise", thor))
 {
-  def newBody = Util.locate(m.Body.Location,
+  def newBody = UtilMacros.locate(m.Body.Location,
     <[ assert($expr, "requ"); $(if (thor != null) <[ $thor ]> else m.Body) ]>);
 
   m.Body = newBody;
@@ -316,7 +317,7 @@ syntax ("requ", expr, Optional ("otherwise", thor))
 macro MyAsync (_ : TypeBuilder, m : ParsedMethod)
 syntax ("asyn")
 {
-  def newBody = Util.locate(m.Body.Location,
+  def newBody = UtilMacros.locate(m.Body.Location,
     <[ System.Console.WriteLine ("I could be asynced"); $(m.Body); ]>);
 
   m.Body = newBody;
@@ -326,7 +327,7 @@ syntax ("asyn")
 macro MyAsync (_ : TypeBuilder, m : MethodBuilder)
 syntax ("asyn")
 {
-  def newBody = Util.locate(m.Body.Location,
+  def newBody = UtilMacros.locate(m.Body.Location,
     <[ System.Console.WriteLine ("I could be asynced with members");
        $(m.Body); ]>);
 
@@ -390,7 +391,7 @@ syntax ("metaclass", className, body)
         foreach(<[ $(n : name) : $(t : name) ]> in props)
         {
           code ::= <[ decl:
-            [Nemerle.Utility.Accessor]
+            [Nemerle.UtilityMacros.Accessor]
             mutable $(n.NewName("_" + n.Id) : name) : $(t : name);
           ]>;
         }
@@ -398,7 +399,7 @@ syntax ("metaclass", className, body)
         def builder = ctx.Env.Define(<[ decl: [Record] public class $(nm : name) { .. $(code.Reverse()) } ]>);
         builder.Compile();
 
-      | _ => Message.FatalError($"Invalid metaclass syntax, expected properties definition, got $body");
+      | _ => MessageMacros.FatalError($"Invalid metaclass syntax, expected properties definition, got $body");
     }
 
     def t = ctx.Env.Define(<[ decl:

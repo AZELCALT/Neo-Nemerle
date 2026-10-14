@@ -358,7 +358,7 @@ namespace Nemerle.Compiler
           acc
       }
 
-      Util.locate (curr, {
+      UtilMacros.locate (curr, {
         def comment = Comments.Fold (null, choose);
         when (comment != null && comment != "") {
           try {
@@ -457,7 +457,7 @@ namespace Nemerle.Compiler
         | Ref         (t)
         | Out         (t)           => AppendParmTypeName     (sb, t, m).Append("@");
         | Void                      => sb.Append ("System.Void");
-        | Intersection              => Util.ice ("Got FixedType.Intersection for doc comment");
+        | Intersection              => UtilMacros.ice ("Got FixedType.Intersection for doc comment");
         }
     }
 
@@ -509,7 +509,7 @@ namespace Nemerle.Compiler
         | MemberKinds.NestedType =>
           appendTypeName(sb.Append ("T:"), m :> TypeInfo);
 
-        | other => Util.ice ($"Invalid MemberKinds for doc comment: `$other'");
+        | other => UtilMacros.ice ($"Invalid MemberKinds for doc comment: `$other'");
         }).ToString ();
     }
   }

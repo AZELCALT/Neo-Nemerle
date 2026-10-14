@@ -1,6 +1,7 @@
 using Nemerle.IO;
 using System.Console;
 using System.IO;
+using Nemerle.IOMacros;
 
 class T {
   public this () {}

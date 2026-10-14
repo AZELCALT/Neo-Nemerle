@@ -1,0 +1,360 @@
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Imperative;
+using System.IO;
+using System.IO.File;
+using System.IO.Path;
+using System.IO.Directory;
+using DictionaryEntry = System.Collections.DictionaryEntry;
+#if MODERN_CLR
+using ResXReader = Nemerle.Platform.ClrResXReader;
+#else
+using ResXReader = System.Resources.ResXResourceReader;
+#endif
+using System.Console;
+using System.Xml.Linq;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+// ---- Resource.n ----
+#if MODERN_CLR
+#else
+#endif
+
+// ---- Resource.n (Nemerle.Macro) ----
+[MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+public macro Resource(path : string)
+{
+  ResourceImpl.Build(path, Nemerle.Macros.ImplicitCTX());
+}
+
+internal module ResourceImpl
+{
+  public Build(path : string, typer : Typer) : void
+  {
+    def types = Hashtable();
+    def getType(name : string) : FixedType
+    {
+      if (name.EndsWith("[]"))
+        FixedType.Array(getType(name.Substring(0, name.Length - 2)), 1)
+      else
+      {
+        when (!types.ContainsKey(name))
+          types.Add(name, typer.Manager.Lookup(name).GetMemType());
+
+        types[name];
+      }
+    }
+    def projDir = GetDirectoryName(typer.Manager.Options.ProjectPath);
+    def className = GetFileNameWithoutExtension(path);
+    def resPath =
+      if (IsPathRooted(path)) path
+      else Combine(projDir, path);
+
+    // Ignore if default resource file is lacking.
+    when (className == "Resources" && !File.Exists(resPath))
+      return;
+
+    when (!File.Exists(resPath))
+    {
+      Message.Error($<#The "$resPath" not exists.#>);
+      return;
+    }
+
+    def oldDir = GetCurrentDirectory();
+    def dir    = GetDirectoryName(resPath);
+
+    SetCurrentDirectory(dir); // The resourse reader use current dir to find referenced files.
+
+    def makeWrapperClass(resource : ISource, processingCount : int) : void
+    {
+      // request rebuilding type tree when xml changed
+      when (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
+      {
+        typer.Manager.RequestOnBuildTypesTree();
+        return;
+      }
+
+      try
+      {
+        using (def reader = ResXReader(StringReader(resource.GetText())))
+        {
+          def rootNamespace = typer.Manager.Options.RootNamespace;
+          def resourceName =
+            if (string.IsNullOrEmpty(rootNamespace)) className
+            else SourceHelper.MakeNamespaceForFolder(rootNamespace, dir, projDir) + "." + className;
+
+          def builder = typer.Env.Define(
+          <[ decl:
+            internal module  $(className: usesite)
+            {
+              private mutable _resourceManager : System.Resources.ResourceManager;
+
+              public ResourceManager : System.Resources.ResourceManager
+              {
+                get
+                {
+                  when (object.ReferenceEquals(_resourceManager, null))
+                  {
+                      def temp : System.Resources.ResourceManager
+                        = System.Resources.ResourceManager($(resourceName : string), typeof($(className: usesite)).Assembly);
+
+                      _resourceManager = temp;
+                  }
+                  _resourceManager;
+                }
+              }
+
+              private mutable _resourceCulture : System.Globalization.CultureInfo;
+
+              public ResourceCulture : System.Globalization.CultureInfo
+              {
+                get { _resourceCulture; }
+                set { _resourceCulture = value; }
+              }
+            }
+          ]>);
+
+          foreach(d :> DictionaryEntry in reader)
+          {
+            def typeName = if (d.Value == null) "System.Object" else d.Value.GetType().FullName;
+            def key = d.Key.ToString();
+            def typedDype = <[ $(getType(typeName) : typed) ]>;
+
+            match(d.Value)
+            {
+              | _ is string =>
+                  builder.Define(
+                  <[ decl:
+                    public $(key : usesite) : string
+                    {
+                      get
+                      {
+                        ResourceManager.GetString($(key : string), _resourceCulture);
+                      }
+                    }
+                  ]>);
+                  
+              | _ =>
+                  builder.Define(
+                  <[ decl:
+                    public $(key : usesite) : $typedDype
+                    {
+                      get
+                      {
+                        def temp = ResourceManager.GetObject($(key : string), _resourceCulture);
+                        temp :> $typedDype;
+                      }
+                    }
+                  ]>);
+            }
+          }
+
+          builder.Compile();
+        }
+      }
+      catch { | e => Message.Error(e.Message); }
+    }
+    
+    SourceHelper.SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(resPath), makeWrapperClass);
+    SetCurrentDirectory(oldDir);
+  }
+}
+
+// ---- Settings.n (Nemerle.Macro) ----
+/// <summary>
+/// Description of Settings.
+/// </summary>
+[MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+macro Settings(path : string, @public : bool = false)
+{
+  SettingsHelper.Settings(path, @public, Nemerle.Macros.ImplicitCTX())
+}
+
+internal module SettingsHelper
+{
+  private _xmlNamespace : string = "http://schemas.microsoft.com/VisualStudio/2004/01/settings";
+
+  public Settings(path : string, @public : bool, typer : Typer) : void
+  {
+    def types = Hashtable();
+
+    def getType(name)
+    {
+      when (!types.ContainsKey(name))
+        types.Add(name, typer.Manager.Lookup(name).GetMemType());
+
+      types[name];
+    }
+
+    def makeWrapperClass(resource : ISource, processingCount : int) : void
+    {
+      // request rebuilding type tree when xml changed
+      when (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
+      {
+        typer.Manager.RequestOnBuildTypesTree();
+        return;
+      }
+
+      try
+      {
+        def defineProperty(builder, el : XElement)
+        {
+          mutable propertyAttributes = [<[ System.Diagnostics.DebuggerNonUserCodeAttribute ]>];
+          def propertyType =
+            match (el.Attribute(XName.Get("Type")).Value)
+            {
+              | "(Web Service URL)" =>
+                propertyAttributes ::= <[ System.Configuration.SpecialSettingAttribute(System.Configuration.SpecialSetting.WebServiceUrl) ]>;
+                "System.String";
+              | "(Connection string)" =>
+                propertyAttributes ::= <[ System.Configuration.SpecialSettingAttribute(System.Configuration.SpecialSetting.ConnectionString) ]>;
+                "System.String";
+              | _ => el.Attribute(XName.Get("Type")).Value;
+            }
+
+          match(el.Attribute(XName.Get("Scope")))
+          {
+            | null => Message.Error("Scope of setting can't be null.");
+            | e => match(e.Value)
+              {
+                | "User" => propertyAttributes ::= <[ System.Configuration.UserScopedSettingAttribute ]>;
+                | "Application" => propertyAttributes ::= <[ System.Configuration.ApplicationScopedSettingAttribute ]>;
+                | _ => Message.Error($"Unrecognized scope $e in setting $el");
+              }
+          };
+
+          match(el.Element(XName.Get("Value", _xmlNamespace)))
+          {
+            | null => ();
+            | e =>
+              def attribute = e.Attribute(XName.Get("Profile"));
+              when(attribute != null && attribute.Value == "(Default)" && !string.IsNullOrEmpty(e.Value))
+                propertyAttributes ::= <[ System.Configuration.DefaultSettingValueAttribute($(e.Value : string)) ]>;
+          }
+
+          def propertyName = el.Attribute(XName.Get("Name")).Value;
+
+          builder.Define(
+          <[ decl:
+            ..$(AttributesAndModifiers(NemerleModifiers.Public, propertyAttributes))
+            $(propertyName : usesite) : $(getType(propertyType) : typed)
+            {
+              get { Item[$(propertyName : string)] :> $(getType(propertyType) : typed); }
+              set { Item[$(propertyName : string)] = value; }
+            }
+          ]>);
+        }
+
+        def defineClass(root)
+        {
+          def getAttributes()
+          {
+            NemerleModifiers.Sealed |
+            (if (@public) NemerleModifiers.Public else NemerleModifiers.Internal);
+          }
+
+          def attribute = root.Attribute(XName.Get("GeneratedClassName"));
+          def className = if(attribute != null) attribute.Value; else GetFileNameWithoutExtension(path);
+          def modifiers = AttributesAndModifiers(getAttributes(), [ <[ System.Runtime.CompilerServices.CompilerGeneratedAttribute ]> ]);
+
+          def builder = typer.Env.Define(
+          <[ decl:
+            ..$modifiers class $(className : usesite) : System.Configuration.ApplicationSettingsBase
+            {
+              private static _defaultInstance : $(className : usesite) =
+                System.Configuration.ApplicationSettingsBase.Synchronized($(className : usesite)()) :> $(className : usesite);
+
+              public static Default : $(className : usesite)
+              {
+                get { _defaultInstance; }
+              }
+            }
+          ]>);
+
+          foreach (el in root.Element(XName.Get("Settings", _xmlNamespace))?.Elements() ?? [])
+          {
+            if(el.Name.LocalName == "Setting")
+              defineProperty(builder, el);
+            else
+              Message.Warning($"$el isn't setting");
+          }
+          otherwise
+            Message.Warning($"$path doesn't contain settings");
+
+          builder.Compile();
+        }
+
+        try
+        {
+          def root = XDocument.Parse(resource.GetText(), LoadOptions.SetLineInfo).Root;
+
+          if(root.Name.NamespaceName == _xmlNamespace)
+            defineClass(root);
+          else
+            Message.Error($"$path is not valid settings file");
+        }
+        catch { | e => Message.Error($"$path isn't valid settings file. $e"); }
+      }
+      catch { | e => Message.Error(e.Message); }
+    }
+
+    def fullPath = if (IsPathRooted(path)) path
+                   else Combine(GetDirectoryName(typer.Manager.Options.ProjectPath), path);
+    def name = Path.GetFileNameWithoutExtension(fullPath);
+
+    // Ignore if default resource file is lacking.
+    when (name == "Settings" && !File.Exists(fullPath))
+      return;
+
+    when (!File.Exists(fullPath))
+    {
+      Message.Error($<#The "$fullPath" not exists.#>);
+      return;
+    }
+
+    SourceHelper.SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(fullPath), makeWrapperClass);
+  }
+}
+
+// ---- SourceHelper.n (Nemerle.Macro) ----
+/// <summary>
+/// Description of Class1.
+/// </summary>
+public module SourceHelper
+{
+  public MakeNamespaceForFolder(rootNs : string, path : string, basePath : string) : string
+  {
+    def relativePath = MakeRelativePath(path, basePath);
+    def relativeName = relativePath.Replace('\\', '.');
+    
+    if (relativeName.StartsWith("."))
+      rootNs + relativeName
+    else
+      rootNs + "." + relativeName
+  }
+  
+  public MakeRelativePath(path : string, basePath : string) : string
+  {
+    def fullPath = Path.GetFullPath(path);
+    def fullBasePath = Path.GetFullPath(basePath);
+    if (fullPath.StartsWith(fullBasePath, StringComparison.InvariantCultureIgnoreCase))
+      fullPath.Substring(fullBasePath.Length)
+    else
+      ""
+  }
+
+  public SubscribeSourceChangedWithCounter(manager : ManagerClass, fileIndex : int, handler : ISource * int -> void) : void
+  {
+    mutable counter = 0;
+    manager.SubscribeSourceChanged(fileIndex, source =>
+    {
+      counter += 1;
+      handler(source, counter);
+    });
+  }
+}

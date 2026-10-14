@@ -104,22 +104,22 @@ public class EnumsTest
     def x = Reflection.FieldAttributes.NotSerialized;
     def y = Reflection.FieldAttributes.NotSerialized;
     def z = ~(x | y);
-    when (z %&& x) Nemerle.IO.printf ("bad\n");
+    when (z %&& x) Nemerle.IOMacros.printf ("bad\n");
     def x = Foo.X | Foo.Y;
-    when (x %&& Foo.X) Nemerle.IO.printf ("good\n");
+    when (x %&& Foo.X) Nemerle.IOMacros.printf ("good\n");
     def _ = Foo1.X1 | Foo1.Y1;
     def x = ~Foo.X;
-    when (x %&& Foo.X) Nemerle.IO.printf ("bad\n");
-    when ((Foo.Z :> int) == 6 && (Foo.U :> int) == 18) Nemerle.IO.print ("good\n");
-    Nemerle.IO.printf ("%i %i %i %i %i\n", Foo.V :> int, Foo.W :> int,
+    when (x %&& Foo.X) Nemerle.IOMacros.printf ("bad\n");
+    when ((Foo.Z :> int) == 6 && (Foo.U :> int) == 18) Nemerle.IOMacros.print ("good\n");
+    Nemerle.IOMacros.printf ("%i %i %i %i %i\n", Foo.V :> int, Foo.W :> int,
                        Foo.ZERO :> int, Foo.XOR :> int, Foo.MINUS :> int);
     Bases.Run ();
 
     XEnumCasts.Run ();
 
-    Nemerle.IO.print ("----- lib loading ----\n");    
-    Nemerle.IO.print (LibFromLong.B :> long);
-    Nemerle.IO.print ("\n");    
+    Nemerle.IOMacros.print ("----- lib loading ----\n");    
+    Nemerle.IOMacros.print (LibFromLong.B :> long);
+    Nemerle.IOMacros.print ("\n");    
   }
 }
 

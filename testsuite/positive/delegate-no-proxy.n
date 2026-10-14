@@ -2,6 +2,7 @@ namespace NoDelegateProxy
 {
   using Nemerle.IO;
   using Nemerle.Collections;
+  using Nemerle.IOMacros;
   
   delegate Foo (x : string) : void;
 

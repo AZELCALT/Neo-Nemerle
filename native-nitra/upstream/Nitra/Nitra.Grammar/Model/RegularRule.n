@@ -14,6 +14,7 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
 using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.ExtensionsMacros;
 
 namespace Nitra.Model
 {

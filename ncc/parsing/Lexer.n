@@ -36,6 +36,8 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 
 using NStack = Nemerle.Collections.Stack;
+using Nemerle.UtilityMacros;
+using Nemerle.CompilerMacros;
 
 namespace Nemerle.Compiler {
 
@@ -638,13 +640,13 @@ public abstract class LexerBase
         else if (IsOperatorChar (next))
           match (get_op (next)) {
             | Token.Operator (s) => Token.Identifier (s)
-            | _ => Util.ice ()
+            | _ => UtilMacros.ice ()
           }
         else if (IsIdBeginning (next))
           match (get_id (next)) {
             | Token.Identifier (x)
             | Token.Keyword (x) => Token.QuotedIdentifier (x)
-            | _ => Util.ice ()
+            | _ => UtilMacros.ice ()
           }
         else if (next == '"')
           get_monkey_string ()

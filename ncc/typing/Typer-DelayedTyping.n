@@ -37,6 +37,8 @@ using Nemerle.Utility;
 using System.Diagnostics;
 
 using PT = Nemerle.Compiler.Parsetree;
+using Nemerle.CompilerMacros;
+using Nemerle.UtilityMacros;
 
 namespace Nemerle.Compiler
 {
@@ -499,7 +501,7 @@ namespace Nemerle.Compiler
           | Overloaded (overloads) => makeOverloads(overloads, "ambiguity between overloads:")
           | Macro (action) =>
             // the Resolve function should dump the error message
-            Util.locate (Location, {
+            UtilMacros.locate (Location, {
               def res = action.Resolve (true);
               when (res.IsSome)
                 Message.Error ($ "the macro resolution function unexpectedly succeeded "
@@ -553,11 +555,11 @@ namespace Nemerle.Compiler
       public SetCallExpr (e : TExpr.Call) : void
       {
         def kind = DtKind;
-        Util.cassert (CanSetCallExpr);
+        UtilMacros.cassert (CanSetCallExpr);
         if (kind.filtering_expression == null)
           kind.filtering_expression = e;
         else
-          Util.cassert (kind.filtering_expression : object == e : object)
+          UtilMacros.cassert (kind.filtering_expression : object == e : object)
       }
 
       ResolveOverload(overloads : list[OverloadPossibility], parms : list[Parm], expected : TypeVar) : list[OverloadPossibility]
@@ -823,7 +825,7 @@ namespace Nemerle.Compiler
                       typer.TryAddCastTo(expr1, expected, _speculative)
                     else match (expr1.Type)
                     {
-                      | FixedType.Fun(FixedType.Tuple([_]), _) | FixedType.Fun(FixedType.Tuple([]), _) => Util.ice("FixedType.Fun has inconsistent state!")
+                      | FixedType.Fun(FixedType.Tuple([_]), _) | FixedType.Fun(FixedType.Tuple([]), _) => UtilMacros.ice("FixedType.Fun has inconsistent state!")
                       | FixedType.Fun(FixedType.Tuple(head :: last :: []), to) with (from = last,              cnt = 1)
                       | FixedType.Fun(FixedType.Tuple(head :: tail),       to) with (from = FixedType.Tuple(tail), cnt = tail.Length)
                       | FixedType.Fun(head,                            to) with (from = FixedType.Void(),      cnt = 0) =>
@@ -936,7 +938,7 @@ namespace Nemerle.Compiler
               SetKind(Kind.Error())
 
           | Kind.Macro (action) =>
-            Util.locate (Location,
+            UtilMacros.locate (Location,
               match (action.Resolve(false))
               {
                 | Some (expr) =>
@@ -975,7 +977,7 @@ namespace Nemerle.Compiler
 
       public Resolve (speculative = false) : void
       {
-        Util.locate (Location, 
+        UtilMacros.locate (Location, 
         {
           def old_speculative = _speculative;
           _speculative = _speculative || speculative;

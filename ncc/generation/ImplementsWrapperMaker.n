@@ -52,7 +52,7 @@ namespace Nemerle.Compiler
         else
         {
           //Message.Debug("fail");
-          Util.locate(Location, MakeImplWrapper(ifaceType, impl_meth));
+          UtilMacros.locate(Location, MakeImplWrapper(ifaceType, impl_meth));
           false
         }
       }
@@ -70,7 +70,7 @@ namespace Nemerle.Compiler
       def parms = hd.Parameters;
       mutable new_typarms = [];
 
-      Util.cassert(Name.IndexOf('.') == -1, $"impl loop, $this IMPL $impl_meth, $(this.GetMemType()) != $(declaring_type.GetMemType().TypeOfMember(impl_meth))");
+      UtilMacros.cassert(Name.IndexOf('.') == -1, $"impl loop, $this IMPL $impl_meth, $(this.GetMemType()) != $(declaring_type.GetMemType().TypeOfMember(impl_meth))");
 
       def subst = impl_meth.DeclaringType.MakeSubst(ifaceType.args);
       //def subst = declaring_type.SubtypingSubst(impl_meth.DeclaringType);

@@ -28,6 +28,7 @@
 
 using System.Diagnostics;
 using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
 
 // ---- internal-numbered.n (Nemerle.Builtins) ----
 [DebuggerNonUserCode]
@@ -1351,32 +1352,32 @@ public abstract class FunctionVoid ['p1, 'p2, 'p3, 'p4, 'p5, 'p6, 'p7, 'p8, 'p9,
   }
 
 // ---- internal-array.n (Nemerle.Builtins) ----
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array1 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array2 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array3 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array4 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array5 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array6 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array7 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array8 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array9 [T] : System.Array { }
 
-[Nemerle.Extensions.DisableImplicitConstructor]
+[Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array10 [T] : System.Array { }

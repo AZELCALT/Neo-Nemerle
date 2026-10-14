@@ -153,10 +153,10 @@ public class Test
   public static Main () :  int
   {
     mutable  y =  Y ();
-    mutable  a = Nemerle.Extensions.DefaultValue (X);
-    mutable b = Nemerle.Extensions.DefaultValue (X);
-    mutable c = Nemerle.Extensions.DefaultValue (X);
-    mutable d = Nemerle.Extensions.DefaultValue (X);
+    mutable  a = Nemerle.ExtensionsMacros.DefaultValue (X);
+    mutable b = Nemerle.ExtensionsMacros.DefaultValue (X);
+    mutable c = Nemerle.ExtensionsMacros.DefaultValue (X);
+    mutable d = Nemerle.ExtensionsMacros.DefaultValue (X);
 
     a = Y.Bar ();
     if (!(a is Y))

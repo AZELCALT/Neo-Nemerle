@@ -41,7 +41,7 @@ class App {
     X.Y.Z.W.Ahoj ();
 
     // Array declaration
-    mutable  _addresses2 = Nemerle.Extensions.DefaultValue ( array [System2.Net.IPAddress]) : array [System2.Net.IPAddress];
+    mutable  _addresses2 = Nemerle.ExtensionsMacros.DefaultValue ( array [System2.Net.IPAddress]) : array [System2.Net.IPAddress];
 
      0;
   }

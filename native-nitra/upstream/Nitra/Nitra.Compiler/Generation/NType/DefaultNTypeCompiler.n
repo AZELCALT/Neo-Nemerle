@@ -10,6 +10,7 @@ using Nemerle.Compiler.Parsetree;
 
 using System;
 using SCG = System.Collections.Generic;
+using NemerleMacros;
 
 namespace Nitra.Compiler
 {
@@ -68,7 +69,7 @@ namespace Nitra.Compiler
 
     public override Compile(t : NType) : PExpr
     {
-      Util.locate(t.Location.NLocation(),
+      UtilMacros.locate(t.Location.NLocation(),
         match (t)
         {
           | Predefined(t)    => MakeNemerleType(t)
@@ -81,7 +82,7 @@ namespace Nitra.Compiler
 
             if (parts is first :: other)
             {
-              mutable acc = Util.locate(first.Location.NLocation(),
+              mutable acc = UtilMacros.locate(first.Location.NLocation(),
                 match (first.TypeArguments)
                 {
                   | []                                => <[ $(makeName(first) : name) ]>
@@ -90,7 +91,7 @@ namespace Nitra.Compiler
                 });
               foreach (t in other)
               {
-                Util.locate(t.Location.NLocation(),
+                UtilMacros.locate(t.Location.NLocation(),
                 {
                   acc = <[ $acc . $(makeName(t) : name) ]>;
                   unless (t.TypeArguments.IsEmpty())

@@ -24,8 +24,8 @@ class Test {
   {
     mutable  myself = typeof (Test);
     mutable  bf = BindingFlags.Static %| BindingFlags.NonPublic %| BindingFlags.Public;
-    mutable  mpia = Nemerle.Extensions.DefaultValue (MethodAttributes);
-    mutable  mpi = Nemerle.Extensions.DefaultValue (MethodInfo);
+    mutable  mpia = Nemerle.ExtensionsMacros.DefaultValue (MethodAttributes);
+    mutable  mpi = Nemerle.ExtensionsMacros.DefaultValue (MethodInfo);
 
     //
     // protected internal

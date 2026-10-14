@@ -7,6 +7,8 @@ using Nemerle.Extensions;
 using Nemerle.Collections;
 using Nemerle.Utility;
 using NorthWind;
+using Nemerle.ExtensionsMacros;
+using Nemerle.UtilityMacros;
 
 module Program
 {

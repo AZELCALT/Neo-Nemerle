@@ -1,6 +1,7 @@
 using System;
 using System.Console;
 using Nemerle;
+using NemerleMacros;
 
 // We can not allow add fields in different parts of a variant option.
 partial variant V

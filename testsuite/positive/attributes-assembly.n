@@ -3,6 +3,7 @@ using System.Reflection;
 using SCG = System.Collections.Generic;
 using System.Console;
 using Nemerle.Utility;
+using Nemerle.UtilityMacros;
 
 public sealed class TestAttribute : Attribute {
 

@@ -20,7 +20,7 @@ namespace Nitra.Compiler
       {
         | FatalError =>
           ErrorCount++;
-          Message.FatalError(loc.NLocation(), msg)
+          MessageMacros.FatalError(loc.NLocation(), msg)
 
         | Error =>
           ErrorCount++;

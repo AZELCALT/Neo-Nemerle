@@ -45,7 +45,7 @@ namespace Nemerle.Compiler
                                     return_value_attrs : AttributesAndModifiers,
                                     header : PFunHeader) : TypeBuilder
     {
-      Util.locate (header.Location, {
+      UtilMacros.locate (header.Location, {
         when ((attrs.mods %& ~NemerleModifiers.AccessModifiers) != NemerleModifiers.None)
           Message.Error (header.Location, "delegates are only allowed to have access specifiers as attributes");
 
@@ -56,7 +56,7 @@ namespace Nemerle.Compiler
 
         // build the delegate's return type and method body for the type inference engine
         def ret_type = header.ReturnType;
-        def invoke_body = <[ Nemerle.Extensions.DefaultValue ($ret_type) ]>;
+        def invoke_body = <[ Nemerle.ExtensionsMacros.DefaultValue ($ret_type) ]>;
         def delegate_name = header.PName;
         def tparms = header.TypeParameters;
 

@@ -32,7 +32,7 @@ namespace Nitra.Compiler
     public DefineTypes() : void
     {
       assert(_tb : object == null);
-      Util.locate(Symbol.FirstLocation.NLocation(),
+      UtilMacros.locate(Symbol.FirstLocation.NLocation(),
       {
         def baseLanguage =
           if (Symbol.Parent is SymbolRef.Some(parent))
@@ -61,7 +61,7 @@ namespace Nitra.Compiler
 
       foreach (style in Symbol.Styles)
       {
-        Util.locate(style.FirstLocation.NLocation(),
+        UtilMacros.locate(style.FirstLocation.NLocation(),
         {
           def backingFieldName = Util.tmpname(style.Name);
           _tb.Define(<[ decl:
@@ -90,7 +90,7 @@ namespace Nitra.Compiler
 
       foreach (spanClass in Symbol.SpanClasses)
       {
-        Util.locate(spanClass.FirstLocation.NLocation(),
+        UtilMacros.locate(spanClass.FirstLocation.NLocation(),
         {
           def backingFieldName = Util.tmpname(spanClass.Name);
           _tb.Define(<[ decl:
@@ -110,7 +110,7 @@ namespace Nitra.Compiler
 
       def nameToExpr(n : string) : PExpr { <[ $(n : usesite) ]> }
 
-      Util.locate(Symbol.FirstLocation.NLocation(),
+      UtilMacros.locate(Symbol.FirstLocation.NLocation(),
       {
         def parentExpr =
           if (Symbol.Parent is SymbolRef.Some(parent))

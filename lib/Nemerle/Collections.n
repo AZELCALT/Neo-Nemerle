@@ -36,10 +36,10 @@ using Nemerle.Imperative;
 using Array = System.Array;
 using System.Runtime.Serialization;
 using SC = System.Collections;
-using Nemerle;
 using Nemerle.Text;
 using Nemerle.Utility;
 using System.Collections.Generic;
+using NemerleMacros;
 
 // ---- list.n (Nemerle.Collections) ----
 [DebuggerNonUserCode]
@@ -2513,7 +2513,7 @@ public interface ICovariantEnumerable [+T] {
   GetEnumerator () : ICovariantEnumerator [T];
 }
 
-//[Nemerle.Utility.ExtensionPattern ( Nil() = (x when x.IsEmpty) )]
+//[Nemerle.UtilityMacros.ExtensionPattern ( Nil() = (x when x.IsEmpty) )]
 public interface ICovariantList [+T] {
   IsEmpty : bool { get; }
   Head : T { get; }
@@ -3558,7 +3558,7 @@ public class LinkedList ['a] : System.Collections.Generic.LinkedList['a],
   }        
 
   /** Compares two lists item by item using Equals method of contained objects. */
-  [Nemerle.OverrideObjectEquals]
+  [NemerleMacros.OverrideObjectEquals]
   public Equals (another_list : LinkedList ['a]) : bool
     implements System.IEquatable[LinkedList['a]].Equals
   {
@@ -4533,7 +4533,7 @@ public class Queue ['a] : System.Collections.Generic.Queue ['a]
     public fst : 'a;
     public snd : 'a;
 
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (p : Pair ['a]) : bool
       implements System.IEquatable[Pair['a]].Equals
     {
@@ -4633,7 +4633,7 @@ public class Queue ['a] : System.Collections.Generic.Queue ['a]
           false otherwise.
         </returns>
      */
-    [Nemerle.OverrideObjectEquals]
+    [NemerleMacros.OverrideObjectEquals]
     public Equals (ys : RList ['a]) : bool
       implements System.IEquatable[RList['a]].Equals
     {

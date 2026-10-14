@@ -1,5 +1,6 @@
 using Nemerle.IO;
 using System.Console;
+using Nemerle.IOMacros;
 
 [Record]
 class Printer[T] {

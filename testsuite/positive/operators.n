@@ -48,7 +48,7 @@ class Foo {
   }
 
   public static @%^ (a : Foo, b : Foo) : void {
-    Nemerle.IO.printf ("want to %d ^ %d?\n", a.x, b.x)
+    Nemerle.IOMacros.printf ("want to %d ^ %d?\n", a.x, b.x)
   }
 
   public static prop : int {
@@ -265,12 +265,12 @@ class B1 {
 
   static Main () : void {
     mutable a = Foo (1) + Foo (1);
-    Nemerle.IO.printf ("%d\n", a.x);
-    when (Foo (0) | Foo (1)) Nemerle.IO.printf ("good\n");
+    Nemerle.IOMacros.printf ("%d\n", a.x);
+    when (Foo (0) | Foo (1)) Nemerle.IOMacros.printf ("good\n");
     a++;
-    Nemerle.IO.printf ("%d\n", a.x);
+    Nemerle.IOMacros.printf ("%d\n", a.x);
     ++a;
-    Nemerle.IO.printf ("%d\n", a.x);
+    Nemerle.IOMacros.printf ("%d\n", a.x);
     a %^ Foo (10);
     mutable x1 = 16; ++x1;
     mutable x2 = 16b; ++x2;
@@ -281,16 +281,16 @@ class B1 {
     System.Console.WriteLine ("{0} {1} {2}", x1, x2, x3);
     System.Console.WriteLine ("{0} {1} {2}", x4, x5, x6);    
     Foo.prop = 5;
-    Nemerle.IO.printf ("%d\n", Foo.prop);
+    Nemerle.IOMacros.printf ("%d\n", Foo.prop);
     ++Foo.prop;
-    Nemerle.IO.printf ("%d\n", Foo.prop);
+    Nemerle.IOMacros.printf ("%d\n", Foo.prop);
     def x = array [1,2,3,4, 5];
     ++x[1];
-    Nemerle.IO.printf ("%d\n", x[1]);
+    Nemerle.IOMacros.printf ("%d\n", x[1]);
     x[2] = ~x[1];
-    Nemerle.IO.printf ("%d\n", x[2]);
+    Nemerle.IOMacros.printf ("%d\n", x[2]);
     def t = 5U;
-    Nemerle.IO.printf ("%s\n", (~t).ToString ()); 
+    Nemerle.IOMacros.printf ("%s\n", (~t).ToString ()); 
     System.Console.Write ("foo" + "bar" + "\n");
     def z = System.Decimal (10 + 12) + System.Decimal (6 + 4 + 10);
     when (42 == System.Decimal.ToInt32 (z)) IO.printf ("ok\n");

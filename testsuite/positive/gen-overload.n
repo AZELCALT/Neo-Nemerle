@@ -85,7 +85,7 @@ namespace NS
     static public DoIt[T]() : T
     {
       System.Console.WriteLine ("bb");
-      Nemerle.Extensions.DefaultValue (T);
+      Nemerle.ExtensionsMacros.DefaultValue (T);
     }
   }
   

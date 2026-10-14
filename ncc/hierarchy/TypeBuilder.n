@@ -42,6 +42,8 @@ using System.Collections.Specialized;
 using PT = Nemerle.Compiler.Parsetree;
 using SCG = System.Collections.Generic;
 using SC = System.Collections;
+using Nemerle.UtilityMacros;
+using NemerleMacros;
 
 namespace Nemerle.Compiler
 {
@@ -49,7 +51,7 @@ type NameToMethodsMap = Hashtable[string, list[FixedType.Class * IMethod]];
 type IfaceMethod      = FixedType.Class * IMethod;
 type IfaceMethods     = list[FixedType.Class * IMethod];
 
-[Nemerle.Compiler.SupportRelocation]
+[Nemerle.CompilerMacros.SupportRelocation]
 public partial class TypeBuilder : TypeInfo
 {
   type Subinfo = Map [TypeInfo, TypeInfo * list[FixedType]];
@@ -146,7 +148,7 @@ public partial class TypeBuilder : TypeInfo
     _nameLocation = td.NameLocation;
 
     when (this.GlobalEnv == null)
-      Util.ice ($ "env is null for $(ns_node.GetDisplayName ())");
+      UtilMacros.ice ($ "env is null for $(ns_node.GetDisplayName ())");
 
     _declaringType = par;
 
@@ -922,7 +924,7 @@ public partial class TypeBuilder : TypeInfo
 
   public GetTypeBuilder () : System.Reflection.Emit.TypeBuilder
   {
-    when (type_builder == null) Util.ice($"no emit type builder was created for `$FullName'");
+    when (type_builder == null) UtilMacros.ice($"no emit type builder was created for `$FullName'");
     type_builder
   }
 
@@ -982,7 +984,7 @@ public partial class TypeBuilder : TypeInfo
               | PT.TopDeclaration.Variant  (typarms = t) => t
               | PT.TopDeclaration.Interface(typarms = t) => t
               | PT.TopDeclaration.VariantOption          => _ast.typarms
-              | _ => Util.ice ("non class / variant")
+              | _ => UtilMacros.ice ("non class / variant")
             };
 
           when (!tparms.tyvars.Equals(_ast.typarms.tyvars))
@@ -1029,7 +1031,7 @@ public partial class TypeBuilder : TypeInfo
     }
 
     when (forced_typarms != null) {
-      Util.cassert (typarms.IsEmpty);
+      UtilMacros.cassert (typarms.IsEmpty);
       typarms = forced_typarms;
       forced_typarms = null;
     }
@@ -1086,7 +1088,7 @@ public partial class TypeBuilder : TypeInfo
     self_type = FixedType.Class (this, this.typarms.Map (FixedType.StaticTypeVarRef (_)));
 
     foreach (tb in this.contained_types)
-      Util.locate (tb.loc, tb.make_tyenvs ());
+      UtilMacros.locate (tb.loc, tb.make_tyenvs ());
   }
 
   mutable _nestingLevel : int;
@@ -1166,7 +1168,7 @@ public partial class TypeBuilder : TypeInfo
                 def ttype = this.tenv.BindFixedType(this.GlobalEnv, this, t, check_parms = false);
                 TypeDeclaration.Alias(ttype)
 
-              | _ => Util.ice("The 'tydecl' field of alias must have TypeDeclaration.Alias(null) type.")
+              | _ => UtilMacros.ice("The 'tydecl' field of alias must have TypeDeclaration.Alias(null) type.")
             }
 
           | PT.TopDeclaration.Interface     => TypeDeclaration.Interface ()
@@ -1176,7 +1178,7 @@ public partial class TypeBuilder : TypeInfo
 
           | PT.TopDeclaration.VariantOption => TypeDeclaration.VariantOption ()
           | PT.TopDeclaration.Delegate
-          | PT.TopDeclaration.Macro         => Util.ice ("this top declaration shouldn't survive to typing")
+          | PT.TopDeclaration.Macro         => UtilMacros.ice ("this top declaration shouldn't survive to typing")
         };
 
       def nested_tyvars_subst =
@@ -1705,7 +1707,7 @@ public partial class TypeBuilder : TypeInfo
     def new_mems =
       match (member_map.Get(mem.Name))
       {
-        | Some([]) => Util.ice()
+        | Some([]) => UtilMacros.ice()
         | Some((x :: _) as old) =>
           if (x.DeclaringType.Equals(this))
             match (mem, x)
@@ -1822,7 +1824,7 @@ public partial class TypeBuilder : TypeInfo
     when (class_member.Env == null)
       class_member._env = GlobalEnv;
 
-    Util.locate (class_member.Location,
+    UtilMacros.locate (class_member.Location,
     {
       // if current class is static (it's a module) then sign its members to static
       when (IsModule)
@@ -1941,7 +1943,7 @@ public partial class TypeBuilder : TypeInfo
       else e
     }
 
-    def no_refs = Util.locate(expr.Location, { Macros.TraverseExpr(None(), expr, false, resolve_ref) });
+    def no_refs = UtilMacros.locate(expr.Location, { Macros.TraverseExpr(None(), expr, false, resolve_ref) });
 
     match (ConstantFolder.FoldConstants (this, no_refs))
     {
@@ -2062,9 +2064,9 @@ public partial class TypeBuilder : TypeInfo
         // in abstract classes we have protected implicit ctor, otherwise public
         // http://www.jaggersoft.com/csharp_standard/17.10.4.htm
         if (IsAbstract)
-          Util.locate(loc, <[ decl: protected this () { } ]>)
+          UtilMacros.locate(loc, <[ decl: protected this () { } ]>)
         else
-          Util.locate(loc, <[ decl: public this () { } ]>);
+          UtilMacros.locate(loc, <[ decl: public this () { } ]>);
 
       def meth = bind_and_add_member(ctor);
 
@@ -2109,12 +2111,12 @@ public partial class TypeBuilder : TypeInfo
         match (LookupMember (".ctor"))
         {
           | [ctor is MethodBuilder] => ctor
-          | _ => Util.ice ();
+          | _ => UtilMacros.ice ();
         };
 
       ctor.Attributes = NemerleModifiers.Private;
 
-      Util.locate(loc,
+      UtilMacros.locate(loc,
       {
         def field = <[ decl: public static _N_constant_object : $(ttf : typed); ]>;
         constant_object = DefineAndReturn(field) :> IField;
@@ -2266,14 +2268,14 @@ public partial class TypeBuilder : TypeInfo
     // finalization is blocked until call to Compile
     this.cannot_finalize = true;
 
-    Util.locate (loc, process_macro_attributes (MacroPhase.BeforeInheritance));
+    UtilMacros.locate (loc, process_macro_attributes (MacroPhase.BeforeInheritance));
 
     def run_phase = TyManager.run_phase;
 
     when (run_phase >= 1)
       make_tyenvs ();
     when (run_phase >= 2)
-      Util.locate (loc, bind_types ());
+      UtilMacros.locate (loc, bind_types ());
     when (run_phase >= 3)
       construct_subtyping_map ();
     when (run_phase >= 4)
@@ -2302,7 +2304,7 @@ public partial class TypeBuilder : TypeInfo
     {
       | member is MemberBuilder => member.MarkWithSpecialName ()
       | tb is TypeBuilder       => tb.MarkWithSpecialName ()
-      | _                       => Util.ice ()
+      | _                       => UtilMacros.ice ()
     }
   }
 
@@ -2791,7 +2793,7 @@ public partial class TypeBuilder : TypeInfo
           add_macros_from_parsedmems (x, stage);
 
       | MacroPhase.WithTypedMembers => ()
-      | _ => Util.ice ("cannot run macros processing with none phase")
+      | _ => UtilMacros.ice ("cannot run macros processing with none phase")
     }
 
     TyManager.ExpandMacros();
@@ -2982,7 +2984,7 @@ public partial class TypeBuilder : TypeInfo
     def check_for_invalid_attr (attr : NemerleModifiers, attr_name : string)
     {
       when (attributes %&& attr)
-        Message.FatalError (loc, "invalid attribute `" + attr_name + "' specified for " + title () + ": " + FullName)
+        MessageMacros.FatalError (loc, "invalid attribute `" + attr_name + "' specified for " + title () + ": " + FullName)
     }
 
     check_for_invalid_attr (NemerleModifiers.Virtual, "virtual");
@@ -3008,7 +3010,7 @@ public partial class TypeBuilder : TypeInfo
     match (CheckAccessAttributes (attributes))
     {
       | Some (msg) =>
-        Message.FatalError (loc, msg + " for type: " + FullName)
+        MessageMacros.FatalError (loc, msg + " for type: " + FullName)
       | _ => ()
     }
 
@@ -3016,17 +3018,17 @@ public partial class TypeBuilder : TypeInfo
 
     // top-level classes can only be public or internal
     when (type_is_top_level && accessibility != Accessibility.Public && accessibility != Accessibility.Internal)
-      Message.FatalError (loc, "top level " + title () + "s are only allowed to be public or internal: " + FullName);
+      MessageMacros.FatalError (loc, "top level " + title () + "s are only allowed to be public or internal: " + FullName);
 
     // top-level classes are not allowed to be `new'
     def type_is_new = attributes %&& NemerleModifiers.New;
 
     when (type_is_top_level && type_is_new)
-      Message.FatalError(loc, "only nested " + title() +"s are allowed to `new': " + FullName);
+      MessageMacros.FatalError(loc, "only nested " + title() +"s are allowed to `new': " + FullName);
 
     // types cannot be abstract and sealed at the same time
     when (IsAbstract && IsSealed)
-      Message.FatalError(loc, title() + "s are not allowed to be abstract and sealed at the same time: " + FullName)
+      MessageMacros.FatalError(loc, title() + "s are not allowed to be abstract and sealed at the same time: " + FullName)
   }
 
   /// Get direct (derived directly) subtypes of given type.

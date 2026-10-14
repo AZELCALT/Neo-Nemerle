@@ -15,7 +15,7 @@ public static run () : void {
     def a = A1();
     a.Bar += Foo (m1);
     a.Bar -= Foo (m1);
-    if (a.Bar == null) Nemerle.IO.printf ("ok\n") else Nemerle.IO.printf ("bad\n");
+    if (a.Bar == null) Nemerle.IOMacros.printf ("ok\n") else Nemerle.IOMacros.printf ("bad\n");
   }
 }
 
@@ -101,7 +101,7 @@ class MyClass {
         delegate Foo () : int;
 
         public static Run () : void {
-                mutable validDigit = Nemerle.Extensions.DefaultValue (IsAnything);
+                mutable validDigit = Nemerle.ExtensionsMacros.DefaultValue (IsAnything);
                 validDigit = IsAnything (Char.IsDigit);
                 assert(validDigit ('9'));
                 assert(!validDigit ('a'));
@@ -185,6 +185,7 @@ module X {
 
 namespace Bug674reopen {
 using System.Collections.Generic;
+using Nemerle.IOMacros;
 
 public delegate FuncX [T] () : T;
 public delegate FuncX [A0,T] (arg0 : A0) : T;

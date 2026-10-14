@@ -38,7 +38,7 @@ namespace Nitra.Compiler
 
     public DefineTypes(ownerTb : TypeBuilder) : void
     {
-      Util.locate(Symbol.FirstLocation.NLocation(),
+      UtilMacros.locate(Symbol.FirstLocation.NLocation(),
       {
         def itemType = Environment.GetAstType(Symbol);
 
@@ -87,7 +87,7 @@ namespace Nitra.Compiler
         ]>);
       }
 
-      Util.locate(Symbol.FirstLocation.NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
+      UtilMacros.locate(Symbol.FirstLocation.NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
     }
 
     protected static LinkProperties(source : DependencyPath, target : DependencyPath, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], resultBuilder : PExpr -> PExpr = null) : PExpr

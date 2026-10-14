@@ -40,6 +40,7 @@ using Nemerle.IO;
 using Nemerle.Utility;
 
 using TT = Nemerle.Compiler.Typedtree;
+using Nemerle.IOMacros;
 
 //#define PRINT_COLOR
 
@@ -182,7 +183,7 @@ namespace Nemerle.Compiler
         | <[ $e1 in $e2 ]> => SprintExpr (ctx, e1, indentation, acc);
                               acc.Write (" in ");   
                               SprintExpr (ctx, e2, indentation, acc);
-        | <[ Nemerle.IO.sprint($e) ]> => acc.Write ("$");SprintExpr (ctx, e, indentation, acc);                        
+        | <[ Nemerle.IOMacros.sprint($e) ]> => acc.Write ("$");SprintExpr (ctx, e, indentation, acc);                        
         | <[ $func (.. $parms) ]> =>
           def print_parm (p : PExpr)
           {
@@ -480,7 +481,7 @@ namespace Nemerle.Compiler
                           //               + namespc.GetDisplayName ())
                       }, acc);
 
-                  | GrammarElement.Branch | GrammarElement.End => Util.ice ("invalid node");
+                  | GrammarElement.Branch | GrammarElement.End => UtilMacros.ice ("invalid node");
                 }
 
                 when (x.Next != null)
@@ -823,7 +824,7 @@ namespace Nemerle.Compiler
                 | [(As (HasType (ty), _), _, [])] =>
                   append (strip_nemerle_core_dot_prefix (ty.ToString ()));
                 | _ =>
-                  Util.ice ("SprintTyMatch: is_is")
+                  UtilMacros.ice ("SprintTyMatch: is_is")
               }
               append (")");
               true
@@ -838,7 +839,7 @@ namespace Nemerle.Compiler
                 | [(then_pat, _, [])] =>
                   print_pattern (then_pat)
                 | _ =>
-                  Util.ice ("SprintTyMatch: is_matches")
+                  UtilMacros.ice ("SprintTyMatch: is_matches")
               }
               append (")");
               true
@@ -964,7 +965,7 @@ namespace Nemerle.Compiler
               match (parms)
               {
                 | [head, tail] => walk_tree (tail.expr, head.expr :: acc)
-                | _            => Util.ice ("SprintTyExpr/flatten_list/walk_list_tree")
+                | _            => UtilMacros.ice ("SprintTyExpr/flatten_list/walk_list_tree")
               }
 
             | TT.TExpr.StaticRef (_, mem, _) when is_list_nil (mem) => (NList.Rev (acc), true)
@@ -1215,7 +1216,7 @@ namespace Nemerle.Compiler
               foreach (and_fun_decl in rest)
                 print_local_fun_decl("and", and_fun_decl)
 
-            | _ => Util.ice ("TT.TExpr.DefFunctionsIn with no function declarations")
+            | _ => UtilMacros.ice ("TT.TExpr.DefFunctionsIn with no function declarations")
           }
 
           recurse_no_indent (body)
@@ -1441,7 +1442,7 @@ namespace Nemerle.Compiler
   [Record]
   public class LocatableTextWriter
   {
-    [Nemerle.Utility.Accessor]
+    [Nemerle.UtilityMacros.Accessor]
     protected sbuilder : StringBuilder;
 
     public virtual Loc : Location { get { Location.Default } }
@@ -1455,7 +1456,7 @@ namespace Nemerle.Compiler
   [Record]
  class LocatingTextWriter : LocatableTextWriter
   {
-    [Nemerle.Utility.Accessor (flags = Override)]
+    [Nemerle.UtilityMacros.Accessor (flags = Override)]
     mutable loc : Location;
 
     public override Write (txt : string) : void

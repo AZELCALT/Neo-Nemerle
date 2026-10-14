@@ -7,7 +7,7 @@ module TestsNullable
     assert(isnull == (null == x));
     assert(isnotnull == (null != x));
     assert(isnull != isnotnull);
-    Nemerle.IO.print ("isnull=$isnull value=$x\n");
+    Nemerle.IOMacros.print ("isnull=$isnull value=$x\n");
   }
   
   basic () : void {

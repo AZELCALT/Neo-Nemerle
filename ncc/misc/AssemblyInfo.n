@@ -29,6 +29,7 @@
 using System.Runtime.InteropServices;
 using System.Reflection;
 using Nemerle.Utility;
+using Nemerle.UtilityMacros;
 
 [assembly: AssemblyTitle("Nemerle Language Compiler Library")]
 [assembly: AssemblyDescription("Nemerle (http://nemerle.org) Language Compiler Library")]

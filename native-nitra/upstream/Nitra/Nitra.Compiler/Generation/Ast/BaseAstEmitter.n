@@ -46,7 +46,7 @@ namespace Nitra.Compiler
     {
       def propertyType     = TypeCompiler.CompileDependentPropertyType(symbol);
       def backingFieldName = Util.tmpname(symbol.Name);
-      Util.locate(symbol.FirstLocation.NLocation(),
+      UtilMacros.locate(symbol.FirstLocation.NLocation(),
       {
         tb.Define(<[ decl:
           [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
