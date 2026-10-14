@@ -66,6 +66,7 @@ namespace Nemerle.Compiler
     {
       GlobalEnv(nameTree).AddOpenNamespace([nameTree.NamespaceTree], Location.Default)
                          .AddOpenNamespace(["Nemerle", "Core"], Location.Default)
+                         .AddOpenNamespace(["Nemerle", "CoreMacros"], Location.Default) // the core language macros
                          .AddOpenNamespace(["Nemerle", "Core", "option"], Location.Default)
                          .AddOpenNamespace(["Nemerle", "Core", "ValueOptionStatic"], Location.Default);
     }

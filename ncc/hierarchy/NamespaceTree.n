@@ -345,7 +345,14 @@ namespace Nemerle.Compiler
           def count = e.system_type.GetGenericArguments().Length;
           if (by_parms_amount.Contains (count)) {
             def used = by_parms_amount [count] : System.Type;
-            unless (used.Assembly.GetName().Name == e.system_type.Assembly.GetName().Name)
+            def isModule(t : System.Type) { t.IsClass && t.IsAbstract && t.IsSealed }
+            if (used.Assembly.GetName().Name == e.system_type.Assembly.GetName().Name) ()
+            // A path names exactly one file: two libraries exporting the same module path is an ambiguity.
+            else if (isModule(used) && isModule(e.system_type))
+              Message.Error ($"ambiguous path `$(ClrNames.TypeFullName (used))': it is defined by both "
+                             $"$(used.Assembly.GetName().Name) and $(e.system_type.Assembly.GetName().Name); "
+                             "a path names exactly one file, so one of them must use another path")
+            else
               Message.Warning ($"using type `[$(used.Assembly)]$(ClrNames.TypeFullName (used))' that"
                                " was defined in more than one assembly: "
                                " `[$(e.system_type.Assembly)]$(ClrNames.TypeFullName (e.system_type))'"
@@ -725,7 +732,9 @@ namespace Nemerle.Compiler
             // we could forbid referencing type-style namespaces here if we want
             | _ => scream = false
           }
-        when (scream) {
+        // The compiler's own default opens (Location.Default) may name modules a compilation does not load,
+        // e.g. Nemerle.CoreMacros without the standard macros.
+        when (scream && loc != Location.Default) {
           Message.Error (loc, "referenced namespace `" 
                          + all_opened.Last.GetDisplayName ()
                          + "' does not exist")
