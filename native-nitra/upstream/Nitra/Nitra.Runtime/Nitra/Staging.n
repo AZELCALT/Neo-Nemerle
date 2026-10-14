@@ -1,0 +1,18 @@
+using System;
+using Nitra.Serialization2;
+using Nitra.Serialization2Macros;
+using Nitra.Runtime;
+using NitraMacros;
+
+// ---- DependentProperties/CollectAttribute.n (Nitra.Staging) ----
+[AttributeUsageAttribute(AttributeTargets.Method | AttributeTargets.Field | AttributeTargets.Property, Inherited=true, AllowMultiple=false)]
+public sealed class CollectAttribute : Attribute
+{
+}
+
+// ---- DependentProperties/ICollector.n (Nitra.Staging) ----
+public interface ICollector : ISerializable
+{
+  CreatedOnStage : int { get; }
+  CreatedOnPass  : int { get; }
+}

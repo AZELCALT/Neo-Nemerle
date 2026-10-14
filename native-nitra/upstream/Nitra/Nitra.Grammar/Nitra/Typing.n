@@ -1,0 +1,5394 @@
+using Nitra.ProjectSystem;
+using Nitra.Model;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using G = NitraSyntaxParseTree;
+using Nitra.Runtime;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.Parsetree;
+using NemerleMacros;
+using Nemerle.Imperative;
+using System.Text;
+using SCG = System.Collections.Generic;
+using L = NitraLiteralsParseTree;
+using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
+using Nitra.Serialization;
+using Nitra.Runtime.GraphUtils;
+using System.IO;
+using Nemerle.Internal;
+using Nemerle.Compiler.AST;
+using System.Drawing;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.type_var;
+using Nitra;
+using Nitra.Declarations;
+using Nitra.Grammar.Utils;
+using Nemerle.Compiler.manager_class;
+using Nitra.Grammar;
+using Nitra.Runtime.Typing;
+using NitraMacros;
+
+using Nitra.Typing.RuleMethod;
+// ---- Context/AstContext.n (Nitra.Typing) ----
+public sealed class AstContext : EnteredScopeContext
+{
+  public AstSymbol : AstSymbol { get; }
+
+  public this(parent : Context, astSymbol : AstSymbol)
+  {
+    base(parent);
+    AstSymbol = astSymbol;
+  }
+
+  public override CurrentSymbols  : list[Symbol] { get { [AstSymbol] } }
+
+  public override ToString() : string
+  {
+    AstSymbol.Description + " " + AstSymbol.Name
+  }
+}
+
+// ---- Context/AstDependentPropertyStageContext.n (Nitra.Typing) ----
+public sealed class AstDependentPropertyStageContext : Context
+{
+  public this(parent : Context, stage : int)
+  {
+    base(parent);
+    Stage = stage;
+  }
+
+  public Stage : int { get; }
+}
+
+// ---- Context/AstVariableContext.n (Nitra.Typing) ----
+public sealed class AstVariableContext : SimpleNameContext[AstVariableSymbol]
+{
+  public this(parent : Context, variable : AstVariableSymbol)
+  {
+    base(parent);
+    SymbolMap = Map().Add(variable.Name, variable);
+  }
+
+  public override SymbolMap : Map[string, AstVariableSymbol] { get; }
+}
+
+// ---- Context/BindingUtils.n (Nitra.Typing) ----
+internal module BindingUtils
+{
+  public MakeBindingResult[T](name : Location, newCandidates : list[T]) : BindingResult[T]
+    where T: Symbol
+  {
+    match (newCandidates)
+    {
+      | []  => UnboundBindingResult(name)
+      | [_] => BindingResult(name, newCandidates, CompilerMessage.EmptyCompilerMessages)
+      | _   => AmbiguousBindingResult(name, newCandidates)
+    }
+  }
+
+  public UnboundBindingResult[T](name : Location) : BindingResult[T]
+  {
+    using (msgs = CompilerMessageList())
+    {
+      msgs.Error(name, $"Unbound name '$(name.GetText())'");
+      BindingResult(name, [], msgs.GetMessages())
+    }
+  }
+
+  public AmbiguousBindingResult[T](name : Location, result : list[T]) : BindingResult[T]
+    where T: Symbol
+  {
+    using (msgs = CompilerMessageList())
+    {
+      using (rootMsg = msgs.RootError(name, $"'$(name.GetText())' is an ambiguous reference (see related messages)"))
+        foreach (s in result)
+          foreach (loc in s.Locations)
+            rootMsg.Hint(loc, "Previous definition.");
+      BindingResult(name, result.OfType(), msgs.GetMessages())
+    }
+  }
+}
+
+// ---- Context/ContextExtensions.n (Nitra.Typing) ----
+public module ContextExtensions
+{
+  public TryGetContext[T](this context : Context) : T
+    where T: IContext, class
+  {
+    match (context)
+    {
+      | null   => null
+      | c is T => c
+      | c      => TryGetContext.[T](c.Parent)
+    }
+  }
+
+  public TryGetParent[T](this context : Context) : T
+    where T: IContext, class
+  {
+    TryGetContext.[T](context.Parent)
+  }
+
+  public GetContext[T](this context : Context) : T
+    where T: IContext, class
+  {
+    match (context)
+    {
+      | null   => assert3(false)
+      | c is T => c
+      | c      => GetContext.[T](c.Parent)
+    }
+  }
+
+  public GetParent[T](this context : Context) : T
+    where T: IContext, class
+  {
+    GetContext(context.Parent)
+  }
+}
+
+// ---- Context/EnterNamespaceContext.n (Nitra.Typing) ----
+public class EnteredNamespaceContext : EnteredScopeContext, INemerleEnvironmentContext
+{
+  public Entered   : list[NamespaceSymbol] { get; }
+
+  public this(parent : Context, currentNode : NamespaceSymbol)
+  {
+    base(parent);
+
+    Namespace = currentNode;
+
+    def getEnteredNss(currentNode : NamespaceSymbol, acc : list[NamespaceSymbol]) : list[NamespaceSymbol]
+    {
+      def parentNode = currentNode.Node.Parent;
+
+      if (parentNode == null)
+        currentNode :: acc
+      else match (currentNode.Node.Parent.GetSymbol.[NamespaceSymbol]())
+      {
+        | [ns] => getEnteredNss(ns, currentNode :: acc)
+        | _ => assert3(false)
+      }
+    }
+
+    Entered = getEnteredNss(currentNode, []);
+  }
+
+  public virtual Namespace : NamespaceSymbol { get; }
+
+  public override CurrentSymbols : list[Symbol] { get { Entered.Map(x => x) } }
+
+  [Memoize]
+  GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
+  {
+    def parentEnv = Parent.GetNemerleEnvironment();
+    parentEnv.EnterIntoNamespace(Namespace.Node.FullNameParts)
+  }
+
+  public override ToString() : string
+  {
+    $<#namespace ..$(Entered; ".")#>
+  }
+}
+
+// ---- Context/EnteredScopeContext.n (Nitra.Typing) ----
+public abstract class EnteredScopeContext : Context
+{
+  public ParentScope      : EnteredScopeContext                     { get; }
+  public OpenedNamespaces : list[Symbol]                            { get; }
+  public AliasMap         : Map[string, NamespaceOrTypeAliasSymbol] { get; }
+
+  public this(parent : Context)
+  {
+    base(parent);
+    ParentScope = TryGetParent();
+
+    def lookupSymbols(context, openedNamespaces, aliasMap : Map[string, NamespaceOrTypeAliasSymbol])
+    {
+      match(context)
+      {
+        | null
+        | EnteredScopeContext => (openedNamespaces, aliasMap)
+        | OpenNamespaceOrTypeContext(OpenSymbol = Some(symbol)) =>
+          lookupSymbols(context.Parent, symbol :: openedNamespaces, aliasMap)
+
+        | NamespaceOrTypeAliasContext(Alias = NamespaceOrTypeAliasSymbol as aliasSymbol) =>
+          when (aliasMap.Find(aliasSymbol.Name) is Some(previousDefinition))
+            using (rootMsg = Project.RootError(aliasSymbol.FirstLocation, $"Redifinition of alias $(aliasSymbol.Name)."))
+              rootMsg.Error(previousDefinition.FirstLocation, "previous definition");
+          lookupSymbols(context.Parent, openedNamespaces, aliasMap.Replace(aliasSymbol.Name, aliasSymbol))
+
+        | _ => lookupSymbols(context.Parent, openedNamespaces, aliasMap)
+      }
+    }
+    (OpenedNamespaces, AliasMap) = lookupSymbols(Parent, [], Map());
+  }
+
+  public abstract CurrentSymbols : list[Symbol] { get; }
+
+  public sealed override BindMany[T](path : list[Location]) : BindingResult[T]
+  {
+    | []               => assert(false, "Path is empty")
+    | name :: nameTail => BindManyImpl(name, nameTail)
+  }
+
+  public sealed override BindMany[T](name : Location) : BindingResult[T]
+  {
+    BindManyImpl(name, [])
+  }
+
+  BindByEnteredSymbol(name : Location) : list[Symbol]
+  {
+    // пробуем сбиндиться по AliasMap
+    // пробуем сбиндиться по ParentScope
+    // если успешен только один, возвращем его
+    // если оба успешны, сообщаем об ошибке и возвращаем алиас
+    // если оба обломались и парнт == корень, то возвращем None()
+    // если оба обломались делаем рекурсивный вызов у ParentScope
+    def bindByAliasMap(name : Location) : option[NamespaceOrTypeAliasSymbol]
+    {
+      AliasMap.Find(name.GetText()) //TODO: сделать Find по подстроке
+    }
+    def bindByCurrentSymbols(name : Location, symbols : list[Symbol]) : list[Symbol] * list[Symbol]
+    {
+      match (symbols)
+      {
+        | first :: tail => (first.Node.BindMany(name), tail)
+        | [] => ([], [])
+      }
+    }
+    match (bindByAliasMap(name), bindByCurrentSymbols(name, CurrentSymbols))
+    {
+      | (Some(aliasSymbol), (                [],           _)) => [aliasSymbol]
+      | (Some(aliasSymbol), ((_ :: _) as result,           _)) => aliasSymbol :: result
+      | (             None, ((_ :: _) as result,           _)) => result
+      | (             None, (                [], tailSymbols)) =>
+        def loop(_)
+        {
+          | [] when ParentScope : object == null => []
+          | [] => ParentScope.BindByEnteredSymbol(name)
+          | symbol :: other =>
+            match (symbol.Node.BindMany(name))
+            {
+              | [] => loop(other)
+              | result => result
+            }
+        }
+        loop(tailSymbols)
+    }
+  }
+
+  BindByOpenedNamespace(name : Location) : list[Symbol]
+  {
+    mutable result =
+      if (ParentScope != null)
+        ParentScope.BindByOpenedNamespace(name)
+      else
+        GetContext.[RootContext]().Namespace.Node.BindMany(name);
+    foreach (ns in OpenedNamespaces)
+      match (ns.Node.BindMany(name))
+      {
+        | []    => ()
+        | [one] => result = one :: result
+        | many  => result = many + result
+      }
+    result
+  }
+
+  static BindPathTail[T](symbol : Symbol, tail : list[Location], buffer : ref LightList[T]) : void
+    where T: Symbol
+  {
+    match (symbol)
+    {
+      | NamespaceOrTypeAliasSymbol(RealSymbol = realSymbol) =>
+        when (realSymbol is Some(x))
+          BindPathTail(x, tail, ref buffer);
+
+      | AmbiguousSymbol(AmbiguousList = ambiguities) =>
+        foreach(x in ambiguities)
+          BindPathTail(x, tail, ref buffer);
+
+      | _ =>
+        match (tail)
+        {
+          | [] =>
+            when (symbol is T)
+              buffer.Add(symbol :> T);
+
+          | name :: nameTail =>
+            foreach (x in symbol.Node.BindMany(name))
+              BindPathTail(x, nameTail, ref buffer);
+        }
+    }
+  }
+
+  BindManyImpl[T](name : Location, nameTail : list[Location]) : BindingResult[T]
+    where T: Symbol
+  {
+    def bindManyTails(symbols : list[Symbol], tail : list[Location]) : list[T]
+    {
+      mutable buffer;
+      foreach (x in symbols)
+        BindPathTail(x, tail, ref buffer);
+      buffer.ToNList()
+    }
+
+    def bindByOpenedNamespace(loc, name, nameTail) : BindingResult[T]
+    {
+      match (BindByOpenedNamespace(name))
+      {
+        | []      => BindingUtils.UnboundBindingResult(loc)
+        | symbols => BindingUtils.MakeBindingResult(loc, bindManyTails(symbols, nameTail))
+      }
+    }
+
+    def loc = if (nameTail.IsEmpty) name else nameTail.Last;
+    match (BindByEnteredSymbol(name))
+    {
+      | []      => bindByOpenedNamespace(loc, name, nameTail)
+      | symbols =>
+        match (bindManyTails(symbols, nameTail))
+        {
+          | []     => 
+            def path = name :: nameTail;
+            when (this.Parent == null)
+              return bindByOpenedNamespace(loc, name, nameTail);
+
+            def result = this.Parent.BindMany.[T](path);
+            if (result.Candidates.IsEmpty)
+              bindByOpenedNamespace(loc, name, nameTail)
+            else
+              result
+            
+          | result => BindingUtils.MakeBindingResult(loc, result)
+        }
+    }
+  }
+}
+
+// ---- Context/INemerleEnvironmentContext.n (Nitra.Typing) ----
+internal interface INemerleEnvironmentContext
+{
+  GetNemerleEnvironment() : GlobalEnv;
+}
+
+public module NemerleEnvironmentContextExtensions
+{
+  public GetNemerleEnvironment(this context : Context) : GlobalEnv
+  {
+    | null => assert(false)
+    | c is INemerleEnvironmentContext => c.GetNemerleEnvironment()
+    | c => GetNemerleEnvironment(c.Parent)
+  }
+}
+
+// ---- Context/KeywordRegexContext.n (Nitra.Typing) ----
+public class KeywordRegexContext : Context
+{
+  public KeywordRegexes : list[G.RegexExpression * RuleDefSymbol] { get; }
+
+  public this(parent : Context, matchTokens : G.RegexExpression, ruleName : G.QualifiedReference)
+  {
+    base(parent);
+    def rule = parent.Bind(ruleName);
+    def parent     = TryGetParent.[KeywordRegexContext]();
+    when (rule is Some(ruleSymbol))
+      KeywordRegexes = (matchTokens, ruleSymbol) :: (parent?.KeywordRegexes ?? []);
+  }
+
+  public Matchers : list[RegularExpressionMatcher * RuleDefSymbol]
+  {
+    [Memoize] get
+    {
+      def compilerMessages = Project;
+      KeywordRegexes.Map((re, rule) => (re.Typing().MakeMatcher(compilerMessages), rule))
+    }
+  }
+
+  public FindRule(keyword : string) : ValueOption[RuleDefSymbol]
+  {
+    foreach ((matcher, rule) in Matchers)
+      when (matcher(keyword))
+        return VSome(rule);
+
+    VNone()
+  }
+
+  private _findRuleCache : Dictionary[RegularRuleSymbol, ValueOption[RuleDefSymbol]] = Dictionary();
+
+  public FindRule(ruleSymbol : RegularRuleSymbol) : ValueOption[RuleDefSymbol]
+  {
+    def find(_ : RegularRule) : ValueOption[RuleDefSymbol]
+    {
+      | Call(SymbolRef.Some(callee)) => FindRule(callee)
+      | Chars(StringOpt = Some(str)) => FindRule(str)
+      | Choice(first :: rules) =>
+        match (find(first))
+        {
+          | VNone         => VNone()
+          | VSome(symbol) =>
+            def loop(_)
+            {
+              | []         => VSome(symbol)
+              | r :: rules =>
+                match (find(r))
+                {
+                  | VSome(otherSymbol) when otherSymbol == symbol => loop(rules)
+                  | _ => VNone()
+                }
+            }
+            loop(rules)
+        }
+
+      | _ => VNone()
+    }
+
+    mutable result;
+    unless (_findRuleCache.TryGetValue(ruleSymbol, out result))
+    {
+      _findRuleCache[ruleSymbol] = VNone(); // prevent unbound recursion
+      result = find(ruleSymbol.Rule);
+      when (result.IsSome) // VNone value is already set
+        _findRuleCache[ruleSymbol] = result;
+    }
+    result
+  }
+}
+
+// ---- Context/LanguageContext.n (Nitra.Typing) ----
+public sealed class LanguageContext : EnteredScopeContext
+{
+  public LanguageSymbol : ParsedLanguageSymbol { get; }
+
+  public this(parent : Context, language : ParsedLanguageSymbol)
+  {
+    base(parent);
+    LanguageSymbol = language;
+  }
+
+  public override CurrentSymbols  : list[Symbol] { get { [LanguageSymbol] } }
+
+  public override ToString() : string
+  {
+    LanguageSymbol.Description + " " + LanguageSymbol.Name
+  }
+}
+
+// ---- Context/MapSyntaxContext.n (Nitra.Typing) ----
+public sealed class MapSyntaxContext : SimpleNameContext[SyntaxMappingParameterSymbol]
+{
+  public this(parent : Context)
+  {
+    base(parent);
+    _symbolMap = Map();
+  }
+
+  private mutable _symbolMap : Map[string, SyntaxMappingParameterSymbol];
+
+  public override SymbolMap : Map[string, SyntaxMappingParameterSymbol]
+  {
+    get { _symbolMap }
+  }
+
+  private mutable _returnType : AstType;
+
+  public ReturnType : AstType
+  {
+    get { assert(_returnType : object != null); _returnType }
+  }
+
+  public Initialize(parameters : list[SyntaxMappingParameterSymbol], returnType : AstType) : void
+  {
+    assert(_symbolMap.IsEmpty);
+    assert(_returnType : object == null);
+
+    foreach (p in parameters)
+    {
+      if (_symbolMap.Find(p.Name) is Some(existingParameter))
+        using (root = this.RootError(p.FirstLocation, $"Redefinition of AST mapping parameter '$(p.Name)'"))
+          root.Hint(existingParameter.FirstLocation, "previous definition");
+      else
+        _symbolMap = _symbolMap.Add(p.Name, p)
+    }
+
+    _returnType = returnType;
+  }
+}
+
+public sealed class MapSyntaxEnteredScopeContext : EnteredScopeContext
+{
+  public this(parent : Context)
+  {
+    base(parent)
+  }
+
+  public override CurrentSymbols : list[Symbol] { get { [] } }
+}
+
+// ---- Context/NamespaceOrTypeAliasContext.n (Nitra.Typing) ----
+public sealed class NamespaceOrTypeAliasContext : Context, INemerleEnvironmentContext
+{
+  public Name  : G.Name                     { get; }
+  public Path  : G.QualifiedReference       { get; }
+  public Alias : NamespaceOrTypeAliasSymbol { get; }
+
+  public this(parent : Context, name : G.Name, path : G.QualifiedReference)
+  {
+    base(parent);
+    Name  = name;
+    Path  = path;
+    def p = this.GetParent.[EnteredNamespaceContext]();
+    Alias = NamespaceOrTypeAliasSymbol(name, p.TryBind(path));
+  }
+
+  [Memoize]
+  GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
+  {
+    def parentEnv = Parent.GetNemerleEnvironment();
+    parentEnv.AddNamespaceAlias(Name.Value(), Path.Parts(), Path.NLocation())
+  }
+
+  public override ToString() : string
+  {
+    "using " + Alias.Name + " = " + Alias.RealSymbol.Map(sym => sym.FullName)
+  }
+}
+
+// ---- Context/OpenNamespaceOrTypeContext.n (Nitra.Typing) ----
+public class OpenNamespaceOrTypeContext : Context, INemerleEnvironmentContext
+{
+  public OpenPath      : G.QualifiedReference  { get; }
+  public OpenSymbol    : SymbolRef[Symbol]     { get; }
+  public IsAlreadyOpen : bool                  { get; }
+
+  public this(parent : Context, path : G.QualifiedReference)
+  {
+    base(parent);
+    OpenPath   = path;
+    def scopeContext = GetParent.[EnteredScopeContext]();
+    (OpenSymbol, IsAlreadyOpen) = match (scopeContext.TryBind(path))
+    {
+      | SymbolRef.Some(symbol) as result =>
+        def checkAlreadyOpen(_ : OpenNamespaceOrTypeContext)
+        {
+          | null => (result, false)
+          | OpenNamespaceOrTypeContext(OpenSymbol = SymbolRef.Some(other)) as context when symbol : object == other =>
+            using (rootMsg = Project.RootWarning(path, $"Symbol '$(symbol.FullName)' is already open (see related messages)"))
+              rootMsg.Hint(context.OpenPath, "Previous definition.");
+            (SymbolRef.None(result.Location, true), true)
+
+          | context => checkAlreadyOpen(context.TryGetParent.[OpenNamespaceOrTypeContext]())
+        }
+        checkAlreadyOpen(parent.TryGetContext.[OpenNamespaceOrTypeContext]())
+
+      | SymbolRef.None as result =>
+        // FIXME: we can't determine if that namespace actualy does not exists
+        (result, false)
+    }
+  }
+
+  [Memoize]
+  GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
+  {
+    def parentEnv = Parent.GetNemerleEnvironment();
+    if (IsAlreadyOpen)
+      parentEnv
+    else
+      parentEnv.AddOpenNamespace(OpenPath.Parts(), OpenPath.NLocation())
+  }
+
+  public override ToString() : string
+  {
+    OpenSymbol.Map(sym => "using " + sym.FullName) ?? "using <Error>"
+  }
+}
+
+// ---- Context/ParseTreePatternVariableContext.n (Nitra.Typing) ----
+[Record]
+public class ParseTreePatternVariableContext : SimpleNameContext[ParseTreePatternVariableSymbol]
+{
+  [RecordIgnore] mutable variables        : Map[string, ParseTreePatternVariableSymbol];
+  [RecordIgnore]         currentVariables : Hashtable[string, ParseTreePatternVariableSymbol] = Hashtable();
+
+  public override SymbolMap : Map[string, ParseTreePatternVariableSymbol]
+  {
+    get
+    {
+      when (variables == null)
+      {
+        variables =
+          match (this.TryGetParent.[ParseTreePatternVariableContext]())
+          {
+            | null   => Map(currentVariables.KeyValuePairs)
+            | parent => parent.SymbolMap.ReplaceRange(currentVariables.KeyValuePairs)
+          };
+      }
+      variables
+    }
+  }
+
+  public AddVariable(newVariable : ParseTreePatternVariableSymbol) : void
+  {
+    assert(variables == null, "Context is frozen");
+
+    mutable existingVariable;
+    if (currentVariables.TryGetValue(newVariable.Name, out existingVariable))
+    {
+      using (relatedMessages = Project.RootError(newVariable.FirstLocation, $"Redefinition of pattern variable '$(newVariable.Name)'"))
+        relatedMessages.Hint(existingVariable.FirstLocation, "Previous definition")
+    }
+    else
+      currentVariables.Add(newVariable.Name, newVariable)
+  }
+}
+
+// ---- Context/PrecedenceContext.n (Nitra.Typing) ----
+[Record]
+public class PrecedenceRelation
+{
+  public Symbol : IPrecedenceSymbolOwner;
+  public Low : string;
+  public Hi  : string;
+}
+
+[Record]
+public class Precedence
+{
+  public Symbol : IPrecedenceSymbolOwner;
+  public Name   : string;
+}
+
+public type PrecedenceOrderList = option[Location * list[Identifier]];
+public type PrecedenceRelations = list[PrecedenceRelation];
+
+public abstract class PrecedenceContext : Context
+{
+  public this(parent : Context)
+  {
+    base(parent);
+  }
+
+  public abstract GetPrecedence() : PrecedenceReference;
+  public virtual Typing() : void {}
+
+  public static MakePrecedenceRelations(context : Context) : PrecedenceRelations * list[Precedence]
+  {
+    def allPrecedences = HashSet();
+    def contexts = List();
+    def collectContexts(_)
+    {
+      | context is PrecedenceStartContext => contexts.Add(context); 
+      | context is PrecedenceContext      => contexts.Add(context); collectContexts(context.Parent);
+      | context                           =>                        collectContexts(context.Parent);
+    }
+    collectContexts(context);
+    contexts.Reverse();
+    def relations = List();
+    mutable prevContext = null;
+    mutable symbol      = null;
+    foreach (context in contexts)
+    {
+      | context is PrecedenceStartContext => symbol = context.Owner;
+      | _       is PrecedenceZeroContext  => prevContext = null;
+      | context is PrecedenceNamedContext =>
+        _ = allPrecedences.Add(context.Symbol.Name);
+        when (prevContext != null)
+        {
+          if (prevContext.Relations.Count == 0)
+            when (context.Relations.Count == 0)
+              relations.Add(PrecedenceRelation(symbol, prevContext.Symbol.Name, context.Symbol.Name));
+          else when (context.Relations.Count == 0)
+            context.Error(context.Name, "Implicit precedence can't follow explicit precedence.");
+        }
+        prevContext = context;
+        relations.AddRange(context.Relations);
+      | _ => assert3(false);
+    }
+    (relations.NToList(), allPrecedences.Map(name => Precedence(symbol, name)));
+  }
+}
+
+public sealed class PrecedenceStartContext : PrecedenceContext
+{
+  public Owner : IPrecedenceSymbolOwner;
+  public this(parent : Context, owner : IPrecedenceSymbolOwner)
+  {
+    base(parent);
+    Owner = owner;
+  }
+
+  public override GetPrecedence() : PrecedenceReference
+  {
+    PrecedenceReference.Zero();
+  }
+}
+
+public sealed class PrecedenceZeroContext : PrecedenceContext
+{
+  public this(parent : Context)
+  {
+    base(parent);
+  }
+
+  public override GetPrecedence() : PrecedenceReference
+  {
+    PrecedenceReference.Zero();
+  }
+}
+
+public sealed class PrecedenceNoneContext : PrecedenceContext
+{
+  public this()
+  {
+    base(null);
+  }
+
+  public override GetPrecedence() : PrecedenceReference
+  {
+    PrecedenceReference.Zero();
+  }
+}
+
+public sealed class PrecedenceNamedContext : PrecedenceContext
+{
+  public  Symbol    : PrecedenceSymbol;
+  public  Owner     : IPrecedenceSymbolOwner;
+  public  Relations : List[PrecedenceRelation] = List();
+  public  Name      : Identifier;
+  private _order    : PrecedenceOrderList;
+
+  public this(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, name : Identifier, order : PrecedenceOrderList)
+  {
+    base(parent);
+    Symbol = symbol;
+    Owner  = owner;
+    Name   = name;
+    _order = order;
+  }
+
+  public AddRelation(relation : PrecedenceRelation) : void
+  {
+    Relations.Add(relation);
+  }
+
+  public override Typing() : void
+  {
+    when (_order is Some((errorLoc, names)))
+    {
+      def bind(identifier : Identifier)
+      {
+        def symbols = Owner.Node.BindMany.[PrecedenceSymbol](identifier.Value);
+        def symbols = match (symbols)
+        {
+          | []      => 
+            if (Owner is ExtendSyntaxSymbol(Extend = SymbolRef.Some(extendRule)))
+              extendRule.Node.BindMany.[PrecedenceSymbol](identifier.Value);
+            else
+              [];
+          | symbols => symbols
+        }
+        match (symbols)
+        {
+          | [symbol]    => symbol
+          | []          => this.Error(identifier, "Undeclared precedence."); null
+          | symbol :: _ => this.Error(identifier, "Ambiguous precedence."); symbol
+        }
+      }
+      def symbols = names.Map(bind);
+      unless (symbols.Count(s => s : object == Symbol) == 1)
+        this.Error(errorLoc, "On of precedencies must be same as current precedence.");
+      mutable prevSymbol = null;
+      foreach (symbol in symbols)
+      {
+        when (prevSymbol != null && symbol != null)
+          AddRelation(PrecedenceRelation(Owner, prevSymbol.Name.ToString(), symbol.Name.ToString()));
+        prevSymbol = symbol;
+      }
+    }
+  }
+
+  public override GetPrecedence() : PrecedenceReference
+  {
+    PrecedenceReference.Name(SymbolRef.Some(Location.Default, true, Symbol));//TODO proper location
+  }
+}
+
+[Record]
+public class PrecedenceInfo
+{
+  public Context : PrecedenceContext { get; }
+  public IsRightAssociative : bool { get; }
+  public IsStrong : bool { get; }
+  public static None : PrecedenceInfo { get; default PrecedenceInfo(PrecedenceNoneContext(), false, false) }
+}
+
+// ---- Context/RootContext.n (Nitra.Typing) ----
+public sealed class RootContext : EnteredNamespaceContext, INemerleEnvironmentContext
+{
+  public override Project : Project { get; }
+  private _coreNemerleEnvironment : GlobalEnv;
+
+  public this(project : Project, rootNamespace : NamespaceSymbol, coreNemerleEnvironment : GlobalEnv)
+  {
+    base(null, rootNamespace);
+    Project = project;
+    _coreNemerleEnvironment = coreNemerleEnvironment;
+  }
+
+  public override Namespace : NamespaceSymbol
+  {
+    get
+    {
+      match (Entered)
+      {
+        | [one] => one
+        | _ => assert3(false)
+      }
+    }
+  }
+
+  GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
+  {
+    _coreNemerleEnvironment
+  }
+
+  public override ToString() : string
+  {
+    "<global namespace>"
+  }
+}
+
+// ---- Context/RuleAliasContext.n (Nitra.Typing) ----
+public class RuleAliasContext : SimpleNameContext[RuleAliasSymbol]
+{
+  RuleAlias    : RuleAliasSymbol { get; }
+  public override SymbolMap : Map[string, RuleAliasSymbol] { get; }
+
+  public this(parent : Context, ruleAlias : RuleAliasSymbol)
+  {
+    base(parent);
+    RuleAlias  = ruleAlias;
+    def parent = TryGetParent.[RuleAliasContext]();
+    SymbolMap  = (parent?.SymbolMap ?? Map()).Replace(ruleAlias.Name, RuleAlias);
+  }
+
+  public override ToString() : string
+  {
+    "alias " + RuleAlias.Name + " = " + RuleAlias.Rule
+  }
+}
+
+// ---- Context/RuleDeclarationSiteContext.n (Nitra.Typing) ----
+public sealed class RuleDeclarationSiteContext : Context
+{
+  public DeclarationSite : IRuleDeclarationSite { get; }
+
+  public this(parent : Context, declarationSite : IRuleDeclarationSite)
+  {
+    base(parent);
+    DeclarationSite = declarationSite;
+  }
+
+  public override BindMany[T](path : list[Location]) : BindingResult[T]
+  {
+    | [name] => BindMany(name)
+    | _      => Parent.BindMany(path)
+  }
+
+  public override BindMany[T](name : Location) : BindingResult[T]
+  {
+    // we don't want to bind local ExtensionRuleSymbols by its short name
+    match (DeclarationSite.Node.BindMany(name).Filter((s : T) => !(s is ExtensionRuleSymbol)))
+    {
+      | []         => Parent.BindMany(name)
+      | candidates => BindingUtils.MakeBindingResult(name, candidates);
+    }
+  }
+
+  public override ToString() : string
+  {
+    DeclarationSite.Description + " " + DeclarationSite.Name
+  }
+}
+
+// ---- Context/SimpleNameContext.n (Nitra.Typing) ----
+[Record]
+public abstract class SimpleNameContext[TSymbol] : Context
+  where TSymbol : Symbol
+{
+  public abstract SymbolMap : Map[string, TSymbol] { get; }
+
+  public sealed override BindMany[T](path : list[Location]) : BindingResult[T]
+  {
+    | [one] => BindMany(one)
+    | _ => base.BindMany(path)
+  }
+
+  public sealed override BindMany[T](name : Location) : BindingResult[T]
+  {
+    match (SymbolMap.Find(name.GetText()))
+    {
+      | Some(symbol is T) =>
+        Project.AddSymbolRef(symbol, name);
+        BindingResult(name, [symbol], CompilerMessage.EmptyCompilerMessages)
+
+      | _ => base.BindMany(name)
+    }
+  }
+}
+
+// ---- Context/SyntaxModuleBodyContext.n (Nitra.Typing) ----
+public sealed class SyntaxModuleBodyContext : EnteredScopeContext, ITokenNamesMapContext
+{
+  public this(parent : Context)
+  {
+    base(parent);
+  }
+
+  public override CurrentSymbols : list[Symbol] { get { [] } }
+
+  public TokenNamesMap : Map[string, TokenLiteralSymbol]
+  {
+    [Memoize] get
+    {
+      def appendSymbol(symbol : TokenLiteralSymbol, map : Map[string, TokenLiteralSymbol])
+      {
+        symbol.StringLiterals.FoldLeft(map, (lit, map) => map.Replace(lit, symbol))
+      }
+      def walk(baseContext)
+      {
+        match (baseContext.TryGetParent.[OpenNamespaceOrTypeContext]())
+        {
+          | null => Map()
+          | OpenNamespaceOrTypeContext(OpenSymbol = Some(SyntaxModuleSymbol as moduleSymbol)) as context =>
+            moduleSymbol.TokenLiterals.FoldLeft(walk(context), appendSymbol)
+
+          | context => walk(context)
+        }
+      }
+      walk(this)
+    }
+  }
+
+  public GetSpaceRule(context : Context, ruleName : string, loc : Location) : SymbolRef[RuleDefSymbol]
+  {
+    def result = GetSpaceRule(context, ruleName);
+    when (result.IsNone && !_whitespaceHintShown)
+    {
+      Project.Hint(loc, $"Declare whitespace handling rule '$ruleName' or import 'Nitra.Core' syntax module from Nitra.Runtime library.");
+      _whitespaceHintShown = true;
+    }
+    result;
+  }
+
+  [Memoize]
+  private GetSpaceRule(context : Context, ruleName : string) : SymbolRef[RuleDefSymbol]
+  {
+    def s = Location(SourceSnapshot(ruleName), 0, ruleName.Length);
+    def symbol = Utils.MakeSymbolRefWithMessages(context.BindMany.[RuleDefSymbol](s), context);
+    symbol
+  }
+
+  private mutable _whitespaceHintShown : bool = false;
+
+  public override ToString() : string
+  {
+    "<SyntaxModuleBodyContext>"
+  }
+}
+
+// ---- Context/SyntaxModuleContext.n (Nitra.Typing) ----
+public sealed class SyntaxModuleContext : EnteredScopeContext
+{
+  public SyntaxModuleSymbol : ParsedSyntaxModuleSymbol { get; }
+
+  public this(parent : Context, name : G.Name)
+  {
+    base(parent);
+    def p = this.GetParent.[EnteredNamespaceContext]();
+    def compilerMessages = Project;
+    SyntaxModuleSymbol = p.Namespace.BindByHierarchy.[ParsedSyntaxModuleSymbol](name, compilerMessages).GetValue(compilerMessages);
+  }
+
+  public override CurrentSymbols  : list[Symbol] { get { [SyntaxModuleSymbol] } }
+
+  public override ToString() : string
+  {
+    SyntaxModuleSymbol.Description + " " + SyntaxModuleSymbol.Name
+  }
+}
+
+// ---- Context/TokenFieldContext.n (Nitra.Typing) ----
+public class TokenLiteralContext : Context, ITokenNamesMapContext
+{
+  public TokenLiteral    : TokenLiteralSymbol { get; }
+  public TokenNamesMap : Map[string, TokenLiteralSymbol]
+  {
+    [Memoize] get
+    {
+      TokenLiteral.StringLiterals.FoldLeft(GetParent.[ITokenNamesMapContext]().TokenNamesMap, (lit, map) => map.Replace(lit, TokenLiteral))
+    }
+  }
+
+  public this(parent : Context, name : G.Text, stringLiterals : ListParseTree[L.StringLiteral])
+  {
+    base(parent);
+    TokenLiteral     = ParsedTokenLiteralSymbol(name, stringLiterals);
+    Project.AddSymbolDef(TokenLiteral, name.Location);
+  }
+
+  public override ToString() : string
+  {
+    $<#literal $(TokenLiteral.Name) = ..$(TokenLiteral.StringLiterals; ", ")#>
+  }
+}
+
+public interface ITokenNamesMapContext : IContext
+{
+  TokenNamesMap : Map[string, TokenLiteralSymbol] { get; }
+}
+
+// ---- Model/ChemicalRuleType.n (Nitra.Typing) ----
+public variant ChemicalRuleType
+{
+  | Void
+  | Root  { Symbol : SyntaxRuleSymbol }
+  | Tuple { members : list[ChemicalRuleType] }
+  | StaticString
+  | String
+  | Bool
+  | Option { item : ChemicalRuleType }
+  | Int
+  | List   { item : ChemicalRuleType }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Void           => "VOID"
+      | Root(s)        => s.FullName
+      | Tuple(members) => $<#(..$(members; ", "))#>
+      | StaticString   => "STATIC STRING"
+      | String         => "STRING"
+      | Bool           => "BOOL"
+      | Option(item)   => $"Option[$item]"
+      | Int            => "INT"
+      | List(item)     => $"List[$item]"
+    }
+  }
+}
+
+// ---- Model/RuleRef.n (Nitra.Typing) ----
+public type RuleRef = SymbolRef[RuleSymbol];
+public type ExtensibleRuleRef = SymbolRef[ExtensibleRuleSymbol];
+
+// ---- Model/RuleType.n (Nitra.Typing) ----
+[StructuralEquality]
+public variant RuleType
+{
+  | List
+    {
+      Type    : RuleType;
+
+      [EqualsIgnore, RecordIgnore]
+      private mutable chemicalType : ChemicalRuleType;
+
+      public override ChemicalType : ChemicalRuleType
+      {
+        get
+        {
+          when (chemicalType : object == null)
+          {
+            chemicalType = match (this.Type.ChemicalType)
+            {
+              | Void             => ChemicalRuleType.Void()
+              | StaticString     => ChemicalRuleType.Int()
+              | any              => ChemicalRuleType.List(any)
+            };
+          }
+          chemicalType
+        }
+      }
+    }
+  | Option
+    {
+      Type    : RuleType;
+
+      [EqualsIgnore, RecordIgnore]
+      private mutable chemicalType : ChemicalRuleType;
+
+      public override ChemicalType : ChemicalRuleType
+      {
+        get
+        {
+          when (chemicalType : object == null)
+          {
+            chemicalType = match (this.Type.ChemicalType)
+            {
+              | Void             => ChemicalRuleType.Void()
+              | StaticString     => ChemicalRuleType.Bool()
+              | any              => ChemicalRuleType.Option(any)
+            };
+          }
+          chemicalType
+        }
+      }
+    }
+  | Tuple
+    {
+      Types   : list[RuleType];
+
+      [EqualsIgnore, RecordIgnore]
+      private mutable chemicalType : ChemicalRuleType;
+
+      public override ChemicalType : ChemicalRuleType
+      {
+        get
+        {
+          when (chemicalType : object == null)
+          {
+            def members = LightList();
+            mutable hasStaticString;
+            foreach (t in this.Types)
+              match (t.ChemicalType)
+              {
+                | Void          => ()
+                | StaticString  => hasStaticString = true;
+                | any           => members.Add(any);
+              }
+
+            chemicalType = match (members.Count)
+            {
+              | 0 =>
+                if (hasStaticString)
+                  ChemicalRuleType.StaticString()
+                else
+                  ChemicalRuleType.Void()
+
+              | 1 => members.FirstItem
+              | _ => ChemicalRuleType.Tuple(members.ToNList())
+            }
+          }
+          chemicalType
+        }
+      }
+    }
+  | Ref
+    {
+      Symbol  : SyntaxRuleSymbol;
+
+      [EqualsIgnore, RecordIgnore]
+      private mutable chemicalType : ChemicalRuleType;
+
+      public override ChemicalType : ChemicalRuleType
+      {
+        get
+        {
+          when (chemicalType : object == null)
+            chemicalType = ChemicalRuleType.Root(this.Symbol);
+          chemicalType
+        }
+      }
+    }
+  | Chars
+    {
+      Keyword : option[string];
+
+      public override ChemicalType : ChemicalRuleType
+      {
+        get { if (Keyword.IsSome) ChemicalRuleType.StaticString() else ChemicalRuleType.String() }
+      }
+    }
+  | Void
+    {
+      public override ChemicalType : ChemicalRuleType
+      {
+        get { ChemicalRuleType.Void() }
+      }
+    }
+
+  public abstract ChemicalType : ChemicalRuleType { get; }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | List(ty)     => "List[" + ty + "]"
+      | Option(ty)   => "option(" + ty + ")"
+      | Tuple(types) => string.Join(" * ", types)
+      | Ref(symbol)  => symbol.FullName
+      | Chars(None)  => "Token"
+      | Chars(Some)  => "Literal"
+      | Void         => "Void"
+    }
+  }
+}
+
+// ---- Symbols/Ast/AbstractAstSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class AbstractAstSymbol : AstSymbol, INamespaceMember
+{
+  public override Description : string         { get { if (IsDeclaration) "abstract declaration" else "abstract ast" } }
+  public override Cardinality : AstCardinality { get { AstCardinality.Single } }
+  public override IsAbstract  : bool           { get { true } }
+}
+
+public sealed class ParsedAbstractAstSymbol : AbstractAstSymbol, IDependentStatementContainer
+{
+  private         _node                     : G.NamespaceMember.Ast;
+  private         _statements               : SCG.List[DependentStatement];
+  private mutable _initializedOutProperties : list[DependentPropertySymbol];
+
+  public this(node : G.NamespaceMember.Ast, isDeclaration : bool)
+  {
+    base(node.Name, node.Name.Value());
+    _node                     = node;
+    _statements               = SCG.List();
+    _initializedOutProperties = [];
+    IsDeclaration             = isDeclaration;
+  }
+
+  private mutable _symbol             : SymbolRef[SymbolSymbol];
+  private mutable _propertyDependency : PropertyDependencyData;
+
+  public override Symbol                   : SymbolRef[SymbolSymbol]       { get { assert(_symbol : object != null); _symbol } }
+  public override IsDeclaration            : bool                          { get; }
+  public override Parents                  : list[AstSymbol]               { get { _node.Parents } }
+  public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+  public override PropertyDependency       : PropertyDependencyData        { get { assert(_propertyDependency != null); _propertyDependency } }
+
+  public AddStatement(statement : DependentStatement) : void { AddStatementImpl(statement, _statements, ref _initializedOutProperties); }
+  public GetStatements() : Seq[DependentStatement] { _statements }
+  public override SetPropertyDependency(graph : PropertyDependencyData) : void { assert(graph != null); _propertyDependency = graph; }
+
+  protected override CreateSymbolSymbol() : SymbolRef[SymbolSymbol]
+  {
+    assert(_symbol : object == null);
+
+    _symbol =
+      CreateSymbolSymbolImpl(fun (baseSymbols)
+      {
+        def symbolSymbol =
+          if (_node.Body.IsSymbolSealed())
+            ParsedSimpleSymbolSymbol(this, baseSymbols)
+          else
+            ParsedAbstractSymbolSymbol(this, baseSymbols);
+        _ = Node.Parent.AddAndReport.[SymbolSymbol](symbolSymbol, FirstLocation);
+        symbolSymbol
+      });
+    _node.Body.CollectSymbolMembers(this, _symbol);
+    _symbol
+  }
+}
+
+// ---- Symbols/Ast/AstCardinality.n (Nitra.Typing) ----
+[Flags]
+public enum AstCardinality
+{
+  | Single   = 0
+  | Optional = 1
+  | Multiple = 2
+}
+
+public module AstCardinalityExtensions
+{
+  public GetText(this cardinality : AstCardinality) : string
+  {
+    mutable items = [];
+    when (cardinality %&& AstCardinality.Multiple)
+      items ::= "multiple";
+    when (cardinality %&& AstCardinality.Optional)
+      items ::= "optional";
+    string.Join(" ", items)
+  }
+}
+
+// ---- Symbols/Ast/AstSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
+{
+  public abstract Parents       : list[AstSymbol] implements IGraphNode[AstSymbol].Connections { get; }
+  public abstract IsDeclaration : bool                          { get; }
+  public abstract Cardinality   : AstCardinality                { get; }
+  public abstract Symbol        : SymbolRef[SymbolSymbol]       { get; }
+  public override GetParents() : Seq[PropertyContainerSymbol] { Parents }
+
+  public AllBaseAsts : Seq[AstSymbol]
+  {
+    get { TypeInheritance(); _allBaseAsts }
+  }
+
+  public override AllProperties : Seq[PropertySymbol]
+  {
+    get { TypeInheritance(); _allProperties.Values }
+  }
+
+  public override IsSubtypeOf(other : PropertyContainerSymbol) : bool
+  {
+    | AstSymbol as other =>
+      TypeInheritance();
+      this == other || _allBaseAsts.Contains(other)
+
+    | _ => false
+  }
+
+  [RecordIgnore] private mutable _allBaseAsts         : HashSet[AstSymbol];
+  [RecordIgnore] private mutable _allProperties       : Dictionary[string, PropertySymbol];
+  [RecordIgnore] private mutable _isTypingInheritance : bool;
+  [RecordIgnore] private mutable _isCyclic            : bool;
+
+  public TypeInheritance() : void
+  {
+    if (_isTypingInheritance)
+    {
+      unless (_isCyclic)
+      {
+        foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
+        {
+          def firstSymbol = group.Nodes.FirstItem;
+          using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Declaration '$(firstSymbol.FullName)' is cyclic."))
+          {
+            // 'foreach' causes invalid IL
+            def e = group.Nodes.GetEnumerator();
+            _ = e.MoveNext();
+            while (e.MoveNext())
+            {
+              def symbol = e.Current;
+              root.Hint(symbol.FirstLocation, $"Circular base declaration dependency '$(symbol.FullName)' for declaration '$(firstSymbol.FullName)'.");
+            }
+          }
+        }
+
+        _isCyclic = true;
+      }
+    }
+    else when (_allBaseAsts : object == null)
+    {
+      _isTypingInheritance = true;
+      try
+      {
+        _allBaseAsts   = HashSet();
+        _allProperties = Dictionary(StringComparer.Ordinal);
+
+        foreach (a when _allBaseAsts.Add(a) in Parents)
+          _allBaseAsts.UnionWith(a.AllBaseAsts);
+
+        unless (_isCyclic)
+          CollectInheritedProperties(_allBaseAsts, _allProperties);
+
+        when (CreateSymbolSymbol() is SymbolRef.Some(symbolSymbol))
+          TryOverrideSymbolProperty(symbolSymbol);
+
+        CollectDeclaredProperties(_allProperties);
+      }
+      finally _isTypingInheritance = false;
+    }
+  }
+
+  public override GetAncestors() : Seq[PropertyContainerSymbol]
+  {
+    AllBaseAsts
+  }
+
+  public override LookupProperty(name : string) : ValueOption[PropertySymbol]
+  {
+    TypeInheritance();
+
+    mutable symbol;
+    if (_allProperties.TryGetValue(name, out symbol))
+      VSome(symbol)
+    else
+      VNone()
+  }
+
+  protected virtual CreateSymbolSymbol() : SymbolRef[SymbolSymbol]
+  {
+    Symbol
+  }
+
+  private TryOverrideSymbolProperty(symbol : SymbolSymbol) : void
+  {
+    assert(_allProperties != null);
+
+    mutable foundSymbol;
+    when (_allProperties.TryGetValue("Symbol", out foundSymbol))
+    when (foundSymbol is DependentPropertySymbol as symbolProperty)
+    {
+      def newSymbolProperty = ChemicalDependentPropertySymbol(FirstLocation, "Symbol")
+        .SetAssemblyId(AssemblyIds.CurrentAssembly)
+        .SetPropertyContainer(this)
+        .SetDirection(symbolProperty.Direction)
+        .SetLinkedProperty(SymbolRef.None(Location.Default, true))
+        .SetOverrideProperty(SymbolRef.Some(Location.Default, true, symbolProperty))
+        .SetStage(symbolProperty.Stage)
+        .SetType(Utils.MakeNTypeQualified(FirstLocation, symbol.Node.FullNameParts));
+
+      _ = Node.AddAndReport(newSymbolProperty, FirstLocation)
+    }
+  }
+
+  protected CreateSymbolSymbolImpl(makeSymbol : list[SymbolSymbol] -> SymbolSymbol) : SymbolRef[SymbolSymbol]
+  {
+    if (IsDeclaration)
+    {
+      mutable baseSymbols = [];
+      mutable sealedSymbolFromBase;
+      foreach (baseAst in Parents)
+      {
+        when (baseAst.Symbol is SymbolRef.Some(s))
+        {
+          if (s.IsAbstract)
+            baseSymbols ::= s;
+          else
+          {
+            sealedSymbolFromBase = s;
+            break;
+          }
+        }
+      }
+
+      if (sealedSymbolFromBase : object == null)
+        SymbolRef.Some(FirstLocation, true, makeSymbol(baseSymbols));
+      else
+      {
+        foreach (baseAst in Parents)
+        {
+          when (baseAst.Symbol is SymbolRef.Some(s))
+          unless (sealedSymbolFromBase.IsSubtypeOf(s))
+            using (root = Node.Project.RootError(FirstLocation, $"Symbol inheritance is not available from sealed symbol '$(sealedSymbolFromBase.FullName)'."))
+            {
+              root.Hint(sealedSymbolFromBase.FirstLocation, "Sealed symbol.");
+              break;
+            }
+        }
+
+        SymbolRef.Some(FirstLocation, true, sealedSymbolFromBase);
+      }
+    }
+    else
+      SymbolRef.None(FirstLocation, true);
+  }
+}
+
+// ---- Symbols/Ast/PrecedenceSymbol.n (Nitra.Typing) ----
+public interface IPrecedenceSymbolOwner : IExportableSymbol
+{
+}
+
+[Record, ExportableSymbol]
+public abstract class PrecedenceSymbol : MultipleDefSymbol
+{
+  public abstract Owner          : IPrecedenceSymbolOwner { get; }
+  public override Description    : string                 { get { "precedence" } }
+
+  public static GetPrecedenceSymbol(owner : IPrecedenceSymbolOwner, identifier : Identifier) : PrecedenceSymbol
+  {
+    def symbol =
+      match (owner.Node.BindMany.[PrecedenceSymbol](identifier.Value))
+      {
+        | [symbol] => symbol;
+        | []       =>
+          def symbol = ChemicalPrecedenceSymbol(identifier, owner);
+          _ = owner.Node.Add(symbol, identifier.Location);
+          symbol
+        | _ :: _ => assert3(false);
+      };
+    symbol.AddDefinition(identifier.Location);
+    symbol
+  }
+}
+
+public sealed class ChemicalPrecedenceSymbol : PrecedenceSymbol
+{
+  public override Owner : IPrecedenceSymbolOwner { get; }
+
+  public this(identifier : Identifier, owner : IPrecedenceSymbolOwner)
+  {
+    base(identifier.Value);
+    AssemblyId   = AssemblyIds.CurrentAssembly;
+    Owner = owner;
+  }
+}
+
+// ---- Symbols/Ast/ProjectedPropertySymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class ProjectedPropertySymbol : PropertySymbol
+{
+  public override Description    : string                         { get "projected property" }
+  public abstract AstType        : AstType                        { get; }
+  public abstract ProjectionType : option[PropertyProjectionType] { get; }
+}
+
+public sealed class ParsedProjectedPropertySymbol : ProjectedPropertySymbol
+{
+  private _node : G.AstMember.Decompose.Nested.ProjectedProperty;
+
+  public this(node : G.AstMember.Decompose.Nested.ProjectedProperty, propertyContainer : PropertyContainerSymbol)
+  {
+    base(node.Name, node.Name.Value());
+    _node             = node;
+    PropertyContainer = propertyContainer;
+    OverrideProperty  = SymbolRef.None(_node.Name.Location, false);
+  }
+
+  public override PropertyContainer : PropertyContainerSymbol        { get; }
+  public override OverrideProperty  : SymbolRef[PropertySymbol]      { get; }
+  public override Type              : NType                          { get { _node.Type } }
+  public override AstType           : AstType                        { get { _node.AstType } }
+  public override ProjectionType    : option[PropertyProjectionType] { get { _node.ProjectionType } }
+}
+
+// ---- Symbols/Ast/PropertyContainerSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class PropertyContainerSymbol : SingleDefSymbol
+{
+  public abstract AllProperties            : Seq[PropertySymbol]              { get; }
+  public abstract InitializedOutProperties : list[DependentPropertySymbol]    { get; }
+  public abstract IsAbstract               : bool                             { get; }
+  public abstract PropertyDependency       : PropertyDependencyData           { get; }
+
+  public Properties : Seq[PropertySymbol]
+  {
+    get { this.Node.GetChildren.[PropertySymbol]() }
+  }
+
+  public abstract GetAncestors() : Seq[PropertyContainerSymbol];
+  public abstract GetParents() : Seq[PropertyContainerSymbol];
+  public abstract LookupProperty(name : string) : ValueOption[PropertySymbol];
+  public virtual SetPropertyDependency(_graph : PropertyDependencyData) : void
+  {
+    throw NotSupportedException("SetPropertyDependency is not supported");
+  }
+
+  public abstract IsSubtypeOf(other : PropertyContainerSymbol) : bool;
+
+  protected CollectInheritedProperties(ancestors : Seq[PropertyContainerSymbol], table : SCG.Dictionary[string, PropertySymbol]) : void
+  {
+    foreach (s1 in ancestors)
+    {
+      foreach (p1 when p1.OverrideProperty.IsNone in s1.Properties)
+      {
+        mutable p2;
+        if (table.TryGetValue(p1.Name, out p2))
+        {
+          def s2 = p2.PropertyContainer;
+          using (root = Node.Project.RootError(this.FirstLocation, $"Inherited $(s1.Description) '$(s1.FullName)' and $(s2.Description) '$(s2.FullName)' have properties with same name '$(p1.Name)'."))
+          {
+            root.Hint(p1.FirstLocation, "Property declaration.");
+            root.Hint(p2.FirstLocation, "Property declaration.");
+          }
+        }
+        else
+          table.Add(p1.Name, p1)
+      }
+    }
+  }
+
+  protected CollectDeclaredProperties(table : SCG.Dictionary[string, PropertySymbol]) : void
+  {
+    foreach (p in Properties)
+    {
+      if (p.OverrideProperty.HasValue)
+      {
+        if (table.ContainsKey(p.Name))
+          table[p.Name] = p;
+        else
+          Node.Project.Error(p.FirstLocation, $"Property '$(p.Name)' to override not found.");
+      }
+      else
+      {
+        mutable existingProperty;
+        if (table.TryGetValue(p.Name, out existingProperty))
+        {
+          def s = existingProperty.PropertyContainer;
+          using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from $(s.Description) '$(s.FullName)'."))
+            root.Hint(existingProperty.FirstLocation, "Property declaration.");
+        }
+        else
+          table.Add(p.Name, p);
+      }
+    }
+  }
+
+  protected AddStatementImpl(statement : DependentStatement, assignments : SCG.List[DependentStatement], initializedOutProperties : ref list[DependentPropertySymbol]) : void
+  {
+    assignments.Add(statement);
+    when (statement.Path is [Identifier(Value = propertyName)])
+    when (LookupProperty(propertyName) is VSome(DependentPropertySymbol(Direction = Out) as propertySymbol))
+      initializedOutProperties ::= propertySymbol;
+  }
+}
+
+// ---- Symbols/Ast/PropertyProjectionType.n (Nitra.Typing) ----
+[Record]
+public variant PropertyProjectionType
+{
+  | OptionList
+  | List
+  | Option
+  | Single
+
+  public ProjectionSource  : PropertySymbol;
+  public TargetAst : AstSymbol;
+}
+
+// ---- Symbols/Ast/PropertySymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class PropertySymbol : SingleDefSymbol
+{
+  [ExternalProperty]
+  public abstract Type              : NType                     { get; }
+  public abstract OverrideProperty  : SymbolRef[PropertySymbol] { get; }
+  public abstract PropertyContainer : PropertyContainerSymbol   { get; }
+  public          BackingFieldName  : ValueOption[string]
+  {
+    get
+    {
+      if (PropertyContainer is AstSymbol(IsDeclaration = true) when Name == "Name")
+        VSome("__NameImpl")
+      else
+        VNone()
+    }
+  }
+}
+
+// ---- Symbols/Ast/SimpleAstSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class SimpleAstSymbol : AstSymbol, INamespaceMember
+{
+  public override Description : string               { get { if (IsDeclaration) "declaration" else "ast" } }
+  public override IsAbstract  : bool                 { get { false } }
+  public abstract DefinedIn   : SymbolRef[AstSymbol] { get; }
+  public override PropertyDependency : PropertyDependencyData { get { PropertyDependencyData.Empty } }
+}
+
+public sealed class ParsedSimpleAstSymbol : SimpleAstSymbol, IDependentStatementContainer
+{
+  private         _node                     : G.NamespaceMember.Ast;
+  private         _statements               : SCG.List[DependentStatement];
+  private mutable _initializedOutProperties : list[DependentPropertySymbol];
+
+  public this(node : G.NamespaceMember.Ast, isDeclaration : bool, cardinality : AstCardinality)
+  {
+    base(node.Name, node.Name.Value());
+    _node                     = node;
+    _statements               = SCG.List();
+    _initializedOutProperties = [];
+    DefinedIn                 = SymbolRef.None(this.FirstLocation, true);
+    IsDeclaration             = isDeclaration;
+    Cardinality               = cardinality;
+  }
+
+  private mutable _symbol : SymbolRef[SymbolSymbol];
+
+  public override DefinedIn                : SymbolRef[AstSymbol]          { get; }
+  public override Symbol                   : SymbolRef[SymbolSymbol]       { get { assert(_symbol : object != null); _symbol } }
+  public override IsDeclaration            : bool                          { get; }
+  public override Cardinality              : AstCardinality                { get; }
+  public override Parents                  : list[AstSymbol]               { get { _node.Parents } }
+  public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+
+  public AddStatement(statement : DependentStatement) : void { AddStatementImpl(statement, _statements, ref _initializedOutProperties); }
+  public GetStatements() : Seq[DependentStatement] { _statements }
+
+  protected override CreateSymbolSymbol() : SymbolRef[SymbolSymbol]
+  {
+    assert(_symbol : object == null);
+
+    _symbol =
+      CreateSymbolSymbolImpl(fun (baseSymbols)
+      {
+        def symbolSymbol = ParsedSimpleSymbolSymbol(this, baseSymbols);
+        _ = Node.Parent.AddAndReport.[SymbolSymbol](symbolSymbol, FirstLocation);
+        symbolSymbol
+      });
+    _node.Body.CollectSymbolMembers(this, _symbol);
+    _symbol
+  }
+}
+
+public sealed class ParsedChildAstSymbol : SimpleAstSymbol, IDependentStatementContainer
+{
+  private         _node                     : G.AstMember.ChildAst;
+  private         _statements               : SCG.List[DependentStatement];
+  private mutable _initializedOutProperties : list[DependentPropertySymbol];
+
+  public this(node : G.AstMember.ChildAst, owner : AstSymbol, cardinality : AstCardinality)
+  {
+    base(node.Name, node.Name.Value());
+    _node                     = node;
+    _statements               = SCG.List();
+    _initializedOutProperties = [];
+    Owner                     = owner;
+    DefinedIn                 = SymbolRef.Some(FirstLocation, true, owner);
+    IsDeclaration             = owner.IsDeclaration;
+    Cardinality               = cardinality;
+  }
+
+  private mutable _symbol : SymbolRef[SymbolSymbol];
+
+  public          Owner                    : AstSymbol                     { get; }
+  public override DefinedIn                : SymbolRef[AstSymbol]          { get; }
+  public override Symbol                   : SymbolRef[SymbolSymbol]       { get { assert(_symbol : object != null); _symbol } }
+  public override IsDeclaration            : bool                          { get; }
+  public override Cardinality              : AstCardinality                { get; }
+  public override Parents                  : list[AstSymbol]               { get { _node.Parents } }
+  public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+
+  public AddStatement(statement : DependentStatement) : void { AddStatementImpl(statement, _statements, ref _initializedOutProperties); }
+  public GetStatements() : Seq[DependentStatement] { _statements }
+
+  protected override CreateSymbolSymbol() : SymbolRef[SymbolSymbol]
+  {
+    assert(_symbol : object == null);
+
+    _symbol =
+      CreateSymbolSymbolImpl(fun (baseSymbols)
+      {
+        def symbolSymbol = ParsedSimpleSymbolSymbol(this, baseSymbols);
+        _ = Owner.Node.AddAndReport.[SymbolSymbol](symbolSymbol, FirstLocation);
+        symbolSymbol
+      });
+    when (_node.Body.HasValue)
+      _node.Body.Value.CollectSymbolMembers(this, _symbol);
+    _symbol
+  }
+}
+
+// ---- Symbols/Ast/StructuralPropertySymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class StructuralPropertySymbol : PropertySymbol
+{
+  public override Description : string  { get "structural property" }
+  public abstract AstType     : AstType { get; }
+}
+
+public sealed class ParsedStructuralPropertySymbol : StructuralPropertySymbol
+{
+  private _node : G.AstMember.StructuralProperty;
+
+  public this(node : G.AstMember.StructuralProperty, propertyContainer : PropertyContainerSymbol)
+  {
+    base(node.Name, node.Name.Value());
+    _node             = node;
+    PropertyContainer = propertyContainer;
+    OverrideProperty  = SymbolRef.None(_node.Name.Location, false);
+  }
+
+  public override PropertyContainer : PropertyContainerSymbol   { get; }
+  public override OverrideProperty  : SymbolRef[PropertySymbol] { get; }
+  public override Type              : NType                     { get { _node.Type } }
+  public override AstType           : AstType                   { get { _node.AstType } }
+}
+
+// ---- Symbols/Ast/SymbolSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class SymbolSymbol : PropertyContainerSymbol, INamespaceMember
+{
+  public override Description  : string             { get { "symbol" } }
+  public abstract Declaration  : AstSymbol          { get; }
+  public abstract Parents      : list[SymbolSymbol] { get; }
+  public override GetParents() : Seq[PropertyContainerSymbol] { Parents }
+
+  public AllBaseSymbols : Seq[SymbolSymbol]
+  {
+    get { TypeInheritance(); _allBaseSymbols }
+  }
+
+  public override AllProperties : Seq[PropertySymbol]
+  {
+    get { TypeInheritance(); _allProperties.Values }
+  }
+
+  public override IsSubtypeOf(other : PropertyContainerSymbol) : bool
+  {
+    | SymbolSymbol as other =>
+      TypeInheritance();
+      this == other || _allBaseSymbols.Contains(other)
+
+    | _ => false
+  }
+
+  [RecordIgnore] private mutable _allBaseSymbols : SCG.HashSet[SymbolSymbol];
+  [RecordIgnore] private mutable _allProperties  : SCG.Dictionary[string, PropertySymbol];
+
+  public TypeInheritance() : void
+  {
+    when (_allBaseSymbols : object == null)
+    {
+      _allBaseSymbols = SCG.HashSet();
+      _allProperties  = SCG.Dictionary(StringComparer.Ordinal);
+
+      foreach (s when _allBaseSymbols.Add(s) in Parents)
+        _allBaseSymbols.UnionWith(s.AllBaseSymbols);
+
+      CollectInheritedProperties(_allBaseSymbols, _allProperties);
+      CollectDeclaredProperties(_allProperties);
+    }
+  }
+
+  public override GetAncestors() : Seq[PropertyContainerSymbol]
+  {
+    AllBaseSymbols
+  }
+
+  public override LookupProperty(name : string) : ValueOption[PropertySymbol]
+  {
+    TypeInheritance();
+
+    mutable p;
+    if (_allProperties.TryGetValue(name, out p))
+      VSome(p)
+    else
+      VNone()
+  }
+}
+
+public sealed class ParsedAbstractSymbolSymbol : SymbolSymbol, IDependentStatementContainer
+{
+  public this(astSymbol : AstSymbol, parents : list[SymbolSymbol])
+  {
+    base (astSymbol.FirstLocation, astSymbol.Name + "Symbol");
+    Declaration  = astSymbol;
+    Parents      = parents;
+    _statements  = SCG.List();
+    _initializedOutProperties = [];
+  }
+
+  private         _statements               : SCG.List[DependentStatement];
+  private mutable _initializedOutProperties : list[DependentPropertySymbol];
+  private mutable _propertyDependency       : PropertyDependencyData;
+
+  public override Declaration              : AstSymbol                     { get; }
+  public override Parents                  : list[SymbolSymbol]            { get; }
+  public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+  public override IsAbstract               : bool                          { get { true } }
+  public override PropertyDependency       : PropertyDependencyData        { get { assert(_propertyDependency != null); _propertyDependency } }
+
+  public AddStatement(statement : DependentStatement) : void { AddStatementImpl(statement, _statements, ref _initializedOutProperties); }
+  public GetStatements() : Seq[DependentStatement] { _statements }
+  public override SetPropertyDependency(graph : PropertyDependencyData) : void { assert(graph != null); _propertyDependency = graph; }
+}
+
+public sealed class ParsedSimpleSymbolSymbol : SymbolSymbol, IDependentStatementContainer
+{
+  public this(astSymbol : AstSymbol, parents : list[SymbolSymbol])
+  {
+    base (astSymbol.FirstLocation, astSymbol.Name + "Symbol");
+    Declaration  = astSymbol;
+    Parents      = parents;
+    _statements  = SCG.List();
+    _initializedOutProperties = [];
+    _builtInMethods = SCG.Dictionary(StringComparer.Ordinal);
+  }
+
+  private         _statements               : SCG.List[DependentStatement];
+  private mutable _initializedOutProperties : list[DependentPropertySymbol];
+  private         _builtInMethods           : SCG.Dictionary[string, Identifier * PExpr];
+  private static  _builtInMethodNames       : SCG.HashSet[string] = SCG.HashSet(
+    array["CanMerge", "IsSameIdentity", "AfterStage", "ToString", "GetHashCode", "Equals", "DecomposeType", "MakeHint"],
+    StringComparer.Ordinal);
+
+  public override Declaration              : AstSymbol                     { get; }
+  public override Parents                  : list[SymbolSymbol]            { get; }
+  public override InitializedOutProperties : list[DependentPropertySymbol] { get { _initializedOutProperties } }
+  public override IsAbstract               : bool                          { get { false } }
+  public override PropertyDependency       : PropertyDependencyData        { get { PropertyDependencyData.Empty } }
+  public          BuiltInMethods           : SCG.Dictionary[string, Identifier * PExpr].ValueCollection { get { _builtInMethods.Values } }
+
+  public AddStatement(statement : DependentStatement) : void
+  {
+    | DependentStatement.Assign(Path = [Identifier(Value = name) as identifier], Expression = expr) when _builtInMethodNames.Contains(name) =>
+      mutable existingStatement;
+      if (_builtInMethods.TryGetValue(name, out existingStatement))
+        Node.Project.Error(statement, $"Duplicate implementation of '$name' method.")
+      else
+        _builtInMethods.Add(name, (identifier, expr));
+
+    | _ => AddStatementImpl(statement, _statements, ref _initializedOutProperties);
+  }
+
+  public GetStatements() : Seq[DependentStatement] { _statements }
+}
+
+// ---- Symbols/Ast/TablePropertySymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class TablePropertySymbol : PropertySymbol
+{
+  [RecordIgnore]
+  private mutable type : NType;
+
+  public override Description : string  { get "table property" }
+  public override Type        : NType
+  {
+    get
+    {
+      when (type == null)
+      {
+        type = Utils.MakeNTypeQualified(FirstLocation.FromEnd(), ["Nitra", "Declarations", "TableScope"]);
+      }
+      type
+    }
+  }
+}
+
+public sealed class ParsedTablePropertySymbol : TablePropertySymbol
+{
+  private _node : G.SymbolMember.TableProperty;
+
+  public this(node : G.SymbolMember.TableProperty, propertyContainer : PropertyContainerSymbol)
+  {
+    base(node.Name, node.Name.Value());
+    _node             = node;
+    PropertyContainer = propertyContainer;
+    OverrideProperty  = SymbolRef.None(_node.Name.Location, false);
+  }
+
+  public override PropertyContainer : PropertyContainerSymbol   { get; }
+  public override OverrideProperty  : SymbolRef[PropertySymbol] { get; }
+}
+
+// ---- Symbols/DependentProperties/DependencyPath.n (Nitra.Typing) ----
+[StructuralEquality]
+public variant DependencyPath
+{
+  | This
+  | Variable
+    {
+      Name : string;
+    }
+  | DeclaredProperty
+    {
+      Path   : DependencyPath;
+      Symbol : PropertySymbol;
+      [EqualsIgnore] Mask : int;
+
+      [RecordCtor]
+      public new this([MappedMember("Path")] path : DependencyPath, [MappedMember("Symbol")] symbol : PropertySymbol, [MappedMember("Mask")] bitMask : int)
+      {
+        Path   = path;
+        Symbol = if (symbol.OverrideProperty is SymbolRef.Some(originalSymbol)) originalSymbol else symbol;
+        Mask   = bitMask;
+      }
+    }
+  | DependentProperty
+    {
+      Path            : DependencyPath;
+      Name            : string;
+      IsEvaluatedName : string;
+    }
+  | SimpleProperty
+    {
+      Path : DependencyPath;
+      Name : string;
+    }
+
+  public BasePath : ValueOption[DependencyPath]
+  {
+    get
+    {
+      match (this)
+      {
+        | This
+        | Variable => VNone()
+        | DeclaredProperty(basePath, _, _)
+        | DependentProperty(basePath, _, _)
+        | SimpleProperty(basePath, _) => VSome(basePath)
+      }
+    }
+  }
+
+  public IsDependent          : bool
+  {
+    get
+    {
+      match (this)
+      {
+        | DeclaredProperty(_, DependentPropertySymbol, _)
+        | DependentProperty => true
+        | _ => false
+      }
+    }
+  }
+
+  public IsSinglePropertyPath : bool
+  {
+    get
+    {
+      match (this)
+      {
+        | DeclaredProperty(This, _, _)
+        | DependentProperty(This, _, _)
+        | SimpleProperty(This, _) => true
+        | _ => false
+      }
+    }
+  }
+
+  public override ToString() : string
+  {
+    ToString(StringBuilder()).ToString()
+  }
+
+  public ToString(buffer : StringBuilder) : StringBuilder
+  {
+    match (this)
+    {
+      | Variable(name) => buffer.Append(name)
+      | This           => buffer.Append("this");
+      | DeclaredProperty(This, symbol, _) with name = symbol.Name
+      | DependentProperty(This, name, _)
+      | SimpleProperty(This, name) => buffer.Append(name)
+      | DeclaredProperty(path, symbol, _) with name = symbol.Name
+      | DependentProperty(path, name, _)
+      | SimpleProperty(path, name) => path.ToString(buffer).Append('.').Append(name)
+    }
+  }
+}
+
+// ---- Symbols/DependentProperties/DependentPropertyDirection.n (Nitra.Typing) ----
+public enum DependentPropertyDirection
+{
+  | In
+  | Out
+}
+
+// ---- Symbols/DependentProperties/DependentPropertySymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class DependentPropertySymbol : PropertySymbol
+{
+  public abstract Direction      : DependentPropertyDirection         { get; }
+  public abstract LinkedProperty : SymbolRef[DependentPropertySymbol] { get; }
+  public abstract Stage          : int                                { get; }
+  public override Description    : string
+  {
+    get { match (Direction) { In  => "input property" | Out => "output property" } }
+  }
+}
+
+public sealed class ParsedDependentPropertySymbol : DependentPropertySymbol
+{
+  private         _node           : G.DependentProperty;
+  private mutable _linkedProperty : SymbolRef[DependentPropertySymbol];
+
+  public this(node : G.DependentProperty, propertyContainer : PropertyContainerSymbol, direction : DependentPropertyDirection, isInOut : bool)
+  {
+    def makeName(text)
+    {
+      if (isInOut)
+        text + match (direction) { In  => "In" | Out => "Out" }
+      else
+        text
+    }
+
+    base(node.Name, makeName(node.Name.Value()));
+    _node             = node;
+    PropertyContainer = propertyContainer;
+    Direction         = direction;
+    OverrideProperty  = SymbolRef.None(_node.Name.Location, false);
+    unless (isInOut)
+      _linkedProperty = SymbolRef.None(_node.Name.Location, false);
+  }
+
+  public override PropertyContainer : PropertyContainerSymbol            { get; }
+  public override Direction         : DependentPropertyDirection         { get; }
+  public override OverrideProperty  : SymbolRef[PropertySymbol]          { get; }
+  public override Type              : NType                              { get { _node.Type } }
+  public override Stage             : int                                { get { _node.Stage() } }
+  public override LinkedProperty    : SymbolRef[DependentPropertySymbol]
+  {
+    get
+    {
+      when (_linkedProperty : object == null)
+        _linkedProperty = SymbolRef.Some(_node.Name.Location, true, match (Direction) { In => _node.Symbol2 | Out => _node.Symbol1 });
+      _linkedProperty
+    }
+  }
+}
+
+// ---- Symbols/DependentProperties/DependentStatement.n (Nitra.Typing) ----
+[Record]
+public variant DependentStatement : Located
+{
+  public override Location : Location         { get; }
+  public          Path     : list[Identifier] { get; }
+
+  | Assign
+    {
+      Expression : PExpr;
+    }
+  | Call
+    {
+      MethodName : Identifier;
+      Arguments  : list[PExpr];
+      NemerleEnv : GlobalEnv;
+      Conditions : list[DependentStatementCondition];
+    }
+  | Add
+    {
+      Expression : PExpr;
+    }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Assign(expr)                =>         $<#..$(Path; "."; _.GetText()) = $expr#>
+      | Call(name, exprs, _, conds) => $<#..$conds..$(Path; "."; _.GetText()).$name(..$(exprs; ", "))#>
+      | Add(expr)                   =>         $<#..$(Path; "."; _.GetText()) |= $expr#>
+    }
+  }
+}
+
+[Record]
+public variant DependentStatementCondition : Located
+{
+  public override Location : Location { get; }
+
+  | When
+    {
+      Expression : PExpr;
+    }
+  | Unless
+    {
+      Expression : PExpr;
+    }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | When(expr)   => $"when ($expr) "
+      | Unless(expr) => $"unless ($expr) "
+    }
+  }
+}
+
+// ---- Symbols/DependentProperties/IDependentStatementContainer.n (Nitra.Typing) ----
+public interface IDependentStatementContainer
+{
+  AddStatement(statement : DependentStatement) : void;
+  GetStatements() : Seq[DependentStatement];
+}
+
+// ---- Symbols/DependentProperties/PropertyDependencyCallData.n (Nitra.Typing) ----
+[Record]
+public variant PropertyDependencyCallData : Nitra.Runtime.Located
+{
+  public override Location           : Location                { get; }
+  public          Id                 : int                     { get; }
+  public          DeclaredIn         : PropertyContainerSymbol { get; }
+  public          DependendOn        : list[int]               { get; }
+  public          Path               : DependencyPath          { get; }
+  public          CompiledMethodName : string                  { get; }
+
+  | Normal
+  | Collect
+  | StagedUse
+}
+
+// ---- Symbols/DependentProperties/PropertyDependencyData.n (Nitra.Typing) ----
+[Record]
+public sealed class PropertyDependencyData
+{
+  public Nodes : list[PropertyDependencyNodeData] { get; }
+  public Calls : list[PropertyDependencyCallData] { get; }
+
+  public static Empty : PropertyDependencyData = PropertyDependencyData([], []);
+}
+
+// ---- Symbols/DependentProperties/PropertyDependencyNodeData.n (Nitra.Typing) ----
+[Record]
+public variant PropertyDependencyNodeData : Nitra.Runtime.Located
+{
+  public override Location    : Location                { get; }
+  public          DeclaredIn  : PropertyContainerSymbol { get; }
+  public          Path        : DependencyPath          { get; }
+  public          DependendOn : list[int]               { get; }
+  public          IsCollector : bool                    { get; }
+  public          IsDependent : bool                    { get { Path.IsDependent } }
+
+  public override ToString() : string
+  {
+    (match (this)
+    {
+      | Assign => "Assign: "
+      | Use    => "Use: "
+    })
+    + Location.GetText()
+  }
+  
+  | Assign { CompiledMethodName : string }
+  | Use
+}
+
+// ---- Symbols/LanguageMembers/SpanClassSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class SpanClassSymbol : SingleDefSymbol
+{
+  public override Description       : string                 { get "span class" }
+  public abstract DeclaringLanguage : LanguageSymbol         { get; }
+  public abstract RegularRule       : option[RegularRule]    { get; }
+  public abstract Style             : SymbolRef[StyleSymbol] { get; }
+  public          Matcher           : string -> bool
+  {
+    [Memoize] get
+    {
+      assert(Node != null);
+      match (this.RegularRule)
+      {
+        | Some(rr) => rr.MakeMatcher(Node.Project)
+        | None     => nullMatcher
+      }
+    }
+  }
+
+  private static nullMatcher : string -> bool = _ => false;
+}
+
+public sealed class ParsedSpanClassSymbol : SpanClassSymbol
+{
+  private _node : G.LanguageMember.SpanClass;
+
+  public this(node : G.LanguageMember.SpanClass, language : LanguageSymbol)
+  {
+    base(node.Name);
+    _node             = node;
+    DeclaringLanguage = language;
+  }
+
+  public override DeclaringLanguage : LanguageSymbol         { get; }
+  public override RegularRule       : option[RegularRule]    { get { _node.RegularRule() } }
+  public override Style             : SymbolRef[StyleSymbol] { get { _node.StyleRef() } }
+}
+
+// ---- Symbols/LanguageMembers/StyleSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class StyleSymbol : SingleDefSymbol
+{
+  public override Description       : string         { get "style" }
+  public abstract DeclaringLanguage : LanguageSymbol { get; }
+  public abstract ForegroundColor   : int            { get; }
+}
+
+public sealed class ParsedStyleSymbol : StyleSymbol
+{
+  private _properties : PropertyBag;
+
+  public this(node : G.LanguageMember.Style, language : LanguageSymbol)
+  {
+    this(node.Name.Location, node.Name.Value(), language);
+  }
+
+  public this(loc : Location, name : string, language : LanguageSymbol)
+  {
+    base(loc, name);
+    DeclaringLanguage = language;
+    _properties       = PropertyBag(this);
+  }
+
+  public override DeclaringLanguage : LanguageSymbol { get; }    
+  public override ForegroundColor   : int { get { _properties.GetProperty("ForegroundColor", Color.Empty.ToArgb()) } }
+
+  internal SetForegroundColor(loc : Location, value : Color) : void
+  {
+    _properties.SetProperty("ForegroundColor", loc, value.ToArgb())
+  }
+}
+
+// ---- Symbols/LanguageSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraphNode[LanguageSymbol]
+{
+  public override Description              : string                      { get "language" }
+  public abstract Parent                   : SymbolRef[LanguageSymbol]   { get; }
+  public abstract FileExtensions           : list[string]                { get; }
+  public abstract Company                  : string                      { get; }
+  public abstract LanguageDescription      : string                      { get; }
+  public abstract Authors                  : string                      { get; }
+  public abstract Copyright                : string                      { get; }
+  public abstract LicenseUrl               : string                      { get; }
+  public abstract RequireLicenseAcceptance : bool                        { get; }
+  public abstract SyntaxModules            : list[SyntaxModuleSymbol]    { get; }
+  public abstract StartRule                : SymbolRef[SyntaxRuleSymbol] { get; }
+
+  public SpanClasses : Seq[SpanClassSymbol]
+  {
+    get { this.Node.GetChildren.[SpanClassSymbol]() }
+  }
+
+  public Styles : Seq[StyleSymbol]
+  {
+    get { this.Node.GetChildren.[StyleSymbol]() }
+  }
+
+  Connections : Seq[LanguageSymbol] implements IGraphNode[LanguageSymbol].Connections
+  {
+    get { if (Parent is SymbolRef.Some(parent)) [parent] else [] }
+  }
+
+  public Ancestors : Seq[LanguageSymbol]
+  {
+    get { TypeInheritance(); _ancestors }
+  }
+
+  public AllSpanClasses : Seq[SpanClassSymbol]
+  {
+    get { TypeInheritance(); _allSpanClasses.Values }
+  }
+
+  public SpanClassesWithMatchers : Seq[SpanClassSymbol]
+  {
+    [RecordIgnore] mutable spanClasses : array[SpanClassSymbol];
+    get
+    {
+      when (spanClasses : object == null)
+        spanClasses = AllSpanClasses.FilterToArray(x => x.RegularRule.HasValue);
+      spanClasses
+    }
+  }
+
+  public IsSubtypeOf(other : LanguageSymbol) : bool
+  {
+    TypeInheritance();
+
+    this == other || _ancestors.Contains(other)
+  }
+
+  [RecordIgnore] private mutable _ancestors           : HashSet[LanguageSymbol];
+  [RecordIgnore] private mutable _allSpanClasses      : Dictionary[string, SpanClassSymbol];
+  [RecordIgnore] private mutable _isTypingInheritance : bool;
+  [RecordIgnore] private mutable _isCyclic            : bool;
+
+  public TypeInheritance() : void
+  {
+    if (_isTypingInheritance)
+    {
+      unless (_isCyclic)
+      {
+        foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
+        {
+          def firstSymbol = group.Nodes.FirstItem;
+          using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Language '$(firstSymbol.FullName)' is cyclic."))
+          {
+            // 'foreach' causes invalid IL
+            def e = group.Nodes.GetEnumerator();
+            _ = e.MoveNext();
+            while (e.MoveNext())
+            {
+              def symbol = e.Current;
+              root.Hint(symbol.FirstLocation, $"Circular base language dependency '$(symbol.FullName)' for language '$(firstSymbol.FullName)'.");
+            }
+          }
+        }
+
+        _isCyclic = true;
+      }
+    }
+    else when (_ancestors : object == null)
+    {
+      _isTypingInheritance = true;
+      try
+      {
+        _ancestors      = HashSet();
+        _allSpanClasses = Dictionary(StringComparer.Ordinal);
+
+        when (Parent is SymbolRef.Some(parentLanguage))
+        {
+          _ = _ancestors.Add(parentLanguage);
+          _ancestors.UnionWith(parentLanguage.Ancestors);
+        }
+
+        unless (_isCyclic)
+          CollectInheritedSpanClasses(_ancestors, _allSpanClasses);
+
+        CollectDeclaredSpanClasses(_allSpanClasses);
+      }
+      finally _isTypingInheritance = false;
+    }
+  }
+
+  public LookupSpanClass(name : string) : ValueOption[SpanClassSymbol]
+  {
+    TypeInheritance();
+
+    mutable symbol;
+    if (_allSpanClasses.TryGetValue(name, out symbol))
+      VSome(symbol)
+    else
+      VNone()
+  }
+
+  private CollectInheritedSpanClasses(ancestors : Seq[LanguageSymbol], table : Dictionary[string, SpanClassSymbol]) : void
+  {
+    foreach (s1 in ancestors)
+    {
+      foreach (p1 in s1.SpanClasses)
+      {
+        mutable p2;
+        if (table.TryGetValue(p1.Name, out p2))
+        {
+          def s2 = p2.DeclaringLanguage;
+          using (root = Node.Project.RootError(this.FirstLocation, $"Inherited language '$(s1.FullName)' and language '$(s2.FullName)' have span classes with same name '$(p1.Name)'."))
+          {
+            root.Hint(p1.FirstLocation, "Span class declaration.");
+            root.Hint(p2.FirstLocation, "Span class declaration.");
+          }
+        }
+        else
+          table.Add(p1.Name, p1)
+      }
+    }
+  }
+
+  private CollectDeclaredSpanClasses(table : Dictionary[string, SpanClassSymbol]) : void
+  {
+    foreach (p in SpanClasses)
+    {
+      mutable existingSpanClass;
+      if (table.TryGetValue(p.Name, out existingSpanClass))
+      {
+        def s = existingSpanClass.DeclaringLanguage;
+        using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of span class '$(p.Name)', span class inherited from language '$(s.FullName)'."))
+          root.Hint(existingSpanClass.FirstLocation, "Span class declaration.");
+      }
+      else
+        table.Add(p.Name, p);
+    }
+  }
+}
+
+public sealed class ParsedLanguageSymbol : LanguageSymbol
+{
+  private         _node           : G.NamespaceMember.Language;
+  private         _properties     : PropertyBag;
+  private mutable _syntaxModules  : list[SyntaxModuleSymbol];
+  private mutable _startRule      : SymbolRef[SyntaxRuleSymbol];
+  private mutable _fileExtensions : list[string];
+
+  public this(node : G.NamespaceMember.Language)
+  {
+    base(node.Name, node.Name.Value());
+    _node           = node;
+    _properties     = PropertyBag(this);
+    _syntaxModules  = [];
+    _startRule      = SymbolRef.None(FirstLocation, true);
+    _fileExtensions = [];
+  }
+
+  public override Parent                   : SymbolRef[LanguageSymbol]   { get { _node.Parent() } }
+  public override SyntaxModules            : list[SyntaxModuleSymbol]    { get { _syntaxModules } }
+  public override StartRule                : SymbolRef[SyntaxRuleSymbol] { get { _startRule } }
+  public override FileExtensions           : list[string]                { get { _fileExtensions } }
+  public override Company                  : string                      { get { _properties.GetProperty("Company",                  string.Empty) } }
+  public override LanguageDescription      : string                      { get { _properties.GetProperty("LanguageDescription",      string.Empty) } }
+  public override Authors                  : string                      { get { _properties.GetProperty("Authors",                  string.Empty) } }
+  public override Copyright                : string                      { get { _properties.GetProperty("Copyright",                string.Empty) } }
+  public override LicenseUrl               : string                      { get { _properties.GetProperty("LicenseUrl",               string.Empty) } }
+  public override RequireLicenseAcceptance : bool                        { get { _properties.GetProperty("RequireLicenseAcceptance", false) } }
+
+  internal SetCompany                 (loc : Location, value : string) : void { _properties.SetProperty("Company",                  loc, value) }
+  internal SetLanguageDescription     (loc : Location, value : string) : void { _properties.SetProperty("LanguageDescription",      loc, value) }
+  internal SetAuthors                 (loc : Location, value : string) : void { _properties.SetProperty("Authors",                  loc, value) }
+  internal SetCopyright               (loc : Location, value : string) : void { _properties.SetProperty("Copyright",                loc, value) }
+  internal SetRequireLicenseAcceptance(loc : Location, value : bool)   : void { _properties.SetProperty("RequireLicenseAcceptance", loc, value) }
+  internal SetLicenseUrl              (loc : Location, value : string) : void
+  {
+    mutable unused;
+    unless (Uri.TryCreate(value, UriKind.Absolute, out unused))
+      Node.Project.Error(loc, "Invalid absolute URL specified.");
+
+    _properties.SetProperty("LicenseUrl", loc, value)
+  }
+
+  internal AddSyntaxModule(loc : Location, syntaxModule : SyntaxModuleSymbol) : void
+  {
+    when (_syntaxModules.Contains(syntaxModule))
+      Node.Project.Error(loc, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
+
+    _syntaxModules ::= syntaxModule;
+  }
+
+  internal SetStartRule(startRule : SymbolRef[SyntaxRuleSymbol]) : void
+  {
+    if (_startRule is SymbolRef.None(IsGenerated = true))
+      _startRule = startRule
+    else
+      using (root = Node.Project.RootError(startRule, "Redefinition of start rule"))
+        root.Hint(_startRule, "First seen here");
+  }
+
+  internal AddFileExtension(loc : Location, ext : string) : void
+  {
+    when (_fileExtensions.Contains(ext))
+      Node.Project.Error(loc, $"Duplicated file extension '$ext'.");
+
+    _fileExtensions ::= ext;
+  }
+}
+
+// ---- Symbols/NitraExternalSymbolPropertyReader.n (Nitra.Typing) ----
+public sealed class NitraExternalSymbolPropertyReader : DefaultExternalSymbolPropertyReader
+{
+  public override ReadPropertyValue[T](project : Project, symbol : Symbol, propertyName : string) : T
+  {
+    match (symbol, propertyName)
+    {
+      | (PropertySymbol as s, "Type")       => AstProperty_Type(project :> NitraProject, s) :> T
+      | (RuleMethodSymbol  as s, "Signature")  => RuleMethod_Signature(project :> NitraProject, s) :> T
+      | _ => base.ReadPropertyValue(project, symbol, propertyName)
+    }
+  }
+
+  private AstProperty_Type(project : NitraProject, symbol : PropertySymbol) : object
+  {
+    def nemerleType = project.GetNemerleType(symbol.PropertyContainer);
+
+    mutable ntype;
+    foreach (property is IProperty in nemerleType.TypeInfo.LookupMember(symbol.Name, false))
+    {
+      ntype = ReflectNType(project, nemerleType.TypeOfMember(property));
+      break;
+    }
+    assert(ntype != null);
+    ntype
+  }
+
+  private ReflectNType(project : NitraProject, typeVar : Nemerle.Compiler.type_var.TypeVar) : NType
+  {
+    def getOuterType(ti : TypeInfo) : TypeInfo
+    {
+      def parentNode = ti.NamespaceNode.Parent;
+      if (parentNode != null)
+      {
+        def loop(_)
+        {
+          | one :: _ when one.GetNestedTypes().Contains(ti) => one
+          | _ :: tail => loop(tail)
+          | []        => null
+        }
+        loop(parentNode.LookupTypes([], false))
+      }
+      else
+        null
+    }
+
+    def makeQualified(loc : Nitra.Runtime.Location, ti : TypeInfo, args : list[Nemerle.Compiler.type_var.TypeVar]) : NType.Qualified
+    {
+      def env       = ti.Manager.CoreEnv;
+      def nameParts = ti.FullName.Split(array['.']);
+      assert(nameParts.Length > 0);
+      mutable typeNameParts = [TypeNamePart(loc, nameParts[nameParts.Length - 1], args.Map(ReflectNType(project, _)), env)];
+      for (mutable i = nameParts.Length - 2; i >= 0; --i)
+        typeNameParts ::= TypeNamePart(loc, nameParts[i], [], env);
+      NType.Qualified(loc, typeNameParts)
+    }
+
+    def loc = project.MakeFakeNitraLocation(typeVar.Location);
+    match (typeVar)
+    {
+      | FixedType.Tuple(members)               => NType.Tuple(loc, members.Map(ReflectNType(project, _))) // for function signatures
+      | FixedType.Void                         => NType.Predefined(loc, NPredefinedType.Void)
+      | FixedType.Fun(from, to)                => NType.Func(loc, ReflectNType(project, from), ReflectNType(project, to))
+      | FixedType.Class(ti, []) when ti.FullName == "System.Int32"            => NType.Predefined(loc, NPredefinedType.Int)
+      | FixedType.Class(ti, []) when ti.FullName == "System.String"           => NType.Predefined(loc, NPredefinedType.String)
+      | FixedType.Class(ti, []) when ti.FullName == "Nitra.Declarations.IAst" => NType.Predefined(loc, NPredefinedType.Ast)
+      | FixedType.Class(ti, []) when ti.Name == "IAstOption" =>
+        def outerType = getOuterType(ti);
+        if (outerType : object != null)
+          NType.Option(loc, ReflectNType(project, FixedType.Class(outerType, []) <- Location = typeVar.Location))
+        else
+          makeQualified(loc, ti, [])
+
+      | FixedType.Class(ti, []) when ti.Name == "IAstList" =>
+        def outerType = getOuterType(ti);
+        if (outerType : object != null)
+          NType.List(loc, ReflectNType(project, FixedType.Class(outerType, []) <- Location = typeVar.Location))
+        else
+          makeQualified(loc, ti, [])
+
+      | FixedType.Class(ti, args) => makeQualified(loc, ti, args)
+      | _ => assert3(false, "Failed to reflect NType from TypeVar")
+    }
+  }
+
+  private RuleMethod_Signature(project : NitraProject, symbol : RuleMethodSymbol) : object
+  {
+    def reflectParameter(p : Nemerle.Compiler.Typedtree.TParameter) : RuleMethodParameter
+    {
+      def loc  = project.MakeFakeNitraLocation(p.NameLocation);
+      def name = Identifier(loc, p.Name);
+      def type = ReflectNType(project, p.Type);
+      RuleMethodParameter(loc, name, type)
+    }
+
+    def nemerleType = project.GetNemerleType(symbol.DeclaringRule);
+
+    mutable signature;
+    foreach (method is IMethod in nemerleType.TypeInfo.LookupMember(symbol.Name, false))
+    {
+      def loc        = project.MakeFakeNitraLocation(method.NameLocation);
+      def parameters = method.Header.Parameters.Map(reflectParameter);
+      def type       = ReflectNType(project, method.Header.ReturnType);
+      signature      = RuleMethodSignature(loc, parameters, type);
+      break;
+    }
+    assert(signature != null);
+    signature
+  }
+}
+
+// ---- Symbols/PropertyBag.n (Nitra.Typing) ----
+public sealed class PropertyBag
+{
+  public this(symbol : Symbol)
+  {
+    _symbol = symbol;
+    _table  = Dictionary(StringComparer.Ordinal);
+  }
+
+  private _symbol : Symbol;
+  private _table  : Dictionary[string, Location * object];
+
+  public HasValue(name : string) : bool
+  {
+    _table.ContainsKey(name)
+  }
+
+  public SetProperty[T](name : string, loc : Location, value : T) : void
+  {
+    mutable existingValue;
+    if (_table.TryGetValue(name, out existingValue))
+      using (rootError = _symbol.Node.Project.RootError(loc, $"Duplicated assignment of '$name' property"))
+        rootError.Hint(existingValue[0], "First assigned here");
+    else
+      _table.Add(name, (loc, value))
+  }
+
+  public GetProperty[T](name : string, defaultValue : T) : T
+  {
+    mutable existingValue;
+    if (_table.TryGetValue(name, out existingValue))
+      existingValue[1] :> T
+    else
+      defaultValue
+  }
+}
+
+// ---- Symbols/SyntaxMapping/AstVariableSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class AstVariableSymbol : LocalVariableSymbol
+{
+  public abstract Type        : AstType           { get; }
+  public abstract Expr        : SyntaxMappingExpr { get; }
+  public override Description : string            { get { $"Variable $Name : $Type" } }
+}
+
+public sealed class ParsedAccumulatorAstVariableSymbol : AstVariableSymbol
+{
+  private _node : G.MapSyntaxExpression.Fold;
+
+  public this(node : G.MapSyntaxExpression.Fold)
+  {
+    def name = node.AccumulatorName1.Identifier();
+    base(name, name.Value);
+    _node = node;
+  }
+
+  public override Type : AstType           { get { _node.ReturnType } }
+  public override Expr : SyntaxMappingExpr { get { assert2(false, "Expression not available"); SyntaxMappingExpr.Error(FirstLocation) } }
+}
+
+public sealed class ParsedAstVariableSymbol : AstVariableSymbol
+{
+  private _node : G.MapSyntaxExpression.DefineVariable;
+
+  public this(node : G.MapSyntaxExpression.DefineVariable)
+  {
+    def name = node.Name.Identifier();
+    base(name, name.Value);
+    _node = node;
+  }
+
+  public override Type : AstType           { get { _node.VariableType } }
+  public override Expr : SyntaxMappingExpr { get { _node.VariableExpression } }
+}
+
+// ---- Symbols/SyntaxMapping/LocalVariableSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class LocalVariableSymbol : SingleDefSymbol
+{
+}
+
+// ---- Symbols/SyntaxMapping/ParseTreeCtor.n (Nitra.Typing) ----
+[Record, StructuralEquality]
+public variant ParseTreeCtor
+{
+  | ListCons
+  | ListNil
+  | OptionSome
+  | OptionNone
+  | Tuple     { arity : int }
+  | ParseTree { arity : int }
+
+  public Name  : string
+  {
+    get
+    {
+      match (this)
+      {
+        | ListCons   => "List.Cons"
+        | ListNil    => "List.Nil"
+        | OptionSome => "Option.Some"
+        | OptionNone => "Option.None"
+        | Tuple      => "Tuple"
+        | ParseTree  => "ParseTree"
+      }
+    }
+  }
+
+  public Arity : int
+  {
+    get
+    {
+      match (this)
+      {
+        | ListCons         => 2
+        | ListNil          => 0
+        | OptionSome       => 1
+        | OptionNone       => 0
+        | Tuple(arity)     => arity
+        | ParseTree(arity) => arity
+      }
+    }
+  }
+
+  public Span  : int
+  {
+    get
+    {
+      match (this)
+      {
+        | ListCons
+        | ListNil
+        | OptionSome
+        | OptionNone => 2
+        | Tuple      => 1
+        | ParseTree  => 1
+      }
+    }
+  }
+
+  public static AppendCtor(this buffer : StringBuilder, ctor : ParseTreeCtor) : StringBuilder
+  {
+    buffer.Append(ctor.Name).Append('(').AppendNTimes(ctor.Arity, "_", ", ").Append(')')
+  }
+ 
+  public override ToString() : string
+  {
+    StringBuilder().AppendCtor(this).ToString()
+  }
+}
+
+// ---- Symbols/SyntaxMapping/ParseTreePath.n (Nitra.Typing) ----
+[Record]
+public variant ParseTreePath : Nitra.Runtime.Located
+{
+  | This     { Symbol : SyntaxRuleSymbol }
+  | Variable
+    {
+      Name     : Identifier;
+      new Type : RuleType;
+    }
+  | Member
+    {
+      Qualifier  : ParseTreePath;
+      Name       : Identifier;
+      new Type   : RuleType;
+    }
+
+  public override Location : Location { get; }
+  public          Type     : RuleType
+  {
+    get
+    {
+      match (this)
+      {
+        | This(symbol)       => RuleType.Ref(symbol) // ExtensionRuleSymbol возвращает RuleType.Ref от расширяемого правила
+        | Variable(_, type)
+        | Member(_, _, type) => type
+      }
+    }
+  }
+
+  public this([Nemerle.Internal.MappedMemberAttribute("Location")] loc : Nitra.Runtime.Located)
+  {
+    this(loc.Location)
+  }
+}
+
+// ---- Symbols/SyntaxMapping/ParseTreePattern.n (Nitra.Typing) ----
+[Record]
+public variant ParseTreePattern : Nitra.Runtime.Located
+{
+  | Var  { Name  : Identifier; }
+  | Ctor { Value : ParseTreeCtor; Args : list[ParseTreePattern] }
+
+  public override Location   : Location { get; }
+  public          Type       : RuleType { get; }
+  public          IsWildcard : bool     { get { this is Var(Identifier(Value = "_")) } }
+
+  public static Wildcard(location : Location, ruleType : RuleType) : ParseTreePattern
+  {
+    def name = Identifier(location, "_");
+    ParseTreePattern.Var(location, ruleType, name)
+  }
+
+  public static ParseTree(location : Location, ruleSymbol : SyntaxRuleSymbol, args : list[ParseTreePattern]) : ParseTreePattern
+  {
+    def arity = SyntaxMappingTyper.GetNonVoidSubRules(ruleSymbol).Length;
+    assert(arity == args.Length);
+    ParseTreePattern.Ctor(location, RuleType.Ref(ruleSymbol), ParseTreeCtor.ParseTree(arity), args)
+  }
+
+  public static AppendPattern(this buffer : StringBuilder, pattern : ParseTreePattern) : StringBuilder
+  {
+    match (pattern)
+    {
+      | Var(n)           => buffer.Append(n)
+      | Ctor(ctor, args) => buffer.Append(ctor.Name).Append('(').AppendList(args, AppendPattern, ", ").Append(')')
+    }
+  }
+ 
+  public override ToString() : string
+  {
+    StringBuilder().AppendPattern(this).ToString()
+  }
+}
+
+// ---- Symbols/SyntaxMapping/ParseTreePatternVariableSymbol.n (Nitra.Typing) ----
+public sealed class ParseTreePatternVariableSymbol : LocalVariableSymbol
+{
+  public this(name : Identifier, type : RuleType)
+  {
+    base(name.Location, name.Value);
+    Type = type;
+  }
+
+  public          Type        : RuleType { get; }
+  public override Description : string   { get "pattern variable" }
+}
+
+// ---- Symbols/SyntaxMapping/PatternTyper.n (Nitra.Typing) ----
+internal module PatternTyper
+{
+  public TypeParseTreePattern(location : Location, ruleSymbol : SyntaxRuleSymbol, patterns : ListParseTree[G.Pattern], context : Context) : ParseTreePattern
+  {
+    def ruleTypes = SyntaxMappingTyper.GetNonVoidSubRules(ruleSymbol).Map(_.Type);
+    def args      = PatternTyper.TypeSequence(ruleTypes, patterns, context);
+    ParseTreePattern.ParseTree(location, ruleSymbol, args)
+  }
+
+  public TypeSequence(ruleTypes : list[RuleType], patterns : ListParseTree[G.Pattern], context : Context) : list[ParseTreePattern]
+  {
+    using (ruleTypeSeq = ruleTypes.GetEnumerator(), patternSeq = patterns.GetEnumerator())
+    {
+      def loop(result, errorReported)
+      {
+        match (ruleTypeSeq.MoveNext(), patternSeq.MoveNext())
+        {
+          | (false, false) => result
+          | (true,   true) => loop(patternSeq.Current.Typing(ruleTypeSeq.Current, context) :: result, errorReported)
+          | (false,  true) =>
+            unless (errorReported)
+              context.Error(patternSeq.Current.Location + patterns.Location.FromEnd(), $"Too many patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).");
+            result
+
+          | (true, false) =>
+            unless (errorReported)
+            unless (result is [ParseTreePattern(IsWildcard = true)]) // treat single '_' as sequence of '_' with proper length
+              context.Error(patterns, $"Too few patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).");
+            loop(ParseTreePattern.Wildcard(patterns.Location.FromEnd(), ruleTypeSeq.Current) :: result, true)
+        }
+      }
+      loop([], false).Rev()
+    }
+  }
+
+  private TryBindCtor(identifier : Identifier) : ParseTreeCtor
+  {
+    match (identifier.Value)
+    {
+      | "Some" => ParseTreeCtor.OptionSome()
+      | "None" => ParseTreeCtor.OptionNone()
+      | "Cons" => ParseTreeCtor.ListCons()
+      | "Nil"  => ParseTreeCtor.ListNil()
+      | _      => null
+    }
+  }
+
+  private ReportTypeMismatch(location : Location, ruleType : RuleType, ctor : ParseTreeCtor, context : Context) : ParseTreePattern
+  {
+    context.Error(location, $"Expected '$(ruleType)' found '$(ctor)'.");
+    ParseTreePattern.Wildcard(location, ruleType)
+  }
+
+  public TypeIdentifier(location : Location, identifier : Identifier, ruleType : RuleType, context : Context) : ParseTreePattern
+  {
+    def makeArgument = ParseTreePattern.Wildcard(location.FromEnd(), _);
+    match (ruleType, TryBindCtor(identifier))
+    {
+      | (_,                 null)  =>
+        def var = ParseTreePattern.Var(location, ruleType, identifier);
+        unless (var.IsWildcard)
+        {
+          def patternContext = context.GetContext.[ParseTreePatternVariableContext]();
+          def variableSymbol = ParseTreePatternVariableSymbol(identifier, ruleType);
+          patternContext.AddVariable(variableSymbol);
+        }
+        var
+
+      | (Tuple,             Tuple) => assert(false, "Tuples not supported here")
+      | (Option(valueType), OptionSome   as ctor) with args = [makeArgument(valueType)]
+      | (Option,            OptionNone   as ctor) with args = []
+      | (List(itemType),    ListCons     as ctor) with args = [makeArgument(itemType), makeArgument(ruleType)]
+      | (List,              ListNil      as ctor) with args = [] =>
+        ParseTreePattern.Ctor(location, ruleType, ctor, args)
+
+      | (_, ctor) => ReportTypeMismatch(location, ruleType, ctor, context)
+    }
+  }
+
+  public TypeCtor(location : Location, identifier : Identifier, patterns : ListParseTree[G.Pattern], ruleType : RuleType, context : Context) : ParseTreePattern
+  {
+    match (ruleType, TryBindCtor(identifier))
+    {
+      | (_, null) =>
+        context.Error(identifier, $"Unbound name '$(identifier.Value)'.");
+        ParseTreePattern.Wildcard(location, ruleType)
+
+      | (Tuple,             Tuple) => assert(false, "Tuples not supported here")
+      | (Option(valueType), OptionSome   as ctor) with args = TypeSequence([valueType], patterns, context)
+      | (Option,            OptionNone   as ctor) with args = TypeSequence([], patterns, context)
+      | (List(itemType),    ListCons     as ctor) with args = TypeSequence([itemType, ruleType], patterns, context)
+      | (List,              ListNil      as ctor) with args = TypeSequence([], patterns, context) =>
+        ParseTreePattern.Ctor(location, ruleType, ctor, args)
+
+      | (_, ctor) => ReportTypeMismatch(location, ruleType, ctor, context)
+    }
+  }
+
+  public TypeTuple(location : Location, patterns : ListParseTree[G.Pattern], ruleType : RuleType, context : Context) : ParseTreePattern
+  {
+    match (ruleType)
+    {
+      | Ref(ruleSymbol) => TypeParseTreePattern(location, ruleSymbol, patterns, context);
+      | Tuple(members) =>
+        def ctor = ParseTreeCtor.Tuple(patterns.Count);
+        ParseTreePattern.Ctor(location, ruleType, ctor, TypeSequence(members, patterns, context))
+
+      | _ =>
+        def ctor = ParseTreeCtor.Tuple(patterns.Count);
+        ReportTypeMismatch(location, ruleType, ctor, context)
+    }
+  }
+
+  public TypeList1(location : Location, pattern1 : G.Pattern, pattern2 : G.Pattern, ruleType : RuleType, context : Context) : ParseTreePattern
+  {
+    def ctor = ParseTreeCtor.ListCons();
+    if (ruleType is List(itemType))
+      ParseTreePattern.Ctor(location, ruleType, ctor, TypeSequence([itemType, ruleType], ConcreteListParseTree(location, array[pattern1, pattern2]), context))
+    else
+      ReportTypeMismatch(location, ruleType, ctor, context)
+  }
+
+  public TypeList2(location : Location, patterns : ListParseTree[G.Pattern], ruleType : RuleType, context : Context) : ParseTreePattern
+  {
+    if (ruleType is List(itemType))
+    {
+      def loop(index : int) : ParseTreePattern
+      {
+        if (index < patterns.Count)
+        {
+          def item = patterns[index].Typing(itemType, context);
+          def tail = loop(index + 1);
+          ParseTreePattern.Ctor(item.Location + tail.Location, ruleType, ParseTreeCtor.ListCons(), [item, tail])
+        }
+        else
+          ParseTreePattern.Ctor(location.FromEnd(), ruleType, ParseTreeCtor.ListNil(), [])
+      }
+      loop(0)
+    }
+    else
+    {
+      def ctor = if (patterns.Count > 0) ParseTreeCtor.ListCons() else ParseTreeCtor.ListNil();
+      ReportTypeMismatch(location, ruleType, ctor, context)
+    }
+  }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingCase.n (Nitra.Typing) ----
+[Record]
+public sealed class SyntaxMappingCase : Nitra.Runtime.Located
+{
+  public override Location : Location          { get; }
+  public          Pattern  : ParseTreePattern  { get; }
+  public          Expr     : SyntaxMappingExpr { get; }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingExpr.n (Nitra.Typing) ----
+[Record]
+public variant SyntaxMappingExpr : Nitra.Runtime.Located
+{
+  | Error
+  | Code          { Expr   : PExpr }
+  | ParameterRef  { Ref    : SyntaxMappingParameterSymbol }
+  | VariableRef   { Ref    : AstVariableSymbol; }
+  | PropertyRef   { Expr   : SyntaxMappingExpr; Symbol : StructuralPropertySymbol; }
+  | Match         { Path   : ParseTreePath; Cases : list[SyntaxMappingCase]; ReturnType : AstType; }
+  | AstCtor       { Symbol : AstSymbol; Fields : list[SyntaxMappingField]  }
+  | ListCtor      { Symbol : AstSymbol; Items  : list[SyntaxMappingExpr]   }
+  | OptionCtor    { Symbol : AstSymbol; Value  : option[SyntaxMappingExpr] }
+  | Call          { Path : ParseTreePath; Arguments : list[SyntaxMappingExpr]; ReturnType : AstType; }
+  | ConvertList   { Path : ParseTreePath; Arguments : list[SyntaxMappingExpr]; Symbol : AstSymbol; ItemPath  : ParseTreePath }
+  | ConvertOption { Path : ParseTreePath; Arguments : list[SyntaxMappingExpr]; Symbol : AstSymbol; ValuePath : ParseTreePath }
+  | ConcatLists   { Path : ParseTreePath; Arguments : list[SyntaxMappingExpr]; Symbol : AstSymbol; ItemPath  : ParseTreePath }
+  | ConcatOptions { Path : ParseTreePath; Arguments : list[SyntaxMappingExpr]; Symbol : AstSymbol; ItemPath  : ParseTreePath }
+  | Fold          { ItemVariable : ParseTreePatternVariableSymbol; ListPath : ParseTreePath; AccumulatorVariable : AstVariableSymbol; InitExpr : SyntaxMappingExpr; EachExpr : SyntaxMappingExpr; ReturnType : AstType; }
+  | DefineVariable { Symbol : AstVariableSymbol; Body : SyntaxMappingExpr }
+
+  public override Location : Location { get; }
+
+  public this([Nemerle.Internal.MappedMemberAttribute("Location")] loc : ILocated)
+  {
+    this(loc.Location)
+  }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingField.n (Nitra.Typing) ----
+[Record]
+public sealed class SyntaxMappingField : Nitra.Runtime.Located
+{
+  public override Location : Location                 { get; }
+  public          Property : StructuralPropertySymbol { get; }
+  public          Expr     : SyntaxMappingExpr        { get; }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingParameterSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class SyntaxMappingParameterSymbol : LocalVariableSymbol
+{
+  public abstract Type        : AstType { get; }
+  public override Description : string  { get { $"Parameter $Name : $Type" } }
+}
+
+public sealed class ChemicalSyntaxMappingParameterSymbol : SyntaxMappingParameterSymbol
+{
+  public this(name : Identifier, type : AstType)
+  {
+    base(name, name.Value);
+    Type = type;
+  }
+
+  public override Type : AstType { get; }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class SyntaxMappingSymbol : SingleDefSymbol
+{
+  public static SymbolName = "GetAst";
+
+  public override Description   : string                       { get { "map syntax" } }
+  public abstract DeclaringRule : SyntaxRuleSymbol             { get; }
+  public abstract Parameters    : list[SyntaxMappingParameterSymbol] { get; }
+  public abstract ReturnType    : AstType                      { get; }
+  public virtual  Expression    : SyntaxMappingExpr            { get { null } }
+  public          HasValidSignature : bool
+  {
+    get { !(ReturnType.IsVoid || Parameters.Exists(p => p.Type.IsVoid)) }
+  }
+}
+
+public sealed class ChemicalSyntaxMappingSymbol : SyntaxMappingSymbol
+{
+  public this(loc : Location, declaringRule : SyntaxRuleSymbol, parameters : list[SyntaxMappingParameterSymbol], returnType : AstType)
+  {
+    base(loc, SymbolName);
+    this.DeclaringRule = declaringRule;
+    this.Parameters    = parameters;
+    this.ReturnType    = returnType;
+  }
+
+  public override DeclaringRule : SyntaxRuleSymbol             { get; }
+  public override Parameters    : list[SyntaxMappingParameterSymbol] { get; }
+  public override ReturnType    : AstType                      { get; }
+  public override Expression    : SyntaxMappingExpr            { get { assert(_expr.HasValue, "Property 'Expression' is not set."); _expr.GetValueOrDefault() } }
+
+  private mutable _expr : ValueOption[SyntaxMappingExpr];
+
+  public SetExpression(expr : SyntaxMappingExpr) : void
+  {
+    assert(!_expr.HasValue, "Property 'Expression' is already set.");
+    _expr = VSome(expr);
+  }
+}
+
+public sealed class ParsedSyntaxMappingSymbol : SyntaxMappingSymbol
+{
+  public this(node : G.NamespaceMember.MapSyntax, declaringRule : SyntaxRuleSymbol)
+  {
+    base(node.Location, SymbolName);
+    this._node         = node;
+    this.DeclaringRule = declaringRule;
+  }
+
+  private _node : G.NamespaceMember.MapSyntax;
+
+  public override DeclaringRule : SyntaxRuleSymbol             { get; }
+  public override Parameters    : list[SyntaxMappingParameterSymbol] { get { _node.Parameters } }
+  public override ReturnType    : AstType                      { get { _node.ReturnType } }
+  public override Expression    : SyntaxMappingExpr            { get { _node.Expr } }
+}
+
+public sealed class ParsedInplaceSyntaxMappingSymbol : SyntaxMappingSymbol
+{
+  public this(node : G.RuleBodyMember.MapSyntax, declaringRule : SyntaxRuleSymbol)
+  {
+    base(node.Location, SymbolName);
+    this._node         = node;
+    this.DeclaringRule = declaringRule;
+  }
+
+  private _node : G.RuleBodyMember.MapSyntax;
+
+  public override DeclaringRule : SyntaxRuleSymbol             { get; }
+  public override Parameters    : list[SyntaxMappingParameterSymbol] { get { _node.Parameters } }
+  public override ReturnType    : AstType                      { get { _node.ReturnType } }
+  public override Expression    : SyntaxMappingExpr            { get { _node.Expr } }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingType.n (Nitra.Typing) ----
+[Record]
+public variant SyntaxMappingType : Nitra.Runtime.Located // TODO: this is definitly PExpr variant, and SyntaxMappingExpr is TExpr
+{
+  | Undefined
+  | Ast       { Type  : AstType; Expr : SyntaxMappingExpr }
+  | Option    { Value : option[SyntaxMappingType] }
+  | List      { Items : list[SyntaxMappingType] }
+  | ParseTree { Path  : ParseTreePath }
+  | Call      { Target : ParseTreePath; Arguments : list[SyntaxMappingType]; }
+  | Match     { Target : ParseTreePath; Cases : list[Location * ParseTreePattern * SyntaxMappingType] }
+  | DefineVariable { Symbol : AstVariableSymbol; Body : SyntaxMappingType }
+
+  public override Location : Location { get; }
+
+  public this([Nemerle.Internal.MappedMemberAttribute("Location")] loc : ILocated)
+  {
+    this(loc.Location)
+  }
+}
+
+// ---- Symbols/SyntaxMapping/SyntaxMappingTyper.n (Nitra.Typing) ----
+internal module SyntaxMappingTyper
+{
+  public MakeExpression(type : SyntaxMappingType, astType : AstType, compilerMessages : ICompilerMessages) : SyntaxMappingExpr
+  {
+    match (type)
+    {
+      | Undefined           => SyntaxMappingExpr.Error(type)
+      | Ast(exprType, expr) =>
+        if (exprType.IsSubtypeOf(astType))
+          expr
+        else
+        {
+          compilerMessages.Error(type, $"Expected AST type '$astType' got '$exprType'.");
+          SyntaxMappingExpr.Error(type)
+        }
+
+      | Option(valueType) =>
+        if (astType is AstType.Option(astSymbol))
+        {
+          def valueExpr =
+            if (valueType is Some(expr))
+              Some(MakeExpression(expr, AstType.Ast(astType, astSymbol), compilerMessages))
+            else
+              None();
+
+          SyntaxMappingExpr.OptionCtor(type, astSymbol, valueExpr)
+        }
+        else
+        {
+          compilerMessages.Error(type, $"Expected AST type '$astType' got option.");
+          SyntaxMappingExpr.Error(type)
+        }
+
+      | List(itemTypes) =>
+        match (astType)
+        {
+          | List(astSymbol) | OptionList(astSymbol) =>
+            def itemAstType = AstType.Ast(astType, astSymbol);
+            def itemExprs   = itemTypes.Map(MakeExpression(_, itemAstType, compilerMessages));
+            SyntaxMappingExpr.ListCtor(type, astSymbol, itemExprs)
+
+          | _ =>
+            compilerMessages.Error(type, $"Expected AST type '$astType' got list.");
+            SyntaxMappingExpr.Error(type)
+        }
+
+      | ParseTree(path)       with typeToCheck = ResolveCall(type, path, [],        VSome(astType), compilerMessages)
+      | Call(path, arguments) with typeToCheck = ResolveCall(type, path, arguments, VSome(astType), compilerMessages)
+      | Match(path, cases)    with typeToCheck = ResolveMatch(type, path, cases, astType, compilerMessages) =>
+        MakeExpression(typeToCheck, astType, compilerMessages)
+
+      | DefineVariable(symbol, body) => SyntaxMappingExpr.DefineVariable(type, symbol, MakeExpression(body, astType, compilerMessages))
+    }
+  }
+
+  public TypeTypeHint(node : G.MapSyntaxExpression.TypeHint, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def astType = TypingUtils.NTypeToAstTypeWithMessage(node.NitraType, node.Context);
+    if (astType.IsVoid)
+      SyntaxMappingType.Undefined(node)
+    else
+    {
+      def exprType = node.Expr.MakeType(ruleSymbol, VSome(astType));
+      def expr     = MakeExpression(exprType, astType, node.Context);
+      SyntaxMappingType.Ast(node, astType, expr);
+    }
+  }
+
+  public TypeList(node : G.MapSyntaxExpression.List, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def itemTypeHintOpt =
+      if (typeHintOpt is VSome(AstType.List(itemType) as t))
+        VSome(AstType.Ast(t.Location, itemType))
+      else
+        VNone();
+
+    def items = node.ItemExprs.Item1.MapToList(_.MakeType(ruleSymbol, itemTypeHintOpt));
+    SyntaxMappingType.List(node.Location, items)
+  }
+
+  public TypeOptionSome(node : G.MapSyntaxExpression.OptionSome, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def valueTypeHintOpt =
+      if (typeHintOpt is VSome(AstType.Option(valueType) as t))
+        VSome(AstType.Ast(t.Location, valueType))
+      else
+        VNone();
+
+    def valueOpt = Some(node.ValueExpr.MakeType(ruleSymbol, valueTypeHintOpt));
+    SyntaxMappingType.Option(node.Location, valueOpt)
+  }
+
+  public TypeThis(node : G.MapSyntaxExpression.This, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    SyntaxMappingType.ParseTree(node, ParseTreePath.This(node.Location, ruleSymbol))
+  }
+
+  public TypeIdentifier(node : G.MapSyntaxExpression.Identifier, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def name = node.Reference.Identifier();
+    def result1 = node.Context.BindMany.[LocalVariableSymbol](name.Location);
+    match (result1.Candidates)
+    {
+      | [variable is ParseTreePatternVariableSymbol] =>
+        def path = ParseTreePath.Variable(node, name, variable.Type);
+        SyntaxMappingType.ParseTree(node, path)
+
+      | [parameter is SyntaxMappingParameterSymbol] =>
+        def expr = SyntaxMappingExpr.ParameterRef(name, parameter);
+        SyntaxMappingType.Ast(node, parameter.Type, expr)
+
+      | [variable is AstVariableSymbol] =>
+        def expr = SyntaxMappingExpr.VariableRef(name, variable);
+        SyntaxMappingType.Ast(node, variable.Type, expr)
+
+      | _ :: _ =>
+        result1.Messages.TranslateTo(node.Context);
+        SyntaxMappingType.Undefined(node)
+
+      | [] =>
+        if (LookupRuleField(RuleType.Ref(ruleSymbol), name) is VSome(ruleType))
+        {
+          def path = ParseTreePath.Member(name, ParseTreePath.This(name.Location.FromStart(), ruleSymbol), name, ruleType);
+          SyntaxMappingType.ParseTree(node, path)
+        }
+        else
+        {
+          node.Context.Error(name, $"Unbound name '$(name.Value)'.");
+          SyntaxMappingType.Undefined(node)
+        }
+    }
+  }
+
+  public TypeMemberAccess(node : G.MapSyntaxExpression.MemberAccess, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def error(errorLoc : ILocated, message : string)
+    {
+      node.Context.Error(errorLoc, message);
+      SyntaxMappingType.Undefined(node)
+    }
+    def unboundName(name : Identifier)
+    {
+      error(name, $"Unbound name '$name'.")
+    }
+
+    def makeAccess(exprType : SyntaxMappingType)
+    {
+      def loc = node.Location;
+      match (exprType)
+      {
+        | Ast(NemerleExpr, _) | Ast(NemerleContext, _) => error(exprType, "Use a Nemerle code mapping to access compiler object members.")
+        | Ast(Void, _) | Undefined => SyntaxMappingType.Undefined(loc)
+        | Ast(Option, _) | Option => error(exprType, "Member access expression is not supported on option.")
+        | Ast(List, _) | Ast(OptionList, _) | List => error(exprType, "Member access expression is not supported on list.")
+        | Match => error(exprType, "Member access expression is not supported on parse tree match.")
+        | Ast(Ast(symbol), expr) =>
+          def name = node.Reference.Identifier();
+          match (symbol.LookupProperty(name.Value))
+          {
+            | VSome(StructuralPropertySymbol as property) =>
+              if (property.AstType.IsVoid)
+                error(name, $"Property type '$(property.Type)' is not valid AST type.")
+              else
+                SyntaxMappingType.Ast(loc, property.AstType, SyntaxMappingExpr.PropertyRef(loc, expr, property))
+
+            | VSome(property) => error(name, $"Property '$(property.FullName)' is not simple AST property.")
+            | VNone()         => unboundName(name)
+          }
+
+        | ParseTree(path) =>
+          def name = node.Reference.Identifier();
+          if (LookupRuleField(path.Type, name) is VSome(ruleType))
+            SyntaxMappingType.ParseTree(loc, ParseTreePath.Member(loc, path, name, ruleType))
+          else
+            unboundName(name)
+
+        | Call(path, arguments) => makeAccess(ResolveCall(exprType, path, arguments, VNone(), node.Context))
+        | DefineVariable(_, body) => makeAccess(body)
+      }
+    }
+
+    makeAccess(node.Expr.MakeType(ruleSymbol, VNone()))
+  }
+
+  public TypeCall(node : G.MapSyntaxExpression.Call, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def exprType      = node.Expr.MakeType(ruleSymbol, VNone());
+    def argumentTypes = node.ArgumentExprs.Item1.MapToList(_.MakeType(ruleSymbol, VNone()));
+    match (exprType)
+    {
+      | Undefined       => SyntaxMappingType.Undefined(node)
+      | ParseTree(path) => SyntaxMappingType.Call(node, path, argumentTypes)
+      | _               =>
+        node.Context.Error(node, "Syntax mapping invokation is not allowed here.");
+        SyntaxMappingType.Undefined(node)
+    }
+  }
+
+  public TypeMatch(node : G.MapSyntaxExpression.Match, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def exprType = node.Expr.MakeType(ruleSymbol, VNone());
+    match (exprType)
+    {
+      | Undefined       => SyntaxMappingType.Undefined(node)
+      | ParseTree(path) =>
+        def cases = node.MatchCases.Item1.MapToList(_.MakeType(path.Type, ruleSymbol, typeHintOpt));
+        SyntaxMappingType.Match(node, path, cases)
+
+      | _ =>
+        node.Context.Error(node, "Parse tree matching is not allowed here.");
+        SyntaxMappingType.Undefined(node)
+    }
+  }
+
+  public TypeFold(node : G.MapSyntaxExpression.Fold, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    if (typeHintOpt is VSome(astType))
+    {
+      _ = node.MakeReturnType(astType);
+
+      def itemExpr = node.ItemExpr.MakeType(ruleSymbol, VNone());
+      match (itemExpr)
+      {
+        | Undefined       => SyntaxMappingType.Undefined(node)
+        | ParseTree(path) =>
+          if (path.Type is RuleType.List(itemType))
+          {
+            def itemSymbol = ParseTreePatternVariableSymbol(node.ItemName.Identifier(), itemType);
+            node.EachExpr.Context.GetContext.[ParseTreePatternVariableContext]().AddVariable(itemSymbol);
+
+            def accumulatorReference = node.AccumulatorName2.Identifier();
+            unless (node.AccumulatorSymbol.Name == accumulatorReference.Value)
+              node.Context.Error(accumulatorReference, $"Unbound name '$(accumulatorReference.Value)'.");
+
+            def initExpr = MakeExpression(node.InitExpr.MakeType(ruleSymbol, VSome(astType)), astType, node.Context);
+            def eachExpr = MakeExpression(node.EachExpr.MakeType(ruleSymbol, VSome(astType)), astType, node.Context);
+            def expr     = SyntaxMappingExpr.Fold(node, itemSymbol, path, node.AccumulatorSymbol, initExpr, eachExpr, astType);
+            SyntaxMappingType.Ast(node, astType, expr)
+          }
+          else
+          {
+            node.Context.Error(path, $"Expected list rule type got '$(path.Type)'.");
+            SyntaxMappingType.Undefined(node)
+          }
+
+        | _ =>
+          node.Context.Error(node, "Parse tree list folding is not allowed here.");
+          SyntaxMappingType.Undefined(node)
+      }
+    }
+    else
+    {
+      _ = node.MakeReturnType(AstType.Void(node));
+      node.Context.Error(node, "Type inference is not supported, please specify type with ':' operator.");
+      SyntaxMappingType.Undefined(node)
+    }
+  }
+
+  public TypeAst(node : G.MapSyntaxExpression.Ast, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+  {
+    def result = TypingUtils.BindAstSymbolFromMappingExtension(node.QualifiedReference, node.Context);
+    if (result is SymbolRef.Some(astSymbol))
+    {
+      def mappingFields = SCG.List();
+      foreach (member in node.Members)
+        when (member.GetSyntaxMappingField(astSymbol, ruleSymbol) is VSome(mappingField))
+          mappingFields.Add(mappingField);
+
+      def type = AstType.Ast(node.QualifiedReference, astSymbol);
+      def expr = TypingUtils.CreateAstCtor(node, astSymbol, mappingFields, node.Location.WithSpan(node.CloseBrace), node.Context);
+      SyntaxMappingType.Ast(node, type, expr)
+    }
+    else
+      SyntaxMappingType.Undefined(node)
+  }
+
+  private LookupRuleField(type : RuleType, name : Identifier) : ValueOption[RuleType]
+  {
+    match (type)
+    {
+      | Ref(symbol) =>
+        def loop(rules : list[Rule])
+        {
+          | [] => VNone()
+          | rule :: _ when StringComparer.Ordinal.Equals(name.Value, rule.FieldName) => VSome(rule.Type)
+          | _ :: otherRules => loop(otherRules)
+        }
+        loop(SyntaxMappingTyper.GetNonVoidSubRules(symbol))
+
+      | Tuple(members) =>
+        def loop(members, index)
+        {
+          match (members)
+          {
+            | [] => VNone()
+            | member :: _ when StringComparer.Ordinal.Equals(name.Value, $"Item$index") => VSome(member)
+            | _ :: otherMembers => loop(otherMembers, index + 1)
+          }
+        }
+        loop(members, 1)
+
+      | _ => VNone()
+    }
+  }
+
+  private ResolveCall(loc : ILocated, originalPath : ParseTreePath, arguments : list[SyntaxMappingType], returnTypeOpt : ValueOption[AstType], compilerMessages : ICompilerMessages) : SyntaxMappingType
+  {
+    def formatAstType(t : ValueOption[AstType]) : string
+    {
+      | VSome(astType) => $"AST of type '$astType'"
+      | VNone          => "AST"
+    }
+    def error(message : string) : SyntaxMappingType
+    {
+      compilerMessages.Error(loc, message);
+      SyntaxMappingType.Undefined(loc)
+    }
+    def selectOverload(targetRuleSymbol : SyntaxRuleSymbol, returnTypePred : AstType -> bool, resultBuilder : AstType * list[SyntaxMappingExpr] -> SyntaxMappingType) : SyntaxMappingType
+    {
+      def applyArguments(parms : list[SyntaxMappingParameterSymbol], args : list[SyntaxMappingType], subMessages : ICompilerMessages) : ValueOption[list[SyntaxMappingExpr]]
+      {
+        match (parms, args)
+        {
+          | ([], []) => VSome([])
+          | (p :: otherParms, a :: otherArgs) =>
+            def expr = MakeExpression(a, p.Type, subMessages);
+            if (expr is SyntaxMappingExpr.Error)
+              VNone()
+            else if (applyArguments(otherParms, otherArgs, subMessages) is VSome(otherExprs))
+              VSome(expr :: otherExprs)
+            else
+              VNone()
+
+          | _ => VNone()
+        }
+      }
+
+      def buffer = LightList();
+      foreach (syntaxMapping in targetRuleSymbol.SyntaxMappings)
+      {
+        when (returnTypePred(syntaxMapping.ReturnType))
+        when (syntaxMapping.Parameters.Length == arguments.Length)
+        {
+          def subMessages = CompilerMessageList();
+          when (applyArguments(syntaxMapping.Parameters, arguments, subMessages) is VSome(exprs))
+            buffer.Add(syntaxMapping, exprs, subMessages)
+        }
+      }
+
+      match (buffer.Count)
+      {
+        | 1 =>
+          def (syntaxMapping, args, subMessages) = buffer.FirstItem;
+          subMessages.GetMessages().TranslateTo(compilerMessages);
+          resultBuilder(syntaxMapping.ReturnType, args)
+
+        | 0 =>
+          if (targetRuleSymbol.SyntaxMappings.IsEmpty)
+            error($"Rule '$(targetRuleSymbol.FullName)' has no AST mapping.")
+          else
+          {
+            if (returnTypeOpt is VSome(astType))
+            {
+              def toString(syntaxMapping : SyntaxMappingSymbol) : string
+              {
+                def parameters = if (syntaxMapping.Parameters.IsEmpty) "" else $<#(..$(syntaxMapping.Parameters; " * "; p => p.Type.ToString()))#>;
+                parameters + syntaxMapping.ReturnType.ToString()
+              }
+              error($<#Rule '$(targetRuleSymbol.FullName)' has no mapping to '$astType'. Exists mapping: ..$(targetRuleSymbol.SyntaxMappings; ", "; toString)#>)
+            }
+            else
+              error($"Rule '$(targetRuleSymbol.FullName)' has no compatible AST mapping.")
+          }
+
+        | _ =>
+          using (root = compilerMessages.RootError(loc, $"Ambiguous '$(targetRuleSymbol.FullName)' AST mapping."))
+            foreach ((syntaxMapping, _, _) in buffer.ToArray())
+              root.Hint(syntaxMapping.FirstLocation, "AST mapping ambiguity.");
+          SyntaxMappingType.Undefined(loc)
+      }
+    }
+    def mapListBottomUpPred(_ : AstType) : bool
+    {
+      | Ast | List | OptionList | Option => true
+      | NemerleExpr | NemerleContext | Void => false
+    }
+    def mapListTopDownPred(astSymbol : AstSymbol) : AstType -> bool
+    {
+      fun (returnType : AstType)
+      {
+        | Ast(returnSymbol) | List(returnSymbol) | OptionList(returnSymbol) | Option(returnSymbol) => returnSymbol.IsSubtypeOf(astSymbol)
+        | NemerleExpr | NemerleContext | Void => false
+      }
+    }
+    def mapOptionBottomUpPred(_ : AstType) : bool
+    {
+      | Ast => true
+      | _   => false
+    }
+    def mapOptionTopDownPred(astSymbol : AstSymbol) : AstType -> bool
+    {
+      fun (returnType : AstType)
+      {
+        | Ast(returnSymbol) => returnSymbol.IsSubtypeOf(astSymbol)
+        | _                 => false
+      }
+    }
+    def createVariablePath(loc : Location, type : RuleType) : ParseTreePath
+    {
+      NavigateThroughTuples(ParseTreePath.Variable(loc, Nitra.Model.Identifier(loc, "node"), type))
+    }
+
+    def path = NavigateThroughTuples(originalPath);
+    match (path.Type)
+    {
+      | Ref(targetRuleSymbol) =>
+        selectOverload(targetRuleSymbol,
+          if (returnTypeOpt is VSome(astType)) fun (t) { t.IsSubtypeOf(astType) } else fun (_) { true },
+          (returnType, args) => SyntaxMappingType.Ast(loc, returnType, SyntaxMappingExpr.Call(loc, path, args, returnType)))
+
+      | List(item) =>
+        def itemPath = createVariablePath(path.Location.FromEnd(), item);
+        match (itemPath.Type, returnTypeOpt)
+        {
+          | (Ref(targetRuleSymbol), VNone)                             with (pred = mapListBottomUpPred, expectedSymbol = null)
+          | (Ref(targetRuleSymbol), VSome(List(expectedSymbol)))       with pred = mapListTopDownPred(expectedSymbol)
+          | (Ref(targetRuleSymbol), VSome(OptionList(expectedSymbol))) with pred = mapListTopDownPred(expectedSymbol) =>
+            selectOverload(targetRuleSymbol, pred, fun (returnType : AstType, args : list[SyntaxMappingExpr])
+            {
+              match (returnType)
+              {
+                | Ast(returnSymbol)        with symbol = expectedSymbol ?? returnSymbol => SyntaxMappingType.Ast(loc, AstType.OptionList(Location.Default, symbol), SyntaxMappingExpr.ConvertList(loc, path, args, symbol, itemPath))
+                | List(returnSymbol)       with symbol = expectedSymbol ?? returnSymbol
+                | OptionList(returnSymbol) with symbol = expectedSymbol ?? returnSymbol => SyntaxMappingType.Ast(loc, AstType.OptionList(Location.Default, symbol), SyntaxMappingExpr.ConcatLists(loc, path, args, symbol, itemPath))
+                | Option(returnSymbol)     with symbol = expectedSymbol ?? returnSymbol => SyntaxMappingType.Ast(loc, AstType.OptionList(Location.Default, symbol), SyntaxMappingExpr.ConcatOptions(loc, path, args, symbol, itemPath))
+                | NemerleExpr | NemerleContext | Void                                                    => assert(false)
+              }
+            })
+
+          | (Ref,                   VSome(astType))               => error($"Expected AST type '$astType' got list.")
+          | (_,                     x)                            => error($"Cannot map list rule '$(originalPath.Type)' to $(formatAstType(x)): rule '$item' does not refer syntax rule symbol.")
+        }
+
+      | Option(value) =>
+        def valuePath = createVariablePath(path.Location.FromEnd(), value);
+        match (valuePath.Type, returnTypeOpt)
+        {
+          | (Ref(targetRuleSymbol), VNone)                         with (pred = mapOptionBottomUpPred, expectedSymbol = null)
+          | (Ref(targetRuleSymbol), VSome(Option(expectedSymbol))) with pred = mapOptionTopDownPred(expectedSymbol) =>
+            selectOverload(targetRuleSymbol, pred, fun (returnType : AstType, args : list[SyntaxMappingExpr])
+            {
+              if (returnType is Ast(returnSymbol))
+              {
+                def symbol = expectedSymbol ?? returnSymbol;
+                SyntaxMappingType.Ast(loc, AstType.Option(Location.Default, symbol), SyntaxMappingExpr.ConvertOption(loc, path, args, symbol, valuePath))
+              }
+              else
+                assert(false)
+            })
+
+          | (Ref,                   VSome(astType))           => error($"Expected AST type '$astType' got option.")
+          | (_,                     x)                        => error($"Cannot map option rule '$(originalPath.Type)' to $(formatAstType(x)): rule '$value' does not refer syntax rule symbol.")
+        }
+
+      | _ => error($"Cannot map rule '$(originalPath.Type)' to $(formatAstType(returnTypeOpt)).")
+    }
+  }
+
+  private ResolveMatch(loc : ILocated, path : ParseTreePath, cases : list[Location * ParseTreePattern * SyntaxMappingType], returnType : AstType, compilerMessages : ICompilerMessages) : SyntaxMappingType
+  {
+    def caseExprs = SCG.List();
+    foreach ((caseLoc, pattern, caseType) in cases)
+    {
+      def expr = MakeExpression(caseType, returnType, compilerMessages);
+      caseExprs.Add(SyntaxMappingCase(caseLoc, pattern, expr));
+    }
+    SyntaxMappingType.Ast(loc, returnType, SyntaxMappingExpr.Match(loc, path, caseExprs.ToNList(), returnType))
+  }
+
+  private NavigateThroughTuples(path : ParseTreePath) : ParseTreePath
+  {
+    def filterNonKeywords(members : list[RuleType], index : int) : list[int * RuleType]
+    {
+      match (members)
+      {
+        | [] => []
+        | RuleType.Chars(Keyword = Some) :: rest => filterNonKeywords(rest, index + 1)
+        | x :: rest => (index, x) :: filterNonKeywords(rest, index + 1)
+      }
+    }
+
+    if (path.Type is Tuple(members))
+      if (filterNonKeywords(members, 1) is [(index, nonKeyword)])
+        NavigateThroughTuples(ParseTreePath.Member(path, path, Identifier(path.Location.FromEnd(), "Item" + index), nonKeyword))
+      else path
+    else path
+  }
+
+  public GetNonVoidSubRules(symbol : SyntaxRuleSymbol) : list[Rule]
+  {
+    | ExtensibleRuleSymbol => []
+    | _ => symbol.NonVoidSubRules
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/NamespaceOrTypeAliasSymbol.n (Nitra.Typing) ----
+[Record, /*ExportableSymbol*/]
+public sealed class NamespaceOrTypeAliasSymbol : SingleDefSymbol
+{
+  public RealSymbol : option[Symbol] { get; }
+
+  public override Description : string { get { "alias" } }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/ExtendSyntaxSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class ExtendSyntaxSymbol : SingleDefSymbol, IRuleDeclarationSite, IPrecedenceSymbolOwner
+{
+  public abstract DeclarationSite : IRuleDeclarationSite { get; }
+  public abstract Extend          : ExtensibleRuleRef    { get; }
+  public abstract IsToken         : bool                 { get; }
+  public override Description     : string               { get { if (IsToken) "extend token" else "extend syntax" } }
+
+  public GetDefaultRuleDefinitionOptions() : RuleDefinitionOptions
+  {
+    DeclarationSite.GetDefaultRuleDefinitionOptions()
+  }
+}
+
+public sealed class ParsedExtendSyntaxSymbol : ExtendSyntaxSymbol
+{
+  _node : G.SyntaxModuleMember.ExtendRule;
+
+  public this(node : G.SyntaxModuleMember.ExtendRule, declarationSite : IRuleDeclarationSite, isToken : bool)
+  {
+    def nameLoc =
+      if (node.NameOpt.HasValue)
+        node.NameOpt.Value.Item1.Location
+      else
+        node.BaseName.LastIdentifier().Location;
+    base(nameLoc);
+    _node           = node;
+    IsToken         = isToken;
+    DeclarationSite = declarationSite;
+  }
+
+  public override Extend          : ExtensibleRuleRef    { get { _node.BaseRuleRef } }
+  public override IsToken         : bool                 { get; }
+  public override DeclarationSite : IRuleDeclarationSite { get; }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/ExtensibleRuleSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class ExtensibleRuleSymbol : SyntaxRuleSymbol, IRuleDeclarationSite, IPrecedenceSymbolOwner
+{
+  public sealed override Type          : RuleType                        { [Memoize] get { RuleType.Ref(this) } }
+  public sealed override Rule          : Rule.Sequence                   { get { assert3(false) } }
+  public        override Description   : string                          { get "extensible rule" }
+}
+
+[Record, ChemicalSymbol]
+public abstract class BaseExtensibleRuleSymbol : ExtensibleRuleSymbol
+{
+  public override IdInGrammar         : int  { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+}
+
+public sealed class ParsedExtensibleRuleSymbol : BaseExtensibleRuleSymbol
+{
+  public this(node : G.ExtensibleRule, declarationSite : IRuleDeclarationSite)
+  {
+    base(node.Name);
+    _node = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                    : G.ExtensibleRule;
+
+  public override DeclarationSite : IRuleDeclarationSite            { get; }
+  public override Options         : RuleDefinitionOptions           { [Memoize] get { _node.RuleAttributes.Options(DeclarationSite.GetDefaultRuleDefinitionOptions()) } }
+  public override LastLocation    : option[Location]                {           get { Some(_node.RuleBody.GetLastLocation()) } }
+  public override SyntaxMappings  : list[SyntaxMappingSymbol]       {           get { _syntaxMappings } }
+
+  private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+  internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+  {
+    _syntaxMappings ::= symbol;
+  }
+}
+
+public sealed class ParsedExtensibleTokenRuleSymbol : BaseExtensibleRuleSymbol
+{
+  public this(node : G.ExtensibleRule, declarationSite : IRuleDeclarationSite)
+  {
+    base(node.Name);
+    _node = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                        : G.ExtensibleRule;
+
+  public override DeclarationSite     : IRuleDeclarationSite            {           get; }
+  public override Options             : RuleDefinitionOptions           { [Memoize] get { _node.RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule()) } }
+  public override LastLocation        : option[Location]                {           get { Some(_node.RuleBody.GetLastLocation()) } }
+  public override SyntaxMappings      : list[SyntaxMappingSymbol]       {           get { _syntaxMappings } }
+
+  private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+  internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+  {
+    _syntaxMappings ::= symbol;
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/ExtensionRuleSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class ExtensionRuleSymbol     : SyntaxRuleSymbol, IRuleDeclarationSite
+{
+  public        abstract BaseRule             : SymbolRef[ExtensibleRuleSymbol] { get; }
+  public sealed override Type                 : RuleType                        { get { if (BaseRule is SymbolRef.Some(s)) s.Type else RuleType.Void() } }
+  public        override Description          : string                          { get { "extension rule" } }
+
+  public variant ExtensionRuleType
+  {
+    | Prefix
+    | Postfix { prefix : Rule.Call; rule : Rule.Sequence; public BindingPower : BindingPowerInfo { get prefix.BindingPower } }
+  }
+
+  public ExtensionType : ExtensionRuleType
+  {
+    [Memoize] get { DetectExtensionType(BaseRule, Rule) }
+  }
+
+  private static DetectExtensionType(baseRule : SymbolRef[ExtensibleRuleSymbol], seq : Rule.Sequence) : ExtensionRuleType
+  {
+    def isMarker(r : SymbolRef[_]) : bool
+    {
+      | SymbolRef.Some(s) => s is MarkerSymbol
+      | SymbolRef.None    => false
+    }
+
+    def lookupPrefixCall(rules : list[Rule]) : option[Rule.Call] * list[Rule]
+    {
+      | Call(callee, _)           :: tail when isMarker(callee)   => lookupPrefixCall(tail)
+      | Call(callee, _) as prefix :: tail when callee == baseRule => (Some(prefix), tail)
+      | Sequence(seqRules)        :: tail =>
+        match (lookupPrefixCall(seqRules))
+        {
+          | (None, []) => lookupPrefixCall(tail)
+          | (None, _)  => (None(), rules)
+          | (Some as prefix, seqTail) => (prefix, seqTail + tail)
+        }
+
+      | rules => (None(), rules)
+    }
+
+    match (lookupPrefixCall(seq.Rules))
+    {
+      | (None(), _)                => ExtensionRuleType.Prefix()
+      | (Some(prefix), otherRules) => ExtensionRuleType.Postfix(prefix, Rule.Sequence(seq, otherRules))
+    }
+  }
+}
+
+[Record, ChemicalSymbol]
+public abstract class BaseExtensionRuleSymbol : ExtensionRuleSymbol
+{
+  public override IdInGrammar         : int        { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+}
+
+public sealed class ParsedExtensionRuleSymbol : BaseExtensionRuleSymbol
+{
+  public this(node : G.RuleBodyMember.ExtensionRule, declarationSite : IRuleDeclarationSite)
+  {
+    assert(declarationSite.Node != null);
+
+    def (loc, name) =
+      if (node.NameOpt.HasValue)
+      {
+        def name = node.NameOpt.Value.Item1;
+        (name.Location, name.GetText())
+      }
+      else
+      {
+        def name1 = node.RuleExpression.InferName();
+        def name2 = if (IsIdentifier(name1)) ToPascalCase(name1) else "";
+
+        when (name2 == "")
+          declarationSite.Node.Project.Error(node, "Can't infer name for this rule.");
+        (node.Location.WithSpan(NSpan(node.Pipe.EndPos)), name2);
+      };
+
+    base(loc, name);
+    _node = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                    : G.RuleBodyMember.ExtensionRule;
+  private mutable _options         : RuleDefinitionOptions;
+
+  public override DeclarationSite  : IRuleDeclarationSite           { get; }
+  public override BaseRule         : ExtensibleRuleRef              { get { _node.BaseRuleRef } }
+  public override Options          : RuleDefinitionOptions
+  {
+    get
+    {
+      when (_options == null)
+      {
+        def defaults = if (BaseRule is SymbolRef.Some(symbol)) symbol.Options.InheritedCopy() else RuleDefinitionOptions.Empty;
+        _options = _node.RuleAttributes.Options(defaults)
+      }
+      _options
+    }
+  }
+  public override SyntaxMappings   : list[SyntaxMappingSymbol]      { get { _syntaxMappings } }
+  public override Rule             : Rule.Sequence                  { get { _node.TypedRule } }
+  public override LastLocation     : option[Location]
+  {
+    [Memoize]  get
+    {
+      if (_node.RuleBodyOpt.HasValue)
+        Some(_node.RuleBodyOpt.Value.GetLastLocation())
+      else
+        Some(Utils.MakeLastLocation(_node))
+    }
+  }
+
+  internal SetOptions(newOptions : RuleDefinitionOptions) : void
+  {
+    assert(newOptions != null);
+    _options = newOptions;
+  }
+
+  private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+  internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+  {
+    _syntaxMappings ::= symbol;
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/IRuleDeclarationSite.n (Nitra.Typing) ----
+public interface IRuleDeclarationSite : IExportableSymbol
+{
+  FirstLocation : Location { get; }
+  DeclarationSite : IRuleDeclarationSite { get; }
+  GetDefaultRuleDefinitionOptions() : RuleDefinitionOptions;
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/MarkerSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class MarkerSymbol : RuleSymbol
+{
+  public override Description : string { get { "marker" } }
+}
+
+[Record]
+public sealed class ParsedMarkerSymbol : MarkerSymbol
+{
+  public override DeclarationSite : IRuleDeclarationSite { get; }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/RegularRuleSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class RegularRuleSymbol : RuleDefSymbol, IRuleDeclarationSite
+{
+  public sealed override Type                : RuleType    { get { RuleType.Chars(None()) } }
+  public sealed override IsToken             : bool        { get { true } }
+  public        abstract Rule                : RegularRule { get; }
+  public        abstract CanParseEmptyString : bool        { get; }
+  public        abstract FirstCharLowerBound : char        { get; }
+  public        abstract FirstCharUpperBound : char        { get; }
+  public                 Fsm                 : FSM         
+  {
+    [Memoize] get
+    {
+      assert(Node != null);
+      FSMTransform.MakeDeterministic(this.Rule.ConvertRegularRuleToFsm(Node.Project))
+    }
+  }
+  public        override Description         : string      { get { "regular rule" } }
+}
+
+public sealed class ParsedRegularRuleSymbol : RegularRuleSymbol
+{
+  public this(node : G.RegexRule, declarationSite : IRuleDeclarationSite)
+  {
+    base(node.Name);
+    _node = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                        : G.RegexRule;
+
+  public override DeclarationSite     : IRuleDeclarationSite  { get; }
+  public override Options             : RuleDefinitionOptions { [Memoize] get { _node.RuleAttributes.Options(DeclarationSite.GetDefaultRuleDefinitionOptions()) } }
+  public override Rule                : RegularRule           {           get { _node.Regex() } }
+  public override LastLocation        : option[Location]      { [Memoize] get { Some(_node.RuleBody.GetLastLocation()) } }
+  public override IdInGrammar         : int                   { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+  public override CanParseEmptyString : bool                  { [Memoize] get { Fsm.OkStates.Contains(Fsm.StartState) } }
+  public override FirstCharLowerBound : char                  {           get { FirstCharBounds[0] } }
+  public override FirstCharUpperBound : char                  {           get { FirstCharBounds[1] } }
+  private FirstCharBounds : char * char
+  {
+    [Memoize] get
+    {
+      mutable totalRange = RangeSet();
+      foreach (Symbol(Chars = range, From = from) when from == Fsm.StartState in Fsm.Transitions)
+        totalRange = totalRange.Sum(range);
+      match (totalRange.GetBounds())
+      {
+        | None => (char.MinValue, char.MaxValue)
+        | Some(bounds) => bounds
+      }
+    }
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/RuleDefSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class RuleDefSymbol : RuleSymbol
+{
+  public RuleMethods                  : list[RuleMethodSymbol] { [Memoize] get { Node.GetChildren.[RuleMethod.RuleMethodSymbol]().NToList() } }
+
+  public abstract Type                : RuleType              { get; }
+  public abstract Options             : RuleDefinitionOptions { get; }
+  public abstract IdInGrammar         : int                   { get; }
+
+  public virtual LastLocation         : option[Location] { get { None() } }
+  public abstract IsToken             : bool                  { get; }
+
+  public GetDefaultRuleDefinitionOptions() : RuleDefinitionOptions
+  {
+    def defaults = DeclarationSite.GetDefaultRuleDefinitionOptions();
+    if (defaults.IsExplicitSpaces != Options.IsExplicitSpaces)
+      defaults.SetExplicitSpaces(null, Options.IsExplicitSpaces)
+    else
+      defaults
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/RuleSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class RuleSymbol : SingleDefSymbol
+{
+  public abstract DeclarationSite : IRuleDeclarationSite { get }
+  public          DeclaringModule : SyntaxModuleSymbol
+  {
+    get
+    {
+      def loop(_ : IRuleDeclarationSite) : SyntaxModuleSymbol
+      {
+        | null                                  => assert(false)
+        | declaringModule is SyntaxModuleSymbol => declaringModule
+        | site                                  => loop(site.DeclarationSite)
+      }
+      loop(DeclarationSite)
+    }
+  }
+
+  public ModuleRelativeName : list[string]
+  {
+    [Memoize] get
+    {
+      def loop(site : IRuleDeclarationSite, acc)
+      {
+        match (site)
+        {
+          | null                     => assert(false)
+          | _ is SyntaxModuleSymbol  => acc
+          | site                     => loop(site.DeclarationSite, site.Name :: acc)
+        }
+      }
+      loop(DeclarationSite, [Name])
+    }
+  }
+
+  public ParseTreeModuleRelativeName : list[string]
+  {
+    [Memoize] get
+    {
+      def loop(site : IRuleDeclarationSite, acc)
+      {
+        match (site)
+        {
+          | null                     => assert(false)
+          | _ is SyntaxModuleSymbol  => acc
+          | _ is SimpleRuleSymbol
+          | _ is ExtensionRuleSymbol => loop(site.DeclarationSite, site.Name :: "Nested" :: acc)
+          | site                     => loop(site.DeclarationSite, site.Name :: acc)
+        }
+      }
+      loop(DeclarationSite, [Name])
+    }
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/SimpleRuleSymbol.n (Nitra.Typing) ----
+public enum SimpleRuleKind
+{
+  | Normal
+  | Token
+  | Void
+}
+
+[Record, ExportableSymbol]
+public abstract class SimpleRuleSymbol : SyntaxRuleSymbol, IRuleDeclarationSite
+{
+  public abstract Kind        : SimpleRuleKind { get; }
+  public override Description : string
+  {
+    get
+    {
+      match (Kind)
+      {
+        | Normal => "simple rule"
+        | Token  => "token rule"
+        | Void   => "void rule"
+      }
+    }
+  }
+}
+
+[Record, ChemicalSymbol]
+public abstract class BaseSimpleRuleSymbol : SimpleRuleSymbol
+{
+  public override IdInGrammar         : int        { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+}
+
+public sealed class ParsedSimpleRuleSymbol : BaseSimpleRuleSymbol
+{
+  public this(node : G.SimpleRule, declarationSite : IRuleDeclarationSite)
+  {
+    base(node.Name);
+
+    _node            = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                        : G.SimpleRule;
+
+  public override Kind                : SimpleRuleKind              { get SimpleRuleKind.Normal }
+  public override DeclarationSite     : IRuleDeclarationSite        { get; }
+  public override Type                : RuleType                    { [Memoize] get { RuleType.Ref(this) } }
+  public override Options             : RuleDefinitionOptions       { [Memoize] get { _node.RuleAttributes.Options(DeclarationSite.GetDefaultRuleDefinitionOptions()) } }
+  public override Rule                : Rule.Sequence               {           get { _node.TypedRule } }
+  public override LastLocation        : option[Location]            { [Memoize] get { Some(_node.RuleBody.GetLastLocation()) } }
+  public override SyntaxMappings      : list[SyntaxMappingSymbol]   {           get { _syntaxMappings } }
+
+  private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+  internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+  {
+    _syntaxMappings ::= symbol;
+  }
+}
+
+public sealed class ParsedTokenRuleSymbol : BaseSimpleRuleSymbol
+{
+  public this(node : G.SimpleRule, declarationSite : IRuleDeclarationSite)
+  {
+    base(node.Name);
+
+    _node            = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                        : G.SimpleRule;
+
+  public override Kind                : SimpleRuleKind              { get SimpleRuleKind.Token }
+  public override DeclarationSite     : IRuleDeclarationSite        { get; }
+  public override Type                : RuleType                    { [Memoize] get { RuleType.Ref(this) } }
+  public override Options             : RuleDefinitionOptions       { [Memoize] get { _node.RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule()) } }
+  public override Rule                : Rule.Sequence               {           get { _node.TypedRule } }
+  public override LastLocation        : option[Location]            { [Memoize] get { Some(_node.RuleBody.GetLastLocation()) } }
+  public override SyntaxMappings      : list[SyntaxMappingSymbol]   {           get { _syntaxMappings } }
+
+  private mutable _syntaxMappings : list[SyntaxMappingSymbol] = [];
+
+  internal override AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+  {
+    _syntaxMappings ::= symbol;
+  }
+}
+
+public sealed class ParsedVoidRuleSymbol : BaseSimpleRuleSymbol
+{
+  public this(node : G.SimpleRule, declarationSite : IRuleDeclarationSite)
+  {
+    base(node.Name);
+    _node = node;
+    DeclarationSite = declarationSite;
+  }
+
+  private _node                        : G.SimpleRule;
+
+  public override Kind                : SimpleRuleKind               {           get SimpleRuleKind.Void }
+  public override DeclarationSite     : IRuleDeclarationSite         {           get; }
+  public override Type                : RuleType                     {           get { RuleType.Void() } }
+  public override Options             : RuleDefinitionOptions        { [Memoize] get { _node.RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule()) } }
+  public override Rule                : Rule.Sequence                {           get { _node.TypedRule } }
+  public override SyntaxMappings      : list[SyntaxMappingSymbol]    {           get { [] } }
+}
+
+// ---- Symbols/SyntaxModuleMembers/Rule/SyntaxRuleSymbol.n (Nitra.Typing) ----
+[Record]
+public abstract class SyntaxRuleSymbol : RuleDefSymbol
+{
+  public abstract Rule             : Rule.Sequence                {           get; }
+  public          NonVoidSubRules  : list[Rule]                   { [Memoize] get { Rule.Rules.Filter(rule => !(rule.Type is RuleType.Void)) } }
+  public          SubRules         : list[Rule]                   {           get { Rule.Rules } }
+  public          Sequence         : SequenceCompileInfo.Root     { [Memoize] get { SequenceCompileInfo.MakeSequenceCompileInfo(this) } }
+  public override IsToken          : bool                         {           get { Options.IsTokenRule } }
+  public abstract SyntaxMappings   : list[SyntaxMappingSymbol]    {           get; }
+
+  internal virtual AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
+  {
+    assert(Node != null);
+    Node.Project.Error(symbol.FirstLocation, "AST mapping is not allowed here")
+  }
+}
+
+// ---- Symbols/SyntaxModuleMembers/RuleAliasSymbol.n (Nitra.Typing) ----
+[Record, /*ExportableSymbol*/]
+public abstract class RuleAliasSymbol : SingleDefSymbol
+{
+  public abstract Rule : G.RuleExpression { get; }
+  public override Description : string { get "rule alias" }
+}
+
+public sealed class ParsedRuleAliasSymbol : RuleAliasSymbol
+{
+  public this(node : G.RuleAlias)
+  {
+    base(node.Name);
+    Rule = node.RuleExpression;
+  }
+
+  public override Rule : G.RuleExpression { get; }
+}
+
+// ---- Symbols/SyntaxModuleMembers/TokenFieldSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol]
+public abstract class TokenLiteralSymbol : SingleDefSymbol
+{
+  // TODO: Не ясно нормально ли здеь хранить строки. Ведь это не позволит ассоциировать сгенерированные поля с TokenLiteralSymbol
+  public abstract StringLiterals : list[string] { get; }
+  public override Description    : string { get "literal" }
+}
+
+[Record]
+public sealed class ParsedTokenLiteralSymbol : TokenLiteralSymbol
+{
+  private _stringLiterals : ListParseTree[L.StringLiteral];
+
+  public override StringLiterals : list[string] { [Memoize] get { _stringLiterals.MapToList(_.Value())  } }
+}
+
+// ---- Symbols/SyntaxModuleSymbol.n (Nitra.Typing) ----
+[Record, ExportableSymbol, ChemicalSymbol]
+public abstract class SyntaxModuleSymbol : SingleDefSymbol, IRuleDeclarationSite, INamespaceMember
+{
+  public abstract Language            : SymbolRef[LanguageSymbol]     { get; }
+  public abstract Options             : SyntaxModuleOptions           { get; }
+  public abstract TokenLiterals       : list[TokenLiteralSymbol]      { get; }
+  public abstract ExternalImports     : list[SyntaxModuleSymbol]      { get; }
+  public override Description         : string                        { get "syntax module" }
+  public          DeclarationSite     : IRuleDeclarationSite          { get null }
+  public abstract PrecedenceRelations : PrecedenceRelations           { get; }
+  public abstract AllPrecedences      : list[Precedence]              { get; }
+
+  [RecordIgnore] private mutable _ruleIdCounter : int;
+
+  internal GetNewRuleId() : int
+  {
+    def newId = _ruleIdCounter;
+    ++_ruleIdCounter;
+    newId
+  }
+
+  public GetAllRuleSymbols() : IEnumerable[RuleDefSymbol]
+  {
+    Node.GetDescendants.[RuleDefSymbol]()
+  }
+
+  public GetDefaultRuleDefinitionOptions() : RuleDefinitionOptions
+  {
+    def defaults = RuleDefinitionOptions.Empty;
+    if (defaults.IsExplicitSpaces != Options.IsExplicitSpaces)
+      defaults.SetExplicitSpaces(null, Options.IsExplicitSpaces)
+    else
+      defaults
+  }
+}
+
+public sealed class ParsedSyntaxModuleSymbol : SyntaxModuleSymbol
+{
+  private _node : G.NamespaceMember.SyntaxModule;
+
+  public this(node : G.NamespaceMember.SyntaxModule)
+  {
+    base(node.Name, node.Name.Value());
+    _node = node;
+  }
+
+  public override Language      : SymbolRef[LanguageSymbol] { get { _node.Language } }
+  public override Options       : SyntaxModuleOptions       { get { _node.SyntaxModuleAttributes.Options(SyntaxModuleOptions.Empty) } }
+  public override TokenLiterals : list[TokenLiteralSymbol]
+  {
+    [Memoize] get
+    {
+      def loop(context : TokenLiteralContext, acc)
+      {
+        if (null == context)
+          acc
+        else
+          loop(context.TryGetParent(), context.TokenLiteral :: acc)
+      }
+      loop(_node.FinalContext.TryGetContext(), [])
+    }
+  }
+
+  public override ExternalImports : list[SyntaxModuleSymbol]
+  {
+    [Memoize] get
+    {
+      def loop(context : OpenNamespaceOrTypeContext, acc)
+      {
+        if (null == context)
+          acc
+        else
+          loop(context.TryGetParent(), if (context.OpenSymbol is Some(SyntaxModuleSymbol as symbol)) symbol :: acc else acc)
+      }
+      loop(_node.FinalContext.TryGetContext(), [])
+    }
+  }
+
+  public override PrecedenceRelations : PrecedenceRelations
+  {
+    [Memoize] get
+    {
+      def relations = List();
+      foreach (member in _node.SyntaxModuleMembers)
+      {
+        def (curRelations, _curPrecedences) = member.GetPrecedenceRelations();
+        when (curRelations != null)
+          relations.AddRange(curRelations);
+      }
+      relations.NToList();
+    }
+  }
+
+  public override AllPrecedences : list[Precedence]
+  {
+    [Memoize] get
+    {
+      def allPrecedences = List();
+      foreach (member in _node.SyntaxModuleMembers)
+      {
+        def (_curRelations, curPrecedences) = member.GetPrecedenceRelations();
+        when (curPrecedences != null)
+          allPrecedences.AddRange(curPrecedences);
+      }
+      allPrecedences.NToList();
+    }
+  }
+}
+
+// ---- Typing/TypingUtils-BindAstPropertyProjectionSource.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-BindProperty.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-CreateAstCtor.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-MakePropertyProjectionType.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-RegisterDependentStatement.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-SetNameReferenceSyntaxMapping.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-SetOutDependentProperties.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-TypeAstInheritance.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-TypeAstModifiers.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-TypeCall.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-TypeLanguageInheritance.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-TypeRuleExpression.n (Nitra.Typing) ----
+public module TypingUtils
+{
+  internal TypeRuleExpression(options : RuleDefinitionOptions, context : Context, rule : Rule) : Rule.Sequence
+  {
+    def insertWhitespaceRules() : List[Rule]
+    {
+      def keywordContext = context.TryGetContext.[KeywordRegexContext]();
+      def moduleContext  = context.GetContext.[SyntaxModuleBodyContext]();
+      def makeCall(loc, sSymbol) { Rule.Call(loc, sSymbol.Type, sSymbol.Name, RuleRef.Some(loc, true, sSymbol), BindingPowerInfo.Zero); }
+      def getSpaceRule(loc) { moduleContext.GetSpaceRule(context, "s", loc) }
+      def tryAddSpaceRule(rule, loc)
+      {
+        match (getSpaceRule(loc))
+        {
+          | None          => (rule, None())
+          | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+        }
+      }
+      def transform(_ : Rule) : Rule * option[Rule]
+      {
+        | Repeat              as rule when rule.IsOptimizedList => tryAddSpaceRule(rule, rule.Location.FromEnd())
+        | Repeat              as rule => (Rule.Repeat(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule)), None())
+        | RepeatWithSeparator as rule => (Rule.RepeatWithSeparator(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule), transformToSequence(rule.Separator), rule.HangingSeparator), None())
+        | Not                 as rule => (Rule.Not(rule, transformToSequence(rule.Rule)), None())
+        | And                 as rule => (Rule.And(rule, transformToSequence(rule.Rule)), None())
+        | Sequence            as rule =>
+          def buffer = List();
+          foreach (r in rule.Rules)
+            transformToBuffer(r, buffer);
+          (Rule.Sequence(rule, buffer.ToNList()), None())
+
+        | String              as rule =>
+          def loc = rule.Location.FromEnd();
+          if (keywordContext?.FindRule(rule.Str) is VSome(sym))
+            (Rule.String(rule.Location, rule.FieldName, rule.Str, true, rule.SpanClass ?? (context.Project :> NitraProject).KeywordSpanClassSymbolOpt.WithDefault(null)), Some(makeCall(loc, sym)))
+          else
+            tryAddSpaceRule(rule, loc)
+
+        | Call                as rule =>
+          def calleeOptions =
+            if (rule.RuleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
+              ruleSymbol.Options
+            else
+              RuleDefinitionOptions();
+
+          // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+          if (calleeOptions.IsSuppressTrailingSpaces)
+            (rule, None())
+          // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+          else if (calleeOptions.IsExplicitSpaces)
+            tryAddSpaceRule(rule, rule.Location.FromEnd())
+          // Whitespace rule is inserted after all 'regex' rules
+          else if (rule.RuleRef is RuleRef.Some(RegularRuleSymbol as ruleSymbol))
+          {
+            def loc = rule.Location.FromEnd();
+            if (keywordContext?.FindRule(ruleSymbol) is VSome(sym))
+              (Rule.Call(rule.Location, rule.Type, rule.FieldName, rule.RuleRef, rule.BindingPower, rule.SpanClass ?? (context.Project :> NitraProject).KeywordSpanClassSymbolOpt.WithDefault(null)), Some(makeCall(loc, sym)))
+            else
+              tryAddSpaceRule(rule, loc);
+          }
+          else
+            (rule, None());
+      }
+      and transformToSequence(rule : Rule) : Rule
+      {
+        match (transform(rule))
+        {
+          | (rule, Some(s)) => Rule.Sequence(rule, [rule, s])
+          | (rule, None)    => rule
+        }
+      }
+      and transformToBuffer(rule : Rule, buffer : List[Rule]) : void
+      {
+        match (transform(rule))
+        {
+          | (rule, Some(s)) => buffer.Add(rule); buffer.Add(s);
+          | (rule, None)    => buffer.Add(rule);
+        }
+      }
+
+      def buffer = List();
+      when (options.IsStart)
+      {
+        def loc = rule.Location.FromStart();
+        when (getSpaceRule(loc) is Some(sSymbol))
+          buffer.Add(makeCall(loc, sSymbol));
+      }
+      match (rule)
+      {
+        | Sequence(rules) => foreach (r in rules) transformToBuffer(r, buffer);
+        | _               => transformToBuffer(rule, buffer);
+      }
+      buffer
+    }
+    def createUniqueFieldNames(rules : IEnumerable[Rule]) : list[Rule]
+    {
+      def fieldNameUniqueness  = Dictionary();
+      def plainParseTreeFields = List();
+      foreach (rule in rules)
+      {
+        def fieldName =
+          if (!string.IsNullOrEmpty(rule.FieldName))
+            Utils.ToPascalCase(rule.FieldName)
+          else if (rule.Type is RuleType.Void)
+            "_"
+          else
+            "Node";
+        plainParseTreeFields.Add(fieldName, rule);
+        fieldNameUniqueness[fieldName] = !fieldNameUniqueness.ContainsKey(fieldName);
+      }
+      def fieldNameCounters = Dictionary();
+      def finalRules = List();
+      foreach ((fieldName, fieldRule) in plainParseTreeFields)
+      {
+        def indexedFieldName =
+          if (fieldNameUniqueness[fieldName])
+            fieldName
+          else
+          {
+            mutable counter;
+            _ = fieldNameCounters.TryGetValue(fieldName, out counter);
+            counter += 1;
+            fieldNameCounters[fieldName] = counter;
+            if (char.IsDigit(fieldName, fieldName.Length - 1))
+              fieldName + "_" + counter.ToString()
+            else
+              fieldName + counter.ToString()
+          }
+        finalRules.Add(fieldRule.UpdateFieldName(indexedFieldName));
+      }
+      finalRules.ToNList();
+    }
+
+    def rules =
+      if (options.IsExplicitSpaces)
+        match (rule)
+        {
+          | Sequence(rules) => rules
+          | _               => [rule]
+        }
+      else
+        insertWhitespaceRules();
+
+    Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames(rules))
+  }
+
+  public TryInferOperatorType(symbol : ParsedExtensionRuleSymbol) : void
+  {
+    def isArgument(rule : Rule) : bool
+    {
+      | Call(Some(argSymbol is RuleDefSymbol), _) => !(argSymbol.Type is RuleType.Void || argSymbol.IsToken)
+      | _ => false
+    }
+    mutable arity = 0;
+
+    foreach (rule in symbol.Rule.Rules)
+    {
+      when (isArgument(rule))
+        arity++;
+    }
+
+    def rulesWithoutVoid = symbol.Rule.Rules.FilterToArray(rule => !(rule.Type is RuleType.Void));
+    def end = rulesWithoutVoid.Length - 1;
+    mutable firstIsArg;
+    mutable lastIsArg;
+    mutable infix;
+    mutable prevIsArg;
+    foreach (rule in rulesWithoutVoid with i)
+    {
+      def currIsArg = isArgument(rule);
+      if (i == 0) // first
+      {
+        infix = currIsArg;
+        prevIsArg = currIsArg;
+        firstIsArg = currIsArg;
+      }
+      else if (i == end)
+      {
+        lastIsArg = currIsArg;
+        unless (lastIsArg)
+          infix = false;
+        when (prevIsArg)
+          infix = false; // no separator!
+      }
+      else when (infix)
+      {
+        when (prevIsArg && currIsArg)
+          infix = false; // no separator!
+
+        prevIsArg = currIsArg;
+      }
+    }
+
+    mutable newOptions = symbol.Options;
+
+    when (infix)
+      newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Infix);
+    unless (firstIsArg)
+      newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Prefix);
+    unless (lastIsArg)
+      newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Postfix);
+    when (arity > 0)
+      newOptions = newOptions.SetArity(null, arity);
+
+    when (symbol.Options : object != newOptions)
+      symbol.SetOptions(newOptions);
+  }
+
+  // ---- merged from Typing/TypingUtils-BindAstPropertyProjectionSource.n ----
+  internal BindAstPropertyProjectionSource(propertyContainer : PropertyContainerSymbol, name : G.Reference, context : Context) : StructuralPropertySymbol * AstSymbol
+  {
+    match (TypingUtils.BindProperty(propertyContainer, name, context))
+    {
+      | SymbolRef.Some(StructuralPropertySymbol(Type = OptionList(Qualified as name)) as astProperty)
+      | SymbolRef.Some(StructuralPropertySymbol(Type =       List(Qualified as name)) as astProperty) =>
+        if (context.Bind.[AstSymbol](name) is SymbolRef.Some(baseType))
+          (astProperty, baseType)
+        else
+          (astProperty, null)
+
+      | SymbolRef.Some(StructuralPropertySymbol(Type = t) as astProperty) as loc =>
+        context.Error(loc, $"Property '$(astProperty.Name)' has invalid type '$t'. Only list of declarations can be decomposed.");
+        (astProperty, null)
+
+      | SymbolRef.Some(_) as loc =>
+        context.Error(loc, "Expected structural property in 'decompose' block.");
+        (null, null)
+
+      | SymbolRef.None => (null, null)
+    }
+  }
+
+  // ---- merged from Typing/TypingUtils-BindAstSymbolFromMappingExtension.n ----
+  internal BindAstSymbolFromMappingExtension(qid : G.QualifiedReference, context : Context) : SymbolRef[AstSymbol]
+  {
+    BindAstSymbolFromMappingExtension(qid.Location, qid.CalcLocations(), context, context)
+  }
+
+  internal BindAstSymbolFromMappingExtension(loc : Location, qid : list[Location], context : Context, compilerMessages : ICompilerMessages) : SymbolRef[AstSymbol]
+  {
+    def candidates    =
+      match (context.GetContext.[MapSyntaxContext]().ReturnType)
+      {
+        | Ast(astSymbol) | List(astSymbol) | OptionList(astSymbol) | Option(astSymbol) => astSymbol.Node.BindMany(qid)
+        | NemerleExpr | NemerleContext | Void => []
+      };
+
+    def bindingResult = 
+      if (candidates is [])
+        context.BindMany(qid)
+      else
+        BindingUtils.MakeBindingResult(loc, candidates);
+    Utils.MakeSymbolRefWithMessages(bindingResult, compilerMessages)
+  }
+
+  // ---- merged from Typing/TypingUtils-BindProperty.n ----
+  internal BindProperty(propertyContainer : PropertyContainerSymbol, fieldName : G.Reference, compilerMessages : ICompilerMessages) : SymbolRef[PropertySymbol]
+  {
+    def name = fieldName.Value();
+    match (propertyContainer.LookupProperty(name))
+    {
+      | VSome(p) => SymbolRef.Some(fieldName.Location, false, p)
+      | VNone    =>
+        compilerMessages.Error(fieldName, $"Unbound property '$name'.");
+        SymbolRef.None(fieldName.Location, false)
+    }
+  }
+
+  // ---- merged from Typing/TypingUtils-CreateAstCtor.n ----
+  internal CreateAstCtor(loc : ILocated, astSymbol : AstSymbol, mappingFields : Seq[SyntaxMappingField], errorLoc : Location, compilerMessages : ICompilerMessages) : SyntaxMappingExpr.AstCtor
+  {
+    def initializedProperties = Dictionary();
+    foreach (mappingField in mappingFields)
+    {
+      def property = mappingField.Property;
+      if (initializedProperties.ContainsKey(property))
+      {
+        using (messages = compilerMessages.RootError(mappingField, $"Duplicated assignment of field '$(property.Name)'."))
+          messages.Hint(initializedProperties[property], "First assigned here.");
+      }
+      else
+        initializedProperties.Add(property, mappingField);
+    }
+
+    foreach (StructuralPropertySymbol as property in astSymbol.AllProperties)
+    {
+      unless (initializedProperties.ContainsKey(property))
+        compilerMessages.Error(errorLoc, $"Assignment of field '$(property.Name)' is required.");
+    }
+
+    SyntaxMappingExpr.AstCtor(loc, astSymbol, mappingFields.NToList())
+  }
+
+  // ---- merged from Typing/TypingUtils-MakePropertyProjectionType.n ----
+  internal MakePropertyProjectionType(thisType : NType, projectionSource : StructuralPropertySymbol, baseType : AstSymbol, context : Context) : option[PropertyProjectionType]
+  {
+    def bind(name : NType.Qualified, ctor : _ * _ -> PropertyProjectionType) : option[PropertyProjectionType]
+    {
+      if (context.Bind.[AstSymbol](name) is SymbolRef.Some(targetType))
+      {
+        if (targetType.IsSubtypeOf(baseType))
+          Some(ctor(projectionSource, targetType))
+        else
+        {
+          context.Error(name, $"Declaration '$(targetType.FullName)' is not subtype of declaration '$(baseType.FullName)'.");
+          None()
+        }
+      }
+      else None()
+    }
+
+    if (projectionSource : object != null && baseType : object != null)
+    {
+      match (thisType)
+      {
+        | OptionList(Qualified as name) => bind(name, PropertyProjectionType.OptionList)
+        | List      (Qualified as name) => bind(name, PropertyProjectionType.List)
+        | Option    (Qualified as name) => bind(name, PropertyProjectionType.Option)
+        | Qualified as name             => bind(name, PropertyProjectionType.Single)
+        | t =>
+          context.Error(t, $"Invalid property type '$t'.");
+          None()
+      }
+    }
+    else None()
+  }
+
+  // ---- merged from Typing/TypingUtils-NTypeToAstType.n ----
+  internal NTypeToAstTypeWithMessage(nitraType : G.NitraType, context : Context) : AstType
+  {
+    def t      = nitraType.Typing(context)[0];
+    def result = NTypeToAstType(t, context);
+    when (result.IsVoid)
+      context.Error(nitraType, $"Type '$t' is not valid AST type");
+    result
+  }
+
+  private IsNemerleCompilerType(name : NType.Qualified, context : Context, fullName : string) : bool
+  {
+    def parts = name.Parts;
+    if (parts.IsEmpty || parts.Exists(p => !p.TypeArguments.IsEmpty))
+      false
+    else
+    {
+      def env = parts.Head.NemerleEnv ?? context.GetNemerleEnvironment();
+      match (env.LookupType(parts.Map(p => p.Name)))
+      {
+        | Some(symbol) => symbol.FullName == fullName
+        | None => false
+      }
+    }
+  }
+
+  internal NTypeToAstType(t : NType, context : Context) : AstType
+  {
+    match (t)
+    {
+      | Qualified as name =>
+        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+          AstType.Ast(t.Location, astSymbol)
+        else if (IsNemerleCompilerType(name, context, "Nemerle.Compiler.Parsetree.PExpr"))
+          AstType.NemerleExpr(t.Location)
+        else if (IsNemerleCompilerType(name, context, "Nemerle.Compiler.NitraDialectServices.NitraDialectContext"))
+          AstType.NemerleContext(t.Location)
+        else
+        {
+          AstType.Void(t.Location)
+        }
+
+      | OptionList(Qualified as name) =>
+        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+          AstType.OptionList(t.Location, astSymbol)
+        else
+          AstType.Void(t.Location)
+
+      | List(Qualified as name) =>
+        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+          AstType.List(t.Location, astSymbol)
+        else
+          AstType.Void(t.Location)
+
+      | Option(Qualified as name) =>
+        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+          AstType.Option(t.Location, astSymbol)
+        else
+        {
+          AstType.Void(t.Location)
+        }
+
+      | _ => AstType.Void(t.Location)
+    }
+  }
+
+  // ---- merged from Typing/TypingUtils-RegisterDependentStatement.n ----
+  internal RegisterDependentStatement(propertyContainer : PropertyContainerSymbol, statement : DependentStatement, compilerMessages : ICompilerMessages) : void
+  {
+    if ((propertyContainer : object) is IDependentStatementContainer as container)
+      container.AddStatement(statement)
+    else
+      compilerMessages.Error(statement, $"Dependent property statement is not allowed in $(propertyContainer.Description).");
+  }
+
+  // ---- merged from Typing/TypingUtils-SetNameReferenceSyntaxMapping.n ----
+  public SetNameReferenceSyntaxMapping(project : NitraProject, managerClass : ManagerClass) : void
+  {
+    foreach (symbol when symbol.AssemblyId == AssemblyIds.CurrentAssembly in project.RootNamespace.Node.GetDescendants.[SimpleRuleSymbol]())
+    {
+      when (symbol.Options.IsReference)
+      {
+        when (project.ReferenceSymbolOpt is Some(referenceSymbol))
+        {
+          def loc            = symbol.FirstLocation;
+          def returnType     = AstType.Ast(loc, referenceSymbol);
+          def expr           = SyntaxMappingExpr.Code(loc, Nemerle.Compiler.UtilMacros.locate(loc.NLocation(), <[ $(PExpr.FromQualifiedIdentifier(managerClass, referenceSymbol.FullName))(this) ]>));
+          def mappingSymbol  = ChemicalSyntaxMappingSymbol(loc, symbol, [], returnType);
+          mappingSymbol.SetExpression(expr);
+          symbol.AddSyntaxMapping(mappingSymbol);
+        }
+      }
+
+      when (symbol.Options.IsName)
+      {
+        when (project.NameSymbolOpt is Some(nameSymbol))
+        {
+          def loc           = symbol.FirstLocation;
+          def returnType    = AstType.Ast(loc, nameSymbol);
+          def expr          = SyntaxMappingExpr.Code(loc, Nemerle.Compiler.UtilMacros.locate(loc.NLocation(), <[ $(PExpr.FromQualifiedIdentifier(managerClass, nameSymbol.FullName))(this) ]>));
+          def mappingSymbol = ChemicalSyntaxMappingSymbol(loc, symbol, [], returnType);
+          mappingSymbol.SetExpression(expr);
+          symbol.AddSyntaxMapping(mappingSymbol);
+        }
+      }
+    }
+  }
+
+  // ---- merged from Typing/TypingUtils-SetOutDependentProperties.n ----
+  public SetOutDependentProperties(project : NitraProject) : void
+  {
+    def makeLocation(container : PropertyContainerSymbol, property : DependentPropertySymbol) : Location
+    {
+      if (property.PropertyContainer : object == container)
+        property.FirstLocation
+      else
+        container.FirstLocation
+    }
+    def addAssignment(container : PropertyContainerSymbol, property : DependentPropertySymbol, expr : PExpr) : void
+    {
+      def loc       = makeLocation(container, property).FromStart();
+      def statement = DependentStatement.Assign(loc, [Identifier(container.FirstLocation, property.Name)], expr);
+      (container :> IDependentStatementContainer).AddStatement(statement);
+    }
+    def reportError(container : PropertyContainerSymbol, property : DependentPropertySymbol) : void
+    {
+      def loc = makeLocation(container, property);
+      project.Error(loc, $"Output dependent property '$(property.Name)' is never assigned to.");
+    }
+
+    def visitedSymbols = SCG.HashSet();
+
+    def handleAst(symbol : AstSymbol) : void
+    {
+      when (symbol.AssemblyId == AssemblyIds.CurrentAssembly && visitedSymbols.Add(symbol) && symbol is IDependentStatementContainer)
+      {
+        def initializedOutProperties = SCG.HashSet(symbol.InitializedOutProperties);
+        foreach (baseSymbol in symbol.AllBaseAsts)
+        {
+          handleAst(baseSymbol);
+          initializedOutProperties.UnionWith(baseSymbol.InitializedOutProperties);
+        }
+
+        unless (symbol.IsAbstract)
+        {
+          foreach (DependentPropertySymbol(Direction = Out) as outPropertySymbol when !initializedOutProperties.Contains(outPropertySymbol) in symbol.AllProperties)
+          {
+            if (outPropertySymbol.LinkedProperty is SymbolRef.Some(inPropertySymbol))
+              addAssignment(symbol, outPropertySymbol, <[ this.$(inPropertySymbol.Name : usesite) ]>);
+            else if (symbol.IsDeclaration && outPropertySymbol.Name == "Symbol")
+              addAssignment(symbol, outPropertySymbol, <[ this.ContainingTable.Define(this, context) ]>);
+            else
+              reportError(symbol, outPropertySymbol);
+          }
+        }
+      }
+    }
+
+    def handleSymbol(symbol : SymbolSymbol) : void
+    {
+      when (symbol.AssemblyId == AssemblyIds.CurrentAssembly && visitedSymbols.Add(symbol) && symbol is IDependentStatementContainer)
+      {
+        def initializedOutProperties = SCG.HashSet(symbol.InitializedOutProperties);
+        foreach (baseSymbol in symbol.AllBaseSymbols)
+        {
+          handleSymbol(baseSymbol);
+          initializedOutProperties.UnionWith(baseSymbol.InitializedOutProperties);
+        }
+
+        unless (symbol.IsAbstract)
+        {
+          foreach (DependentPropertySymbol(Direction = Out) as outPropertySymbol when !initializedOutProperties.Contains(outPropertySymbol) in symbol.AllProperties)
+          {
+            if (outPropertySymbol.LinkedProperty is SymbolRef.Some(inPropertySymbol))
+              addAssignment(symbol, outPropertySymbol, <[ this.$(inPropertySymbol.Name : usesite) ]>);
+            else
+              reportError(symbol, outPropertySymbol);
+          }
+        }
+      }
+    }
+
+    foreach (symbol in project.RootNamespace.Node.GetDescendants.[PropertyContainerSymbol]())
+    {
+      | AstSymbol    as s => handleAst(s)
+      | SymbolSymbol as s => handleSymbol(s)
+      | _ => assert(false)
+    }
+  }
+
+  // ---- merged from Typing/TypingUtils-TypeAstInheritance.n ----
+  internal TypeAstInheritance(astInheritance : OptionParseTree[G.AstInheritance], context : Context, astSymbol : AstSymbol) : list[AstSymbol]
+  {
+    mutable result = [];
+    when (astInheritance.HasValue)
+      result = astInheritance.Value.Typing(context, astSymbol.IsDeclaration);
+
+    when (astSymbol.IsDeclaration)
+    when ((context.Project :> NitraProject).DeclarationSymbolOpt is Some(declarationSymbol))
+    unless (astSymbol == declarationSymbol)
+      result ::= declarationSymbol;
+
+    result
+  }
+
+  internal BindAstInheritanceList(baseList : ListParseTree[G.QualifiedReference], context : Context, isDeclaration : bool) : list[AstSymbol]
+  {
+    def result = LightList();
+    foreach (identifier in baseList)
+    {
+      match (context.Bind.[AstSymbol](identifier))
+      {
+        | SymbolRef.Some(AbstractAstSymbol as astSymbol) as symbolRef =>
+          if (!isDeclaration && astSymbol.IsDeclaration)
+            context.Error(symbolRef, "Only abstract ast can be specified in base ast list.")
+          else
+            result.Add(astSymbol)
+
+        | SymbolRef.Some as symbolRef => context.Error(symbolRef, "Only abstract declarations can be specified in base declarations list.");
+        | _ => ()
+      }
+    }
+    result.ToNList()
+  }
+
+  // ---- merged from Typing/TypingUtils-TypeAstModifiers.n ----
+  internal TypeAstModifiers(modifiers : ListParseTree[G.AstModifier], isExtension : bool, isDeclaration : bool, compilerMessages : ICompilerMessages) : bool * bool * AstCardinality
+  {
+    def isAbstract  = Utils.FoldThrough(modifiers, false,                 _.IsAbstract(_, isExtension, compilerMessages));
+    def cardinality = Utils.FoldThrough(modifiers, AstCardinality.Single, _.Cardinality(_, isDeclaration, isAbstract, compilerMessages));
+    (isDeclaration, isAbstract, cardinality)
+  }
+
+  internal TypeAstModifier_IsAbstract(loc : ILocated, acc : bool, isExtension : bool, compilerMessages : ICompilerMessages) : bool
+  {
+    if (isExtension)
+    {
+      compilerMessages.Error(loc, "Modifier 'abstract' is not valid on extension ast");
+      acc
+    }
+    else if (acc)
+    {
+      compilerMessages.Error(loc, "Duplicate 'abstract' modifier");
+      acc
+    }
+    else
+      true
+  }
+
+  internal TypeAstModifier_Cardinality(loc : ILocated, acc : AstCardinality, isDeclaration : bool, isAbstract : bool, compilerMessages : ICompilerMessages, value : AstCardinality) : AstCardinality
+  {
+    if (acc %&& value)
+    {
+      compilerMessages.Error(loc, $"Duplicate '$(value.GetText())' modifier");
+      acc
+    }
+    else if (isAbstract)
+    {
+      compilerMessages.Error(loc, $"Modifier '$(value.GetText())' is not compatible with 'abstract'");
+      acc
+    }
+    else if (isDeclaration)
+      acc %| value
+    else
+    {
+      compilerMessages.Error(loc, $"Modifier '$(value.GetText())' is not valid on ast");
+      acc
+    }
+  }
+
+  // ---- merged from Typing/TypingUtils-TypeCall.n ----
+  internal TypeCall(baseRule : option[ExtensibleRuleSymbol], _precedence : PrecedenceInfo, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
+    QualifiedName : G.QualifiedReference, BindingPower : OptionParseTree[SequenceParseTree[NSpan, Nitra.Runtime.OptionParseTree[NSpan], G.PrecedenceReference2]]) : Rule
+  {
+    def newFieldName : string = _fieldName ?? QualifiedName.LastIdentifier().Value;
+
+    when (context.TryBind.[RuleAliasSymbol](QualifiedName) is SymbolRef.Some(alias))
+      return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
+
+    def ruleRef = context.Bind.[RuleSymbol](QualifiedName);
+    def (type, spanClass) =
+      if (ruleRef is SymbolRef.Some(RuleDefSymbol as ruleSymbol))
+      {
+        when (ruleSymbol is ExtensionRuleSymbol)
+          context.Error(QualifiedName,
+            "You can't use directly reference an extension rule. Use reference to extensible rule instead or make a separate rule.");
+
+        def declarationSiteContext = context.GetContext.[RuleDeclarationSiteContext]();
+        match (declarationSiteContext.DeclarationSite)
+        {
+          | declarationSite is ExtendSyntaxSymbol =>
+            when (declarationSite.Extend is Some(declaration) when declaration.IsToken)
+              context.Error(ruleRef, "Can't refer to a syntax rule from token.");
+
+          | declarationSite is RuleDefSymbol =>
+            when (declarationSite.IsToken && !ruleSymbol.IsToken)
+              context.Error(ruleRef, "Can't refer to a syntax rule from token.");
+
+          | _                  => ()
+        }
+
+        (ruleSymbol.Type, ruleSymbol.Options.SpanClassSymbol)
+      }
+      else (RuleType.Void(), null);
+
+    def bp =
+      if (BindingPower.HasValue)
+      {
+        def value = BindingPower.Value;
+        def isStrong = value.Item2.HasValue;
+        value.Item3.GetBindingPowerInfo(_precedence.Context, isStrong);
+      }
+      else
+      {
+        match (baseRule, ruleRef)
+        {
+          | (Some(baseRuleSymbol), SymbolRef.Some(ruleRefSymbol)) when baseRuleSymbol == ruleRefSymbol =>
+            BindingPowerInfo(_precedence.Context.GetPrecedence(), _precedence.IsStrong)
+          | _ => BindingPowerInfo(PrecedenceReference.Zero(), _precedence.IsStrong)
+        }
+      }
+
+    Rule.Call(QualifiedName.Location, type, newFieldName, ruleRef, bp, spanClass);
+  }
+
+  // ---- merged from Typing/TypingUtils-TypeLanguageInheritance.n ----
+  internal TypeLanguageInheritance(languageInheritance : OptionParseTree[SequenceParseTree[NSpan, G.QualifiedReference]], context : Context, symbol : LanguageSymbol) : SymbolRef[LanguageSymbol]
+  {
+    if (languageInheritance.HasValue)
+      context.Bind(languageInheritance.Value.Item2)
+    else if ((context.Project :> NitraProject).LanguageSymbolOpt is Some(languageSymbol) when (symbol : object != languageSymbol))
+      SymbolRef.Some(languageInheritance.Location, true, languageSymbol)
+    else
+      SymbolRef.None(languageInheritance.Location, true)
+  }
+
+  // ---- merged from Typing/TypingUtils-TypeSequence.n ----
+  internal TypeSequence(_baseRule : option[ExtensibleRuleSymbol], precedenceInfo : PrecedenceInfo, fieldName : option[string], context : Context,
+    options : RuleDefinitionOptions, leftRule : G.RuleExpression, rightRules : ListParseTree[G.RuleExpression], self : G.RuleExpression) : Nitra.Model.Rule
+  {
+    def bp1  = if (precedenceInfo.IsRightAssociative) PrecedenceInfo(precedenceInfo.Context, precedenceInfo.IsRightAssociative, true) else precedenceInfo;
+    def bp2  = precedenceInfo;
+    def flat = List();
+    def tryExtractSpaceSequence(rule : Rule) : void
+    {
+      // assume that 's' is generated whitespace rule
+      match (rule)
+      {
+        | Sequence([String as call1, Call(s, _) as call2])
+        | Sequence([Call   as call1, Call(s, _) as call2]) =>
+          when (s.IsGenerated)
+          {
+            flat.Add(call1);
+            flat.Add(call2);
+            return
+          }
+        | _ => ()
+      }
+      flat.Add(rule);
+    }
+    tryExtractSpaceSequence(leftRule.Typing(_baseRule, bp1, None(), context, options));
+    foreach (rule in rightRules)
+      tryExtractSpaceSequence(rule.Typing(_baseRule, bp2, None(), context, options));
+
+    def matchKeyMarker(rule : Rule) : bool
+    {
+      rule is Rule.Call(Some(MarkerSymbol(FullName="Identifiers.key")), _)
+    }
+
+    // Устанавливаем литералам идущим за Identifiers.key свойство IsKeyToken в true
+    {
+      mutable mark = false;
+      foreach (r in flat)
+      {
+        if (matchKeyMarker(r))
+        {
+          if (mark)
+            context.Error(r, "The Identifiers.key marker must follow before literal.");
+          else
+            mark = true;
+        }
+        else when (mark)
+        {
+          if (r is String as str)
+            str.IsKeyToken = true;
+          else
+            context.Error(r, "The Identifiers.key marker must follow before literal.");
+
+          mark = false;
+        }
+      }
+    }
+
+    def rules = flat.NToList();
+    def type  = Utils.EvaluateSequenceRuleType(rules);
+    Rule.Sequence(self.Location, type, Utils.MakeName(fieldName, rules, context), rules);
+  }
+
+  // ---- merged from Typing/TypingUtils-ValidateSyntaxMapping.n ----
+  public ValidateSyntaxMapping(project : NitraProject) : void
+  {
+    def cache = SCG.Dictionary();
+
+    def collectOverloads(ruleSymbol : SyntaxRuleSymbol) : SCG.Dictionary[list[AstType], SyntaxMappingSymbol]
+    {
+      mutable declaredOverloads;
+      unless (cache.TryGetValue(ruleSymbol, out declaredOverloads))
+      {
+        declaredOverloads = SCG.Dictionary();
+        foreach (syntaxMapping when syntaxMapping.HasValidSignature in ruleSymbol.SyntaxMappings)
+        {
+          def key = syntaxMapping.Parameters.Map(_.Type);
+          mutable existingOverload;
+          if (declaredOverloads.TryGetValue(key, out existingOverload))
+          {
+            using (root = project.RootError(syntaxMapping.FirstLocation, "Redefinition of AST mapping"))
+              root.Hint(existingOverload.FirstLocation, "previous definition");
+          }
+          else
+            declaredOverloads.Add(key, syntaxMapping)
+        }
+        cache.Add(ruleSymbol, declaredOverloads)
+      }
+      declaredOverloads
+    }
+
+    def makeParametersText(parameters : list[SyntaxMappingParameterSymbol]) : string
+    {
+      | []   => "without parameters"
+      | many => $<#with parameters (..$(many; ", "))#>
+    }
+
+    foreach (ruleSymbol when ruleSymbol.AssemblyId == AssemblyIds.CurrentAssembly in project.RootNamespace.Node.GetDescendants.[SyntaxRuleSymbol]())
+    {
+      match (ruleSymbol)
+      {
+        | SimpleRuleSymbol
+        | ExtensibleRuleSymbol => _ = collectOverloads(ruleSymbol)
+        | ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
+          def mappingsToOverride = SCG.Dictionary(collectOverloads(baseRuleSymbol));
+          def overloads          = collectOverloads(ruleSymbol);
+
+          foreach (pair in overloads)
+          {
+            def syntaxMapping = pair.Value;
+            mutable baseSyntaxMapping;
+            if (mappingsToOverride.TryGetValue(pair.Key, out baseSyntaxMapping))
+            {
+              unless (syntaxMapping.ReturnType.IsSubtypeOf(baseSyntaxMapping.ReturnType))
+                project.Error(syntaxMapping.FirstLocation, $"AST mapping returning '$(baseSyntaxMapping.ReturnType)' is required.");
+              _ = mappingsToOverride.Remove(pair.Key);
+            }
+            else
+              project.Error(syntaxMapping.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) not found in base rule '$(baseRuleSymbol.FullName)'.");
+          }
+
+          when (mappingsToOverride.Count > 0)
+            foreach (pair in mappingsToOverride)
+            {
+              def syntaxMapping = pair.Value;
+              using (root = project.RootError(ruleSymbol.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) returning '$(syntaxMapping.ReturnType)' is required"))
+                root.Hint(syntaxMapping.FirstLocation, "base definition");
+            }
+
+        | _ => ()
+      }
+    }
+  }
+}
+
+// ---- Typing/TypingUtils-TypeSequence.n (Nitra.Typing) ----
+
+
+// ---- Typing/TypingUtils-ValidateSyntaxMapping.n (Nitra.Typing) ----
+
+
+public mask RuleMethod
+{
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/AbstractSymbol.n (Nitra.Typing.RuleMethod) ----
+  [Record, ExportableSymbol]
+  public abstract class AbstractSymbol : DefinitionSymbol, ISignature, ICached
+  {
+    [ExternalProperty]
+    public abstract Signature : RuleMethodSignature  { get; }
+    public abstract IsCached  : bool                 { get; }
+    public abstract AstType   : AstType              { get; }
+  }
+
+  public sealed class ParsedAbstractSymbol : AbstractSymbol
+  {
+    _node : G.RuleBodyMember.RuleMethod;
+
+    public this(node : G.RuleBodyMember.RuleMethod)
+    {
+      base(node.Name);
+      _node = node;
+    }
+
+    public override Signature : RuleMethodSignature  { get { _node.Signature } }
+    public override IsCached  : bool                 { get { _node.IsCached } }
+    public override AstType   : AstType              { get { _node.AstType } }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/DefSymbol.n (Nitra.Typing.RuleMethod) ----
+  [Record, ExportableSymbol]
+  public abstract class DefSymbol : DefinitionSymbol, ISignature, IBody, ICached
+  {
+    [ExternalProperty]
+    public abstract Signature : RuleMethodSignature  { get; }
+    public virtual  Body      : RuleMethodBody       { get { throw NotSupportedException() } } // implementation for external symbol
+    public abstract IsCached  : bool                 { get; }
+    public abstract AstType   : AstType              { get; }
+  }
+
+  public sealed class ParsedDefSymbol : DefSymbol
+  {
+    _node : G.RuleBodyMember.RuleMethod;
+
+    public this(node : G.RuleBodyMember.RuleMethod)
+    {
+      base(node.Name);
+      _node = node;
+    }
+
+    public override Signature : RuleMethodSignature  { get { _node.Signature } }
+    public override Body      : RuleMethodBody       { get { _node.Body } }
+    public override IsCached  : bool                 { get { _node.IsCached } }
+    public override AstType   : AstType              { get { _node.AstType } }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/DefinitionSymbol.n (Nitra.Typing.RuleMethod) ----
+  [Record]
+  public abstract class DefinitionSymbol : RuleMethodSymbol
+  {
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/IBody.n (Nitra.Typing.RuleMethod) ----
+  public interface IBody
+  {
+    Body : RuleMethodBody { get; }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/ICached.n (Nitra.Typing.RuleMethod) ----
+  public interface ICached
+  {
+    IsCached : bool { get; }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/ISignature.n (Nitra.Typing.RuleMethod) ----
+  public interface ISignature
+  {
+    Signature : RuleMethodSignature { get; }
+    AstType   : AstType             { get; }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/OnErrorSymbol.n (Nitra.Typing.RuleMethod) ----
+  [Record, ExportableSymbol]
+  public abstract class RuleMethodMissingValueSymbol : RuleMethodSymbol, IBody
+  {
+    public abstract HandlingRuleMethod : SymbolRef[RuleMethodSymbol] { get; }
+    public virtual  Body               : RuleMethodBody              { get { throw NotSupportedException() } } // implementation for external symbol
+  }
+
+  public sealed class ParsedRuleMethodMissingValueSymbol : RuleMethodMissingValueSymbol
+  {
+    _node : G.RuleBodyMember.RuleMethodMissing;
+
+    public this(node : G.RuleBodyMember.RuleMethodMissing)
+    {
+      base(node.Name);
+      _node = node;
+    }
+
+    public override HandlingRuleMethod : SymbolRef[RuleMethodSymbol] { get { _node.HandlingRuleMethod } }
+    public override Body               : RuleMethodBody              { get { _node.Body } }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/OverrideSymbol.n (Nitra.Typing.RuleMethod) ----
+  [Record, ExportableSymbol]
+  public abstract class OverrideSymbol : DefinitionSymbol, IBody
+  {
+    public abstract BaseRuleMethod : SymbolRef[RuleMethodSymbol] { get; }
+    public virtual  Body           : RuleMethodBody              { get { throw NotSupportedException() } } // implementation for external symbol
+  }
+
+  public sealed class ParsedOverrideSymbol : OverrideSymbol, IBody
+  {
+    _node : G.RuleBodyMember.RuleMethodOverride;
+
+    public this(node : G.RuleBodyMember.RuleMethodOverride)
+    {
+      base(node.Name);
+      _node = node;
+    }
+
+    public override BaseRuleMethod : SymbolRef[RuleMethodSymbol] { get { _node.BaseRuleMethod } }
+    public override Body           : RuleMethodBody              { get { _node.Body } }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/RuleMethodBody.n (Nitra.Typing.RuleMethod) ----
+  [Record]
+  public sealed class RuleMethodBody : Nitra.Runtime.Located
+  {
+    public override Location : Location { get; }
+    public          Expr     : PExpr    { get; }
+
+    public override ToString() : string { $"{ $Expr }" }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/RuleMethodParameter.n (Nitra.Typing.RuleMethod) ----
+  [Record]
+  public sealed class RuleMethodParameter : Nitra.Runtime.Located
+  {
+    public override Location : Location    { get; }
+    public          Name     : Identifier  { get; }
+    public          Type     : NType       { get; }
+
+    public override ToString() : string { $"$Name : $Type" }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/RuleMethodSignature.n (Nitra.Typing.RuleMethod) ----
+  [Record]
+  public sealed class RuleMethodSignature : Nitra.Runtime.Located
+  {
+    public override Location : Location                  { get; }
+    public          Params   : list[RuleMethodParameter] { get; }
+    public          Type     : NType                     { get; }
+
+    public override ToString() : string{ $"(..$Params) : $Type" }
+  }
+
+  // ---- Symbols/SyntaxModuleMembers/RuleMethod/RuleMethodSymbol.n (Nitra.Typing.RuleMethod) ----
+  [Record]
+  public abstract class RuleMethodSymbol : SingleDefSymbol
+  {
+    public DeclaringRule : RuleSymbol
+    {
+      get
+      {
+        assert(Node != null);
+        match (Node.Parent.GetSymbol.[RuleSymbol]())
+        {
+          | ruleSymbol :: _ => ruleSymbol
+          | []              => assert(false)
+        }
+      }
+    }
+    public override Description   : string     { get { "rule method" } }
+
+    public override ToString() : string
+    {
+      def cached    = match (this) { | x is ICached when x.IsCached => "[Cached] "            | _ => "" };
+      def signature = match (this) { | x is ISignature              => x.Signature.ToString() | _ => "" };
+      def body      = match (this) { | x is IBody                   => x.Body.ToString()      | _ => "" };
+      def modifier  =
+        match (this)
+        {
+          | RuleMethodMissingValueSymbol    => "missing "
+          | OverrideSymbol   => "override "
+          | _                     => ""
+        };
+
+      $"$cached$modifier$Name$signature$body"
+    }
+  }
+}

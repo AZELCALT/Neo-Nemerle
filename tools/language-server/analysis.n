@@ -111,7 +111,7 @@ public sealed class Analyzer
   messages : SCG.List[Location * string * Severity] = SCG.List();
   hosts : SCG.Dictionary[string, INitraNativeSourceHost] = SCG.Dictionary();
   hostOrder : SCG.List[string] = SCG.List();
-  mutable nitraSyntaxStart : Nitra.StartRuleDescriptor;
+  mutable nitraSyntaxStart : Nitra.Runtime.StartRuleDescriptor;
   // Grammars compiled in memory by Nitra are not loadable by name; descriptors reference them in attributes.
   static generated : System.Collections.Concurrent.ConcurrentDictionary[string, Assembly] = System.Collections.Concurrent.ConcurrentDictionary();
   static this()
@@ -344,7 +344,7 @@ public sealed class Analyzer
       }
   }
 
-  StartRule(assembly : Assembly, rule : string) : Nitra.StartRuleDescriptor
+  StartRule(assembly : Assembly, rule : string) : Nitra.Runtime.StartRuleDescriptor
   {
     def dot = rule.LastIndexOf('.');
     if (dot <= 0) null
@@ -352,27 +352,27 @@ public sealed class Analyzer
     {
       def moduleName = rule.Substring(0, dot); def name = rule.Substring(dot + 1);
       mutable found = null;
-      foreach (g in Nitra.GrammarDescriptor.GetDescriptors(assembly))
+      foreach (g in Nitra.Runtime.GrammarDescriptor.GetDescriptors(assembly))
         when (g.FullName == moduleName)
           foreach (r in g.Rules)
-            when (r.Name == name && r is Nitra.StartRuleDescriptor) found = r :> Nitra.StartRuleDescriptor;
+            when (r.Name == name && r is Nitra.Runtime.StartRuleDescriptor) found = r :> Nitra.Runtime.StartRuleDescriptor;
       found
     }
   }
 
-  Parse(result : AnalysisResult, text : string, body : int, end : int, start : Nitra.StartRuleDescriptor, source : string) : void
+  Parse(result : AnalysisResult, text : string, body : int, end : int, start : Nitra.Runtime.StartRuleDescriptor, source : string) : void
   {
     def length = Math.Max(0, end - body);
     try
     {
-      def session = Nitra.ParseSession(start, null, null, -1, CancellationToken.None, true, TimeSpan.Zero, null, null, null, null);
-      def parsed = session.Parse(Nitra.SourceSnapshot(text.Substring(body, length)));
-      def spans = SCG.HashSet.[Nitra.SpanInfo]();
+      def session = Nitra.Runtime.ParseSession(start, null, null, -1, CancellationToken.None, true, TimeSpan.Zero, null, null, null, null);
+      def parsed = session.Parse(Nitra.Runtime.SourceSnapshot(text.Substring(body, length)));
+      def spans = SCG.HashSet.[Nitra.Runtime.SpanInfo]();
       parsed.GetSpans(0, length, spans);
       foreach (s in spans)
         when (s.Span.EndPos > s.Span.StartPos && s.SpanClass != null)
           result.Tokens.Add((body + s.Span.StartPos, s.Span.EndPos - s.Span.StartPos, Legend.OfSpanClass(s.SpanClass.Name)));
-      def outlining = SCG.List.[Nitra.OutliningInfo]();
+      def outlining = SCG.List.[Nitra.Runtime.OutliningInfo]();
       parsed.GetOutlining(outlining);
       foreach (o in outlining) result.AddFold(body + o.Span.StartPos, body + o.Span.EndPos);
       match (parsed.CompilerMessages)
@@ -380,8 +380,8 @@ public sealed class Analyzer
         | list is Nitra.ProjectSystem.CompilerMessageList =>
           foreach (m in list.GetMessages())
           {
-            def severity = if (m.Type == Nitra.CompilerMessageType.Warning) Severity.Warning
-                           else if (m.Type == Nitra.CompilerMessageType.Hint) Severity.Hint
+            def severity = if (m.Type == Nitra.Runtime.CompilerMessageType.Warning) Severity.Warning
+                           else if (m.Type == Nitra.Runtime.CompilerMessageType.Hint) Severity.Hint
                            else Severity.Error;
             def s = body + Math.Max(0, Math.Min(m.Location.StartPos, length));
             def e = body + Math.Max(0, Math.Min(m.Location.EndPos, length));

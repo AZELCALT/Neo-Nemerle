@@ -1,0 +1,702 @@
+using System;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System.IO;
+using System.Reflection;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Assertions;
+using Nitra.Runtime;
+using Nitra.ProjectSystem;
+using Nemerle.Imperative;
+using NemerleMacros;
+using Nitra.Runtime.Typing;
+using NitraMacros;
+
+// ---- Serialization/ExportableSymbolsAttribute.n (Nitra.Serialization) ----
+[Record, AttributeUsageAttribute(AttributeTargets.Assembly)]
+public sealed class ExportableSymbolsAttribute : Attribute
+{
+  public SymbolTypes : array[Type] { get }
+}
+
+// ---- Serialization/ExternalPropertyAttribute.n (Nitra.Serialization) ----
+[AttributeUsageAttribute(AttributeTargets.Property)]
+public sealed class ExternalPropertyAttribute : Attribute
+{
+}
+
+// ---- Serialization/ExternalSymbolConstructorRegistry.n (Nitra.Serialization) ----
+public sealed class ExternalSymbolConstructorRegistry
+{
+  private _readers : Dictionary[string, Action[IMetadataReader, BinaryReader]] = Dictionary();
+
+  public Register(assembly : Assembly) : void
+  {
+    foreach (attr in assembly.GetCustomAttributes(typeof(ExportableSymbolsAttribute), false) :> array[ExportableSymbolsAttribute])
+      foreach (symbolType in attr.SymbolTypes)
+        Register(symbolType);
+  }
+
+  Register(symbolType : Type) : void
+  {
+    def symbolTypeId = symbolType.FullName.Replace('+', '.'); // the symbol type's path (SymbolTypeId), not its CLR nesting
+    // the generated External<Symbol> sits next to the symbol type: nested in its file module, when it is
+    def externalSymbolTypeName =
+      if (symbolType.DeclaringType != null) symbolType.DeclaringType.FullName + "+External" + symbolType.Name
+      else if (string.IsNullOrEmpty(symbolType.Namespace)) "External" + symbolType.Name
+      else symbolType.Namespace + ".External" + symbolType.Name;
+    def externalSymbolType     = symbolType.Assembly.GetType(externalSymbolTypeName, throwOnError = true);
+    def readSymbolsMethod      = externalSymbolType.GetMethod("CreateSymbols", BindingFlags.Public | BindingFlags.Static);
+    def reader = Delegate.CreateDelegate(typeof(Action[IMetadataReader, BinaryReader]), readSymbolsMethod) :> Action[IMetadataReader, BinaryReader];
+    _readers.Add(symbolTypeId, reader);
+  }
+
+  public Resolve(symbolTypeId : string) : Action[IMetadataReader, BinaryReader]
+  {
+    _readers[symbolTypeId]
+  }
+
+  public static CreateFromAppDomainAssemblies() : ExternalSymbolConstructorRegistry
+  {
+    def registry = ExternalSymbolConstructorRegistry();
+    foreach (assembly in AppDomain.CurrentDomain.GetAssemblies())
+      registry.Register(assembly);
+    registry
+  }
+}
+
+// ---- Serialization/ExternalSymbolLoader.n (Nitra.Serialization) ----
+public class ExternalSymbolLoader : IDisposable
+{
+  public this()
+  {
+    this(ExternalSymbolConstructorRegistry());
+  }
+
+  public this([NotNull] registry : ExternalSymbolConstructorRegistry)
+  {
+    Registry = registry;
+  }
+
+  public Registry : ExternalSymbolConstructorRegistry { get; }
+
+  private         _initialReaders : List[MetadataReader * Location] = List();
+  private mutable _isDisposed     : bool;
+  private mutable _isLoaded       : bool;
+
+  public AddSource([NotNull] reader : MetadataReader, location : Location) : void
+    requires !_isDisposed otherwise throw ObjectDisposedException("ExternalSymbolLoader")
+    requires !_isLoaded otherwise throw InvalidOperationException("Symbols already loaded")
+  {
+    _initialReaders.Add(reader, location);
+  }
+
+  public Load() : void
+    requires !_isDisposed otherwise throw ObjectDisposedException("ExternalSymbolLoader")
+    requires !_isLoaded otherwise throw InvalidOperationException("Symbols already loaded")
+  {
+    def readerWithCreatedSymbols = List();
+
+    // create symbols from all readers
+    foreach ((reader, location) in _initialReaders)
+      try
+      {
+        reader.CreateSymbols();
+        readerWithCreatedSymbols.Add(reader, location);
+      }
+      catch { | e => ReportSymbolLoadFailure(reader, e, location); }
+
+    // read symbol bodies from readers that succeeded symbol creation
+    foreach ((reader, location) in readerWithCreatedSymbols)
+      try reader.ReadSymbols();
+      catch { | e => ReportSymbolLoadFailure(reader, e, location); }
+
+    // read symbol external properties from readers that succeeded symbol creation
+    foreach ((reader, location) in readerWithCreatedSymbols)
+      try reader.ReadSymbolsExternalProperties();
+      catch { | e => ReportSymbolLoadFailure(reader, e, location); }
+
+    _isLoaded = true;
+  }
+
+  public Dispose() : void
+  {
+    unless (_isDisposed)
+    {
+      // dispose all readers
+      foreach ((reader, _) in _initialReaders)
+        reader.Dispose();
+
+      _isDisposed = true;
+    }
+  }
+
+  protected virtual ReportSymbolLoadFailure(reader : MetadataReader, exception : Exception, location : Location) : void
+  {
+    reader.Project.Warning(location, $"Failed to read metadata from referenced assembly: $(exception.Message)");
+  }
+}
+
+// ---- Serialization/IExportableSymbol.n (Nitra.Serialization) ----
+public interface IExportableSymbol : ISymbol
+{
+  Serialize(writer : BinaryWriter, metadataWriter : IMetadataWriter) : void;
+}
+
+// ---- Serialization/IExternalSymbolPropertyReader.n (Nitra.Serialization) ----
+public interface IExternalSymbolPropertyReader
+{
+  ReadPropertyValue[T](project : Project, symbol : Symbol, propertyName : string) : T
+}
+
+public class DefaultExternalSymbolPropertyReader : IExternalSymbolPropertyReader
+{
+  public virtual ReadPropertyValue[T](project : Project, symbol : Symbol, propertyName : string) : T
+  {
+    project.FatalError(symbol.FirstLocation, $"Cannot read value of property '$propertyName : $(typeof(T))' for symbol '$(symbol.FullName)'")
+  }
+}
+
+// ---- Serialization/IImportableSymbol.n (Nitra.Serialization) ----
+public interface IImportableSymbol : ISymbol
+{
+  Deserialize(reader : BinaryReader, metadataReader : IMetadataReader) : void;
+  ReadExternalProperties(project : Project, reader : IExternalSymbolPropertyReader) : void;
+}
+
+// ---- Serialization/IMetadataReader.n (Nitra.Serialization) ----
+public interface IMetadataReader
+{
+  AssemblyId     : byte     { get; }
+  SymbolLocation : Location { get; }
+  Project        : Project  { get; }
+
+  Register(symbolId : int, symbol : IImportableSymbol) : void;
+  GetNode(nodeId : int) : HierarchyNode;
+  ReadSymbolRef(buffer : BinaryReader) : ISymbol;
+  ReadLocation(buffer : BinaryReader) : Location;
+}
+
+// ---- Serialization/IMetadataWriter.n (Nitra.Serialization) ----
+public interface IMetadataWriter
+{
+  Project : Project  { get; }
+
+  WriteSymbolRef(symbol : IExportableSymbol, buffer : BinaryWriter) : void;
+  WriteLocation(location : Location, buffer : BinaryWriter) : void;
+}
+
+// ---- Serialization/ISymbol.n (Nitra.Serialization) ----
+public interface ISymbol
+{
+  AssemblyId   : byte          { get; }
+  SymbolTypeId : string        { get; }
+  Name         : string        { get; }
+  Node         : HierarchyNode { get; }
+  Description  : string        { get; }
+}
+
+// ---- Serialization/MetadataReader.n (Nitra.Serialization) ----
+public sealed class MetadataReader : IMetadataReader, IDisposable
+{
+  public this(stream : Stream, symbolConstructorRegistry : ExternalSymbolConstructorRegistry, externalSymbolPropertyReader : IExternalSymbolPropertyReader, project : Project, assemblyId : byte, symbolLocation : Location)
+  {
+    this(stream, symbolConstructorRegistry, externalSymbolPropertyReader, project, project.RootNamespace, assemblyId, symbolLocation)
+  }
+
+  public this(stream : Stream, symbolConstructorRegistry : ExternalSymbolConstructorRegistry, externalSymbolPropertyReader : IExternalSymbolPropertyReader, project : Project, root : NamespaceSymbol, assemblyId : byte, symbolLocation : Location)
+  {
+    _reader                       = BinaryReader(stream, Text.Encoding.UTF8);
+    _symbolConstructorRegistry    = symbolConstructorRegistry;
+    _externalSymbolPropertyReader = externalSymbolPropertyReader ?? DefaultExternalSymbolPropertyReader();
+    _root                         = root;
+    AssemblyId                    = assemblyId;
+    SymbolLocation                = symbolLocation;
+    Project                       = project;
+  }
+
+  private _reader                       : BinaryReader;
+  private _symbolConstructorRegistry    : ExternalSymbolConstructorRegistry;
+  private _externalSymbolPropertyReader : IExternalSymbolPropertyReader;
+  private _root                         : NamespaceSymbol;
+
+  public Dispose() : void
+  {
+    _reader.Dispose();
+  }
+
+  public CreateSymbols() : void
+  {
+    ReadNameTree();
+    ReadSymbolHeaders();
+    ReadReferencedAssemblies();
+    ReadNameTree();
+    ReadExternalSymbolInfo();
+  }
+
+  public ReadSymbols() : void
+  {
+    def loop()
+    {
+      def symbolId = _reader.ReadInt32();
+      when (symbolId > 0)
+      {
+        def symbol = _localSymbols[symbolId];
+        symbol.Deserialize(_reader, this);
+        loop();
+      }
+    }
+    loop();
+  }
+
+  public ReadSymbolsExternalProperties() : void
+  {
+    foreach (p in _localSymbols)
+      p.Value.ReadExternalProperties(Project, _externalSymbolPropertyReader);
+  }
+
+  public AssemblyId     : byte     { get; }
+
+  public SymbolLocation : Location { get; }
+
+  public Project        : Project  { get; }
+
+  public ReferencedAssemblies : Seq[AssemblyName]
+  {
+    get { _referencedAssemblies.Values }
+  }
+
+  private ReadNameTree() : void
+  {
+    def loop()
+    {
+      def id = _reader.ReadInt32();
+      when (id > 0)
+      {
+        def parentId           = _reader.ReadInt32();
+        def partName           = _reader.ReadString();
+        def hasNamespaceSymbol = _reader.ReadBoolean();
+
+        def parent = if (parentId == -1) _root.Node else _nodes[parentId];
+        def node   =
+          if (hasNamespaceSymbol)
+          {
+            def ([parentNs]) = parent.GetSymbol.[NamespaceSymbol](); // parent must be NamespaceSymbol
+
+            match (parent.BindMany.[NamespaceSymbol](partName))
+            {
+              | [ns] => ns.AddDefinition(SymbolLocation); ns.Node // namespace already exists
+              | []   =>
+                def nsSymbol = NamespaceSymbol(partName);
+                parentNs.AddChild(nsSymbol, SymbolLocation);
+                nsSymbol.AddDefinition(SymbolLocation);
+                nsSymbol.Node
+
+              | _    => assert3(false)
+            }
+          }
+          else
+            parent.AddNode(partName);
+        _nodes.Add(id, node);
+        loop();
+      }
+    }
+    loop();
+  }
+
+  private ReadSymbolHeaders() : void
+  {
+    def loop()
+    {
+      def symbolTypeId = _reader.ReadString();
+      unless (string.IsNullOrEmpty(symbolTypeId))
+      {
+        def symbolConstructor = _symbolConstructorRegistry.Resolve(symbolTypeId);
+        symbolConstructor.Invoke(this, _reader);
+        loop();
+      }
+    }
+    loop();
+  }
+
+  private ReadReferencedAssemblies() : void
+  {
+    def loop()
+    {
+      def assemblyId = _reader.ReadByte();
+      when (assemblyId > 0)
+      {
+        def assemblyName = _reader.ReadString();
+        _referencedAssemblies.Add(assemblyId, AssemblyName(assemblyName));
+        loop();
+      }
+    }
+    loop();
+  }
+
+  private ReadExternalSymbolInfo() : void
+  {
+    def loopTypes()
+    {
+      def symbolTypeId = _reader.ReadString();
+      unless (string.IsNullOrEmpty(symbolTypeId))
+      {
+        def loopSymbols()
+        {
+          def symbolId = _reader.ReadInt32();
+          when (symbolId > 0)
+          {
+            def nodeId     = _reader.ReadInt32();
+            def assemblyId = _reader.ReadByte();
+            def symbolRef  = ExternalSymbolReference(symbolTypeId, nodeId, assemblyId);
+            _externalSymbols.Add(symbolId, symbolRef);
+            loopSymbols();
+          }
+        }
+        loopSymbols();
+        loopTypes();
+      }
+    }
+    loopTypes();
+  }
+
+  private ReadSymbolRef(reader : BinaryReader) : ISymbol implements IMetadataReader.ReadSymbolRef
+  {
+    match (reader.ReadInt32())
+    {
+      | 0        => null
+      | symbolId => ResolveSymbol(symbolId)
+    }
+  }
+
+  private ReadLocation(reader : BinaryReader) : Location implements IMetadataReader.ReadLocation
+  {
+    ignore(reader);
+    SymbolLocation //TODO: implement location reading
+  }
+
+  private RegisterSymbol(symbolId : int, symbol : IImportableSymbol) : void implements IMetadataReader.Register
+  {
+    _localSymbols.Add(symbolId, symbol)
+  }
+
+  private GetNode(nodeId : int) : HierarchyNode implements IMetadataReader.GetNode
+  {
+    _nodes[nodeId]
+  }
+
+  [Memoize]
+  private ResolveSymbol(symbolId : int) : ISymbol
+  {
+    mutable localSymbol;
+    when (_localSymbols.TryGetValue(symbolId, out localSymbol))
+      return localSymbol;
+
+    mutable externalSymbolRef;
+    when (_externalSymbols.TryGetValue(symbolId, out externalSymbolRef))
+    {
+      def assemblyName = _referencedAssemblies[externalSymbolRef.ReferenceId];
+      def node         = _nodes[externalSymbolRef.NodeId];
+      def assemblyId   = Project.GetAssemblyId(assemblyName);
+      foreach (s is IExportableSymbol in node.GetSymbols())
+        when (s.AssemblyId == assemblyId && string.Equals(s.SymbolTypeId, externalSymbolRef.SymbolTypeId, StringComparison.InvariantCulture))
+          return s;
+
+      _ = Project.FatalError.[object](SymbolLocation, $"Failed to load symbol '$(node.FullName)'. Add project reference to assembly '$assemblyName'.")
+    }
+
+    assert2(false, $"Symbol $symbolId is not resolved.");
+    null
+  }
+
+  private _nodes                : Dictionary[int,  HierarchyNode]           = Dictionary();
+  private _localSymbols         : Dictionary[int,  IImportableSymbol]       = Dictionary();
+  private _referencedAssemblies : Dictionary[byte, AssemblyName]            = Dictionary();
+  private _externalSymbols      : Dictionary[int,  ExternalSymbolReference] = Dictionary();
+
+  [Record]
+  private struct ExternalSymbolReference
+  {
+    public SymbolTypeId : string { get; }
+    public NodeId       : int    { get; }
+    public ReferenceId  : byte   { get; }
+  }
+}
+
+// ---- Serialization/MetadataWriter.n (Nitra.Serialization) ----
+public sealed class MetadataWriter : IMetadataWriter, IDisposable
+{
+  public this(stream : Stream, project : Project)
+  {
+    this(stream, project, project.RootNamespace)
+  }
+
+  public this(stream : Stream, project : Project, root : NamespaceSymbol)
+  {
+    _writer           = BinaryWriter(stream, Text.Encoding.UTF8);
+    _symbolBodyWriter = BinaryWriter(MemoryStream(), Text.Encoding.UTF8);
+    _root             = root;
+    Project           = project;
+  }
+
+  private _writer             : BinaryWriter;
+  private _symbolBodyWriter   : BinaryWriter;
+  private _root               : NamespaceSymbol;
+  private _namespaceNodes     : HashSet[HierarchyNode]              = HashSet();
+  private _nonTreeSymbols     : HashSet[IExportableSymbol]          = HashSet();
+  private _externalSymbols    : HashSet[IExportableSymbol]          = HashSet();
+  private _nodeIds            : Dictionary[HierarchyNode,     int]  = Dictionary();
+  private _symbolIds          : Dictionary[IExportableSymbol, int]  = Dictionary();
+  private _assemblyIds        : Dictionary[AssemblyName,      byte] = Dictionary();
+  private _serializationQueue : System.Collections.Generic.Queue[IExportableSymbol]            = System.Collections.Generic.Queue();
+
+  public Project : Project { get; }
+
+  public Dispose() : void
+  {
+    _writer.Dispose();
+    _symbolBodyWriter.Dispose();
+  }
+
+  public WriteSymbols() : void
+  {
+    def exportableSymbols = CollectExportableSymbols();
+    WriteNameTree(exportableSymbols.Select(_.Node));
+    WriteSymbolHeadersAndSerializeSymbols(exportableSymbols);
+    WriteReferencedAssemblies();
+    WriteNameTree(_externalSymbols.Select(_.Node));
+    WriteExternalSymbolInfo();
+    WriteSymbolBodies();
+    _writer.Flush();
+  }
+
+  private WriteNameTree(nodes : IEnumerable[HierarchyNode]) : void
+  {
+    def write(node : HierarchyNode) : int
+    {
+      assert(node.Parent != null);
+
+      mutable id;
+      unless (_nodeIds.TryGetValue(node, out id))
+      {
+        def parentId = if (node.Parent : object != _root.Node) write(node.Parent) else -1;
+        id = _nodeIds.Count + 1;
+        def hasNamespaceSymbol = _namespaceNodes.Contains(node);
+        _nodeIds.Add(node, id);
+        _writer.Write(id);
+        _writer.Write(parentId);
+        _writer.Write(node.PartName);
+        _writer.Write(hasNamespaceSymbol);
+      }
+      id
+    }
+    foreach (node in nodes)
+      _ = write(node);
+    _writer.Write(0 : int);
+  }
+
+  private WriteSymbolHeadersAndSerializeSymbols(symbols : IEnumerable[IExportableSymbol]) : void
+  {
+    // tree symbols
+    foreach (group in symbols.GroupBy(_.SymbolTypeId))
+    {
+      _writer.Write(group.Key);
+      foreach (symbol in group)
+      {
+        def symbolId = GetSymbolId(symbol);
+        def nodeId   = GetNodeId(symbol);
+        _writer.Write(symbolId);
+        _writer.Write(nodeId);
+        _serializationQueue.Enqueue(symbol);
+      }
+      _writer.Write(0 : int);
+    }
+
+    // serialization of all symbols
+    while (_serializationQueue.Count > 0)
+    {
+      def symbol   = _serializationQueue.Dequeue();
+      def symbolId = GetSymbolId(symbol);
+      _symbolBodyWriter.Write(symbolId);
+      symbol.Serialize(_symbolBodyWriter, this);
+    }
+
+    // non tree symbols fully populated only after actual serialization
+    foreach (group in _nonTreeSymbols.GroupBy(_.SymbolTypeId))
+    {
+      _writer.Write(group.Key);
+      foreach (symbol in group)
+      {
+        def symbolId = GetSymbolId(symbol);
+        def name     = symbol.Name;
+        _writer.Write(symbolId);
+        _writer.Write(0 : int);
+        _writer.Write(name);
+      }
+      _writer.Write(0 : int);
+    }
+
+    _writer.Write("");
+  }
+
+  private WriteReferencedAssemblies() : void
+  {
+    foreach (pair in _assemblyIds)
+    {
+      def assemblyId   = pair.Value;
+      def assemblyName = pair.Key;
+      _writer.Write(assemblyId);
+      _writer.Write(assemblyName.FullName);
+    }
+    _writer.Write(0 : byte);
+  }
+
+  private WriteExternalSymbolInfo() : void
+  {
+    foreach (group in _externalSymbols.GroupBy(_.SymbolTypeId))
+    {
+      _writer.Write(group.Key);
+      foreach (symbol in group)
+      {
+        def symbolId   = GetSymbolId(symbol);
+        def nodeId     = GetNodeId(symbol);
+        def assemblyId = GetAssemblyId(symbol);
+        _writer.Write(symbolId);
+        _writer.Write(nodeId);
+        _writer.Write(assemblyId);
+      }
+      _writer.Write(0 : int);
+    }
+    _writer.Write("");
+  }
+
+  private WriteSymbolBodies() : void
+  {
+    // symbol bodies already written
+    (_symbolBodyWriter.BaseStream :> MemoryStream).WriteTo(_writer.BaseStream);
+    _writer.Write(0 : int);
+  }
+
+  private WriteSymbolRef(symbol : IExportableSymbol, writer : BinaryWriter) : void implements IMetadataWriter.WriteSymbolRef
+  {
+    if (null == symbol)
+      writer.Write(0 : int);
+    else if (symbol.Node == null)
+    {
+      unless (symbol.AssemblyId == AssemblyIds.CurrentAssembly)
+        throw NotSupportedException("Serialization of referencies to external non tree symbols not supported");
+
+      // локальный недревесный символ
+      AddNonTreeSymbol(symbol);
+      writer.Write(GetSymbolId(symbol));
+    }
+    else if (symbol.AssemblyId == AssemblyIds.CurrentAssembly)
+    {
+      // локальный древесный символ
+      writer.Write(GetSymbolId(symbol));
+    }
+    else
+    {
+      // внешний древесный символ
+      AddExternalSymbol(symbol);
+      writer.Write(GetSymbolId(symbol));
+    }
+  }
+
+  private WriteLocation(location : Location, writer : BinaryWriter) : void implements IMetadataWriter.WriteLocation
+  {
+    ignore(location, writer); //TODO: implement location writing
+  }
+
+  private CollectExportableSymbols() : List[IExportableSymbol]
+  {
+    def buffer = List();
+    def visitNode(node)
+    {
+      foreach (symbol in node.GetSymbols())
+      {
+        when (symbol.AssemblyId == AssemblyIds.CurrentAssembly && symbol is IExportableSymbol)
+          buffer.Add(symbol :> IExportableSymbol);
+        when (symbol is NamespaceSymbol)
+          _ = _namespaceNodes.Add(node);
+      }
+      foreach (node in node.SubNodes)
+        visitNode(node);
+    }
+    visitNode(_root.Node);
+    buffer
+  }
+
+  private AddNonTreeSymbol(symbol : IExportableSymbol) : void
+  {
+    when (_nonTreeSymbols.Add(symbol))
+      _serializationQueue.Enqueue(symbol);
+  }
+
+  private AddExternalSymbol(symbol : IExportableSymbol) : void
+  {
+    when (_externalSymbols.Add(symbol))
+    {
+      def assemblyName = Project.GetAssemblyName(symbol.AssemblyId);
+      unless (_assemblyIds.ContainsKey(assemblyName))
+      {
+        def id = (_assemblyIds.Count + 1) :> byte;
+        _assemblyIds.Add(assemblyName, id);
+      }
+    }
+  }
+
+  private GetNodeId(symbol : IExportableSymbol) : int
+  {
+    _nodeIds[symbol.Node]
+  }
+
+  private GetSymbolId(symbol : IExportableSymbol) : int
+  {
+    mutable id;
+    unless (_symbolIds.TryGetValue(symbol, out id))
+    {
+      id = _symbolIds.Count + 1;
+      _symbolIds.Add(symbol, id);
+    }
+    id
+  }
+
+  private GetAssemblyId(symbol : IExportableSymbol) : byte
+  {
+    assert(symbol.AssemblyId != AssemblyIds.CurrentAssembly);
+    assert(symbol.AssemblyId != AssemblyIds.NoAssembly);
+
+    def assemblyName = Project.GetAssemblyName(symbol.AssemblyId);
+    _assemblyIds[assemblyName]
+  }
+}
+
+// ---- Serialization/TypeTag.n (Nitra.Serialization) ----
+public enum TypeTag : byte
+{
+  | Empty
+  | Object
+  | Variant
+  | Boolean
+  | Char
+  | SByte
+  | Byte
+  | Int16
+  | UInt16
+  | Int32
+  | UInt32
+  | Int64
+  | UInt64
+  | Single
+  | Double
+  | Decimal
+  | DateTime
+  | String      = 18
+  | Tuple       = 19
+  | Collection  = 20
+  | FirstCustom = 21
+}

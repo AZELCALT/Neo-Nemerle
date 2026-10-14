@@ -1,0 +1,1034 @@
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+using Nemerle.Assertions;
+using SCG = System.Collections.Generic;
+using NemerleMacros;
+using System.Text;
+using System.Diagnostics;
+using Nitra.Runtime;
+using Nitra.Declarations;
+using Nitra.Serialization2;
+using System.Collections.Immutable;
+using System.Collections.Specialized;
+using System.ComponentModel;
+using Nemerle.Extensions;
+using Nemerle.Imperative;
+using System.Reflection;
+using Nemerle.ExtensionsMacros;
+using System.Threading;
+using Nitra.Internal;
+using System.IO;
+using Nitra.Serialization2Macros;
+using Nitra.Runtime.Typing;
+using Nitra.InternalMacros;
+using NitraMacros;
+
+// ---- ProjectSystem/CompilerMessage.n (Nitra.ProjectSystem) ----
+[Record]
+public struct CompilerMessage : IComparable[CompilerMessage]
+{
+  public static EmptyCompilerMessages : ReadOnlyCollection[CompilerMessage] = ReadOnlyCollection(array(0));
+
+  public Type              : CompilerMessageType                 { get; }
+  public Kind              : Guid                                { get; }
+  public Location          : Location                            { get; }
+  public Text              : string                              { get; }
+  public Number            : int                                 { get; }
+
+  internal mutable _nestedMessages : List[CompilerMessage];
+
+  public HasNestedMessages : bool                                { get { _nestedMessages != null } }
+  public NestedMessages    : ReadOnlyCollection[CompilerMessage]
+  {
+    get { if (HasNestedMessages) ReadOnlyCollection(_nestedMessages) else EmptyCompilerMessages }
+  }
+
+  public override ToString() : string { this.Location.ToMessageString() + Text }
+  
+  public CompareTo(other : Nitra.ProjectSystem.CompilerMessage) : int
+  {
+    this.Location.CompareTo(other.Location)
+  }
+}
+
+public module CompilerMessageExtensions
+{
+  public TranslateTo(this message : CompilerMessage, target : ICompilerMessages) : void
+  {
+    if (message.HasNestedMessages)
+      using (root = target.ReportRootMessage(message.Type, message.Location, message.Text, message.Number))
+        message._nestedMessages.TranslateTo(root)
+    else
+      target.ReportMessage(message.Type, message.Location, message.Text, message.Number)
+  }
+
+  public TranslateTo(this messages : Seq[CompilerMessage], target : ICompilerMessages) : void
+  {
+    foreach (message in messages)
+      message.TranslateTo(target)
+  }
+}
+
+// ---- ProjectSystem/CompilerMessageList.n (Nitra.ProjectSystem) ----
+public sealed class CompilerMessageList : IRootCompilerMessages, Seq[CompilerMessage], SCG.ICollection[CompilerMessage]
+{
+  private static _empty : List[CompilerMessage] = List();
+  
+  public Kind : Guid { get; private set; }
+  private         _messages   : List[CompilerMessage];
+  private mutable _isDisposed : bool;
+
+  public this()
+  {
+    this(List())
+  }
+
+  private this(messages : List[CompilerMessage])
+  {
+    _messages = messages;
+  }
+
+  public GetMessages() : ReadOnlyCollection[CompilerMessage]
+  {
+    ReadOnlyCollection(_messages)
+  }
+
+  public ReportMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : void
+    requires !_isDisposed otherwise throw InvalidOperationException("Object disposed")
+  {
+    _messages.Add(CompilerMessage(messageType, this.Kind, loc, msg, num, null))
+  }
+
+  public ReportRootMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : IRootCompilerMessages
+    requires !_isDisposed otherwise throw InvalidOperationException("Object disposed")
+  {
+    def m = CompilerMessage(messageType, this.Kind, loc, msg, num, List());
+    _messages.Add(m);
+    CompilerMessageList(m._nestedMessages)
+  }
+
+  public SetFutureMessagesKind(kind : Guid) : void { Kind = kind; }
+
+  public IsEmpty : bool { get { _messages.Count == 0 } }
+  
+  public Remove(predicate : Func[Guid, Location, bool]) : void
+  {
+    IgnoreParams();
+    throw NotImplementedException();
+  }
+  
+  public Clear() : void
+  {
+    _messages.Clear();
+  }
+
+  public Add(item : Nitra.ProjectSystem.CompilerMessage) : void
+  {
+    IgnoreParams();
+    throw NotImplementedException();
+  }
+  
+  public Contains(item : Nitra.ProjectSystem.CompilerMessage) : bool
+  {
+    IgnoreParams();
+    throw NotImplementedException();
+  }
+  
+  public CopyTo(ary : array[Nitra.ProjectSystem.CompilerMessage], arrayIndex : int) : void
+  {
+    _messages.CopyTo(ary, arrayIndex)
+  }
+  
+  public Count : int
+  {
+    get{ _messages.Count }
+  }
+  
+  public IsReadOnly : bool { get { true } }
+  
+  public Remove(item : Nitra.ProjectSystem.CompilerMessage) : bool
+  {
+    _ = item;
+    throw NotImplementedException()
+  }
+  
+  
+  public Dispose() : void
+  {
+    _isDisposed = true;
+  }
+  
+  public GetEnumerator() : List[CompilerMessage].Enumerator
+  {
+    if (_messages == null)
+      _empty.GetEnumerator();
+    else
+      _messages.GetEnumerator();
+  }
+  
+  private GetEnumerator2() : IEnumerator[CompilerMessage] implements Seq[CompilerMessage].GetEnumerator
+  { 
+    if (_messages == null)
+      Enumerable.Empty().GetEnumerator()
+    else
+      (_messages : Seq[CompilerMessage]).GetEnumerator()
+  }
+}
+
+// ---- ProjectSystem/CompilerMessages.n (Nitra.ProjectSystem) ----
+public abstract class CompilerMessages : ICompilerMessages
+{
+  public NumberPrefix : string { get; }
+
+  protected this(numberPrefix : string = null)
+  {
+    NumberPrefix = if (string.IsNullOrEmpty(numberPrefix)) "MSG" else numberPrefix;
+  }
+
+  public ErrorCount : int { get; private set; }
+
+  public ReportMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : void
+  {
+    match(messageType)
+    {
+      | FatalError | Error => ErrorCount++
+      | _ => ()
+    }
+    ReportMessageImpl(loc, msg, num, messageType);
+  }
+
+  public ReportRootMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : IRootCompilerMessages
+  {
+    match(messageType)
+    {
+      | FatalError | Error => ErrorCount++
+      | _ => ()
+    }
+    ReportMessageImpl(loc, msg, num, messageType);
+    FakeRootCompilerMessages(this)
+  }
+
+  public abstract SetFutureMessagesKind(kind : Guid) : void;
+  public abstract Remove(predicate : Func[Guid, Location, bool]) : void;
+  
+  protected abstract ReportMessageImpl(loc : Location, msg : string, num : int, messageType : CompilerMessageType) : void;
+
+  protected FormatMessage(loc : Location, msg : string, num : int, messageType : CompilerMessageType) : string
+  {
+    def text = StringBuilder().Append(loc.ToMessageString()).Append(GetMessagePrefix(messageType));
+
+    when (num != -1)
+      _ = text.Append(NumberPrefix).Append(num).Append(": ");
+
+    text.Append(msg).ToString()
+  }
+
+  protected static GetMessagePrefix(messageType : CompilerMessageType) : string
+  {
+    | FatalError | Error => "error: "
+    | Warning            => "warning: "
+    | Hint               => "hint: "
+  }
+}
+
+// ---- ProjectSystem/ConsoleCompilerMessages.n (Nitra.ProjectSystem) ----
+public class ConsoleCompilerMessages : TextCompilerMessages
+{
+  public this(numberPrefix : string = null)
+  {
+    base(Console.Out, numberPrefix)
+  }
+
+  protected override ReportMessageImpl(loc : Location, msg : string, num : int, messageType : CompilerMessageType) : void
+  {
+    def oldColor = Console.ForegroundColor;
+    try
+    {
+      Console.ForegroundColor = GetMessageColor(messageType);
+      base.ReportMessageImpl(loc, msg, num, messageType);
+    }
+    finally Console.ForegroundColor = oldColor;
+  }
+
+  protected static GetMessageColor(messageType : CompilerMessageType) : ConsoleColor
+  {
+    | FatalError | Error => ConsoleColor.Red
+    | Warning            => ConsoleColor.Yellow
+    | Hint               => ConsoleColor.Gray
+  }
+}
+
+// ---- ProjectSystem/DebugCompilerMessages.n (Nitra.ProjectSystem) ----
+public class DebugCompilerMessages : CompilerMessages
+{
+  public this(numberPrefix : string = null)
+  {
+    base(numberPrefix)
+  }
+
+  protected override ReportMessageImpl(loc : Location, msg : string, num : int, messageType : CompilerMessageType) : void
+  {
+    def text = FormatMessage(loc, msg, num, messageType);
+    Debug.WriteLine(text)
+  }
+
+  public override SetFutureMessagesKind(kind : Guid) : void { IgnoreParams(); }
+  public override Remove(predicate : Func[Guid, Location, bool]) : void { IgnoreParams(); }
+}
+
+// ---- ProjectSystem/FakeRootCompilerMessages.n (Nitra.ProjectSystem) ----
+public sealed class FakeRootCompilerMessages : IRootCompilerMessages
+{
+  private _compilerMessages : ICompilerMessages;
+
+  public this(compilerMessages : ICompilerMessages)
+  {
+    assert(compilerMessages != null);
+    _compilerMessages = compilerMessages;
+  }
+
+  public ReportMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : void
+  {
+    _compilerMessages.ReportMessage(messageType, loc, msg, num)
+  }
+
+  public ReportRootMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : IRootCompilerMessages
+  {
+    _compilerMessages.ReportRootMessage(messageType, loc, msg, num)
+  }
+
+  public SetFutureMessagesKind(kind : Guid) : void { _compilerMessages.SetFutureMessagesKind(kind); }
+  public Remove(predicate : Func[Guid, Location, bool]) : void { _compilerMessages.Remove(predicate); }
+  
+  public Dispose() : void { }
+}
+
+// ---- ProjectSystem/File.n (Nitra.ProjectSystem) ----
+public abstract class File : ISourceSnapshotProvider, ISerializable
+{
+  private static _fileFactory : Func[IO.BinaryReader, MetadataReader, DeserializedFile] = fun (reader, metadataReader)
+  {
+    def fullName = reader.ReadString();
+    def language = metadataReader.ReadObject(reader);
+    DeserializedFile(fullName, language)
+  };
+  
+  public abstract Project     : Project        { get; }
+  public abstract Length      : int            { get; }
+  public abstract FullName    : string         { get; }
+  public virtual  Name        : string         { get { IO.Path.GetFileNameWithoutExtension(FullName) } }
+  public virtual  Id          : int            { get { -1 } }
+  public virtual  Version     : int            { get { 0 } }
+  public abstract ParseResult : IParseResult   { get; }
+  public abstract Ast         : IAst           { get; }
+  public abstract HasAst      : bool           { get; }
+  public          Statistics  : FileStatistics { get; }
+  public virtual  Language    : Language       { get { Language.Instance } }
+  public event    Redraw      : Action;
+  public virtual  IsFake      : bool           { get { false } }
+  public          IsActive    : bool           { get; protected set; }
+
+  [RecordIgnore] protected mutable _parseMessages : CompilerMessageList = CompilerMessageList();
+  public ParseMessages        : Seq[CompilerMessage] { get { _parseMessages } }
+
+  [RecordIgnore] protected mutable _astMessages : CompilerMessageList = CompilerMessageList();
+  public AstMessages          : CompilerMessageList { get { _astMessages } }
+
+  [RecordIgnore] protected mutable _typingMessages : CompilerMessageList = CompilerMessageList();
+  public TypingMessages       : CompilerMessageList{ get { _typingMessages } }
+  
+  protected this()
+  {
+    Statistics = null;
+  }
+  
+  protected this(statistics : FileStatistics)
+  {
+    Statistics = statistics;
+  }
+  
+  protected OnRedraw() : void
+  {
+    Redraw?.Invoke();
+  }
+
+  public abstract GetParseTree() : ParseTree;
+  public abstract DeepResetProperties() : void;
+
+  public GetCompilerMessages() : array[CompilerMessage]
+  {
+    def symbolErrors = 
+      if (HasAst)
+      {
+        def errorCollector = CollectSymbolErrorsVisitor();
+        errorCollector.Visit(Ast);
+        errorCollector.CompilerMessages
+      }
+      else CompilerMessageList();
+    def len1 =        _parseMessages.Count;
+    def len2 = len1 + _astMessages.Count;
+    def len3 = len2 + symbolErrors.Count;
+    def result = array(len3 + _typingMessages.Count);
+    _parseMessages.CopyTo (result, 0);
+    _astMessages.CopyTo   (result, len1);
+    symbolErrors.CopyTo   (result, len2);
+    _typingMessages.CopyTo(result, len3);
+    result
+  }
+
+  public abstract GetSource() : SourceSnapshot;
+  
+  public override ToString() : string { FullName }
+
+  public Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    when (metadataWriter.BeginWriteObject(this, writer))
+    {
+      writer.Write(FullName);
+      metadataWriter.WriteObject(Language, writer);
+    }
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    mutable file;
+    _ = metadataReader.BeginReadObject(reader, out file, _fileFactory);
+    file
+  }
+
+  GetDeserializationType() : System.Type implements ISerializable.GetType { typeof(File) }
+
+  public virtual GetEvalPropertiesData() : FileEvalPropertiesData
+  {
+    FileEvalPropertiesData(this.FullName, this.Name, this.Id, this.Version, this.Ast, this.Statistics?.Typing, this.IsActive)
+  }
+
+  public static GetEvalPropertiesData(files : Seq[File]) : ImmutableArray[FileEvalPropertiesData]
+  {
+    def buffer = ImmutableArray.CreateBuilder();
+    foreach (file in files)
+      buffer.Add(file.GetEvalPropertiesData());
+    buffer.ToImmutable();
+  }
+}
+
+public abstract class ConcreteFile : File
+{
+          _parser      : IncrementalParser = IncrementalParser();
+  mutable _parseResult : IParseResult;
+  mutable _ast         : IAst;
+  mutable _parseTree   : ParseTree;
+
+  protected this(statistics : FileStatistics = null)
+  {
+    base(statistics);
+  }
+
+  public override ParseResult : IParseResult
+  {
+    get
+    {
+      when (_parseResult == null)
+        ReParse();
+      _parseResult
+    }
+  }
+
+  public override HasAst : bool { get { _ast != null } }
+  
+  public override Ast        : IAst
+  {
+    get
+    {
+      when (_ast == null)
+        UpdateAst();
+      _ast
+    }
+  }
+
+  public override GetParseTree() : ParseTree
+  {
+    when (_parseTree == null)
+      UpdateParseTree();
+    _parseTree
+  }
+
+  public virtual ResetCache() : void
+  {
+    _parseMessages.Clear();
+    _parseResult = null;
+    ResetParseTree();
+  }
+
+  public virtual ResetParseTree() : void
+  {
+    ResetAst();
+
+    _parseTree   = null;
+  }
+
+  public virtual ResetAst() : void
+  {
+    _astMessages.Clear();
+    _typingMessages.Clear();
+
+    _ast     = null;
+  }
+
+  public override DeepResetProperties() : void
+  {
+    _typingMessages.Clear();
+    when (_ast != null)
+      IAstExtensions.DeepResetProperties(_ast);
+  }
+
+  protected virtual GetParseSession() : ParseSession
+  {
+    def language = Language;
+    assert(language.StartRule != null);
+
+    ParseSession(language.StartRule, language.CompositeGrammar, compilerMessages=_parseMessages);
+  }
+
+  public virtual ReParse() : void
+  {
+    def stat = Statistics;
+    stat?.Parse?.Restart();
+
+    def parseSession = GetParseSession();
+    _parseMessages.Clear();
+    _astMessages.Clear();
+    _typingMessages.Clear();
+
+    _parseResult     = _parser.DetectChangesAndParse(parseSession, GetSource());
+
+    stat?.Parse?.Stop();
+  }
+
+  public virtual UpdateParseTree() : void
+  {
+    when (_parseResult == null)
+      ReParse();
+
+    def stat = Statistics;
+    // TODO: The parse tree does not materialize here. So the measurements are incorrect.
+    stat?.ParseTree?.Restart();
+
+    _parseTree = _parseResult.CreateParseTree();
+
+    stat?.ParseTree?.Stop();
+  }
+
+  public virtual UpdateAst() : void
+  {
+    when (_parseResult == null)
+      ReParse();
+
+    when (_parseTree == null)
+      UpdateParseTree();
+
+    def stat = Statistics;
+    stat?.Ast?.Restart();
+
+    _astMessages.Clear();
+    _typingMessages.Clear();
+
+    _ast = AstContext.GetAstUntyped(_parseTree, _astMessages);
+
+    stat?.Ast?.Stop();
+  }
+}
+
+internal sealed class DeserializedFile : ConcreteFile
+{
+  public this(fullName : string, language : Language)
+  {
+    base(null);
+    _fullName = fullName;
+    _language = language;
+  }
+
+  private         _fullName : string;
+  private         _language : Language;
+  private mutable _source   : SourceSnapshot;
+
+  public override Project     : Project        { get { null } }
+  public override Length      : int            { get { 0 } }
+  public override FullName    : string         { get { assert(_fullName : object != null, "Deserialized file is not initialized"); _fullName } }
+  public override Language    : Language       { get { assert(_language : object != null, "Deserialized file is not initialized"); _language } }
+  public override GetSource() : SourceSnapshot { when(_source == null) _source = SingleLineSourceSnapshot("", this); _source }
+  public override IsFake      : bool           { get { true } }
+}
+
+// ---- ProjectSystem/FileBased/FsFile.n (Nitra.ProjectSystem) ----
+public class FsFile[TAst] : ConcreteFile
+  where TAst: IAst
+{
+  public FilePath  : string          { get; }
+  public FsProject : FsProject[TAst] { get; internal set; }
+
+  public this([NotNull] filePath : string, [NotNull] language : Language, fsProject : FsProject[TAst] = null, statistics : FileStatistics = null)
+  {
+    base(statistics);
+    Language = language;
+    assert3(IO.File.Exists(filePath));
+    FilePath = filePath;
+    when (fsProject != null)
+      fsProject.FsFiles.Add(this);
+  }
+
+  public override Length   : int      { get { IO.FileInfo(FilePath).Length :> int } }
+  public override FullName : string   { get { this.FilePath } }
+  public override Project  : Project  { get { this.FsProject } }
+  public override Language : Language { get; }
+
+  public override GetSource() : SourceSnapshot { SourceSnapshot(IO.File.ReadAllText(FilePath, Encoding.UTF8), this)  }
+}
+
+// ---- ProjectSystem/FileBased/FsProject.n (Nitra.ProjectSystem) ----
+public class FsProject[TAst] : Project
+  where TAst: IAst
+{
+  public FsSolution : FsSolution[TAst]                   { get; internal set; }
+  public FsFiles    : ObservableCollection[FsFile[TAst]] { get; private set; }
+
+  public this([NotNull] solution : FsSolution[TAst], projectDir : string, libs : Seq[LibReference])
+  {
+    base();
+    FsFiles = ObservableCollection();
+    FsFiles.CollectionChanged += OnCollectionChanged;
+    solution.FsProjects.Add(this);
+    Libs = libs;
+    ProjectDir = projectDir;
+  }
+  
+  public this([NotNull] solution : FsSolution[TAst], projectDir : string, [NotNull] files : Seq[FsFile[TAst]], libs : Seq[LibReference])
+  {
+    this(solution, projectDir, libs);
+    foreach (file in files)
+      this.FsFiles.Add(file);
+  }
+
+  public this([NotNull] solution : FsSolution[TAst], projectDir : string, [NotNull] file : FsFile[TAst], libs : Seq[LibReference])
+  {
+    this(solution, projectDir, libs);
+    this.FsFiles.Add(file);
+  }
+
+  public override Files : Seq[File]
+  {
+    get { this.FsFiles }
+  }
+  
+  OnCollectionChanged(_sender : object, e : NotifyCollectionChangedEventArgs) : void
+  {
+    when (e.OldItems != null)
+    {
+      foreach(oldItem is FsFile[TAst] in e.OldItems)
+      {
+        oldItem.FsProject = null;
+        //oldItem.PropertyChanged -= this.OnItemPropertyChanged;
+      }
+    }
+
+    when (e.NewItems != null)
+    {
+      foreach(newItem is FsFile[TAst] in e.NewItems)
+      {
+        def oldProj = newItem.FsProject;
+        when (oldProj != null)
+          _ = oldProj.FsFiles.Remove(newItem);
+        newItem.FsProject = this;
+        //Add listener for each item on PropertyChanged event
+        //newItem.PropertyChanged += this.OnItemPropertyChanged;         
+      }
+    }
+  }
+
+  //OnItemPropertyChanged(sender : object, e : PropertyChangedEventArgs) : void
+  //{
+  //  when (sender is FsFile as item)
+  //    ModifiedItems.Add(item);
+  //}
+}
+
+// ---- ProjectSystem/FileBased/FsSolution.n (Nitra.ProjectSystem) ----
+public class FsSolution[TAst] : Solution
+  where TAst: IAst
+{
+  public FsProjects : ObservableCollection[FsProject[TAst]] { get; }
+
+  public this()
+  {
+    FsProjects = ObservableCollection();
+    FsProjects.CollectionChanged += OnCollectionChanged;
+  }
+
+  public override Projects : Seq[Project]
+  {
+    get { FsProjects }
+  }
+
+  OnCollectionChanged(_sender : object, e : NotifyCollectionChangedEventArgs) : void
+  {
+    when (e.OldItems != null)
+    {
+      foreach(oldItem is FsProject[TAst] in e.OldItems)
+      {
+        oldItem.FsSolution = null;
+        //oldItem.PropertyChanged -= this.OnItemPropertyChanged;
+      }
+    }
+
+    when (e.NewItems != null)
+    {
+      foreach(newItem is FsProject[TAst] in e.NewItems)
+      {
+        def oldSolution = newItem.FsSolution;
+        when (oldSolution != null)
+          _ = oldSolution.FsProjects.Remove(newItem);
+        newItem.FsSolution = this;
+        //Add listener for each item on PropertyChanged event
+        //newItem.PropertyChanged += this.OnItemPropertyChanged;         
+      }
+    }
+  }
+
+  //OnItemPropertyChanged(sender : object, e : PropertyChangedEventArgs) : void
+  //{
+  //  when (sender is FsFile as item)
+  //    ModifiedItems.Add(item);
+  //}
+}
+
+// ---- ProjectSystem/FileStatistics.n (Nitra.ProjectSystem) ----
+public class FileStatistics
+{
+  public this([NotNull] parse : StatisticsTask.Single, [NotNull] parseTree : StatisticsTask.Single, [NotNull] ast : StatisticsTask.Single, typing : StatisticsTask.Container)
+  {
+    Parse     = parse;
+    ParseTree = parseTree;
+    Ast       = ast;
+    Typing    = typing;
+  }
+
+  public Parse     : StatisticsTask.Single    { get; }
+  public ParseTree : StatisticsTask.Single    { get; }
+  public Ast       : StatisticsTask.Single    { get; }
+  public Typing    : StatisticsTask.Container { get; }
+}
+
+// ---- ProjectSystem/LibReference.n (Nitra.ProjectSystem) ----
+public abstract class LibReference
+{
+  public abstract Kind : string { get; }
+  public abstract Path : string { get; }
+  public virtual Serialize() : string { Kind + ":" + this }
+  public static Deserialize(data : string) : LibReference
+  {
+    def index1 = data.IndexOf(':');
+
+    when  (index1 <= 0)
+      return null;
+    
+    def value = data.Substring(index1 + 1, data.Length - index1 - 1);
+    def kind  = data.Substring(0, index1);
+
+    match (kind)
+    {
+      | "File"     => FileLibReference(value)
+      | "FullName" => FullNameLibReference(value)
+      | "Project"  =>
+        def index2 = value.IndexOf(':');
+        assert(index2 != 0);
+        if (index2 < 0)
+          FileLibReference(value)
+        else
+        {
+          def projectId = int.Parse(value.Substring(index2 + 1, value.Length - index2 - 1));
+          def path  = value.Substring(0, index2);
+          ProjectReference(projectId, path)
+        }
+        
+      | _ => null
+    }
+  }
+}
+
+[Record]
+[StructuralEquality]
+public class ProjectReference : LibReference
+{
+  public this(path : string) { this(-1, path); }
+  
+  public          ProjectId : int;
+  public override Path      : string { get; }
+  public override Kind      : string { get { "Project" } }
+
+  public override ToString() : string { ProjectId + ":" + Path }
+}
+
+[Record]
+[StructuralEquality]
+public class FileLibReference : LibReference
+{
+  public override Path : string { get; }
+  public override Kind : string { get { "File" } }
+
+  public override ToString() : string { Path }
+}
+
+[Record]
+[StructuralEquality]
+public class FullNameLibReference : LibReference
+{
+  public override Kind : string { get { "FullName" } }
+  
+  [EqualsIgnore]
+  [RecordIgnore]
+  private mutable _path : string;
+  
+  public FullName : string { get; }
+
+  [EqualsIgnore]
+  [RecordIgnore]
+  public Exception : Exception { get; protected set; }
+  
+  public override Path : string
+  {
+    get
+    {
+      when (_path == null)
+      {
+        _path = "";
+        try
+        {
+          def asm = Assembly.ReflectionOnlyLoad(FullName); // TODO: This aproch is platform dependent! Replace with backand call!
+          _path = asm.Location;
+        }
+        catch { | e => this.Exception = e; }
+      }
+        
+      _path
+    }
+  }
+  
+  public override ToString() : string { FullName }
+} // class
+
+// ---- ProjectSystem/Project.n (Nitra.ProjectSystem) ----
+public abstract class Project : ICompilerMessages
+{
+  private _assemblies : List[AssemblyName] = List();
+  public CompilerMessages : ICompilerMessages { get; }
+  public RootNamespace : NamespaceSymbol { get; private set; }
+  public Data : object { get; set; }
+  public abstract Files : Seq[File] { get; }
+  public virtual Solution : Solution { get; protected set; }
+  public virtual Libs : Seq[LibReference] { get; protected set; }
+  public ProjectDir : string { get; protected set; }
+  public event OnSymbolAssemblyResolve : Func[Project, AssemblyName, Assembly];
+
+  protected this()
+  {
+    CompilerMessages = CompilerMessageList();
+  }
+
+  protected this([NotNull] compilerMessages : ICompilerMessages)
+  {
+    CompilerMessages = compilerMessages;
+  }
+
+  public virtual Init(referencedAssemblies : Seq[AssemblyName]) : void
+  {
+    _assemblies.Clear();
+
+    repeat(AssemblyIds.ReservedIdsCount)
+      _assemblies.Add(null);
+
+    _assemblies.AddRange(referencedAssemblies);
+
+    def root = HierarchyNode(this);
+    def rootNamespace = NamespaceSymbol(null : string);
+    root.SetRootNamespaceSymbol(rootNamespace);
+    RootNamespace = rootNamespace;
+  }
+
+  internal ResolveSymbolAssembly(fullName : string) : Assembly
+  {
+    def targetName = AssemblyName(fullName);
+    foreach (assembly in AppDomain.CurrentDomain.GetAssemblies())
+    {
+      def currentName = assembly.GetName();
+      when (StringComparer.OrdinalIgnoreCase.Equals(targetName.Name, currentName.Name))
+      when (currentName.Version >= targetName.Version)
+        return assembly;
+    }
+
+    OnSymbolAssemblyResolve?.Invoke(this, targetName) ?? Assembly.Load(targetName)
+  }
+
+  public GetAssemblyName(assemblyId : byte) : AssemblyName
+  {
+    _assemblies[assemblyId]
+  }
+
+  [Memoize]
+  public GetAssemblyId(assemblyName : AssemblyName) : byte
+  {
+    def arrayEquals(a : array[byte], b : array[byte]) : bool
+    {
+      when (ReferenceEquals(a, b))
+        return true;
+      when (a == null || b == null)
+        return false;
+      when (a.Length != b.Length)
+        return false;
+      for(mutable i = 0; i < a.Length; ++i)
+        when (a[i] != b[i])
+          return false;
+      true
+    }
+
+    mutable nearestVersion = Version();
+    mutable result = AssemblyIds.NoAssembly;
+    for (mutable index = AssemblyIds.ReservedIdsCount; index < _assemblies.Count; ++index)
+    {
+      def n = _assemblies[index];
+      when (n.Name == assemblyName.Name && arrayEquals(n.GetPublicKeyToken(), assemblyName.GetPublicKeyToken()))
+      {
+        when (n.Version == assemblyName.Version)
+          return index :> byte;
+
+        when (n.Version > assemblyName.Version && n.Version >= nearestVersion)
+          result = index :> byte;
+      }
+    }
+    result
+  }
+
+  public GetProjectSupport() : IProjectSupport
+  {
+    def files = Files.ToArray();
+
+    when (files.Length == 0)
+      return null;
+    
+    def fileWithAst = files.FirstOrDefault(f => f.Ast != null);
+    
+    when (fileWithAst == null)
+      return null;
+    
+    match (fileWithAst.Ast)
+    {
+      | x is IProjectSupport => x
+      | x => 
+        Trace.WriteLine($"The $(x.GetType().FullName) not support IProjectSupport.");
+        null
+    }
+  }
+
+  public UpdateProperties() : void { UpdateProperties(default(CancellationToken)) }
+
+  public virtual UpdateProperties(cancellationToken : CancellationToken) : void
+  {
+    def files = Files.ToArray();
+
+    when (files.Length == 0)
+      return;
+
+    foreach (file in files)
+      file.DeepResetProperties();
+
+    def projectSupport = GetProjectSupport();
+    when (projectSupport != null)
+    {
+      this.Data = projectSupport.RefreshReferences(cancellationToken, this);
+      projectSupport.RefreshProject(cancellationToken, File.GetEvalPropertiesData(files), this.Data);
+    }
+  }
+
+  public virtual EvalProperties(context : DependentPropertyEvalContext, passName : string, stage : int) : void
+  {
+    def evalHost = ProjectEvalPropertiesHost(File.GetEvalPropertiesData(this.Files));
+    evalHost.EvalProperties(context, passName, stage);
+  }
+
+  public virtual AddSymbolRef(_symbol : Symbol, _loc : Location) : void
+  {
+  }
+
+  public virtual AddSymbolDef(_symbol : Symbol, _loc : Location) : void
+  {
+  }
+
+  public ReportMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : void
+  {
+    CompilerMessages.ReportMessage(messageType, loc, msg, num)
+  }
+
+  public ReportRootMessage(messageType : CompilerMessageType, loc : Location, msg : string, num : int) : IRootCompilerMessages
+  {
+    CompilerMessages.ReportRootMessage(messageType, loc, msg, num)
+  }
+
+  public SetFutureMessagesKind(kind : Guid) : void { CompilerMessages.SetFutureMessagesKind(kind); }
+  public Remove(predicate : Func[Guid, Location, bool]) : void { CompilerMessages.Remove(predicate); }
+}
+
+// ---- ProjectSystem/ProjectSupportAttribute.n (Nitra.ProjectSystem) ----
+/// <summary>
+/// Define metadata for Nitra ProjectSupport class.
+/// </summary>
+[Record]
+[AttributeUsage(AttributeTargets.Assembly)]
+public class ProjectSupportAttribute : Attribute
+{
+  public Caption : string { get; }
+  public Type    : System.Type { get; }
+}
+
+// ---- ProjectSystem/Solution.n (Nitra.ProjectSystem) ----
+public abstract class Solution
+{
+  public abstract Projects : Seq[Project] { get; }
+
+  public virtual EvalProperties(context : DependentPropertyEvalContext, passName : string, stage : int) : void
+  {
+    def projects = this.Projects;
+
+    when (projects != null)
+      foreach (project in projects)
+        project.EvalProperties(context, passName, stage);
+  }
+}
+
+// ---- ProjectSystem/TextCompilerMessages.n (Nitra.ProjectSystem) ----
+public class TextCompilerMessages : CompilerMessages
+{
+  public Output : TextWriter { get; }
+
+  public this(output : TextWriter, numberPrefix : string = null)
+  {
+    assert(output != null);
+
+    base(numberPrefix);
+    Output = output;
+  }
+
+  protected override ReportMessageImpl(loc : Location, msg : string, num : int, messageType : CompilerMessageType) : void
+  {
+    def text = FormatMessage(loc, msg, num, messageType);
+    Output.WriteLine(text);
+    Debug.WriteLine(text);
+  }
+  
+  public override SetFutureMessagesKind(kind : Guid) : void { IgnoreParams(); }
+  public override Remove(predicate : Func[Guid, Location, bool]) : void { IgnoreParams(); }
+}

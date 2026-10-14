@@ -1,7 +1,0 @@
-﻿namespace Nitra.Typing.RuleMethod
-{
-  public interface ICached
-  {
-    IsCached : bool { get; }
-  }
-}

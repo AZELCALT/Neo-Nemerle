@@ -1,7 +1,0 @@
-﻿namespace Nitra.Typing.RuleMethod
-{
-  public interface IBody
-  {
-    Body : RuleMethodBody { get; }
-  }
-}

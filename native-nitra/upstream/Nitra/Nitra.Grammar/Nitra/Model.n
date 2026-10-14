@@ -1,0 +1,2023 @@
+//using Nitra.Macros;
+
+using Nitra.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.ExtensionsMacros;
+using Nemerle.Assertions;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Imperative;
+using System.Console;
+using SCG = System.Collections.Generic;
+using System.Globalization;
+using Nitra.Grammar.Utils;
+using Nemerle.Compiler.AST;
+using System.Text;
+using System.Text.RegularExpressions;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+using Nitra;
+using Nitra.ProjectSystem;
+using Nemerle.Surround;
+using Nemerle.Compiler.Parsetree;
+using NemerleMacros;
+using G = NitraSyntaxParseTree;
+using Nemerle.Compiler.global_env;
+using System.Globalization.UnicodeCategory;
+using Nitra.Runtime.Typing;
+using Nitra.Runtime;
+using Nitra.Grammar;
+using NitraMacros;
+
+[assembly: DefineSurround("newSyntaxModuleOptions", false, def newOptions = SyntaxModuleOptions(this), newOptions)]
+
+[assembly: DefineSurround("newOptions", false, def newOptions = RuleDefinitionOptions(this), newOptions)]
+
+// ---- Model/AstType.n (Nitra.Model) ----
+[Record, StructuralEquality]
+public variant AstType : Nitra.Runtime.Located
+{
+  | Ast        { Symbol : AstSymbol }
+  | Option     { Symbol : AstSymbol }
+  | List       { Symbol : AstSymbol }
+  | OptionList { Symbol : AstSymbol }
+  | NemerleExpr
+  | NemerleContext
+  | Void
+
+  [EqualsIgnore]
+  public override Location : Location { get; }
+
+  public IsSubtypeOf(other : AstType) : bool
+  {
+    match (this, other)
+    {
+      | (Ast(s1),        Ast(s2))        => s1.IsSubtypeOf(s2)
+      | (Option(s1),     Option(s2))     => s1.Equals(s2)
+      | (List(s1),       List(s2))       => s1.Equals(s2)
+      | (OptionList(s1), OptionList(s2)) => s1.Equals(s2)
+      | (NemerleExpr, NemerleExpr) => true
+      | (NemerleContext, NemerleContext) => true
+      | (Void,           Void)           => true
+      | _                                => false
+    }
+  }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Ast(s)        => s.FullName
+      | Option(s)     => s.FullName + "?"
+      | List(s)       => s.FullName + "+"
+      | OptionList(s) => s.FullName + "*"
+      | NemerleExpr   => "Nemerle.Compiler.Parsetree.PExpr"
+      | NemerleContext => "Nemerle.Compiler.NitraDialectServices.NitraDialectContext"
+      | Void          => "void"
+    }
+  }
+
+  public IsVoid : bool { get { this is Void } }
+
+  public this([Nemerle.Internal.MappedMemberAttribute("Location")] loc : Nitra.Runtime.Located)
+  {
+    this(loc.Location)
+  }
+}
+
+// ---- Model/FSM/FSM.n (Nitra.Model) ----
+[Record]
+public variant Transition
+{
+  public From : int;
+  public To : int;
+  | Symbol { Chars : RangeSet }
+  | Epsilon
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Symbol(chars) => $"Symbol($From $To [$chars])"
+      | Epsilon       => $"Epsilon($From $To)"
+    }
+  }
+}
+
+public class FSM
+{
+  public StateCount : int { get; }
+
+  public Transitions : list[Transition] { get; }
+
+  public StartState : int { get; }
+
+  public OkStates : Set[int] { get; }
+
+  public FailStates : Set[int]
+  {
+    get { Set().AddRange($[0..StateCount - 1]).RemoveRange(OkStates) }
+  }
+
+  public this()
+  {
+    StateCount  = 1;
+    Transitions = [];
+    StartState  = 0;
+    OkStates    = Set();
+  }
+
+  public this(startState : int, stateCount : int)
+  {
+    StateCount  = stateCount;
+    Transitions = [];
+    StartState  = startState;
+    OkStates    = Set();
+  }
+
+  private this(stateCount : int, transitions : list[Transition], startState : int, okStates : Set[int])
+  {
+    StateCount  = stateCount;
+    Transitions = transitions;
+    StartState  = startState;
+    OkStates    = okStates;
+  }
+
+  public NewState() : FSM * int
+  {
+    def fsm = FSM(StateCount + 1, Transitions, StartState, OkStates);
+    (fsm, StateCount);
+  }
+
+  public NewState(state : int) : FSM
+  {
+    if (state < StateCount)
+      this;
+    else
+      FSM(state + 1, Transitions, StartState, OkStates);
+  }
+
+  public NewStartState() : FSM * int
+  {
+    def fsm = FSM(StateCount + 1, Transitions, StateCount, OkStates);
+    (fsm, StateCount);
+  }
+
+  public NewOkState() : FSM * int
+  {
+    def fsm = FSM(StateCount + 1, Transitions, StartState, OkStates.Add(StateCount));
+    (fsm, StateCount);
+  }
+
+  public SetStartState(state : int) : FSM
+  {
+    FSM(StateCount, Transitions, state, OkStates);
+  }
+
+  public SetOkStates(states : Set[int]) : FSM
+  {
+    FSM(StateCount, Transitions, StartState, states);
+  }
+
+  public AddOkState(state : int) : FSM
+  {
+    FSM(StateCount, Transitions, StartState, OkStates.Replace(state));
+  }
+
+  public AddOkStates(states : IEnumerable[int]) : FSM
+  {
+    FSM(StateCount, Transitions, StartState, OkStates.ReplaceRange(states));
+  }
+
+  public RemoveOkState(state : int) : FSM
+  {
+    FSM(StateCount, Transitions, StartState, OkStates.Remove(state));
+  }
+
+  public RemoveOkStates(states : IEnumerable[int]) : FSM
+  {
+    FSM(StateCount, Transitions, StartState, OkStates.RemoveRange(states));
+  }
+
+  public SetTransitions(transitions : list[Transition]) : FSM
+  {
+    FSM(StateCount, transitions, StartState, OkStates);
+  }
+
+  public AddTransition(t : Transition) : FSM
+  {
+    assert3(0 <= t.To && t.To < StateCount && 0 <= t.From && t.From < StateCount);
+    FSM(StateCount, t :: Transitions, StartState, OkStates);
+  }
+
+  public IncludeFSM(fsm : FSM) : FSM * int * Set[int]
+  {
+    def transitions = fsm.Transitions.Fold(Transitions, (transition, transitions) =>
+    {
+      def from = transition.From + StateCount;
+      def to = transition.To + StateCount;
+      def transition = match (transition : Transition)
+      {
+      | Symbol(chars) => Transition.Symbol(from, to, chars);
+      | Epsilon       => Transition.Epsilon(from, to);
+      };
+      transition :: transitions;
+    });
+    def newFsm = FSM(StateCount + fsm.StateCount, transitions, StartState, OkStates);
+    (newFsm, fsm.StartState + StateCount, fsm.OkStates.Fold(Set(), (state, states) => states.Add(state + StateCount)))
+  }
+}
+
+// ---- Model/FSM/FSMBuilder.n (Nitra.Model) ----
+public module FSMBuilder
+{
+  private Wrap(this fsm : FSM) : FSM * int * int
+  {
+    def oldStart     = fsm.StartState;
+    def (fsm, start) = fsm.NewStartState();
+    def (fsm, ok)    = fsm.NewState();
+    def fsm = fsm.OkStates.Fold(fsm, (state, fsm) => fsm.AddTransition(Transition.Epsilon(state, ok)));
+    def fsm = fsm.AddTransition(Transition.Epsilon(start, oldStart));
+    def fsm = fsm.SetOkStates(Set().Add(ok));
+    (fsm, start, ok)
+  }
+
+  public Symbol(c : char) : FSM
+  {
+    Symbol(RangeSet().AddRange(c, c));
+  }
+
+  public Symbol(l : char, h : char) : FSM
+  {
+    Symbol(RangeSet().AddRange(l, h));
+  }
+
+  public ISymbol(c : char) : FSM
+  {
+    def l = char.ToLowerInvariant(c);
+    def u = char.ToUpperInvariant(c);
+    Symbol(RangeSet().AddRange(l, l).AddRange(u, u));
+  }
+
+  public Symbol(chars : RangeSet) : FSM
+  {
+    def (fsm, ok)  = FSM().NewOkState();
+    fsm.AddTransition(Transition.Symbol(fsm.StartState, ok, chars));
+  }
+
+  public Seq(seq : list[RangeSet]) : FSM
+  {
+    Seq(seq.Map(Symbol));
+  }
+
+  public Seq(fsms : list[FSM]) : FSM
+  {
+    | [] =>
+      def (fsm, ok)  = FSM().NewOkState();
+      fsm.AddTransition(Transition.Epsilon(fsm.StartState, ok));
+
+    | fsm :: fsms =>
+      def append(fsm2 : FSM, fsm1 : FSM) : FSM
+      {
+        def (fsm2, _, _) = fsm2.Wrap();
+        def (fsm1, start, ok) = fsm1.IncludeFSM(fsm2);
+        def fsm1 = fsm1.OkStates.Fold(fsm1, (state, fsm1) => fsm1.AddTransition(Transition.Epsilon(state, start)));
+        def fsm1 = fsm1.SetOkStates(ok);
+        fsm1;
+      }
+      fsms.FoldLeft(fsm, append)
+  }
+
+  public String(str : string) : FSM
+  {
+    Seq(str.Map(Symbol))
+  }
+
+  public IString(str : string) : FSM
+  {
+    Seq(str.Map(ISymbol))
+  }
+
+  public Option(fsm : FSM) : FSM
+  {
+    def (fsm, start, ok) = fsm.Wrap();
+    fsm.AddTransition(Transition.Epsilon(start, ok))
+  }
+
+  public RepeatMin(min : int, fsm : FSM) : FSM
+  {
+    def (fsm, _, _) = fsm.Wrap();
+    def loop = fsm
+      .OkStates.Fold(fsm, (state, fsm) =>
+        {
+          fsm
+            .AddTransition(Transition.Epsilon(fsm.StartState, state))
+            .AddTransition(Transition.Epsilon(state, fsm.StartState))
+        });
+    Seq($[0..min - 1].Map(_ => fsm).Append([loop]))
+  }
+
+  public RepeatMinMax(min : int, max : int, fsm : FSM) : FSM
+  {
+    def (fsm, _, _) = fsm.Wrap();
+    Seq($[0..min - 1].Map(_ => fsm).Append($[0..max - min - 1].Map(_ => Option(fsm))))
+  }
+
+  public Repeat(min : int, max : option[int], fsm : FSM) : FSM
+  {
+    if (max is Some(max))
+      RepeatMinMax(min, max, fsm)
+    else
+      RepeatMin(min, fsm)
+  }
+
+  public RepeatWithSeparatorMin(min : int, fsm : FSM, sep : FSM) : FSM
+  {
+    def tail = Seq([sep, fsm]);
+    def loop = RepeatMin(0, tail);
+    def fsm  = Seq(fsm :: $[1..min - 1].Map(_ => tail).Append([loop]));
+    if (min == 0) Option(fsm) else fsm;
+  }
+
+  public RepeatWithSeparatorMinMax(min : int, max : int, fsm : FSM, sep : FSM) : FSM
+  {
+    def tail = Seq([sep, fsm]);
+    def fsm = Seq(fsm :: $[1..min - 1].Map(_ => tail).Append($[0..max - min - 1].Map(_ => Option(tail))));
+    if (min == 0) Option(fsm) else fsm;
+  }
+
+  public RepeatWithSeparator(min : int, max : option[int], fsm : FSM, sep : FSM) : FSM
+  {
+    if (max is Some(max))
+      RepeatWithSeparatorMinMax(min, max, fsm, sep)
+    else
+      RepeatWithSeparatorMin(min, fsm, sep)
+  }
+
+  public Choice(fsms : list[FSM]) : FSM
+  {
+    def fsm = FSM();
+    def (fsm, startState) = fsm.NewStartState();
+    def (fsm, okState) = fsm.NewOkState();
+    def append(fsm2 : FSM, fsm1 : FSM) : FSM
+    {
+      def (fsm2, _, _) = fsm2.Wrap();
+      def (fsm1, start, ok) = fsm1.IncludeFSM(fsm2);
+      def fsm1 = fsm1.AddTransition(Transition.Epsilon(startState, start));
+      def fsm1 = ok.Fold(fsm1, (ok, fsm1) => fsm1.AddTransition(Transition.Epsilon(ok, okState)));
+      fsm1;
+    }
+    fsms.FoldLeft(fsm, append);
+  }
+}
+
+// ---- Model/FSM/FSMMatch.n (Nitra.Model) ----
+internal type RegularExpressionMatcher = string -> bool;
+
+public class FSMMatch
+{
+  public static MakeMatcher(fsm : FSM) : RegularExpressionMatcher
+  {
+    def fsm = FSMTransform.MakeDeterministic(fsm);
+    def transMap = fsm.Transitions.Cast.[Transition.Symbol]().Grouping(trans => (trans.From, trans));
+    def transitions = array(fsm.StateCount);
+    def start = fsm.StartState;
+    def okStates = fsm.OkStates;
+    foreach (kv in transMap)
+      transitions[kv.Key] = kv.Value.ToArray();
+    (str) =>
+    {
+      result:
+        {
+          mutable state = start;
+          for (mutable i = 0; i < str.Length; ++i)
+          {
+            def c = str[i];
+            def t = transitions[state];
+            when (t == null)
+              result(false);
+
+            def checkTransition(j)
+            {
+              if (j < t.Length)
+                if (t[j].Chars.Contains(c))
+                  state = t[j].To;
+                else
+                  checkTransition(j + 1)
+              else
+                result(false)
+            }
+            checkTransition(0)
+          }
+          okStates.Contains(state)
+        }
+    }
+  }
+}
+
+// ---- Model/FSM/FSMTransform.n (Nitra.Model) ----
+/// <summary>
+/// Description of DFSMTransform.
+/// </summary>
+public module FSMTransform
+{
+  public Normalize(fsm : FSM) : FSM
+  {
+    def transitions = fsm.Transitions.Fold(Hashtable(), (transition : Transition, transitions) =>
+      transitions.Update((transition.From, transition.To), (RangeSet(), false), (chars, epsilon) =>
+        match (transition)
+        {
+        | Symbol(ch) => (ch.Sum(chars), epsilon);
+        | Epsilon    => (chars, true);
+        }
+      )
+    );
+
+    def transitions = transitions.Fold([], ((from, to), (chars, epsilon), transitions) =>
+    {
+      def transitions = if (!chars.Ranges.IsEmpty())
+        Transition.Symbol(from, to, chars) :: transitions;
+      else
+        transitions;
+
+      def transitions = if (epsilon)
+        Transition.Epsilon(from, to) :: transitions;
+      else
+        transitions;
+
+      transitions;
+    });
+    fsm.SetTransitions(transitions);
+  }
+
+  public Xor(fsm1 : FSM, fsm2 : FSM) : FSM
+  {
+    Product([fsm1, fsm2], fun(([ok1, ok2])) { set => set.Contains(ok1) ^ set.Contains(ok2) })
+  }
+
+  public Sub(fsm1 : FSM, fsm2 : FSM) : FSM
+  {
+    Product([fsm1, fsm2], fun(([ok, fail])) { set => set.Contains(ok) && !set.Contains(fail) })
+  }
+
+  public Product(fsms : list[FSM], makeIsOkState : list[int] -> (Set[int] -> bool)) : FSM
+  {
+    def (result, resultStart) = FSM().NewStartState();
+    def (result, resultOkStates) = fsms.Fold((result, []), (fsm, (result, resultOkStates)) =>
+    {
+      def (result, fsmStart, fsmOkStates) = result.IncludeFSM(fsm);
+      def (result, fsmOkState) = result.NewState();
+      def result = result.AddTransition(Transition.Epsilon(resultStart, fsmStart));
+      def result = fsmOkStates.Fold(result, (okState, result) => result.AddTransition(Transition.Epsilon(okState, fsmOkState)));
+      (result, fsmOkState :: resultOkStates);
+    });
+    MakeDeterministic(result, makeIsOkState(resultOkStates.Reverse()))
+  }
+
+  public MakeDeterministic(fsm : FSM) : FSM
+  {
+    MakeDeterministic(fsm, set => set.Exists(s => fsm.OkStates.Contains(s)))
+  }
+
+  private EmptySymbolList : SCG.List[Transition.Symbol] = SCG.List();
+  private EmptyEpsilonList : SCG.List[Transition.Epsilon] = SCG.List();
+  private MakeDeterministic(fsm : FSM, isOkState : Set[int] -> bool) : FSM
+  {
+    def fsm = Normalize(fsm);
+    def symbolTransitionsMap = fsm.Transitions.OfType.[Transition.Symbol]().Grouping(t => (t.From, t));
+    def symbolTransitions(state)
+    {
+      mutable transitions;
+      if (symbolTransitionsMap.TryGetValue(state, out transitions))
+        transitions
+      else
+        EmptySymbolList
+    }
+
+    def epsilonTransitionsMap = fsm.Transitions.OfType.[Transition.Epsilon]().Grouping(t => (t.From, t));
+    def epsilonTransitions(state)
+    {
+      mutable transitions;
+      if (epsilonTransitionsMap.TryGetValue(state, out transitions))
+        transitions
+      else
+        EmptyEpsilonList
+    }
+
+    def epsilonMove(set : Set[int])
+    {
+      def rec(state, set)
+      {
+        def states = epsilonTransitions(state).Map(_.To).Filter(state => !set.Contains(state));
+        states.Fold(set.AddList(states), rec);
+      }
+      set.Fold(set, rec);
+    }
+
+    def stateMap = Hashtable();
+    def states = Nemerle.Collections.Stack();
+    mutable result = FSM();
+
+    def addStateSet(stateSet)
+    {
+      def stateSet = epsilonMove(stateSet);
+      match (stateMap.Get(stateSet))
+      {
+        | Some(resultState) => resultState;
+        | None =>
+          def resultState = stateMap.Count;
+          stateMap.Add(stateSet, resultState);
+          states.Push((stateSet, resultState));
+          result = result.NewState(resultState);
+          resultState;
+        }
+    }
+    _ = addStateSet(Set().Add(fsm.StartState));
+    mutable toStateCounters = array(fsm.StateCount);
+    while (states.Count > 0)
+    {
+      def (stateSet, fromState) = states.Pop();
+      def addSymbolTransition(fromCh, toCh, toState)
+      {
+        def transition = Transition.Symbol(fromState, toState, RangeSet().AddRange(fromCh :> char, (toCh - 1) :> char));
+        result = result.AddTransition(transition);
+      }
+
+      def allChars = Hashtable();
+      foreach (state in stateSet)
+        foreach (transition in symbolTransitions(state))
+          foreach (range in transition.Chars.Ranges)
+          {
+            _ = allChars.Update((range.from : int, true), [], states => transition.To :: states);
+            _ = allChars.Update((range.to : int + 1, false), [], states => transition.To :: states);
+          }
+
+      def allChars = allChars.MapToArray(pair => (pair.Key[0], pair.Key[1], pair.Value));
+      def allChars = allChars.SortInplace(((c1, b1, _), (c2, b2, _)) =>
+        {
+          def res = c1.CompareTo(c2);
+          if (res == 0)
+            -b1.CompareTo(b2)
+          else
+            res
+        });
+
+      mutable lastCh = 0;
+      mutable toStateSet = Set();
+      foreach ((ch, isStart, states) in allChars)
+      {
+        when (lastCh != ch && toStateSet.Count > 0)
+          addSymbolTransition(lastCh, ch, addStateSet(toStateSet));
+        lastCh = ch;
+        foreach (state in states)
+        {
+          if (isStart)
+          {
+            ++toStateCounters[state];
+            when (toStateCounters[state] == 1)
+              toStateSet = toStateSet.Add(state);
+          }
+          else
+          {
+            --toStateCounters[state];
+            when (toStateCounters[state] == 0)
+              toStateSet = toStateSet.Remove(state);
+          }
+        }
+      }
+      assert3(toStateSet.Count == 0);
+    }
+    foreach (kv in stateMap)
+      when (isOkState(kv.Key))
+        result = result.AddOkState(kv.Value);
+    Minimize(result);
+  }
+
+  public Minimize(fsm : FSM) : FSM
+  {
+    when (fsm.OkStates.Count == 0)
+      return FSM();
+    def fsm = Normalize(fsm);
+    def (fsm, failState) = fsm.NewState();
+    def transitions = array(fsm.StateCount);
+    foreach ((state, stateTransitions) in fsm.Transitions.Cast.[Transition.Symbol]().Grouping(t => (t.From, t)).KeyValuePairs)
+    {
+      def ranges = SCG.List();
+      foreach (transition in stateTransitions)
+        foreach (range in transition.Chars.Ranges)
+          ranges.Add((range.from : int, range.to : int + 1, transition.To));
+      ranges.Sort((l, r) => l[0].CompareTo(r[0]));
+      def result = SCG.List();
+      mutable last = 0;
+      foreach ((start, end, stateTo) in ranges)
+      {
+        when (start != last)
+          result.Add((last, failState));
+        result.Add((start, stateTo));
+        last = end;
+      }
+      when (char.MaxValue : int + 1 != last)
+        result.Add((last, failState));
+      assert3(transitions[state] == null);
+      transitions[state] = result.ToArray();
+    }
+    for (mutable i = 0; i < transitions.Length; ++i)
+      when (transitions[i] == null)
+        transitions[i] = array[(0, failState)];
+    def stateGroups = SCG.List();
+    def stateMap = array(fsm.StateCount);
+    stateGroups.Add(SCG.List());
+    foreach (state in fsm.OkStates)
+    {
+      stateMap[state] = 0;
+      stateGroups[0].Add(state);
+    }
+    stateGroups.Add(SCG.List());
+    foreach (state in fsm.FailStates)
+    {
+      stateMap[state] = 1;
+      stateGroups[1].Add(state);
+    }
+    def mapTransitions(stateMap, transitions, state, map)
+    {
+      map.Clear();
+      mutable last = -1;
+      mutable lastState = stateMap[failState];
+      foreach ((signal, to) in transitions[state])
+      {
+        def to = stateMap[to];
+        when (lastState != to)
+        {
+          map.Add((last, lastState));
+          last = signal;
+          lastState = to;
+        }
+      }
+      map.Add((last, lastState));
+    }
+    def listEqueals(l, r)
+    {
+      if (l.Count == r.Count)
+      {
+        res:
+        {
+          for (mutable i = 0; i < l.Count; ++i)
+            when (!l[i].Equals(r[i]))
+              res(false);
+          true
+        }
+      }
+      else
+        false
+    }
+    mutable updated = true;
+    def pattern = SCG.List();
+    def cur = SCG.List();
+    mutable newGroup = SCG.List();
+    while (updated)
+    {
+      updated = false;
+      for (mutable stateGroup = 0; stateGroup < stateGroups.Count;)
+      {
+        assert3(newGroup.Count == 0);
+        def group = stateGroups[stateGroup];
+        when (group.Count == 1)
+        {
+          ++stateGroup;
+          continue;
+        }
+        mapTransitions(stateMap, transitions, group[0], pattern);
+        mutable i = 1;
+        mutable j = 1;
+        for (; i < group.Count; ++i)
+        {
+          mapTransitions(stateMap, transitions, group[i], cur);
+          if (listEqueals(pattern, cur))
+          {
+            group[j] = group[i];
+            ++j;
+          }
+          else
+          {
+            newGroup.Add(group[i]);
+          }
+        }
+        if (i != j)
+        {
+          updated = true;
+          group.RemoveRange(j, i - j);
+          foreach (state in newGroup)
+            stateMap[state] = stateGroups.Count;
+          stateGroups.Add(newGroup);
+          newGroup = SCG.List();
+        }
+        else
+          ++stateGroup;
+      }
+    }
+    def failGroup = stateMap[failState];
+    def startGroup = stateMap[fsm.StartState];
+    mutable newFsm = FSM(0, stateGroups.Count - 1);
+    mutable addedGroups = 1;
+    def groupMap = array(stateGroups.Count);
+    for (mutable i = 0; i < groupMap.Length; ++i)
+      groupMap[i] = -1;
+    def groupsToProcess = SCG.Queue();
+    groupsToProcess.Enqueue(startGroup);
+    groupMap[startGroup] = 0;
+    mutable okStates = Set();
+    while (groupsToProcess.Count > 0)
+    {
+      def groupIndex = groupsToProcess.Dequeue();
+      def group = stateGroups[groupIndex];
+      def from = groupMap[groupIndex];
+      mapTransitions(stateMap, transitions, group[0], cur);
+      when (fsm.OkStates.Contains(group[0]))
+        okStates = okStates.Replace(from);
+      mutable last = -1;
+      mutable lastGroup = failGroup;
+      def getNewState()
+      {
+        if (groupMap[lastGroup] == -1)
+        {
+          groupsToProcess.Enqueue(lastGroup);
+          groupMap[lastGroup] = addedGroups;
+          ++addedGroups;
+          groupMap[lastGroup];
+        }
+        else
+          groupMap[lastGroup];
+      }
+      foreach ((signal, to) in cur)
+      {
+        when (lastGroup != failGroup)
+          newFsm = newFsm.AddTransition(Transition.Symbol(from, getNewState(), RangeSet().AddRange(last :> char, (signal - 1) :> char)));
+        last = signal;
+        lastGroup = to;
+      }
+      when (lastGroup != failGroup)
+        newFsm = newFsm.AddTransition(Transition.Symbol(from, getNewState(), RangeSet().AddRange(last :> char, char.MaxValue)));
+    }
+    FSMTransform.Normalize(newFsm.SetOkStates(okStates));
+  }
+}
+
+// ---- Model/Identifier.n (Nitra.Model) ----
+[Record]
+public sealed class Identifier : Nitra.Runtime.Located, IComparable[Identifier]
+{
+  public override Location : Location { get; }
+  public          Value    : string   { get; }
+
+  public this(parent : Nitra.Runtime.Located, token : Nitra.Runtime.NSpan) { this(parent.Location.WithSpan(token)) }
+  public this(location : Location)                   { this(location, location.GetText()) }
+  public this(located  : Nitra.Runtime.Located)                    { this(located,  located.GetText()) }
+
+  public override ToString() : string { Value }
+
+  public CompareTo(that : Identifier) : int { StringComparer.Ordinal.Compare(this.Value, that.Value) }
+
+  [NemerleMacros.OverrideObjectEquals]
+  public Equals(that : Identifier)   : bool { Value.Equals(that.Value, StringComparison.Ordinal) }
+  public EqualsToName(name : string) : bool { Value.Equals(name, StringComparison.Ordinal) }
+
+  public override GetHashCode() : int { Value.GetHashCode() }
+
+  public static @==(name1 : Identifier, name2 : Identifier) : bool
+  {
+    if (name1 : object == name2)
+      true
+    else if (null == name1 || null == name2)
+      false
+    else
+      name1.Equals(name2)
+  }
+
+  public static @!=(name1 : Identifier, name2 : Identifier) : bool
+  {
+    !(name1 == name2)
+  }
+}
+
+// ---- Model/RangeSet.n (Nitra.Model) ----
+[Record, StructuralEquality]
+public sealed class RangeSet
+{//TODO:Optimize
+  [Record, StructuralEquality]
+  public struct Range
+  {
+    public from : char;
+    public to   : char;
+
+    public override ToString() : string
+    {
+      if (from == to) EscapeChar(from)
+      else            EscapeChar(from) + ".." + EscapeChar(to)
+    }
+  }
+
+  public Ranges : list[Range] { get }
+
+  public this() { this([]) }
+
+  // this ctor is produced by Record macro and
+  //   should be _public_ to be callable from deserialization routine
+  //private this(ranges : list[Range]) { Ranges = ranges }
+
+  public AddRange(from : char, to : char) : RangeSet
+  {
+    AddRange(Range(from, to));
+  }
+
+  public AddSingleCharRange(ch : char) : RangeSet
+  {
+    AddRange(Range(ch, ch));
+  }
+
+  public static MakeString(str : string) : list[RangeSet]
+  {
+    def set = List(str.Length);
+
+    foreach (ch in str)
+      set.Add(RangeSet().AddRange(ch, ch));
+
+    set.NToList()
+  }
+
+  public AddRange(category : UnicodeCategory) : RangeSet
+  {
+    this.Sum(UnicodeCategoryTable.UnicodeCategoryToRangeSet(category));
+  }
+
+  public AddRange(range : Range) : RangeSet
+  {
+    assert(range.from <= range.to);
+
+    def add(ranges, range)
+    {
+      match (ranges)
+      {
+      | [] => [range];
+      | firstRange :: ranges =>
+        if (firstRange.to + 1 < range.from)
+          firstRange :: add(ranges, range);
+        else if (range.to + 1 < firstRange.from)
+          range :: firstRange :: ranges;
+        else
+          add(ranges, Range(Math.Min(range.from, firstRange.from) :> char, Math.Max(range.to, firstRange.to) :> char));
+      }
+    }
+    RangeSet(add(Ranges, range))
+  }
+
+  public RemoveRange(from : char, to : char) : RangeSet
+  {
+    RemoveRange(Range(from, to));
+  }
+
+  public RemoveRange(category : UnicodeCategory) : RangeSet
+  {
+    this.Sub(UnicodeCategoryTable.UnicodeCategoryToRangeSet(category));
+  }
+
+  public RemoveRange(range : Range) : RangeSet
+  {
+    assert(range.from <= range.to);
+
+    def remove(ranges)
+    {
+      match (ranges)
+      {
+      | [] => [];
+      | firstRange :: ranges =>
+        if (firstRange.to < range.from)
+        {
+          firstRange :: remove(ranges);
+        }
+        else if (firstRange.from > range.to)
+        {
+          firstRange :: ranges;
+        }
+        else
+        {
+          def cat(from : int, to : int, ranges)
+          {
+            if (from <= to)
+              Range(from :> char, to :> char) :: ranges;
+            else
+              ranges;
+          }
+          def lo = firstRange.from <= range.from;
+          def hi = firstRange.to >= range.to;
+          if (lo)
+          {
+            if (hi)
+            {
+              cat(firstRange.from, range.from - 1, cat(range.to + 1, firstRange.to, ranges))
+            }
+            else
+            {
+              cat(firstRange.from, range.from - 1, remove(ranges))
+            }
+          }
+          else
+          {
+            if (hi)
+            {
+              cat(range.to + 1, firstRange.to, ranges)
+            }
+            else
+            {
+              remove(ranges);
+            }
+          }
+        }
+      }
+    }
+    RangeSet(remove(Ranges))
+  }
+
+  public Sum(that : RangeSet) : RangeSet
+  {
+    Ranges.Fold(that, (range, that) => that.AddRange(range));
+  }
+
+  public Sub(that : RangeSet) : RangeSet
+  {
+    that.Ranges.Fold(this, (range, rangeSet) => rangeSet.RemoveRange(range));
+  }
+
+  public Intersect(that : RangeSet) : RangeSet
+  {
+    this.Sum(that).Sub(this.Sub(that)).Sub(that.Sub(this))
+  }
+
+  public Invert() : RangeSet
+  {
+    RangeSet([Range(char.MinValue, char.MaxValue)]).Sub(this)
+  }
+
+  public IsSingleChar : bool
+  {
+    get
+    {
+      match (Ranges)
+      {
+        | [x] when x.from == x.to => true
+        | _                       => false
+      }
+    }
+  }
+
+  public Contains(c : char) : bool
+  {
+    res:
+      {
+        foreach (range in Ranges)
+        {
+          when (range.from <= c && c <= range.to)
+            res(true)
+        }
+        false;
+      }
+  }
+
+  public GetBounds() : option[char * char]
+  {
+    match (Ranges)
+    {
+      | []            => None()
+      | [single]      => Some((single.from, single.to))
+      | first :: tail => Some((first.from, tail.Last.to))
+    }
+  }
+
+  public override ToString() : string { $"..$Ranges" }
+}
+
+// ---- Model/RegularRule.n (Nitra.Model) ----
+[Record, StructuralEquality]
+public variant RegularRule : Located
+{
+  | Choice                  { rules    : list[RegularRule]; }
+  | Sequence                { rules    : list[RegularRule]; }
+  | Call                    { ruleRef  : SymbolRef[RegularRuleSymbol]; }
+  | Repeat                  { minCount : int; maxCount : option[int]; rule : RegularRule; }
+  | RepeatWithSeparator     { minCount : int; maxCount : option[int]; rule : RegularRule; separator : RegularRule; }
+  | Subtract                { rule1 : RegularRule; rule2 : RegularRule; }
+  | Chars
+    {
+      chars : list[RangeSet];
+
+      [RecordIgnore, EqualsIgnore]
+      private mutable _stringOpt : option[string];
+
+      public StringOpt : option[string]
+      {
+        get
+        {
+          when (_stringOpt : object == null)
+          {
+            mutable buffer : StringBuilder;
+            def loop(_)
+            {
+              | rangeSet :: others when rangeSet.IsSingleChar =>
+                when (buffer : object == null)
+                  buffer = StringBuilder();
+                _ = buffer.Append(rangeSet.Ranges.Head.from);
+                loop(others)
+
+              | _ :: _ => None()
+              | [] when buffer : object == null => Some("")
+              | []                              => Some(buffer.ToString())
+            }
+            _stringOpt = loop(chars)
+          }
+          _stringOpt;
+        }
+      }
+    }
+
+  public override Location : Location { get; }
+  public Priority : int
+  {
+    get
+    {
+      match (this)
+      {
+        | Chars                       => 6
+        | Call                        => 6
+        | Repeat                      => 5
+        | RepeatWithSeparator         => 5
+        | Subtract                    => 3
+        | Sequence                    => 2
+        | Choice                      => 1
+      }
+    }
+  }
+
+  public override ToString() : string
+  {
+    def callHandler(buffer, callRule)
+    {
+      buffer.Append(callRule.ruleRef.ToString())
+    }
+    def stringHandler(buffer, str)
+    {
+      _ = buffer.Append("'");
+      foreach (c in str)
+        _ = buffer.Append(EscapeStringChar(c));
+      buffer.Append("'")
+    }
+    StringBuilder().AppendRegularRule(this, callHandler, stringHandler, 0).ToString()
+  }
+}
+
+public module RegularRuleExtensions
+{
+  public AppendRegularRule(this buffer : StringBuilder,
+    rule            : RegularRule,
+    callHandler     : StringBuilder * RegularRule.Call -> StringBuilder,
+    stringHandler   : StringBuilder * string -> StringBuilder,
+    currentPriority : int) : System.Text.StringBuilder
+  {
+    def priority = rule.Priority;
+    when (priority <= currentPriority)
+      _ = buffer.Append("(");
+    _ = match (rule)
+    {
+      | Call as call                                   => callHandler(buffer, call)
+      | Choice(rules)                                  => buffer.AppendRegularRules(rules, callHandler, stringHandler, priority, " | ")
+      | Sequence(rules)                                => buffer.AppendRegularRules(rules, callHandler, stringHandler, priority, " ")
+      | Subtract(rule1, rule2)                         => buffer.AppendRegularRules([rule1, rule2], callHandler, stringHandler, priority, " - ")
+      | Repeat(min, max, rule)                         => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).AppendRepeatQuantifier(min, max)
+      | RepeatWithSeparator(min, max, rule, separator) => buffer.Append('(').AppendRegularRule(rule, callHandler, stringHandler, 0).Append(", ").AppendRegularRule(separator, callHandler, stringHandler, 0).Append(")").AppendRepeatQuantifier(min, max)
+      | Chars(StringOpt = Some(str))                   => stringHandler(buffer, str)
+      | Chars([rangeSet])                              => buffer.AppendRangeSet(rangeSet)
+      | Chars(rangeSets)                               =>
+        _ = buffer.Append('(');
+        foreach (rangeSet in rangeSets with index)
+        {
+          when (index > 0)
+            _ = buffer.Append(" | ");
+          _ = buffer.AppendRangeSet(rangeSet)
+        }
+        buffer.Append(')')
+    }
+    when (priority <= currentPriority)
+      _ = buffer.Append(")");
+    buffer
+  }
+
+  private AppendRepeatQuantifier(this buffer : StringBuilder, min : int, max : option[int]) : StringBuilder
+  {
+    match (min, max)
+    {
+      | (0, None)                        => buffer.Append('*')
+      | (1, None)                        => buffer.Append('+')
+      | (min, None)                      => buffer.Append('{').Append(min).Append(",}")
+      | (0, Some(1))                     => buffer.Append('?')
+      | (min, Some(max)) when min == max => buffer.Append('{').Append(min).Append('}')
+      | (min, Some(max))                 => buffer.Append('{').Append(min).Append(',').Append(max).Append('}')
+    }
+  }
+
+  public AppendRegularRules(this buffer : System.Text.StringBuilder,
+    rules           : list[RegularRule],
+    callHandler     : StringBuilder * RegularRule.Call -> StringBuilder,
+    stringHandler   : StringBuilder * string -> StringBuilder,
+    currentPriority : int,
+    separator       : string) : System.Text.StringBuilder
+  {
+    foreach (rule in rules with index)
+    {
+      when (index > 0)
+        _ = buffer.Append(separator);
+      _ = buffer.AppendRegularRule(rule, callHandler, stringHandler, currentPriority)
+    }
+    buffer
+  }
+
+  public AppendRangeSet(this buffer : StringBuilder, chars : RangeSet) : StringBuilder
+  {
+    buffer.Append('[').Append(chars.ToString()).Append(']')
+  }
+}
+
+// ---- Model/Rule.n (Nitra.Model) ----
+public variant PrecedenceReference
+{
+  | Zero
+  | Name { symbol : SymbolRef[PrecedenceSymbol] }
+}
+
+[Record, StructuralEquality]
+public class BindingPowerInfo
+{
+  public Symbol : PrecedenceReference;
+  public IsStrong : bool;
+
+  public IsZero : bool { get { !IsStrong && Symbol is PrecedenceReference.Zero } }
+
+  public Name : string
+  {
+    get
+    {
+      (if (IsStrong) "+" else "") + (if (Symbol is Name(symbol)) symbol.ToString() else "0")
+    }
+  }
+
+  public override ToString() : string
+  {
+    Name
+  }
+  public static Zero : BindingPowerInfo = BindingPowerInfo(PrecedenceReference.Zero(), false);
+}
+
+[Record, StructuralEquality]
+public variant Rule : Nitra.Runtime.Located
+{
+  [EqualsIgnore]
+  public override Location  : Location { get; }
+  public          Type      : RuleType;
+  public          FieldName : string;
+
+  | Sequence                { Rules     : list[Rule]; }
+  | Call
+    {
+      RuleRef : RuleRef;
+      BindingPower : BindingPowerInfo;
+      [RecordIgnore, EqualsIgnore] public SpanClass : SpanClassSymbol { get; }
+
+      public this(loc : Nitra.Runtime.Location, type : RuleType, fieldName : string, ruleRef : RuleRef, bindingPower : BindingPowerInfo, spanClass : SpanClassSymbol)
+      {
+        this(loc, type, fieldName, ruleRef, bindingPower);
+        this.SpanClass = spanClass;
+      }
+    }
+  | Repeat                  {
+                              MinCount  : int;     MaxCount     : option[int]; Rule : Rule;
+                              public IsOptimizedList : bool { get { this.Type is RuleType.Chars } }
+                              public IsDynamicSyntaxExtentionPoint : bool { get { this.Rule is Rule.Call(RuleRef = RuleRef.Some(Symbol = RuleDefSymbol(Options = RuleDefinitionOptions(IsDynamicSyntaxExtentionPoint = true)))) } }
+                            }
+  | RepeatWithSeparator     { MinCount  : int;     MaxCount     : option[int]; Rule : Rule; Separator : Rule; HangingSeparator : bool; }
+  //| Choice                  { rules    : list[RegularRule]; }
+  //| Chars                   {
+  //                            chars : list[RangeSet];
+  //                            public IsString : bool { get { chars.ForAll(_.IsSingleChar) } }
+  //                          }
+  | String
+    {
+      Str       : string;
+      /// This token is important in a error recovery.
+      [RecordIgnore, EqualsIgnore] public IsKeyToken : bool { get; internal set; }
+      /// This token can be parsed by the rule used to parse an identifier. All keywords IsKeyToken.
+      [RecordIgnore, EqualsIgnore] public IsKeyword : bool { get; internal set; }
+      [RecordIgnore, EqualsIgnore] public SpanClass : SpanClassSymbol { get; }
+
+      public this(loc : Nitra.Runtime.Location, fieldName : string, str : string)
+      {
+        this(loc, RuleType.Chars(Some(str)), fieldName, str);
+      }
+
+      public this(loc : Nitra.Runtime.Location, fieldName : string, str : string, isKeyword : bool, spanClass : SpanClassSymbol)
+      {
+        this(loc, RuleType.Chars(Some(str)), fieldName, str);
+        this.IsKeyword  = isKeyword;
+        this.IsKeyToken = isKeyword;
+        this.SpanClass  = spanClass;
+      }
+    }
+  | Not                     { Rule      : Rule; }
+  | And                     { Rule      : Rule; }
+
+  public this(originalRule : Rule)
+  {
+    this.Location  = originalRule.Location;
+    this.Type      = originalRule.Type;
+    this.FieldName = originalRule.FieldName;
+  }
+
+  public UpdateFieldName(newFieldName : string) : Rule
+  {
+    if (FieldName == newFieldName)
+      this
+    else match (this)
+    {
+      | Sequence(rules)                     => Rule.Sequence(Location, Type, newFieldName, rules)
+      | Call(ruleRef, bindingPower) as rule => Rule.Call(Location, Type, newFieldName, ruleRef, bindingPower, rule.SpanClass)
+      | Repeat(minCount, maxCount, rule)    => Rule.Repeat(Location, Type, newFieldName, minCount, maxCount, rule)
+      | RepeatWithSeparator(minCount, maxCount, rule, separator, hangingSeparator) => Rule.RepeatWithSeparator(Location, Type, newFieldName, minCount, maxCount, rule, separator, hangingSeparator)
+      | String(Str = str, IsKeyToken = isKeyToken, SpanClass = spanClass) => Rule.String(Location, newFieldName, str, isKeyToken, spanClass)
+      | Not(rule)     => Rule.Not(Location, Type, newFieldName, rule)
+      | And(rule)     => Rule.And(Location, Type, newFieldName, rule)
+      //| Choice(rules) => Rule.Choice(Location, Type, newFieldName, rules)
+      //| Chars(chars)  => Rule.Chars(Location, Type, newFieldName, chars)
+    }
+  }
+
+  public Priority : int
+  {
+    get
+    {
+      match (this)
+      {
+        //| Chars                       => 5
+        | String                      => 5
+        | Call                        => 5
+        | Repeat                      => 4
+        | RepeatWithSeparator         => 4
+        | Not                         => 3
+        | And                         => 3
+        | Sequence                    => 2
+        //| Choice                      => 1
+      }
+    }
+  }
+
+  public override ToString() : string
+  {
+    def p(rule : Rule)
+    {
+      if (rule.Priority <= this.Priority)
+        $"($rule)"
+      else
+        rule.ToString()
+    }
+
+    def makeCallText(name, fieldName)
+    {
+      if (string.IsNullOrEmpty(fieldName))
+        name.ToString()
+      else
+        fieldName
+    }
+    match (this)
+    {
+      | Sequence(rules)                                      => $<#..$(rules; " "; p)#>
+      | Call as call when call.BindingPower.IsZero           => makeCallText(call.RuleRef, FieldName)
+      | Call(name, bp)                                       => $<#$(makeCallText(name, FieldName)) : $bp#>
+      | Repeat(0, None, rule)                                => $"$(p(rule))*"
+      | Repeat(1, None, rule)                                => $"$(p(rule))+"
+      | Repeat(min, None, rule)                              => $"$(p(rule)){$min,}"
+      | Repeat(0, Some(1), rule)                             => $"$(p(rule))?"
+      | Repeat(min, Some(max), rule) when min == max         => $"$(p(rule)){$min}"
+      | Repeat(min, Some(max), rule)                         => $"$(p(rule)){$min, $max}"
+      | RepeatWithSeparator(0, None, rule, separator, false) => $"($(p(rule)); $(p(separator)))*"
+      | RepeatWithSeparator(0, None, rule, separator, true)  => $"($(p(rule)); $(p(separator)); ?)*"
+      | RepeatWithSeparator(1, None, rule, separator, false) => $"($(p(rule)); $(p(separator)))+"
+      | RepeatWithSeparator(1, None, rule, separator, true)  => $"($(p(rule)); $(p(separator)); ?)+"
+      | RepeatWithSeparator                                  => assert(false);
+      | String(str)                                          => $<#'$str'#>
+      | Not(rule)                                            => $"!$(p(rule))"
+      | And(rule)                                            => $"&$(p(rule))"
+      //| Choice(rules)                                        => $<#..$(rules; " | ")#>
+      //| Chars as stringRule when stringRule.IsString         =>
+      //  def buffer = StringBuilder();
+      //  _ = buffer.Append("''");
+      //  foreach (rangeSet in stringRule.chars)
+      //    _ = buffer.Append(Utils.EscapeStringChar(rangeSet.Ranges.Head.from));
+      //  _ = buffer.Append("''");
+      //  buffer.ToString()
+      //
+      //| Chars([rangeSet])                                    => $"[$rangeSet]"
+      //| Chars(rangeSets)                                     =>
+      //  def buffer = StringBuilder();
+      //  _ = buffer.Append('(');
+      //  foreach (rangeSet in rangeSets with index)
+      //  {
+      //    when (index > 0)
+      //      _ = buffer.Append(" | ");
+      //    _ = buffer.AppendRangeSet(rangeSet)
+      //  }
+      //  _ = buffer.Append(')');
+      //  buffer.ToString()
+    }
+  }
+
+  public SubRules : list[Rule]
+  {
+    get
+    {
+      match (this)
+      {
+        | Rule.Sequence(rules) => rules
+        | _ => [this]
+      }
+    }
+  }
+
+  public static ReferenceEqualityComparer : IEqualityComparer[Rule] = RuleReferenceEqualityComparer();
+
+  private sealed class RuleReferenceEqualityComparer : EqualityComparer[Rule]
+  {
+    public override Equals(x : Rule, y : Rule) : bool { ReferenceEquals(x, y) }
+    public override GetHashCode(obj : Rule) : int { if (ReferenceEquals(obj, null)) 0 else obj.GetHashCode() }
+  }
+}
+
+// ---- Model/RuleDefinitionOptions.n (Nitra.Model) ----
+[Record]
+public sealed class RuleDefinitionOptions
+{
+  public static Empty : RuleDefinitionOptions = RuleDefinitionOptions();
+
+  public IsStart                       : bool            { get; private set; }
+  public IsExplicitSpaces              : bool            { get; private set; }
+  public IsSuppressTrailingSpaces      : bool            { get; private set; }
+  public SpanClassSymbol               : SpanClassSymbol { get; private set; }
+  public IsTokenRule                   : bool            { get; private set; }
+  public IsNoParseTree                 : bool            { get; private set; }
+  /// This token is important in a error recovery.
+  public IsKeyToken                    : bool            { get; private set; }
+  /// This token can be parsed by the rule used to parse an identifier. All keywords IsKeyToken.
+  public IsKeyword                     : bool            { get; private set; }
+  public IsReference                   : bool            { get; private set; }
+  public IsName                        : bool            { get; private set; }
+  public Prefix                        : bool            { get { this.OperatorInfo %&& OperatorInfo.Prefix } }
+  public Postfix                       : bool            { get { this.OperatorInfo %&& OperatorInfo.Postfix } }
+  public Infix                         : bool            { get { this.OperatorInfo %&& OperatorInfo.Infix } }
+  public OperatorInfo                  : OperatorInfo    { get; private set; }
+  public Arity                         : int             { get; private set; }
+  public IsDynamicSyntaxExtender       : bool            { get; private set; }
+  public IsDynamicSyntaxExtentionPoint : bool            { get; private set; }
+
+  public SetDynamicSyntaxExtentionPoint(_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsDynamicSyntaxExtentionPoint  = value }
+  public SetArity                      (_loc : Nitra.Runtime.Located, value : int)             : RuleDefinitionOptions { surroundwith(newOptions) newOptions.Arity                          = value }
+  public SetDynamicSyntaxExtender      (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsDynamicSyntaxExtender        = value }
+  public SetOperatorInfo               (_loc : Nitra.Runtime.Located, value : OperatorInfo)    : RuleDefinitionOptions { surroundwith(newOptions) newOptions.OperatorInfo                   = value }
+  public SetStart                      (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsStart                        = value }
+  public SetExplicitSpaces             (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsExplicitSpaces               = value }
+  public SetSuppressTrailingSpaces     (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsSuppressTrailingSpaces       = value }
+  public SetSpanClass                  (_loc : Nitra.Runtime.Located, value : SpanClassSymbol) : RuleDefinitionOptions { surroundwith(newOptions) newOptions.SpanClassSymbol                = value }
+  public SetNoParseTree                (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsNoParseTree                  = value }
+  public SetTokenRule                                  (value : bool)            : RuleDefinitionOptions
+  {
+    surroundwith(newOptions)
+    {
+      newOptions.IsTokenRule      = value;
+      newOptions.IsExplicitSpaces = value;
+    }
+  }
+  public SetKeyToken               (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsKeyToken               = value }
+  public SetKeyword                (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions
+  {
+    surroundwith(newOptions)
+    {
+      when (value)
+        newOptions.IsKeyToken = true;
+      newOptions.IsKeyword  = value;
+    }
+  }
+  public SetReference             (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsReference             = value }
+  public SetName                  (_loc : Nitra.Runtime.Located, value : bool)            : RuleDefinitionOptions { surroundwith(newOptions) newOptions.IsName                  = value }
+
+  public this() { }
+
+  public this(original : RuleDefinitionOptions)
+  {
+    this( isStart                        = original.IsStart
+        , isExplicitSpaces               = original.IsExplicitSpaces
+        , isSuppressTrailingSpaces       = original.IsSuppressTrailingSpaces
+        , spanClassSymbol                = original.SpanClassSymbol
+        , isTokenRule                    = original.IsTokenRule
+        , isNoParseTree                  = original.IsNoParseTree
+        , isKeyToken                     = original.IsKeyToken
+        , isKeyword                      = original.IsKeyword
+        , isReference                    = original.IsReference
+        , isName                         = original.IsName
+        , operatorInfo                   = original.OperatorInfo
+        , arity                          = original.Arity
+        , isDynamicSyntaxExtender        = original.IsDynamicSyntaxExtender
+        , isDynamicSyntaxExtentionPoint  = original.IsDynamicSyntaxExtentionPoint
+        )
+  }
+
+  public static CreateTokenRule()          : RuleDefinitionOptions
+  {
+    RuleDefinitionOptions
+        ( isStart                       = false
+        , isExplicitSpaces              = true
+        , isSuppressTrailingSpaces      = false
+        , spanClassSymbol               = null
+        , isTokenRule                   = true
+        , isNoParseTree                 = false
+        , isKeyToken                    = false
+        , isKeyword                     = false
+        , isReference                   = false
+        , isName                        = false
+        , operatorInfo                  = OperatorInfo.None
+        , arity                         = 0
+        , isDynamicSyntaxExtender       = false
+        , isDynamicSyntaxExtentionPoint = false
+        )
+    }
+
+
+  public InheritedCopy() : RuleDefinitionOptions
+  {
+    if (IsStart)
+      surroundwith(newOptions) newOptions.IsStart = false
+    else
+      this
+  }
+
+  public override ToString() : string
+  {
+    def values = List();
+    when (this.IsStart)                           values.Add("StartRule");
+    when (this.IsExplicitSpaces && !IsTokenRule)  values.Add("ExplicitSpaces");
+    when (this.IsSuppressTrailingSpaces)          values.Add("SuppressTrailingSpaces");
+    when (this.SpanClassSymbol != null)           values.Add($"SpanClass($(SpanClassSymbol.Node.FullName))");
+    when (this.IsTokenRule)                       values.Add("TokenRule");
+    when (this.OperatorInfo != OperatorInfo.None) values.Add(this.OperatorInfo.ToString());
+    when (this.Arity > 0)                         values.Add("Arity(" + this.Arity + ")");
+
+    $"[..$(values; \", \")]"
+  }
+}
+
+// ---- Model/SequenceCompileInfo.n (Nitra.Model) ----
+[Record]
+public variant SequenceCompileInfo
+{
+                 public         SrcRule          : Nitra.Model.Rule;
+                 public         Subrules         : array[SubruleCompileInfo];
+  [RecordIgnore] public mutable Owner            : SubruleCompileInfo;
+  [RecordIgnore] public mutable Header           : array[SequenceHeaderCompileInfo];
+  [RecordIgnore] public mutable RuleIdFieldName  : string;
+  [RecordIgnore] public mutable Level            : int;
+  [RecordIgnore] public mutable AllocateState    : int;
+                 public         SizesStart       : int   { get { Subrules[0].Offset } }
+                 public         SizesEnd         : int   { get { Subrules[Subrules.Length - 1].Offset + Subrules[Subrules.Length - 1].Size } }
+                 public         Size             : int   { get { SizesEnd } }
+                 public         HeaderId         : SequenceHeaderCompileInfo { get { Header[0] } }
+                 public         HeaderNext       : SequenceHeaderCompileInfo { get { Header[1] } }
+                 public         HeaderState      : SequenceHeaderCompileInfo { get { Header[2] } }
+
+  | Root
+    {
+                             Symbol           : SyntaxRuleSymbol;
+      [RecordIgnore] mutable NestedSequencies : array[SequenceCompileInfo];
+      [RecordIgnore] mutable AllSubrules      : array[SubruleCompileInfo];
+      [RecordIgnore] mutable StateCount       : int;
+
+      public AllNonMarkerSubrules : array[SubruleCompileInfo] { [Memoize] get { AllSubrules.FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
+
+      public CodeForStates(startState : int, mutable endState : int, skipOptionalStates : bool) : array[string]
+      {
+        _ = skipOptionalStates;
+
+        def subrule1 = AllNonMarkerSubrules[startState];
+        def owner1 = subrule1.Owner;
+
+        when (endState < 0)
+          endState = 0;
+
+        def subrule2 =
+          if  (endState < 0)
+            owner1.NonMarkerSubrules.Last()
+          else
+            AllNonMarkerSubrules[endState];
+        def owner2 = subrule2.Owner;
+        assert3(owner1 : object == owner2);
+        mutable i = Array.IndexOf(owner1.Subrules, subrule1);
+        def endIndex = Array.IndexOf(owner2.Subrules, subrule2);
+        def result = array(endIndex - i);
+        for (mutable k = 0; i <= endIndex; i++)
+        {
+          def subrule = owner1.Subrules[i];
+
+          when (subrule is SubruleCompileInfo.Marker)
+            continue;
+
+          result[k] = subrule.SrcRule.ToString();
+
+          k++;
+        }
+
+        result
+      }
+    }
+
+  | Option
+  | ListItem                   { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.List).UseCounter } } }
+  | ListWithSeparatorItem      { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.ListWithSeparator).UseCounter } } }
+  | ListWithSeparatorSeparator { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.ListWithSeparator).UseCounter } } }
+  | Predicate { IsAnd : bool }
+
+  public NonMarkerSubrules    : array[SubruleCompileInfo] { [Memoize] get { Subrules.FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
+  internal static MakeSequenceCompileInfo(ruleSymbol : SyntaxRuleSymbol) : SequenceCompileInfo.Root
+  {
+    def nestedSequencies = SCG.List();
+    def allSubrules = SCG.List();
+
+    mutable predicates = SCG.List();
+    def takePredicates() : array[SequenceCompileInfo.Predicate]
+    {
+      def result = predicates.ToArray();
+      predicates.Clear();
+      result
+    }
+    def convAndAppendPredicates(rule)
+    {
+      def rules = conv(rule);
+      def tailPredicates = takePredicates();
+      if (tailPredicates.Length > 0 || rules.ForAll(r => r is SubruleCompileInfo.Marker))
+        rules.Append(SubruleCompileInfo.Empty(Rule.String(rule.Location.FromEnd(), "", ""), tailPredicates));
+      else
+        rules;
+    }
+    and conv(rule : Rule) : array[SubruleCompileInfo]
+    {
+      def predicate(rule, isAnd)
+      {
+        def externalPredicates = predicates;
+        predicates = SCG.List();
+        externalPredicates.Add(SequenceCompileInfo.Predicate(rule, convAndAppendPredicates(rule), isAnd));
+        predicates = externalPredicates;
+        array[]
+      }
+      match (rule)
+      {
+        | And                   as rule => predicate(rule.Rule, true)
+        | Not                   as rule => predicate(rule.Rule, false)
+        | Repeat(0, Some(1), _) as rule => array[SubruleCompileInfo.Option           (rule, takePredicates(), SequenceCompileInfo.Option(rule.Rule, convAndAppendPredicates(rule.Rule)))]
+        | Repeat                as rule => array[SubruleCompileInfo.List             (rule, takePredicates(), SequenceCompileInfo.ListItem(rule.Rule, convAndAppendPredicates(rule.Rule)), rule.MinCount, rule.MaxCount)]
+        | RepeatWithSeparator   as rule => array[SubruleCompileInfo.ListWithSeparator(rule, takePredicates(), SequenceCompileInfo.ListWithSeparatorItem(rule.Rule, convAndAppendPredicates(rule.Rule)), SequenceCompileInfo.ListWithSeparatorSeparator(rule.Separator, convAndAppendPredicates(rule.Separator)), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
+        | String                as rule => array[SubruleCompileInfo.TokenString      (rule, takePredicates(), rule.Str)]
+        | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
+        | Call(RuleRef.Some(ruleSymbol) as ruleRef, bindingPower) =>
+          match (ruleSymbol)
+          {
+            | ExtensibleRuleSymbol as rs => array[SubruleCompileInfo.ExtensibleCall(rule, takePredicates(), rs, bindingPower)]
+            | SimpleRuleSymbol     as rs => array[SubruleCompileInfo.SimpleCall    (rule, takePredicates(), rs)]
+            | RegularRuleSymbol    as rs => array[SubruleCompileInfo.RegularCall   (rule, takePredicates(), rs)]
+            | MarkerSymbol         as rs => array[SubruleCompileInfo.Marker        (rule,          array[], rs)]
+            | _                          => Nemerle.Compiler.MessageMacros.FatalError(ruleRef.NLocation(), $"ICE! Nitra typing bug: invalid symbol bound. $(ruleSymbol.GetType().Name)");
+          }
+        | Call(RuleRef.None as ruleRef, _) => Nemerle.Compiler.MessageMacros.FatalError(ruleRef.NLocation(), "ICE! Nitra typing bug: not bound symbol.");
+        //| Choice(rules)                 => assert3(false, "Надо реализовать");
+        //| Chars(chars)                  => assert3(false, "Надо реализовать");
+      }
+    }
+    def rule = match (ruleSymbol)
+    {
+      | ExtensionRuleSymbol(ExtensionType = Postfix(_, rule)) => rule
+      | _ => ruleSymbol.Rule
+    }
+    def rootSequence = SequenceCompileInfo.Root(rule, convAndAppendPredicates(rule), ruleSymbol);
+    mutable state = 0;
+    def initSequence(sequence : SequenceCompileInfo, owner : SubruleCompileInfo, level : int, isPredicate : bool) : void
+    {
+      sequence.Level           = level;
+      sequence.Owner           = owner;
+      match (sequence )
+      {
+        | SequenceCompileInfo.Root =>
+          assert(owner == null);
+          sequence.Header    = array[SequenceHeaderCompileInfo.Id(sequence, 0), SequenceHeaderCompileInfo.Next(sequence, 1), SequenceHeaderCompileInfo.State(sequence, 2)];
+          sequence.RuleIdFieldName = "RuleId";
+
+        | SequenceCompileInfo.Predicate =>
+          assert(owner != null);
+          sequence.Header    = array[SequenceHeaderCompileInfo.Id(sequence, 0)];
+          sequence.RuleIdFieldName = $"RuleId$(nestedSequencies.Count)";
+          nestedSequencies.Add(sequence);
+
+        | _ =>
+          assert(owner != null);
+          sequence.Header    = array[SequenceHeaderCompileInfo.Id(sequence, 0), SequenceHeaderCompileInfo.Next(sequence, 1), SequenceHeaderCompileInfo.State(sequence, 2)];
+          sequence.RuleIdFieldName = $"RuleId$(nestedSequencies.Count)";
+          nestedSequencies.Add(sequence);
+      }
+
+      def subrules = sequence.Subrules;
+      def notMarkerSubrules = sequence.NonMarkerSubrules;
+      for (mutable i = 0; i < notMarkerSubrules.Length - 1; ++i)
+        notMarkerSubrules[i].NextSibling = notMarkerSubrules[i + 1];
+      for (mutable i = 1; i < notMarkerSubrules.Length; ++i)
+        notMarkerSubrules[i].PrevSibling = notMarkerSubrules[i - 1];
+
+      for (mutable i = 0; i < subrules.Length; ++i)
+        subrules[i].Owner = sequence;
+
+      for (mutable i = 0; i < subrules.Length; ++i)
+      {
+        initSubrule(subrules[i], level, isPredicate);
+        subrules[i].EndState = state;
+      }
+
+      subrules[0].Offset = sequence.Header.Length;
+      for (mutable i = 1; i < subrules.Length; ++i)
+        subrules[i].Offset = subrules[i - 1].Offset + subrules[i - 1].Size;
+
+      match (subrules.Find(subrule => !(subrule is SubruleCompileInfo.Marker)))
+      {
+        | Some(subrule) =>
+          subrule.AllocateRawTree = true;
+          sequence.AllocateState = subrule.State;
+
+        | None()      => assert(false);
+      }
+    }
+    and initSubrule(subrule : SubruleCompileInfo, level : int, isPredicate : bool) : void
+    {
+      foreach (predicate in subrule.HeadPredicates)
+        initSequence(predicate, subrule, level + 1, true);
+
+      allSubrules.Add(subrule);
+
+      subrule.SequenceLevel    = level;
+      subrule.IsPredicate      = isPredicate;
+
+      if (subrule is SubruleCompileInfo.Marker)
+        subrule.State = int.MaxValue - 1;
+      else
+      {
+        subrule.State = state;
+        ++state;
+      }
+
+      match (subrule)
+      {
+        | Empty                                         => subrule.Size = 1;
+        | TokenString                                   => subrule.Size = 1;
+        | RegularCall                                   => subrule.Size = 1;
+        | SimpleCall                                    => subrule.Size = 1;
+        | ExtensibleCall                                => subrule.Size = 1;
+        | Option           (rule)                       => subrule.Size = 1; initSequence(rule, subrule, level + 1, isPredicate);
+        | List             (rule, _, _)                 => subrule.Size = 1; initSequence(rule, subrule, level + 1, isPredicate);
+        | ListWithSeparator(rule, separator, _, _, _)   => subrule.Size = 1; initSequence(rule, subrule, level + 1, isPredicate); initSequence(separator, subrule, level + 1, isPredicate);
+        | Marker                                        => subrule.Size = 0;
+      }
+    }
+    initSequence(rootSequence, null, 0, false);
+    rootSequence.NestedSequencies = nestedSequencies.ToArray();
+    rootSequence.AllSubrules      = allSubrules.ToArray();
+    rootSequence.StateCount       = state;
+    rootSequence
+  }
+
+  public FunctionNamePostfix : string
+  {
+    get
+    {
+      match (this)
+      {
+        | Root                       => ""
+        | Predicate                  => $"_$(Owner.State)_Predicate"
+        | ListWithSeparatorSeparator => $"_$(Owner.State)_Separator"
+        | ListWithSeparatorItem      => $"_$(Owner.State)_Item"
+        | ListItem                   => $"_$(Owner.State)_Item"
+        | Option                     => $"_$(Owner.State)_Body"
+      }
+    }
+  }
+
+  public ParseFunctionName                : string { get { $"Parse$FunctionNamePostfix" } }
+
+  public ToStringWithIndex(sequenceLevel : int) : string
+  {
+    $<#..$(Subrules; "  "; _.ToStringWithIndex(sequenceLevel))#>
+  }
+
+  public ToStringWithState() : string
+  {
+    $<#..$(Subrules; "  "; _.ToStringWithState())#>
+  }
+
+  public override ToString() : string
+  {
+    $<#..$(Subrules; "  ")#>
+  }
+}
+
+// ---- Model/SequenceHeaderCompileInfo.n (Nitra.Model) ----
+[Record]
+public variant SequenceHeaderCompileInfo
+{
+  public Owner  : SequenceCompileInfo;
+  public Offset : int;
+
+  | Id
+  | Next
+  | State
+}
+
+// ---- Model/SubruleCompileInfo.n (Nitra.Model) ----
+[Record]
+public variant SubruleCompileInfo
+{
+                 public         SrcRule             : Nitra.Model.Rule;
+                 public         HeadPredicates      : array[SequenceCompileInfo.Predicate];
+  [RecordIgnore] public mutable Owner               : SequenceCompileInfo;
+  [RecordIgnore] public mutable State               : int;
+  [RecordIgnore] public mutable EndState            : int;
+  [RecordIgnore] public mutable SequenceLevel       : int;
+  [RecordIgnore] public mutable Size                : int;
+  [RecordIgnore] public mutable Offset              : int;
+  [RecordIgnore] public mutable NextSibling         : SubruleCompileInfo;
+  [RecordIgnore] public mutable PrevSibling         : SubruleCompileInfo;
+  [RecordIgnore] public mutable AllocateRawTree     : bool;
+  [RecordIgnore] public mutable IsPredicate         : bool;
+
+  | Empty
+  | TokenString       { String : string; }
+  | RegularCall       { Symbol : RegularRuleSymbol; }
+  | ExtensibleCall    { Symbol : ExtensibleRuleSymbol; BindingPower : BindingPowerInfo; }
+  | SimpleCall        { Symbol : SimpleRuleSymbol; }
+  | Option            { Rule   : SequenceCompileInfo.Option; }
+  //TODO:refactoring разделить на 3 части
+  | List              {
+                        Item   : SequenceCompileInfo.ListItem; MinCount : int; MaxCount : option[int];
+                        public UseCounter : bool { get MinCount > 0 || MaxCount is Some(_) }
+                        public IsNormal : bool { get { !(IsOptimizedList || IsDynamicSyntaxExtentionPoint) } }
+                        public IsOptimizedList : bool { get { this.SrcRule.Type is RuleType.Chars } }
+                        public IsDynamicSyntaxExtentionPoint : bool { get { this.SrcRule is Rule.Repeat(IsDynamicSyntaxExtentionPoint = true) } }
+                      }
+  | ListWithSeparator { Item   : SequenceCompileInfo.ListWithSeparatorItem; Separator : SequenceCompileInfo.ListWithSeparatorSeparator; MinCount : int; MaxCount : option[int]; HangingSeparator : bool; public UseCounter : bool { get MinCount > 0 || MaxCount is Some(_) } }
+  | Marker            { Symbol : MarkerSymbol; }
+
+  public SequenceIndex : int
+  {
+    [Memoize] get { Array.IndexOf(Owner.NonMarkerSubrules, this) }
+  }
+
+  public IsLoopSeparator : bool { get { Owner is SequenceCompileInfo.ListWithSeparatorSeparator } }
+  public IsLoopBody      : bool { get { Owner is SequenceCompileInfo.ListWithSeparatorItem } }
+  public IsStart         : bool { get { Owner.NonMarkerSubrules[0] : object == this } }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Empty                                                   => "<empty>"
+      | TokenString                                             => SrcRule.ToString()
+      | RegularCall                                             => SrcRule.ToString()
+      | ExtensibleCall                                          => SrcRule.ToString()
+      | SimpleCall                                              => SrcRule.ToString()
+      | Option           (rule)                                 => $"($rule)?"
+      | List             (rule, lower, upper)                   => $"($rule)$(FormatQuantifier(lower, upper))"
+      | ListWithSeparator(rule, separator, lower, upper, false) => $"($rule; $separator)$(FormatQuantifier(lower, upper))"
+      | ListWithSeparator(rule, separator, lower, upper, true)  => $"($rule; $separator; ?)$(FormatQuantifier(lower, upper))"
+      | Marker as m                                             => m.Symbol.Name
+    }
+  }
+
+  public ToStringWithIndex(sequenceLevel : int) : string
+  {
+    // Show index only for sequenceLevel!
+    def prefix = if (sequenceLevel == SequenceLevel) SequenceIndex + ":" else null;
+    match (this)
+    {
+      | Empty                                                   => $"$prefix<empty>"
+      | TokenString                                             => $"$prefix$SrcRule"
+      | RegularCall                                             => $"$prefix$SrcRule"
+      | ExtensibleCall                                          => $"$prefix$SrcRule"
+      | SimpleCall                                              => $"$prefix$SrcRule"
+      | Option           (rule)                                 => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)))?"
+      | List             (rule, lower, upper)                   => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)))$(FormatQuantifier(lower, upper))"
+      | ListWithSeparator(rule, separator, lower, upper, false) => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)); $(separator.ToStringWithIndex(sequenceLevel)))$(FormatQuantifier(lower, upper))"
+      | ListWithSeparator(rule, separator, lower, upper, true)  => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)); $(separator.ToStringWithIndex(sequenceLevel)); ?)$(FormatQuantifier(lower, upper))"
+      | Marker                                                  => ""
+    }
+  }
+
+  public ToStringWithState() : string
+  {
+    match (this)
+    {
+      | Empty                                                   => $"$State:<empty>"
+      | TokenString                                             => $"$State:$SrcRule"
+      | RegularCall                                             => $"$State:$SrcRule"
+      | ExtensibleCall                                          => $"$State:$SrcRule"
+      | SimpleCall                                              => $"$State:$SrcRule"
+      | Option           (rule)                                 => $"$State:($(rule.ToStringWithState()))?"
+      | List             (rule, lower, upper)                   => $"$State:($(rule.ToStringWithState()))$(FormatQuantifier(lower, upper))"
+      | ListWithSeparator(rule, separator, lower, upper, false) => $"$State:($(rule.ToStringWithState()); $(separator.ToStringWithState()))$(FormatQuantifier(lower, upper))"
+      | ListWithSeparator(rule, separator, lower, upper, true)  => $"$State:($(rule.ToStringWithState()); $(separator.ToStringWithState()); ?)$(FormatQuantifier(lower, upper))"
+      | Marker                                                  => ""
+    }
+  }
+
+  private static FormatQuantifier(lower : int, upper : option[int]) : string
+  {
+    | (0, None)    => "*"
+    | (1, None)    => "+"
+    | (x, None)    => $"{$x,}"
+    | (0, Some(x)) => $"{,$x}"
+    | (x, Some(y)) => if (x == y) $"{$x}" else $"{$x, $y}"
+  }
+}
+
+// ---- Model/SyntaxModuleOptions.n (Nitra.Model) ----
+[Record]
+public sealed class SyntaxModuleOptions
+{
+  public static Empty : SyntaxModuleOptions = SyntaxModuleOptions();
+
+  public IsExplicitSpaces : bool { get; private set; }
+
+  public SetExplicitSpaces(_loc : Nitra.Runtime.Located, value : bool) : SyntaxModuleOptions { surroundwith(newSyntaxModuleOptions) newOptions.IsExplicitSpaces = value }
+
+  public this() {}
+
+  public this(original : SyntaxModuleOptions)
+  {
+    this( isExplicitSpaces = original.IsExplicitSpaces)
+  }
+
+  public override ToString() : string
+  {
+    def values = List();
+    when (IsExplicitSpaces) values.Add("ExplicitSpaces");
+    $"[..$(values; \", \")]"
+  }
+}
+
+// ---- Model/Type/NPredefinedType.n (Nitra.Model) ----
+public enum NPredefinedType
+{
+  | Void = 0
+  | Ast
+  | Int
+  | String
+}
+
+// ---- Model/Type/NType.n (Nitra.Model) ----
+[Record]
+public variant NType : Nitra.Runtime.Located
+{
+  | Predefined { Value : NPredefinedType }
+  | Qualified  { Parts : list[TypeNamePart] }
+  | Tuple      { Members : list[NType] }
+  | Func       { From : NType; To : NType }
+  | OptionList { ItemType : NType }
+  | List       { ItemType : NType }
+  | Option     { ItemType : NType }
+
+  public override Location : Location { get; }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Predefined(t)    => t.ToString().ToLowerInvariant()
+      | Qualified(parts) => $<#..$(parts; ".")#>
+      | Tuple(members)   => $<#..$(members; " * ")#>
+      | Func(from, to)   => $"$from -> $to"
+      | OptionList(item) => item + "*"
+      | List(item)       => item + "+"
+      | Option(item)     => item + "?"
+    }
+  }
+}
+
+// ---- Model/Type/TypeNamePart.n (Nitra.Model) ----
+[Record]
+public sealed class TypeNamePart : Located
+{
+  public override Location      : Location    { get; }
+  public          Name          : string      { get; }
+  public          TypeArguments : list[NType] { get; }
+  public          NemerleEnv    : GlobalEnv   { get; }
+
+  public override ToString() : string
+  {
+    if (this.TypeArguments is [])
+      Name
+    else
+      $<#$Name<..$(TypeArguments; ", ")>#>
+  }
+}
+
+// ---- Model/UnicodeCategoryTable.n (Nitra.Model) ----
+public module UnicodeCategoryTable
+{
+  private _nameToCategoryTable     : Hashtable[string, UnicodeCategory]   = Hashtable();
+  private _categoryToRangeSetTable : Hashtable[UnicodeCategory, RangeSet] = Hashtable();
+
+  this()
+  {
+    def classes =
+    [
+      ("Lu", UppercaseLetter),
+      ("Ll", LowercaseLetter),
+      ("Lt", TitlecaseLetter),
+      ("Lm", ModifierLetter),
+      ("Lo", OtherLetter),
+      ("Mn", NonSpacingMark),
+      ("Mc", SpacingCombiningMark),
+      ("Me", EnclosingMark),
+      ("Nd", DecimalDigitNumber),
+      ("Nl", LetterNumber),
+      ("No", OtherNumber),
+      ("Zs", SpaceSeparator),
+      ("Zl", LineSeparator),
+      ("Zp", ParagraphSeparator),
+      ("Cc", Control),
+      ("Cf", Format),
+      ("Cs", Surrogate),
+      ("Co", PrivateUse),
+      ("Pc", ConnectorPunctuation),
+      ("Pd", DashPunctuation),
+      ("Ps", OpenPunctuation),
+      ("Pe", ClosePunctuation),
+      ("Pi", InitialQuotePunctuation),
+      ("Pf", FinalQuotePunctuation),
+      ("Po", OtherPunctuation),
+      ("Sm", MathSymbol),
+      ("Sc", CurrencySymbol),
+      ("Sk", ModifierSymbol),
+      ("So", OtherSymbol),
+      ("Cn", OtherNotAssigned)
+    ];
+
+    def ranges = SCG.List();
+    mutable curCat = char.GetUnicodeCategory(0 :> char);
+    mutable start = 0;
+    for (mutable i = 1; i <= char.MaxValue : int; ++i)
+    {
+      def cat = char.GetUnicodeCategory(i :> char);
+      when (cat != curCat)
+      {
+        ranges.Add((curCat, RangeSet.Range(start :> char, (i - 1) :> char)));
+        start = i;
+        curCat = cat;
+      }
+    }
+    ranges.Add((curCat, RangeSet.Range(start :> char, char.MaxValue)));
+    ranges.Reverse();
+
+    foreach((str, cat) in classes)
+    {
+      _nameToCategoryTable[str] = cat;
+      _categoryToRangeSetTable[cat] = ranges
+        .FilterLazy((c, _) => c == cat)
+        .Fold(RangeSet(), ((_, range), set) => set.AddRange(range));
+    }
+  }
+
+  public StrToUnicodeCategory(x : string) : option[UnicodeCategory]
+  {
+    match (_nameToCategoryTable.TryGetValue(x))
+    {
+      | (cat, true) => Some(cat)
+      | _ => None()
+    }
+  }
+
+  public UnicodeCategoryToRangeSet(cat : UnicodeCategory) : RangeSet
+  {
+    match (_categoryToRangeSetTable.TryGetValue(cat))
+    {
+      | (s, true) => s
+      | _ => throw ArgumentException("Unknown unicode class.", "cat");
+    }
+  }
+}

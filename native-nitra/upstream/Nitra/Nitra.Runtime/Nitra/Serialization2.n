@@ -1,0 +1,457 @@
+using System;
+using System.IO;
+using System.Text;
+using Nitra.ProjectSystem;
+using Nitra.Declarations;
+using Nitra.Staging;
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System.Reflection;
+using System.Collections.Generic;
+using System.Linq;
+using SCG = System.Collections.Generic;
+using Nitra.Runtime;
+using NitraMacros;
+using Nitra.Serialization2Macros;
+
+// ---- Serialization2/ISerializable.n (Nitra.Serialization2) ----
+public interface ISerializable
+{
+  Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
+  GetType() : System.Type;
+
+  // implementation requires static method:
+  // public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this;
+}
+
+// ---- Serialization2/MetadataDefaults.n (Nitra.Serialization2) ----
+internal module MetadataDefaults
+{
+  public Encoding     : Encoding = UTF8Encoding(false, true);
+  public RootSymbolId : int      = 1;
+  public RootScopeId  : int      = 2;
+}
+
+// ---- Serialization2/MetadataReader.n (Nitra.Serialization2) ----
+public sealed class MetadataReader
+{
+  private delegate DeserializationHandler(reader : BinaryReader, metadataReader : MetadataReader) : ISerializable;
+
+  public this(project : Project, source : SourceSnapshot)
+  {
+    Project       = project;
+    Source        = source;
+    ErrorLocation = Location(source, 0);
+  }
+
+  public Project       : Project                  { get; }
+  public Source        : SourceSnapshot           { get; }
+  public ErrorLocation : Location                 { get; }
+
+  private _typeDescriptors         : Dictionary[int, MetadataTypeDescriptor] = Dictionary();
+  private _deserializationHandlers : Dictionary[int, DeserializationHandler] = Dictionary();
+  private _objects                 : Dictionary[int, ISerializable]          = Dictionary();
+
+  public ReadObject[T](reader : BinaryReader) : T
+    where T: ISerializable
+  {
+    def descriptor = reader.ReadInt32();
+    if (descriptor != 0)
+    {
+      def handler = GetDeserializationHandler(descriptor);
+      def result  = handler.Invoke(reader, this);
+      result :> T
+    }
+    else
+      default(T)
+  }
+
+  public ReadType(reader : BinaryReader) : System.Type
+  {
+    def id = reader.ReadInt32();
+    mutable desc;
+    unless (_typeDescriptors.TryGetValue(id, out desc))
+    {
+      assert(false, $"Failed to find type descriptor with id='$id'. Try use UpdateStage1Metadata.cmd to update metadata.");
+    }
+    desc.Type;
+  }
+
+  public ReadObjects[T](reader : BinaryReader) : array[T]
+    where T: ISerializable
+  {
+    def count  = reader.ReadInt32();
+    def buffer = array(count);
+    for (mutable i = 0; i < buffer.Length; ++i)
+      buffer[i] = ReadObject(reader);
+    buffer
+  }
+
+  public ReadRoot(root : DeclarationSymbol, stream : Stream) : void
+  {
+    try
+    {
+      _objects[MetadataDefaults.RootSymbolId] = root;
+      _objects[MetadataDefaults.RootScopeId]  = root.Scope;
+
+      def reader = BinaryReader(stream, MetadataDefaults.Encoding);
+      def assemblyCount = reader.ReadInt32();
+      for (mutable assemblyIndex = 0; assemblyIndex < assemblyCount; ++assemblyIndex)
+      {
+        def fullName = reader.ReadString();
+        def assembly = Project.ResolveSymbolAssembly(fullName);
+        def typeCount = reader.ReadInt32();
+        for (mutable typeIndex = 0; typeIndex < typeCount; ++typeIndex)
+        {
+          def typeName = reader.ReadString();
+          def id       = reader.ReadInt32();
+          def argCount = reader.ReadInt32();
+          def type     = LoadType(assembly, typeName);
+          def descriptor =
+            if (argCount > 0)
+              MetadataTypeDescriptor.GenericDefinition(id, type, argCount)
+            else
+              MetadataTypeDescriptor.Simple(id, type);
+
+          _typeDescriptors.Add(id, descriptor)
+        }
+      }
+
+      def genericTypeCount = reader.ReadInt32();
+      for (mutable typeIndex = 0; typeIndex < genericTypeCount; ++typeIndex)
+      {
+        def id            = reader.ReadInt32();
+        def definitionId  = reader.ReadInt32();
+        def definition    = _typeDescriptors[definitionId] :> MetadataTypeDescriptor.GenericDefinition;
+        def arguments     = array(definition.ArgumentCount);
+        def argumentTypes = array(arguments.Length);
+        for (mutable index = 0; index < arguments.Length; ++index)
+        {
+          def argumentId       = reader.ReadInt32();
+          def argument         = _typeDescriptors[argumentId];
+          arguments[index]     = argument;
+          argumentTypes[index] = argument.Type;
+        }
+        def type       = definition.Type.MakeGenericType(argumentTypes);
+        def descriptor = MetadataTypeDescriptor.Generic(id, type, definition, arguments.ToNList());
+        _typeDescriptors.Add(id, descriptor)
+      }
+
+      def symbolCount = reader.ReadInt32();
+      repeat (symbolCount)
+        _ = ReadObject(reader);
+    }
+    finally
+    {
+      _typeDescriptors.Clear();
+      _deserializationHandlers.Clear();
+      _objects.Clear();
+    }
+  }
+
+  private LoadType(assembly : Assembly, typeName : string) : System.Type
+  {
+    // the reader builds its own symbols: types come from the build of that assembly loaded next to this reader (the
+    // same instance as the referenced one, except while bootstrapping, when the compiler references another build)
+    def own = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(typeof(MetadataReader).Assembly);
+    def assembly = match (own?.Assemblies.Find(a => a.GetName().Name == assembly.GetName().Name)) { | Some(a) => a | _ => assembly };
+    mutable type = assembly.GetType(typeName, throwOnError = false);
+    // a type nested in a file module (Nitra.Declarations.TableScope is Nitra.Declarations+TableScope in the CLR)
+    mutable name = typeName;
+    for (mutable dot = name.LastIndexOf('.'); type == null && dot > 0; dot = name.LastIndexOf('.', dot - 1))
+    {
+      name = name.Substring(0, dot) + "+" + name.Substring(dot + 1);
+      type = assembly.GetType(name, throwOnError = false);
+    }
+    assert(type != null, $"Failed to find type '$typeName' from assembly '$assembly'.");
+    type
+  }
+
+  private GetDeserializationHandler(id : int) : DeserializationHandler
+  {
+    mutable handler;
+    unless (_deserializationHandlers.TryGetValue(id, out handler))
+    {
+      mutable desc;
+      unless (_typeDescriptors.TryGetValue(id, out desc))
+      {
+        assert(false, $"Failed to find type descriptor with id='$id'. Try use UpdateStage1Metadata.cmd to update metadata.");
+      }
+      def type   = desc.Type;
+      def method = type.GetMethod("Deserialize", BindingFlags.Public | BindingFlags.Static);
+      assert(method != null, $"Failed to find method 'Deserialize' in type '$type'.");
+      handler = Delegate.CreateDelegate(typeof(DeserializationHandler), method) :> DeserializationHandler;
+
+      _deserializationHandlers.Add(id, handler);
+    }
+    handler
+  }
+
+  public BeginReadObject[T](reader : BinaryReader, obj : out T, factory : Func[BinaryReader, MetadataReader, T] = null) : bool
+    where T: ISerializable
+  {
+    def id = reader.ReadInt32();
+    if (id < 0)
+    {
+      def newObj = if (factory == null) Activator.CreateInstance() else factory(reader, this);
+      _objects.Add(~id, newObj);
+      obj = newObj;
+      true
+    }
+    else
+    {
+      obj = _objects[id] :> T;
+      false
+    }
+  }
+
+  public BeginReadSymbol[TSymbol](reader : BinaryReader, obj : out TSymbol) : bool
+    where TSymbol: DeclarationSymbol, new()
+  {
+    def id = reader.ReadInt32();
+    if (id < 0)
+    {
+      def nameText        = reader.ReadString();
+      def containingScope = ReadObject.[TableScope](reader);
+      def symbolKind      = reader.ReadByte() :> SymbolKind;
+      obj =
+        match (symbolKind)
+        {
+          | WithoutDeclarations => TSymbol()
+          | Parsed =>
+            def name        = Name(Location(Source, NSpan()), nameText);
+            def declaration = ExternalDeclaration.[TSymbol](name);
+            declaration.DefineSymbol(containingScope)
+
+          | External =>
+            assert3(containingScope : object != null, $"External symbol '$nameText' has no owner scope.");
+
+            def reference  = Reference(Location(Source, NSpan()), nameText);
+            def res        = containingScope.Bind.[TSymbol](reference);
+            def candidates = res.Symbols;
+            match (candidates.Length)
+            {
+              | 0 => assert(false, $"Failed to lookup reference to external symbol '$reference'");
+              | 1 => candidates[0]
+              | _ => assert(false, $"Ambiguous symbol reference '$reference'");
+            }
+
+          | x => assert(false, $"Unknown symbol kind '$x'.")
+        };
+
+      _objects.Add(~id, obj);
+      symbolKind != SymbolKind.External
+    }
+    else
+    {
+      obj = _objects[id] :> TSymbol;
+      false
+    }
+  }
+}
+
+// ---- Serialization2/MetadataTypeDescriptor.n (Nitra.Serialization2) ----
+[Record]
+internal variant MetadataTypeDescriptor
+{
+  | Simple
+  | GenericDefinition { ArgumentCount : int }
+  | Generic           { Definition : MetadataTypeDescriptor; Arguments : list[MetadataTypeDescriptor] }
+
+  public Id   : int;
+  public Type : System.Type;
+}
+
+// ---- Serialization2/MetadataWriter.n (Nitra.Serialization2) ----
+public sealed class MetadataWriter
+{
+  public this(project : Project)
+  {
+    Project = project;
+  }
+
+  public Project : Project { get; }
+
+  private _typeDescriptors : SCG.Dictionary[System.Type, MetadataTypeDescriptor] = SCG.Dictionary();
+  private _objects         : SCG.Dictionary[ISerializable, int]             = SCG.Dictionary();
+  private _symbols         : SCG.Queue[DeclarationSymbol]                   = SCG.Queue();
+
+  private GetTypeDescriptor(type : System.Type) : MetadataTypeDescriptor
+  {
+    mutable descriptor;
+    unless (_typeDescriptors.TryGetValue(type, out descriptor))
+    {
+      descriptor =
+        if (type.IsGenericTypeDefinition)
+          MetadataTypeDescriptor.GenericDefinition(_typeDescriptors.Count + 1, type, type.GetGenericArguments().Length)
+        else if (type.IsGenericType)
+        {
+          def definition = GetTypeDescriptor(type.GetGenericTypeDefinition());
+          def arguments  = type.GetGenericArguments().MapToList(GetTypeDescriptor);
+          MetadataTypeDescriptor.Generic(_typeDescriptors.Count + 1, type, definition, arguments);
+        }
+        else
+          MetadataTypeDescriptor.Simple(_typeDescriptors.Count + 1, type);
+
+      _typeDescriptors.Add(type, descriptor);
+    }
+    descriptor
+  }
+
+  public WriteType(type : System.Type, writer : BinaryWriter) : void
+  {
+    def descriptor = GetTypeDescriptor(type);
+    writer.Write(descriptor.Id : int);
+  }
+
+  public WriteObject(obj : ISerializable, writer : BinaryWriter) : void
+  {
+    if (obj != null)
+    {
+      WriteType(obj.GetType(), writer);
+      obj.Serialize(writer, this);
+    }
+    else
+      writer.Write(0 : int);
+  }
+
+  public WriteObjects[T](items : list[T], writer : BinaryWriter) : void
+    where T: ISerializable
+  {
+    writer.Write(items.Length : int);
+    foreach (item in items)
+      WriteObject(item, writer);
+  }
+
+  public WriteObjects[T](items : System.Collections.Immutable.ImmutableArray[T], writer : BinaryWriter) : void
+    where T: ISerializable
+  {
+    writer.Write(items.Length : int);
+    foreach (item in items)
+      WriteObject(item, writer);
+  }
+
+  public WriteObjects[T](items : System.Collections.Generic.ICollection[T], writer : BinaryWriter) : void
+    where T: ISerializable
+  {
+    writer.Write(items.Count : int);
+    foreach (item in items)
+      WriteObject(item, writer);
+  }
+
+  public WriteRoot(root : DeclarationSymbol, stream : Stream) : void
+  {
+    try
+    {
+      _objects[root]       = MetadataDefaults.RootSymbolId;
+      _objects[root.Scope] = MetadataDefaults.RootScopeId;
+
+      using (symbolBuffer = MemoryStream())
+      {
+        def symbolWriter = BinaryWriter(symbolBuffer, MetadataDefaults.Encoding);
+        (root.Scope :> TableScope).EnqueueSymbols(this);
+
+        mutable symbolCount = 0;
+        while (_symbols.Count > 0)
+        {
+          def symbol = _symbols.Dequeue();
+          unless (_objects.ContainsKey(symbol))
+          {
+            WriteObject(symbol, symbolWriter);
+            ++symbolCount;
+          }
+        }
+
+        def writer = BinaryWriter(stream, MetadataDefaults.Encoding);
+        def normalTypes = _typeDescriptors.Values.Where(t => !(t is MetadataTypeDescriptor.Generic)).GroupBy(d => d.Type.Assembly).ToList();
+        writer.Write(normalTypes.Count : int);
+        foreach (group in normalTypes)
+        {
+          writer.Write(group.Key.FullName);
+          writer.Write(group.Count() : int);
+          foreach (type in group.OrderBy(t => t.Id))
+          {
+            writer.Write(type.Type.FullName);
+            writer.Write(type.Id : int);
+            def argCount = if (type is MetadataTypeDescriptor.GenericDefinition(argCount)) argCount else 0;
+            writer.Write(argCount : int);
+          }
+        }
+
+        def genericTypes = _typeDescriptors.Values.OfType.[MetadataTypeDescriptor.Generic]().OrderBy(t => t.Id).ToList();
+        writer.Write(genericTypes.Count : int);
+        foreach (type in genericTypes)
+        {
+          writer.Write(type.Id : int);
+          writer.Write(type.Definition.Id : int);
+          foreach (arg in type.Arguments)
+            writer.Write(arg.Id : int);
+        }
+
+        writer.Write(symbolCount);
+        symbolBuffer.WriteTo(stream);
+      }
+    }
+    finally
+    {
+      _typeDescriptors.Clear();
+      _objects.Clear();
+      _symbols.Clear();
+    }
+  }
+
+  public BeginWriteObject(obj : ISerializable, writer : BinaryWriter) : bool
+  {
+    mutable existingId;
+    if (_objects.TryGetValue(obj, out existingId))
+    {
+      writer.Write(existingId : int);
+      false
+    }
+    else
+    {
+      def newId = _objects.Count + 1;
+      _objects.Add(obj, newId);
+      writer.Write(~newId : int);
+      true
+    }
+  }
+
+  public BeginWriteSymbol(obj : DeclarationSymbol, writer : BinaryWriter) : bool
+  {
+    if (BeginWriteObject(obj, writer))
+    {
+      writer.Write(obj.InitialName);
+      WriteObject(obj.Owner, writer);
+
+      def symbolKind =
+        if (obj.HasParsedDeclarations)
+          SymbolKind.Parsed
+        else if (!obj.HasDeclarations)
+          SymbolKind.WithoutDeclarations
+        else
+          SymbolKind.External;
+
+      writer.Write(symbolKind :> byte);
+      symbolKind != SymbolKind.External
+    }
+    else
+      false
+  }
+
+  internal EnqueueSymbol(symbol : DeclarationSymbol) : void
+  {
+    _symbols.Enqueue(symbol)
+  }
+}
+
+// ---- Serialization2/SymbolKind.n (Nitra.Serialization2) ----
+internal enum SymbolKind : byte
+{
+  | WithoutDeclarations = 0
+  | Parsed              = 1
+  | External            = 2
+}

@@ -1,9 +1,11 @@
 ﻿using Nitra;
-using Nitra.Utils;
+using Nitra.Grammar;
+using Nitra.Grammar.Utils;
 using Nitra.Model;
 using Nitra.ProjectSystem;
 using Nitra.Runtime;
 using Nitra.Typing;
+using Nitra.Runtime.Typing;
 using Nitra.Typing.TypingUtils;
 
 using Nemerle.Collections;
@@ -62,7 +64,7 @@ syntax module NitraSyntax : NitraLang
   {
     Identifiers() : list[Nitra.Model.Identifier] = Names.Item1.Identifiers();
     Parts() : list[string] = Names.Item1.MapToList(_.Value());
-    CalcLocations() : list[Nitra.Location] = Names.Item1.MapToList(_.Location);
+    CalcLocations() : list[Nitra.Runtime.Location] = Names.Item1.MapToList(_.Location);
     LastIdentifier() : Nitra.Model.Identifier = Names.Item1[Names.Item1.Count - 1].Identifier();
     LastReference() : Reference = Names.Item1[Names.Item1.Count - 1];
   }
@@ -370,7 +372,7 @@ syntax module NitraSyntax : NitraLang
 
     syntax PropertyValue
     {
-      ValueLocation() : Nitra.Location;
+      ValueLocation() : Nitra.Runtime.Location;
       HasValue() : bool;
 
       | Expression = sm "=" sm Expression ";" nl
@@ -862,7 +864,7 @@ syntax module NitraSyntax : NitraLang
         [ExplicitSpaces]
         syntax NamespaceName = Path=(Name s "." s)* Name
         {
-          CalcLocations() : list[Nitra.Location]
+          CalcLocations() : list[Nitra.Runtime.Location]
           {
             def path = List(Path.Count + 1);
             foreach (x in Path)
@@ -1030,7 +1032,7 @@ syntax module NitraSyntax : NitraLang
   {
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void = _ = owner;
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetPrecedenceRelations() : PrecedenceRelations * list[Precedence] = (null, null);
+    GetPrecedenceRelations() : PrecedenceRelations * list[Nitra.Typing.Precedence] = (null, null);
     TypeSyntaxMappings() : void {}
     Typing() : void {}
 
@@ -1084,7 +1086,7 @@ syntax module NitraSyntax : NitraLang
           _ = this.RuleBody.MakeContext(PrecedenceZeroContext(PrecedenceStartContext(context, this.Symbol)));
           parent
         }
-        [Cached] MakePrecedenceRelationsCached(context : Context) : PrecedenceRelations * list[Precedence]
+        [Cached] MakePrecedenceRelationsCached(context : Context) : PrecedenceRelations * list[Nitra.Typing.Precedence]
         {
           PrecedenceContext.MakePrecedenceRelations(context)
         }
@@ -1644,7 +1646,7 @@ syntax module NitraSyntax : NitraLang
       parent
     }
     [Cached]
-    MakePrecedenceRelations(context : Context) : PrecedenceRelations * list[Precedence]
+    MakePrecedenceRelations(context : Context) : PrecedenceRelations * list[Nitra.Typing.Precedence]
     {
       PrecedenceContext.MakePrecedenceRelations(context)
     }
@@ -1656,7 +1658,7 @@ syntax module NitraSyntax : NitraLang
   {
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void = _ = owner;
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetLastLocation() : Nitra.Location;
+    GetLastLocation() : Nitra.Runtime.Location;
     TypeSyntaxMappings() : void { }
     Typing() : void { }
 
@@ -2079,7 +2081,7 @@ syntax module NitraSyntax : NitraLang
 
   syntax RuleMethodBody
   {
-    BodyLocation() : Nitra.Location;
+    BodyLocation() : Nitra.Runtime.Location;
     IsEmpty() : bool;
     MakeBody(context : Context) : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.BodyLocation(), NemerleParser.Parse(this, context));
 

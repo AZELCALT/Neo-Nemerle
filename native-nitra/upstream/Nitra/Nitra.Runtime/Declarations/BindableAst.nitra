@@ -1,4 +1,5 @@
-﻿namespace Nitra.Declarations
+﻿using Nitra.Runtime;
+namespace Nitra.Declarations
 {
   abstract ast BindableAst
   {

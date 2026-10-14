@@ -1,4 +1,4 @@
-﻿using Nitra.Utils;
+﻿using Nitra.Grammar.Utils;
 using System.Text;
 
 syntax module NitraLiterals : NitraLang

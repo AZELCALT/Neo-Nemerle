@@ -1,5 +1,5 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0" DefaultTargets="Build">
   <PropertyGroup>
     <ProductVersion>8.0.30703</ProductVersion>
     <SchemaVersion>2.0</SchemaVersion>
@@ -134,32 +134,16 @@
     <Compile Include="AST\AstMapping.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\AstType.n">
-      <SubType>Code</SubType>
-      <DependentUpon>AST\AstType.nitra</DependentUpon>
-    </Compile>
     <Compile Include="AST\AstType.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\AstUtils.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="AST\CharLiteral.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\DotNet\CompilationUnit.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="AST\DotNet\CompilationUnit.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\DotNet\DependentPropertyEvalContextEx.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="AST\DotNet\NitraQualifiedReference.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\FileExtensionCollector.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="AST\LanguageMember.nitra">
@@ -201,9 +185,6 @@
     <Compile Include="AST\Members\RuleField.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\Members\RuleFieldNameGenerator.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="AST\Members\SyntaxModuleMember\SyntaxModuleUsing.nitra">
       <SubType>Code</SubType>
     </Compile>
@@ -228,32 +209,7 @@
     <Compile Include="AST\RuleExpressions.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\RuleType.n">
-      <SubType>Code</SubType>
-      <DependentUpon>AST\RuleType.nitra</DependentUpon>
-    </Compile>
     <Compile Include="AST\RuleType.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\Scopes\ListRuleTypeScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\Scopes\MappableRuleTypeScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\Scopes\OptionRuleTypeScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\Scopes\ParseTreeTypeCtorScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\Scopes\RuleTypeScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\Scopes\TupleRuleTypeScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="AST\SerializationHelper.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="AST\StringLiteral.nitra">
@@ -265,139 +221,10 @@
     <Compile Include="AST\Language.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\SyntaxModuleCollector.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="AST\TypedDeclaration.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="AST\WellKnownSymbols.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="AST\WellKnownType.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\AstDependentPropertyStageContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\AstVariableContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\BindingUtils.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\ContextExtensions.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\AstContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\EnteredScopeContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\INemerleEnvironmentContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\KeywordRegexContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\LanguageContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\MapSyntaxContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\NamespaceOrTypeAliasContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\EnterNamespaceContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\OpenNamespaceOrTypeContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\ParseTreePatternVariableContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\PrecedenceContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\RootContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\RuleAliasContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\RuleDeclarationSiteContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\SimpleNameContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\SyntaxModuleBodyContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\SyntaxModuleContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Context\TokenFieldContext.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\AstType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\ChemicalRuleType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\Identifier.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\Precedence.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\RegularRule.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\Rule.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\RuleDefinitionOptions.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\RuleRef.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\RangeSet.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\SequenceCompileInfo.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\SubruleCompileInfo.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\SequenceHeaderCompileInfo.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\RuleType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\SyntaxModuleOptions.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\Type\NPredefinedType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\Type\NType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\Type\TypeNamePart.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\UnicodeCategoryTable.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="NemerleParser.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="NitraLanguage.nitra">
@@ -409,278 +236,10 @@
     <Compile Include="NitraSyntax.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="ProjectSystem\NemerleFile.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="ProjectSystem\NitraProject.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\FSM\FSM.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\FSM\FSMBuilder.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\FSM\FSMMatch.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Model\FSM\FSMTransform.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Properties\AssemblyInfo.n" />
-    <Compile Include="$(CommonFilesPath)\AssemblyConstants.Common.n">
-      <Link>Properties\AssemblyConstants.Common.n</Link>
-    </Compile>
-    <Compile Include="Symbols\Ast\AbstractAstSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\AstCardinality.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\PropertyProjectionType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\PropertySymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\AstSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\PrecedenceSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\ProjectedPropertySymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\PropertyContainerSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\StructuralPropertySymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\SimpleAstSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\SymbolSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\Ast\TablePropertySymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\DependencyPath.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\DependentPropertyDirection.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\DependentPropertySymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\DependentStatement.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\IDependentStatementContainer.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\PropertyDependencyCallData.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\PropertyDependencyData.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\DependentProperties\PropertyDependencyNodeData.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\LanguageMembers\SpanClassSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\LanguageMembers\StyleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\LanguageSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\NitraExternalSymbolPropertyReader.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\PropertyBag.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\AstVariableSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\LocalVariableSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\ParseTreePatternVariableSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\ParseTreeCtor.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\ParseTreePath.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\ParseTreePattern.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\PatternTyper.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingCase.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingExpr.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingField.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingParameterSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxMapping\SyntaxMappingTyper.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\NamespaceOrTypeAliasSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\AbstractSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\DefinitionSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\DefSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\RuleMethodBody.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\RuleMethodParameter.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\RuleMethodSignature.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\RuleMethodSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\IBody.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\ICached.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\ISignature.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\OnErrorSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleMethod\OverrideSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\RuleAliasSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\ExtendSyntaxSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\ExtensibleRuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\ExtensionRuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\IRuleDeclarationSite.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\SyntaxRuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\MarkerSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\RegularRuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\RuleDefSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\RuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\Rule\SimpleRuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleMembers\TokenFieldSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Symbols\SyntaxModuleSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-BindProperty.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-BindAstPropertyProjectionSource.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-BindAstSymbolFromMappingExtension.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-CreateAstCtor.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-MakePropertyProjectionType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-NTypeToAstType.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-RegisterDependentStatement.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-SetNameReferenceSyntaxMapping.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-SetOutDependentProperties.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-TypeAstInheritance.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-TypeAstModifiers.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-TypeCall.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-TypeLanguageInheritance.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-TypeRuleExpression.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-TypeSequence.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Typing\TypingUtils-ValidateSyntaxMapping.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="NounUtil.cs">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Utils.n">
-      <SubType>Code</SubType>
-    </Compile>
-  </ItemGroup>
+    <Compile Include="Nitra\Ast.n" /><Compile Include="Nitra\Grammar.n" /><Compile Include="Nitra\Model.n" /><Compile Include="Nitra\Typing.n" /></ItemGroup>
   <ItemGroup>
     <Folder Include="AST" />
     <Folder Include="AST\MapSyntax\" />

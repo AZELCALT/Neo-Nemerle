@@ -1,9 +1,0 @@
-﻿using Nemerle.Utility;
-
-namespace Nitra.Typing
-{
-  [Record]
-  public abstract class LocalVariableSymbol : SingleDefSymbol
-  {
-  }
-}

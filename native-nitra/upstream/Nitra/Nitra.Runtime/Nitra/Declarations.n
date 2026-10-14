@@ -1,0 +1,3366 @@
+using Nitra.ProjectSystem;
+using Nitra.Internal;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Diagnostics;
+using SCG = System.Collections.Generic;
+using NemerleMacros;
+using Nitra.Serialization2;
+using System.IO;
+using Nemerle.Assertions;
+using System.Collections.Immutable;
+using System.Threading;
+using Nemerle.Imperative;
+using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
+using System.Text;
+using Nitra.InternalMacros;
+using Nitra.Serialization2Macros;
+using Nitra.Runtime;
+using NitraMacros;
+
+#pragma warning disable 10003
+
+
+#pragma warning restore 10003
+
+// ---- Declarations/AstBase.n (Nitra.Declarations) ----
+public abstract class AstBase : IAst
+{
+  protected this() { }
+
+  public          Source      : SourceSnapshot { get; protected set; }
+  public          Span        : NSpan          { get; protected set; }
+  public          Location    : Location       { get { Nitra.Runtime.Location(Source, Span) } }
+  public virtual  IsAmbiguous : bool           { get { false } }
+  public virtual  IsMissing   : bool           { get { false } }
+
+  public virtual EvalProperties(context : DependentPropertyEvalContext) : void
+  {
+    _ = context;
+  }
+
+  public virtual ResetProperties() : void
+  {
+  }
+
+  public virtual IsAllPropertiesEvaluated : bool { get { true } }
+  public virtual PropertiesEvalState      : int  { get { 0 } }
+
+  public virtual ToXaml() : string
+  {
+    def type    = GetType();
+    def color   = if (this.IsAmbiguous) "red" else "gray";
+    def str     = AstUtils.XmlEscape(if (type.IsNested) type.DeclaringType.Name + "." + type.Name else type.Name);
+    def typeStr = $"<Span Foreground = '$color'>$str</Span>";
+
+    if (this : object is Declaration as decl)
+    {
+      def text = decl.Name.Text;
+      if (!string.IsNullOrWhiteSpace(text))
+        typeStr + ": " + AstUtils.XmlEscape(text)
+      else
+        typeStr
+    }
+    else
+      typeStr
+  }
+
+  public virtual Accept(visitor : IAstVisitor) : void { _ = visitor }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | decl is Declaration => decl.Name?.Text + ": " + this.GetType().FullName
+      | _ => base.ToString()
+    }
+  }
+
+  protected UpdateSpan(isSpanSet : ref bool, span : NSpan) : void
+  {
+    if (isSpanSet)
+      Span += span
+    else
+    {
+      Span = span;
+      isSpanSet = true;
+    }
+  }
+}
+
+// ---- Declarations/AstContext.n (Nitra.Declarations) ----
+public module AstContext
+{
+  [ThreadStatic]
+  private static mutable _state : ICompilerMessages;
+
+  public static CompilerMessages : ICompilerMessages
+  {
+    get
+    {
+      assert2(_state != null, "You must use the AstContext only in the dependent properties or in the Parse Tree to AST mapping.");
+      _state
+    }
+  }
+  
+  public GetAstUntyped(parseTree : ParseTree, astMessages : CompilerMessageList) : IAst
+  {
+    mutable oldState;
+    try
+    {
+      oldState = AstContext.Set(astMessages);
+      parseTree.GetAstUntyped();
+    }
+    finally AstContext.Restore(oldState);
+  }
+  
+
+  internal Set(compilerMessage : ICompilerMessages) : ValueOption[ICompilerMessages]
+  {
+    def oldState = _state;
+    _state = compilerMessage;
+    VSome(oldState)
+  }
+
+  internal Restore(stateOpt : ValueOption[ICompilerMessages]) : void
+  {
+    when (stateOpt is VSome(state))
+      _state = state;
+  }
+}
+
+// ---- Declarations/AstList.n (Nitra.Declarations) ----
+// TODO: Добавить возможность различать + и *
+public interface IAstList[+T] : SCG.IEnumerable[T], IAst // SCG.IList[T] conflicts with covariance constraint
+  where T : IAst
+{
+  Count             : int   { get; }
+  Item[index : int] : T     { get; }
+}
+
+[DebuggerDisplay("Count = {Count}")]
+public class AstList[T] : AstBase, IAstList[T], SCG.IList[T]
+  where T : IAst
+{
+  private static EmptyItems : array[T] = array(0);
+
+  public this(loc : ILocated, params items : array[T])
+  {
+    this(loc.Location, items)
+  }
+
+  public this(loc : Location, params items : array[T])
+  {
+    Source = loc.Source;
+    Span   = loc.Span;
+    _items = items ?? EmptyItems;
+    foreach (item in _items)
+    {
+      def itemLoc = item.Location;
+      when (itemLoc.Source : object == Source)
+        Span += itemLoc.Span;
+    }
+  }
+
+  [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+  protected _items           : array[T];
+
+  public Count             : int   { get { _items.Length } }
+  public Item[index : int] : T     { get { _items[index] } }
+
+  public GetEnumerator() : SCG.IEnumerator[T]
+  {
+    (_items : SCG.IEnumerable[T]).GetEnumerator()
+  }
+
+  public override EvalProperties(context : DependentPropertyEvalContext) : void
+  {
+    foreach (item in _items)
+      item.EvalProperties(context);
+  }
+
+  public override ToXaml() : string { "List Count: " + _items.Length }
+
+  public override Accept(visitor : IAstVisitor) : void
+  {
+    foreach (item in _items)
+    {
+      | x is Reference => visitor.Visit(x);
+      | x is Name      => visitor.Visit(x);
+      | x              => visitor.Visit(x);
+    }
+  }
+
+  public Contains(item : T) : bool
+  {
+    Array.IndexOf(_items, item) >= 0
+  }
+
+  public CopyTo(target : array[T], targetIndex : int) : void
+  {
+    Array.Copy(_items, 0, target, targetIndex, _items.Length)
+  }
+
+  public IndexOf(item : T) : int
+  {
+    Array.IndexOf(_items, item)
+  }
+
+  Item1[index : int] : T implements SCG.IList[T].Item
+  {
+    get { _items[index] }
+    set { _ = value; _ = index; throw NotSupportedException() }
+  }
+
+  IsReadOnly : bool implements SCG.ICollection[T].IsReadOnly
+  {
+    get { true }
+  }
+
+  Add(_ : T) : void             implements SCG.ICollection[T].Add    { throw NotSupportedException() }
+  Clear() : void                implements SCG.ICollection[T].Clear  { throw NotSupportedException() }
+  Remove(_ : T) : bool          implements SCG.ICollection[T].Remove { throw NotSupportedException() }
+  Insert(_ : int, _ : T) : void implements SCG.IList[T].Insert       { throw NotSupportedException() }
+  RemoveAt(_ : int) : void      implements SCG.IList[T].RemoveAt     { throw NotSupportedException() }
+}
+
+public class AmbiguousAstList[T] : IAstList[T], IAmbiguousAst, SCG.IList[T]
+  where T : IAst
+{
+  public this(ambiguities : array[IAstList[T]])
+  {
+    Ambiguities = ambiguities
+  }
+
+  public Ambiguities       : array[IAstList[T]] { get; }
+  public Location          : Location           { get { Ambiguities[0].Location } }
+  public Source            : SourceSnapshot     { get { Ambiguities[0].Source } }
+  public Span              : NSpan              { get { Ambiguities[0].Span } }
+  public IsAmbiguous       : bool               { get { true } }
+  public IsMissing         : bool               { get { false } }
+  public Count             : int                { get { Ambiguities[0].Count } }
+  public Item[index : int] : T                  { get { Ambiguities[0][index] } }
+
+  private AmbiguitiesImpl : array[IAst] implements IAmbiguousAst.Ambiguities { get { Ambiguities :> array[IAst] } }
+
+  public GetEnumerator() : SCG.IEnumerator[T]
+  {
+    (Ambiguities[0] : SCG.IEnumerable[T]).GetEnumerator()
+  }
+
+  public virtual EvalProperties(context : DependentPropertyEvalContext) : void
+  {
+    AstUtils.EvalAmbiguitiesProperties(context, this)
+  }
+
+  public PropertiesEvalState : int
+  {
+    get { Ambiguities[0].PropertiesEvalState }
+  }
+
+  public ResetProperties() : void
+  {
+    AstUtils.ResetAmbiguitiesProperties(this)
+  }
+
+  public IsAllPropertiesEvaluated : bool
+  {
+    get { Ambiguities[0].IsAllPropertiesEvaluated }
+  }
+
+  public ToXaml() : string { "<Span Foreground='Red'>AmbiguousList Count: " + Ambiguities.Length + "</Span>" }
+
+  public Accept(visitor : IAstVisitor) : void
+  {
+    foreach (item in Ambiguities)
+      item.Accept(visitor);
+  }
+
+  public Contains(item : T) : bool
+  {
+    (Ambiguities[0] :> SCG.IList[T]).Contains(item)
+  }
+
+  public CopyTo(target : array[T], targetIndex : int) : void
+  {
+    (Ambiguities[0] :> SCG.IList[T]).CopyTo(target, targetIndex)
+  }
+
+  public IndexOf(item : T) : int
+  {
+    (Ambiguities[0] :> SCG.IList[T]).IndexOf(item)
+  }
+
+  Item1[index : int] : T implements SCG.IList[T].Item
+  {
+    get { Ambiguities[0][index] }
+    set { _ = value; _ = index; throw NotSupportedException() }
+  }
+
+  IsReadOnly : bool implements SCG.ICollection[T].IsReadOnly
+  {
+    get { true }
+  }
+
+  Add(_ : T) : void             implements SCG.ICollection[T].Add    { throw NotSupportedException() }
+  Clear() : void                implements SCG.ICollection[T].Clear  { throw NotSupportedException() }
+  Remove(_ : T) : bool          implements SCG.ICollection[T].Remove { throw NotSupportedException() }
+  Insert(_ : int, _ : T) : void implements SCG.IList[T].Insert       { throw NotSupportedException() }
+  RemoveAt(_ : int) : void      implements SCG.IList[T].RemoveAt     { throw NotSupportedException() }
+}
+
+// ---- Declarations/AstOption.n (Nitra.Declarations) ----
+public interface IAstOption[+T] : IAst
+  where T : IAst
+{
+  HasValue : bool  { get; }
+  Value    : T     { get; }
+}
+
+public class AstOption[T] : AstBase, IAstOption[T]
+  where T : IAst
+{
+  protected _value     : T;
+
+  public HasValue    : bool  { get; }
+  public Value       : T
+  {
+    get
+    {
+      unless (HasValue)
+        throw InvalidOperationException("Value not set");
+      _value;
+    }
+  }
+
+  public this(loc : ILocated)
+  {
+    this(loc.Location)
+  }
+
+  public this(loc : Location)
+  {
+    Source = loc.Source;
+    Span   = loc.Span;
+  }
+
+  public this(loc : ILocated, value : T)
+  {
+    this(loc.Location, value)
+  }
+
+  public this(loc : Location, value : T)
+  {
+    this(loc);
+    _value  = value;
+    def valueLoc = value.Location;
+    when (valueLoc.Source : object == Source)
+      Span += valueLoc.Span;
+    HasValue = true;
+  }
+
+  public override EvalProperties(context : DependentPropertyEvalContext) : void
+  {
+    when (HasValue)
+      _value.EvalProperties(context);
+  }
+
+  public override ToXaml() : string
+  {
+    if (HasValue)
+      _value.ToString()
+    else
+      "<Span Foreground = 'gray'>None</Span>"
+  }
+
+  public override Accept(visitor : IAstVisitor) : void
+  {
+    when (HasValue)
+      match (_value)
+      {
+        | x is Reference => visitor.Visit(x);
+        | x is Name      => visitor.Visit(x);
+        | x              => visitor.Visit(x);
+      }
+  }
+}
+
+public class AmbiguousAstOption[T] : IAstOption[T], IAmbiguousAst
+  where T : IAst
+{
+  public this(ambiguities : array[IAstOption[T]])
+  {
+    Ambiguities = ambiguities
+  }
+
+  public Ambiguities       : array[IAstOption[T]] { get; }
+  public Location          : Location             { get { Ambiguities[0].Location } }
+  public Source            : SourceSnapshot       { get { Ambiguities[0].Source } }
+  public Span              : NSpan                { get { Ambiguities[0].Span } }
+  public IsAmbiguous       : bool                 { get { true } }
+  public IsMissing         : bool                 { get { false } }
+  public HasValue          : bool                 { get { Ambiguities[0].HasValue } }
+  public Value             : T                    { get { Ambiguities[0].Value } }
+
+  private AmbiguitiesImpl : array[IAst] implements IAmbiguousAst.Ambiguities { get { Ambiguities :> array[IAst] } }
+
+  public EvalProperties(context : DependentPropertyEvalContext) : void
+  {
+    AstUtils.EvalAmbiguitiesProperties(context, this)
+  }
+
+  public PropertiesEvalState : int
+  {
+    get { Ambiguities[0].PropertiesEvalState }
+  }
+
+  public ResetProperties() : void
+  {
+    AstUtils.ResetAmbiguitiesProperties(this)
+  }
+
+  public IsAllPropertiesEvaluated : bool
+  {
+    get { Ambiguities[0].IsAllPropertiesEvaluated }
+  }
+
+  public ToXaml() : string { "AmbiguousOption Count: " + Ambiguities.Length }
+
+  public Accept(visitor : IAstVisitor) : void
+  {
+    foreach (item in Ambiguities)
+      item.Accept(visitor);
+  }
+}
+
+// ---- Declarations/BoundedTypeVarSymbol.n (Nitra.Declarations) ----
+public class BoundedTypeVarSymbol : SymbolBase, TypeVarSymbol
+{
+  [Flags]
+  private enum EvalState : int
+  {
+    | None = 0
+    | BaseTypeConstraint = 1
+    | DerivedTypeConstraint = 2
+    | Type = 4
+    | TypeSubst = 8
+  }
+
+  public this()
+  {
+  }
+
+  private mutable _state : EvalState;
+
+  public IsBaseTypeConstraintEvaluated : bool
+  {
+    get { _state %&& EvalState.BaseTypeConstraint }
+  }
+
+  private mutable _baseTypeConstraint : TypeSymbol;
+
+  [DependentProperty("IsBaseTypeConstraintEvaluated")]
+  public BaseTypeConstraint : TypeSymbol
+  {
+    get { assert(IsBaseTypeConstraintEvaluated);  _baseTypeConstraint }
+    set { assert(!IsBaseTypeConstraintEvaluated); _baseTypeConstraint = value; _state |= EvalState.BaseTypeConstraint }
+  }
+
+  public IsDerivedTypeConstraintEvaluated : bool
+  {
+    get { _state %&& EvalState.DerivedTypeConstraint }
+  }
+
+  private mutable _derivedTypeConstraint : TypeSymbol;
+
+  [DependentProperty("IsDerivedTypeConstraintEvaluated")]
+  public DerivedTypeConstraint : TypeSymbol
+  {
+    get { assert(IsDerivedTypeConstraintEvaluated);  _derivedTypeConstraint}
+    set { assert(!IsDerivedTypeConstraintEvaluated); _derivedTypeConstraint = value; _state |= EvalState.DerivedTypeConstraint }
+  }
+
+  public IsTypeEvaluated : bool
+  {
+    get { _state %&& EvalState.Type }
+  }
+
+  private mutable _type : TypeSymbol;
+
+  [DependentProperty("IsTypeEvaluated")]
+  public Type : TypeSymbol
+  {
+    get { assert(IsTypeEvaluated);  _type }
+    set { assert(!IsTypeEvaluated); _type = value; _state |= EvalState.Type }
+  }
+
+  public IsTypeSubstEvaluated : bool
+  {
+    get { _state %&& EvalState.TypeSubst }
+  }
+
+  private mutable _typeSubst : TypeSymbol;
+
+  [DependentProperty("IsTypeSubstEvaluated")]
+  public TypeSubst : TypeSymbol
+  {
+    get { assert(IsTypeSubstEvaluated); _typeSubst }
+    set { assert(!IsTypeSubstEvaluated); _typeSubst = value; _state |= EvalState.TypeSubst }
+  }
+
+  public IsFullNameEvaluated : bool
+  {
+    get { IsTypeEvaluated && Type.IsFullNameEvaluated }
+  }
+
+  [DependentProperty("IsFullNameEvaluated")]
+  public FullName : string
+  {
+    get { Type.FullName }
+    set { _ = value }
+  }
+
+  public IsKindEvaluated : bool
+  {
+    get { true }
+  }
+
+  [DependentProperty("IsKindEvaluated")]
+  public Kind : string
+  {
+    get { if (IsTypeEvaluated && Type.IsKindEvaluated) Type.Kind else "type var" }
+    set { _ = value; }
+  }
+
+  public IsScopeEvaluated : bool
+  {
+    get { IsTypeEvaluated && Type.IsScopeEvaluated }
+  }
+
+  [DependentProperty("IsScopeEvaluated")]
+  public Scope : Scope
+  {
+    get { Type.Scope }
+    set { _ = value; }
+  }
+
+  public IsSpanClassEvaluated : bool
+  {
+    get { IsTypeEvaluated && Type.IsSpanClassEvaluated }
+  }
+
+  [DependentProperty("IsSpanClassEvaluated")]
+  public SpanClass : SpanClass
+  {
+    get { Type.SpanClass }
+    set { _ = value; }
+  }
+
+  public IsDeclaredInOptEvaluated : bool
+  {
+    get { IsTypeEvaluated && Type.IsDeclaredInOptEvaluated }
+  }
+
+  [DependentProperty("IsDeclaredInOptEvaluated")]
+  public DeclaredInOpt : ValueOption[DeclarationSymbol]
+  {
+    get { Type.DeclaredInOpt }
+    set { _ = value }
+  }
+
+  public IsAllPropertiesEvaluated : bool
+  {
+    get { false }
+  }
+
+  public PropertiesEvalState : int
+  {
+    get { _state :> int }
+  }
+
+  public EvalProperties(context : DependentPropertyEvalContext) : void
+  {
+    _ = context;
+  }
+
+  public ResetProperties() : void
+  {
+    _state = EvalState.None;
+  }
+
+  public override ToString() : string
+  {
+    if (IsTypeEvaluated)
+      Type.ToString()
+    else
+    {
+      match (IsBaseTypeConstraintEvaluated, IsDerivedTypeConstraintEvaluated)
+      {
+        | (false, false) => Kind
+        | (true,  false) => BaseTypeConstraint + "+"
+        | (false,  true) => DerivedTypeConstraint + "-"
+        | (true,   true) => BaseTypeConstraint + " TILL " + DerivedTypeConstraint
+      }
+    }
+  }
+
+  get_Declarations1() : Seq[TypeVar] implements TypeVarSymbol.get_Declarations
+  {
+    GetDeclarationsOfType()
+  }
+
+  get_Declarations2() : Seq[Type] implements TypeSymbol.get_Declarations
+  {
+    GetDeclarationsOfType()
+  }
+
+  get_Declarations3() : Seq[Declaration] implements DeclarationSymbol.get_Declarations
+  {
+    GetDeclarationsUntyped()
+  }
+
+  public Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    _ = writer; _ = metadataWriter;
+    throw System.NotImplementedException()
+  }
+}
+
+// ---- Declarations/Declaration.n (Nitra.Declarations) ----
+public interface ScopedAst : IAst
+{
+}
+
+public interface Declaration : ScopedAst
+{
+  IsParsed : bool { get; }
+  CreateSymbol() : DeclarationSymbol;
+}
+
+public interface DeclarationSymbol : IDependentPropertyContainer, ISerializable
+{
+  Id                        : int         { get; }
+  Name                      : string      { get; }
+  InitialName               : string      { get; }
+  IsNameValid               : bool        { get; }
+  NameId                    : int         { get; }
+  Owner                     : TableScope  { get; }
+  FirstDeclarationOrDefault : Declaration { get; }
+  DeclarationsCount         : int         { get; }
+  HasDeclarations           : bool        { get; }
+  HasParsedDeclarations     : bool        { get; }
+  IsParsed                  : bool        { get; }
+
+  GetDeclarationsUntyped() : Seq[Declaration];
+  VisitChildrenAndSelf(getCildren : Func[DeclarationSymbol, Seq[DeclarationSymbol]], callback : Predicate[DeclarationSymbol]) : bool;
+  
+  AddDeclaration(newDeclaration : Declaration) : void;             // TODO: remove from public interface
+  RemoveDeclarations(shouldRemove : Predicate[Declaration]) : int; // TODO: remove from public interface
+  /// If return value is greater than 0 it is valid name ID which can be used in StringIndex.GetText().
+  /// If return value is 0 the name of symbol is not set.
+  /// If return value is less then 0 the name of symbol set more then one time (is ambiguous). 
+  ///   * You can use bitwise complement (~ operator in C#) to convert returned value to first name id of this symbol if value less then 0.
+  ///   * All names of symbol you can get in declarations (see GetDeclarations*() methods).
+  TryGetNameId() : int;
+  CanMerge(candidate : Declaration) : bool;
+  IsSameIdentity(candidate : Declaration) : bool;
+  AfterStage(stage : int) : void;
+  DecomposeType() : ValueOption[TypeStructure];
+  MakeHint()                 : string;
+  GetTable(tableName : string) : ValueOption[TableScope]
+}
+
+public module DeclarationExtensions
+{
+  public EmitSymbol(this declaration : Declaration, symbol : DeclarationSymbol, context : DependentPropertyEvalContext) : void
+  {
+    _ = declaration;
+    context.EmitSymbol(symbol)
+  }
+}
+
+// ---- Declarations/DeclarationBase.n (Nitra.Declarations) ----
+public abstract class DeclarationBase : AstBase
+{
+  protected this() { }
+
+  protected mutable __NameImpl : Name;
+
+  internal UpdateName(newName : Name) : void
+  {
+    __NameImpl = newName;
+
+    when (IsAmbiguous)
+      foreach (ambiguity in (this :> IAmbiguousAst).Ambiguities)
+        (ambiguity :> DeclarationBase).UpdateName(newName);
+  }
+
+  public virtual CreateSymbol() : DeclarationSymbol
+  {
+    throw NotImplementedException();
+  }
+
+  public virtual IsParsed : bool { get { true } }
+}
+
+// ---- Declarations/DeepResetPropertiesAstVisitor.n (Nitra.Declarations) ----
+public sealed class DeepResetPropertiesAstVisitor : IAstVisitor
+{
+  public static Instance : this = DeepResetPropertiesAstVisitor();
+
+  public Visit(ast : IAst) : void
+  {
+    ast.ResetProperties();
+    ast.Accept(this);
+  }
+
+  public Visit(reference : Reference) : void implements IAstVisitor.Visit
+  {
+    reference.ResetProperties();
+  }
+  
+  public Visit(name : Name) : void implements IAstVisitor.Visit
+  {
+    name.ResetProperties();
+  }
+
+  public Visit(r : IRef) : void
+  {
+    _ = r;
+  }
+}
+
+// ---- Declarations/DependentPropertyEvalContext.n (Nitra.Declarations) ----
+public class DependentPropertyEvalContext
+{
+  public Stage                  : int               { get; internal set; }
+  public CalculatedCount        : int               { get; private  set; }
+  public DeferredCount          : int               { get; internal set; }
+  public Pass                   : int               { get { _pass } }
+  public CollectorsCreatedCount : int               { get { _collectorsCreated } }
+  public CancellationToken      : CancellationToken { get; set; }
+  mutable _files                : ImmutableArray[FileEvalPropertiesData];
+          _fileMap              : Dictionary[int, FileEvalPropertiesData] = Dictionary();
+
+  public GetFileData(fileId : int) : FileEvalPropertiesData
+  {
+    _fileMap[fileId]
+  }
+  
+  public Files : ImmutableArray[FileEvalPropertiesData]
+  {
+    get { _files }
+    set
+    {
+      _files = value;
+      _fileMap.Clear();
+      foreach (file in value)
+        _fileMap.Add(file.FileId, file);
+    }
+  }
+  public CalculatedCountInc() : void
+  {
+    CalculatedCount += 1
+  }
+
+  public DeferredCountInc() : void
+  {
+    DeferredCount += 1
+  }
+
+  public NextPass() : void
+  {
+    ++_pass;
+    _collectorsCreated = 0;
+  }
+
+  private mutable _pass              : int;
+  private mutable _collectorsCreated : int;
+
+  public NotifyCollectorCreated(createdOnStage : out int, createdOnPass : out int) : void
+  {
+    createdOnStage = Stage;
+    createdOnPass  = _pass;
+    ++_collectorsCreated;
+  }
+
+  public EmitSymbol([NotNull] symbol : DeclarationSymbol) : void
+  {
+    OnEmitSymbol?.Invoke(symbol, this);
+  }
+
+  public event OnEmitSymbol : Action[DeclarationSymbol, DependentPropertyEvalContext];
+}
+
+// ---- Declarations/IAmbiguousAst.n (Nitra.Declarations) ----
+public interface IAmbiguousAst : IAst
+{
+  Ambiguities : array[IAst] { get }
+}
+
+// ---- Declarations/IAst.n (Nitra.Declarations) ----
+public interface IAst : ILocated, IDependentPropertyContainer
+{
+  Source      : SourceSnapshot { get; } //TODO: Move to ILocated.
+  Span        : NSpan          { get; } //TODO: Move to ILocated.
+  IsAmbiguous : bool           { get; }
+  IsMissing   : bool           { get; }
+  ToXaml() : string;
+  Accept(visitor : IAstVisitor) : void;
+}
+
+public module IAstExtensions
+{
+  public DeepResetProperties(this ast : IAst) : void
+  {
+    DeepResetPropertiesAstVisitor.Instance.Visit(ast)
+  }
+}
+
+// ---- Declarations/IAstVisitor.n (Nitra.Declarations) ----
+public interface IAstVisitor
+{
+  Visit(ast : IAst) : void;
+  Visit(reference : Reference) : void;
+  Visit(name : Name) : void;
+  Visit(r : IRef) : void;
+}
+
+// ---- Declarations/IDependentPropertyContainer.n (Nitra.Declarations) ----
+public interface IDependentPropertyContainer
+{
+  EvalProperties(context : DependentPropertyEvalContext) : void;
+  ResetProperties() : void;
+  IsAllPropertiesEvaluated : bool { get }
+  PropertiesEvalState      : int  { get }
+}
+
+// ---- Declarations/IProjectSupport.n (Nitra.Declarations) ----
+/// Implement this interface if you need custom calculation of the dependent properties for one or more files.
+/// This interface is requested from a start rule after the Parse Tree to AST mapping is finished.
+/// Returns: The project data. It put in "data" parameter in next time when RefreshProject() will be called.
+public interface IProjectSupport
+{
+  RefreshReferences(cancellationToken : CancellationToken, project : Project) : object;
+  RefreshProject(cancellationToken : CancellationToken, files : ImmutableArray[FileEvalPropertiesData], data : object) : void;
+  GetSymbolById(data : object, symbolId : int) : ValueOption[DeclarationSymbol];
+  DeconstructType(symbol : DeclarationSymbol, type : out TypeSymbol, typeArgs : out ImmutableArray[TypeSymbol]) : bool;
+  /// <summary>Call the callback for each global symbol (namespaces, typese, etc).</summary>
+  /// <param name="callback">Call for each gobal symbol. If 'callback' returns true, the symbols visiting will be stopped..</param>
+  /// <returns>True if visiting was stopped by 'callback'.</returns>
+  VisitGlobalSymbols(data : object, callback : Predicate[DeclarationSymbol]) : void;
+}
+
+// ---- Declarations/Name.n (Nitra.Declarations) ----
+public class Name : AstBase
+{
+  public this(location : Location, Id : int)
+  {
+    this(location);
+    this.Id = Id;
+  }
+
+  public this(location : Location, Text : string)
+  {
+    this(location, StringIndex.GetId(Text));
+  }
+
+  public this(located : Located)
+  {
+    this(located.Location, located.GetText())
+  }
+
+  public virtual  Id   : int    { get; protected set; }
+  public          Text : string { get { StringIndex.GetText(Id) } }
+
+  public override ToString() : string { Text }
+  public override ToXaml()   : string { AstUtils.XmlEscape(Text) }
+
+  new public sealed class AmbiguousOrMissing : Name, IAmbiguousAst
+  {
+    public override Id : int
+    {
+      get
+      {
+        if (IsAmbiguous)
+          Ambiguities[0].Id
+        else
+        {
+          mutable id = base.Id;
+          when (id == StringIndex.InvalidId)
+          {
+            id = StringIndex.GetId("#Missing");
+            base.Id = id;
+          }
+          id
+        }
+      }
+    }
+  }
+}
+
+// ---- Declarations/PredefinedDeclaration.n (Nitra.Declarations) ----
+public class PredefinedDeclaration : DeclarationBase, Declaration
+{
+  public this(name : Name, symbolFactory : Func[DeclarationSymbol])
+  {
+    _symbolFactory = symbolFactory;
+    Source         = name.Source;
+    Span           = name.Span;
+    __NameImpl     = name;
+  }
+
+  private         _symbolFactory   : Func[DeclarationSymbol];
+  private mutable _containingTable : TableScope;
+
+  public Name                       : Name              { get { __NameImpl } }
+  public IsSymbolEvaluated          : bool              { get { __NameImpl.IsSymbolEvaluated } }
+  public Symbol                     : DeclarationSymbol
+  {
+    get { __NameImpl.Symbol }
+    set { __NameImpl.Symbol = value }
+  }
+
+  public IsContainingTableEvaluated : bool              { get { _containingTable : object != null } }
+  public ContainingTable            : TableScope
+  {
+    get { assert(IsContainingTableEvaluated); _containingTable }
+    set { assert(!IsContainingTableEvaluated); _containingTable = value }
+  }
+
+  public override IsParsed : bool { get { false } }
+
+  public override CreateSymbol() : DeclarationSymbol
+  {
+    _symbolFactory()
+  }
+
+  public override Accept(visitor : IAstVisitor) : void
+  {
+    visitor.Visit(Name);
+  }
+
+  public override ToXaml() : string
+  {
+    Name.ToXaml()
+  }
+
+  public DefineSymbol(containingScope : TableScope = null) : DeclarationSymbol
+  {
+    assert(!IsSymbolEvaluated, "Predefined declaration already has symbol");
+
+    if (containingScope : object != null)
+      containingScope.Define(this, null)
+    else
+    {
+      def symbol = CreateSymbol();
+      symbol.AddDeclaration(this);
+      Name.Symbol = symbol;
+      symbol
+    }
+  }
+}
+
+// ---- Declarations/Reference.n (Nitra.Declarations) ----
+public class Reference : AstBase
+{
+  public this(location : Location, Id : int)
+  {
+    def loc =
+      if (location.IsTextAvailable)
+        location
+      else
+        Location.MakeFake(StringIndex.GetText(Id));
+    this(loc);
+    this.Id = Id;
+  }
+  
+  public this(location : Location, text : string)
+  {
+    def id = StringIndex.GetId(text);
+    def loc =
+      if (location.IsTextAvailable)
+        location
+      else
+        Location.MakeFake(text);
+    this(loc, id);
+  }
+  
+  public this(located : Located)
+  {
+    this(located.Location, located.GetText())
+  }
+
+  public virtual  Id   : int    { get; protected set; }
+  public          Text : string { get { StringIndex.GetText(Id) } }
+  
+  public Bind[TSymbol](scope : Scope) : Ref[TSymbol]
+    where TSymbol : DeclarationSymbol
+  {
+    def bindResult = scope.Bind.[TSymbol](this);
+    Ref.[TSymbol].CreateBind(this.Location, bindResult)
+  }
+
+  public override ToString() : string { Text }
+  public override ToXaml()   : string { AstUtils.XmlEscape(Text) }
+
+  new public sealed class AmbiguousOrMissing : Reference, IAmbiguousAst
+  {
+    public override Id : int
+    {
+      get
+      {
+        if (IsAmbiguous)
+          Ambiguities[0].Id
+        else
+        {
+          mutable id = base.Id;
+          when (id == StringIndex.InvalidId)
+          {
+            id = StringIndex.GetId("#Missing");
+            base.Id = id;
+          }
+          id
+        }
+      }
+    }
+  }
+}
+
+// ---- Declarations/Type.n (Nitra.Declarations) ----
+public interface TypeSymbol : DeclarationSymbol
+{
+}
+
+public interface TypeVarSymbol : TypeSymbol
+{
+}
+
+// ---- Declarations/TypeUnifier.n (Nitra.Declarations) ----
+public abstract class TypeUnifier
+{
+  private _typeVarInitContext : DependentPropertyEvalContext = DependentPropertyEvalContext();
+
+  protected abstract IsSubtype(subtype : TypeSymbol, supertype : TypeSymbol) : bool;
+
+  public virtual CreateTypeVar(baseTypeConstraint : TypeSymbol, derivedTypeConstraint : TypeSymbol) : TypeVarSymbol
+  {
+    def var = BoundedTypeVarSymbol();
+
+    when (baseTypeConstraint : object != null)
+      var.BaseTypeConstraint = baseTypeConstraint;
+
+    when (derivedTypeConstraint : object != null)
+      var.DerivedTypeConstraint = derivedTypeConstraint;
+
+    var.EvalProperties(_typeVarInitContext);
+    var
+  }
+
+  public TryProvide(t : TypeSymbol, derivedTypeConstraint : TypeSymbol) : bool
+  {
+    match (UnwrapTypeVar(derivedTypeConstraint))
+    {
+      | TypeVarSymbol as tv
+      | c with tv = CreateTypeVar(null, c) => TryUnify(t, tv)
+    }
+  }
+
+  public Provide(t : TypeSymbol, derivedTypeConstraint : TypeSymbol) : bool
+  {
+    match (UnwrapTypeVar(derivedTypeConstraint))
+    {
+      | TypeVarSymbol as tv
+      | c with tv = CreateTypeVar(null, c) => Unify(t, tv)
+    }
+  }
+
+  public TryRequire(t : TypeSymbol, baseTypeConstraint : TypeSymbol) : bool
+  {
+    match (UnwrapTypeVar(baseTypeConstraint))
+    {
+      | TypeVarSymbol as tv
+      | c with tv = CreateTypeVar(c, null) => TryUnify(t, tv)
+    }
+  }
+
+  public Require(t : TypeSymbol, baseTypeConstraint : TypeSymbol) : bool
+  {
+    match (UnwrapTypeVar(baseTypeConstraint))
+    {
+      | TypeVarSymbol as tv
+      | c with tv = CreateTypeVar(c, null) => Unify(t, tv)
+    }
+  }
+
+  public TryUnify(t1 : TypeSymbol, t2 : TypeSymbol) : bool
+  {
+    mutable updatedVariables;
+    def result = Unify(t1, t2, ref updatedVariables);
+    ResetTypeVars(ref updatedVariables);
+    result
+  }
+
+  public Unify(t1 : TypeSymbol, t2 : TypeSymbol) : bool
+  {
+    mutable updatedVariables;
+    def result = Unify(t1, t2, ref updatedVariables);
+    unless (result)
+      ResetTypeVars(ref updatedVariables);
+    result
+  }
+
+  private Unify(t1 : TypeSymbol, t2 : TypeSymbol, updatedVariables : ref LightList[TypeVarSymbol]) : bool
+  {
+    def t1' = UnwrapTypeVar(t1);
+    def t2' = UnwrapTypeVar(t2);
+    when (t1' : object == t2')
+      return true;
+
+    match (t1', t2')
+    {
+      | (TypeVarSymbol as v, TypeVarSymbol(IsBaseTypeConstraintEvaluated = false, IsDerivedTypeConstraintEvaluated = false) as unboundVar)
+      | (TypeVarSymbol(IsBaseTypeConstraintEvaluated = false, IsDerivedTypeConstraintEvaluated = false) as unboundVar, TypeVarSymbol as v) =>
+        BindTypeVar(unboundVar, v, ref updatedVariables);
+        true
+
+      | (TypeVarSymbol as v1, TypeVarSymbol as v2) =>
+        mutable newBaseTypeConstraint;
+        match (v1.IsBaseTypeConstraintEvaluated, v2.IsBaseTypeConstraintEvaluated)
+        {
+          | (false, false) => ()
+          | (true,  false) => newBaseTypeConstraint = v1.BaseTypeConstraint;
+          | (false,  true) => newBaseTypeConstraint = v2.BaseTypeConstraint;
+          | (true,   true) =>
+            def c1 = v1.BaseTypeConstraint;
+            def c2 = v2.BaseTypeConstraint;
+            if (c1.Equals(c2))
+              newBaseTypeConstraint = c1
+            else if (IsSubtype(c1, c2))
+              newBaseTypeConstraint = c1
+            else if (IsSubtype(c2, c1))
+              newBaseTypeConstraint = c2
+            else
+              return false; // base type constraints are not compatible
+        }
+
+        mutable newDerivedTypeConstraint;
+        match (v1.IsDerivedTypeConstraintEvaluated, v2.IsDerivedTypeConstraintEvaluated)
+        {
+          | (false, false) => ()
+          | (true,  false) => newDerivedTypeConstraint = v1.DerivedTypeConstraint;
+          | (false,  true) => newDerivedTypeConstraint = v2.DerivedTypeConstraint;
+          | (true,   true) =>
+            def c1 = v1.DerivedTypeConstraint;
+            def c2 = v2.DerivedTypeConstraint;
+            if (c1.Equals(c2))
+              newDerivedTypeConstraint = c1
+            else if (IsSubtype(c1, c2))
+              newDerivedTypeConstraint = c2
+            else if (IsSubtype(c2, c1))
+              newDerivedTypeConstraint = c1
+            else
+              return false; // derived type constraints are not compatible
+        }
+
+        mutable type;
+        when (newBaseTypeConstraint : object != null && newDerivedTypeConstraint : object != null)
+        {
+          if (newBaseTypeConstraint.Equals(newDerivedTypeConstraint))
+            type = newBaseTypeConstraint;
+          else unless (IsSubtype(newDerivedTypeConstraint, newBaseTypeConstraint))
+            return false; // merged constraints are not consistent
+        }
+
+        when (type : object == null)
+          type = CreateTypeVar(newBaseTypeConstraint, newDerivedTypeConstraint);
+
+        BindTypeVar(v1, type, ref updatedVariables);
+        BindTypeVar(v2, type, ref updatedVariables);
+        true
+
+      | (type, var is TypeVarSymbol)
+      | (var is TypeVarSymbol, type) =>
+        BindTypeVar(var, type, ref updatedVariables);
+
+        when (var.IsBaseTypeConstraintEvaluated)
+        {
+          def baseTypeConstraint = var.BaseTypeConstraint;
+          unless (type.Equals(baseTypeConstraint) || IsSubtype(type, baseTypeConstraint) || Unify(type, baseTypeConstraint, ref updatedVariables))
+            return false; // base type constraint not satisfied
+        }
+
+        when (var.IsDerivedTypeConstraintEvaluated)
+        {
+          def derivedTypeConstraint = var.DerivedTypeConstraint;
+          unless (type.Equals(derivedTypeConstraint) || IsSubtype(derivedTypeConstraint, type) || Unify(type, derivedTypeConstraint, ref updatedVariables))
+            return false; // derived type constraint not satisfied
+        }
+
+        true
+
+      | _ =>
+        mutable ti1 = t1';
+        mutable args1;
+        mutable ti2 = t2';
+        mutable args2;
+
+        when (t1'.DecomposeType() is VSome(s))
+        {
+          ti1   = s.TypeInfo;
+          args1 = s.TypeArguments;
+        }
+
+        when (t2'.DecomposeType() is VSome(s))
+        {
+          ti2   = s.TypeInfo;
+          args2 = s.TypeArguments;
+        }
+
+        if (ti1 : object == ti2)
+          Unify(ref args1, ref args2, ref updatedVariables);
+        else
+          false
+    }
+  }
+
+  private Unify(ts1 : ref LightList[TypeSymbol], ts2 : ref LightList[TypeSymbol], updatedVariables : ref LightList[TypeVarSymbol]) : bool
+  {
+    when (ts1.Count != ts2.Count)
+      return false;
+
+    for (mutable i = 0; i < ts1.Count; ++i)
+      unless (Unify(ts1[i], ts2[i], ref updatedVariables))
+        return false;
+
+    true
+  }
+
+  private static UnwrapTypeVar(t : TypeSymbol) : TypeSymbol
+  {
+    | tv is TypeVarSymbol when tv.IsTypeEvaluated => UnwrapTypeVar(tv.Type)
+    | _ => t
+  }
+
+  private static BindTypeVar(var : TypeVarSymbol, type : TypeSymbol, updatedVariables : ref LightList[TypeVarSymbol]) : void
+  {
+    var.Type = type;
+    updatedVariables.Add(var);
+  }
+
+  private ResetTypeVars(vars : ref LightList[TypeVarSymbol]) : void
+  {
+    def e = vars.GetEnumerator();
+    when (e.MoveNext())
+    {
+      do
+      {
+        def var                   = e.Current;
+        def baseTypeConstraint    = if (var.IsBaseTypeConstraintEvaluated)    var.BaseTypeConstraint    else null;
+        def derivedTypeConstraint = if (var.IsDerivedTypeConstraintEvaluated) var.DerivedTypeConstraint else null;
+
+        var.ResetProperties();
+
+        when (baseTypeConstraint : object != null)
+          var.BaseTypeConstraint = baseTypeConstraint;
+
+        when (derivedTypeConstraint : object != null)
+          var.DerivedTypeConstraint = derivedTypeConstraint;
+
+        var.EvalProperties(_typeVarInitContext);
+      }
+      while (e.MoveNext())
+    }
+  }
+}
+
+// ---- DependentProperties/EvalPropertiesHost.n (Nitra.Declarations) ----
+public abstract class EvalPropertiesHost
+{
+  public EvalProperties(
+    [NotNull] context    : DependentPropertyEvalContext,
+              passName   : string = null,
+              stage      : int    = 0) : void
+  {
+    when (context.CancellationToken.IsCancellationRequested)
+      return;
+
+    context.Stage = stage;
+    BeforeStage(context, passName);
+    do
+    {
+      context.NextPass();
+      mutable calculatedCount;
+      mutable passCount = 0;
+      do
+      {
+        when (context.CancellationToken.IsCancellationRequested)
+          return;
+
+        context.DeferredCount = 0;
+        calculatedCount = context.CalculatedCount;
+        ExecutePass(context, passName);
+        passCount++;
+      }
+      while (context.DeferredCount > 0 && calculatedCount != context.CalculatedCount);
+    }
+    while (context.CollectorsCreatedCount > 0);
+
+    AfterStage(context, passName);
+  }
+
+  protected abstract ExecutePass(context : DependentPropertyEvalContext, passName : string) : void;
+
+  protected virtual BeforeStage(context : DependentPropertyEvalContext, passName : string) : void
+  {
+    IgnoreParams();
+  }
+
+  protected virtual AfterStage(context : DependentPropertyEvalContext, passName : string) : void
+  {
+    IgnoreParams();
+  }
+
+  protected EvalProperties(context : DependentPropertyEvalContext, obj : IDependentPropertyContainer, statistics : StatisticsTask.Single = null) : void
+  {
+    statistics?.Restart();
+    obj.EvalProperties(context);
+    statistics?.Stop();
+  }
+}
+
+// ---- DependentProperties/FileEvalPropertiesData.n (Nitra.Declarations) ----
+[Record]
+public class FileEvalPropertiesData
+{
+  public FullName    : string;
+  public Title       : string;
+  public FileId      : int;
+  public FileVersion : int;
+  public Ast         : IAst;
+  public Statistics  : StatisticsTask.Container;
+  public IsActive    : bool;
+  [RecordIgnore]
+  mutable _compilerMessage : CompilerMessageList;
+
+  public this(fullName : string, title : string, fileId : int, fileVersion : int, ast : IAst, statistics  : StatisticsTask.Container)
+  {
+    this(fullName, title, fileId, fileVersion, ast, statistics, false)
+  }
+
+  public HasCompilerMessage : bool
+  {
+    get
+    {
+      when (_compilerMessage == null)
+        _ = GetCompilerMessage();
+      
+      _compilerMessage.Count > 0
+    }
+  }
+   
+  public GetCompilerMessage() : CompilerMessageList
+  {
+    when (_compilerMessage == null)
+    {
+      _compilerMessage = CompilerMessageList();
+      when (Ast != null)
+      {
+        def errorCollector = CollectSymbolErrorsVisitor(_compilerMessage);
+        errorCollector.Visit(Ast);
+      }
+    }
+    _compilerMessage
+  }
+ }
+
+// ---- DependentProperties/ProjectEvalPropertiesHost.n (Nitra.Declarations) ----
+public class ProjectEvalPropertiesHost : EvalPropertiesHost
+{
+  protected _files   : ImmutableArray[FileEvalPropertiesData];
+  protected _symbols : ImmutableArray[DeclarationSymbol];
+
+  public this(files : ImmutableArray[FileEvalPropertiesData])
+  {
+    this(files, ImmutableArray.Empty)
+  }
+
+  public this(files : ImmutableArray[FileEvalPropertiesData], symbols : ImmutableArray[DeclarationSymbol])
+  {
+    _files   = files;
+    _symbols = symbols;
+  }
+
+  protected override ExecutePass(context : DependentPropertyEvalContext, passName : string) : void
+  {
+    context.Files = _files;
+    
+    foreach (symbol in _symbols)
+      EvalProperties(context, symbol);
+
+    foreach (file in _files)
+    {
+      when (context.CancellationToken.IsCancellationRequested)
+        return;
+        
+      def stat = GetStatistics(file, passName);
+      def ast  = file.Ast;
+      when (ast : object != null)
+        EvalProperties(context, ast, stat);
+    }
+  }
+
+  protected override AfterStage(context : DependentPropertyEvalContext, _passName : string) : void
+  {
+    // Notify symbols about current stage is finished.
+    def stage = context.Stage;
+    def stageNotifier = StageNotifierVisitor();
+    foreach (file in _files)
+    {
+      def ast = file.Ast;
+      when (ast != null)
+        stageNotifier.Notify(ast, stage);
+    }
+  }
+
+  private GetStatistics(file : FileEvalPropertiesData, passName : string) : StatisticsTask.Single
+  {
+    def statistics = file.Statistics;
+    def passStatistics = 
+      if      (passName == null)   statistics
+      else                         statistics?.GetOrAddContainerSubtask(passName);
+
+    passStatistics?.ReplaceSingleSubtask(file.FullName, file.Title);
+  }
+}
+
+// ---- Serialization2/ExternalDeclaration.n (Nitra.Declarations) ----
+public class ExternalDeclaration[TSymbol] : DeclarationBase, Declaration
+  where TSymbol: DeclarationSymbol
+{
+  public this(location : Location, name : string)
+  {
+    this(Nitra.Declarations.Name(location, name))
+  }
+
+  public this(name : Name)
+  {
+    Source     = name.Source;
+    Span       = name.Span;
+    __NameImpl = name;
+  }
+
+  private mutable _containingTable : TableScope;
+
+  public Name                       : Name              { get { __NameImpl } }
+  public IsSymbolEvaluated          : bool              { get { __NameImpl.IsSymbolEvaluated } }
+  public Symbol                     : TSymbol
+  {
+    get { __NameImpl.Symbol :> TSymbol }
+    set { __NameImpl.Symbol = value }
+  }
+
+  set_Symbol(value : DeclarationSymbol) : void implements Declaration.set_Symbol
+  {
+    Symbol = value :> TSymbol
+  }
+
+  public IsContainingTableEvaluated : bool              { get { _containingTable : object != null } }
+  public ContainingTable            : TableScope
+  {
+    get { assert(IsContainingTableEvaluated); _containingTable }
+    set { assert(!IsContainingTableEvaluated); _containingTable = value }
+  }
+
+  public override IsParsed : bool { get { false } }
+
+  public override CreateSymbol() : DeclarationSymbol
+  {
+    Activator.CreateInstance.[TSymbol]()
+  }
+
+  public override Accept(visitor : IAstVisitor) : void
+  {
+    visitor.Visit(Name);
+  }
+
+  public override ToXaml() : string
+  {
+    Name.ToXaml()
+  }
+
+  public DefineSymbol(containingScope : TableScope = null) : TSymbol
+  {
+    assert(!IsSymbolEvaluated, "External declaration already has symbol");
+
+    if (containingScope : object != null)
+      containingScope.Define(this, null)
+    else
+    {
+      def symbol = CreateSymbol() :> TSymbol;
+      symbol.AddDeclaration(this);
+      Name.Symbol = symbol;
+      symbol
+    }
+  }
+}
+
+// ---- Typing2/Binding/BindResult.n (Nitra.Declarations) ----
+public variant BindResult[TSymbol] : ISerializable
+  where TSymbol : DeclarationSymbol
+{
+  public          IsEmpty        : bool                               { get { this is Nil } }
+  public          HasResult      : bool                               { get { !IsEmpty } }
+  public virtual  Symbols        : ImmutableArray[TSymbol]  { get { GetSymbols() } }
+  
+  | Single
+    {
+      public Symbol : TSymbol { get; }
+      
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObject(Symbol, writer);
+      }
+      public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def symbol = metadataReader.ReadObject(reader);
+        Single(symbol)
+      }
+    }
+  
+  | Multiple
+    {
+      public new Symbols : ImmutableArray[TSymbol] { get; }
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObjects(Symbols, writer);
+      }
+      public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def symbols = metadataReader.ReadObjects(reader);
+        Multiple(symbols.ToImmutableArray())
+      }
+    }
+  
+  | Hiding
+    {
+      public Result : BindResult[TSymbol] { get; }
+      public Hidden : BindResult[TSymbol] { get; }
+
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObject(Result, writer);
+        metadataWriter.WriteObject(Hidden, writer);
+      }
+      public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def result = metadataReader.ReadObject(reader);
+        def hidden = metadataReader.ReadObject(reader);
+        Hiding(result, hidden)
+      }
+    }
+
+  | Union
+    {
+      public DistinctSymbols : ImmutableArray[TSymbol]             { get; }
+      public Results         : ImmutableArray[BindResult[TSymbol]] { get; }
+
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObjects(Results, writer);
+      }
+      public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def results = metadataReader.ReadObjects(reader);
+        NitraUtils.MakeUnion(results.ToImmutableArray()) :> this
+      }
+    }
+    
+  | Nil
+    {
+      public override Serialize(_writer : BinaryWriter, _metadataWriter : MetadataWriter) : void { }
+      public static Deserialize(_reader : BinaryReader, _metadataReader : MetadataReader) : this
+      {
+        Nil()
+      }
+    }
+
+  public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
+
+  public GetSymbols() : ImmutableArray[TSymbol]
+  {
+    match (this)
+    {
+      | Single   as x => ImmutableArray.Create(x.Symbol)
+      | Multiple as x => x.Symbols
+      | Hiding   as x => x.Result.Symbols
+      | Nil           => ImmutableArray.Empty
+      | Union    as x => x.DistinctSymbols
+    }
+  }
+  
+  public Filter[TConcreteSymbol]() : BindResult[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol
+  {
+    Filter.[TConcreteSymbol](null)
+  }
+  
+  /// Filter by predicate. Filter by TConcreteSymbol If predicate is null.
+  public Filter[TConcreteSymbol](predicate : Predicate[TConcreteSymbol]) : BindResult[TConcreteSymbol]
+    //where TConcreteSymbol : TSymbol
+    // TODO: FIXMY
+    where TConcreteSymbol : DeclarationSymbol
+  {
+    match (this)
+    {
+      | Single(Symbol=sym is TConcreteSymbol) => if (predicate == null || predicate(sym)) Single(sym) else Nil()
+      | Single => Nil()
+      | Multiple as m => 
+        def res = LightList.[TConcreteSymbol]();
+        if (predicate == null)
+          foreach(sym is TConcreteSymbol in m.Symbols)
+            res.Add(sym);
+        else
+          foreach(sym is TConcreteSymbol when predicate(sym) in m.Symbols)
+            res.Add(sym);
+
+        match (res.Count)
+        {
+          | 0 => Nil()
+          | 1 => Single(res[0])
+          | _ => Multiple(res.ToImmutableArray())
+        }
+
+      | Hiding as h => 
+        def r = h.Result.Filter.[TConcreteSymbol](predicate);
+        def h = h.Hidden.Filter.[TConcreteSymbol](predicate);
+        
+        if (r.IsEmpty)
+          h
+        else if (h.IsEmpty)
+          r
+        else
+          Hiding(r, h)
+        
+      | Union as u =>
+        def results = LightList();
+        foreach (res in u.Results)
+        {
+          def res2 = res.Filter.[TConcreteSymbol](predicate);
+          when (res2.HasResult)
+            results.Add(res2);
+        }
+        
+        match (results.Count)
+        {
+          | 0 => Nil()
+          | 1 => results[0]
+          | _ => NitraUtils.MakeUnion(results.ToImmutableArray())
+        }
+
+      | Nil => Nil()
+    }
+  }
+
+  public Map[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : BindResult[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol
+  {
+    match (this)
+    {
+      | Single(Symbol=sym) => if (algorithm(sym) is VSome(resSym)) Single(resSym : TConcreteSymbol) else Nil()
+      | Multiple as m => 
+        def res = LightList.[TConcreteSymbol]();
+          foreach(sym in m.Symbols)
+            when (algorithm(sym) is VSome(resSym))
+              res.Add(resSym);
+
+        match (res.Count)
+        {
+          | 0 => Nil()
+          | 1 => Single(res[0])
+          | _ => Multiple(res.ToImmutableArray())
+        }
+
+      | Hiding as h => 
+        def r = h.Result.Map.[TConcreteSymbol](algorithm);
+        def h = h.Hidden.Map.[TConcreteSymbol](algorithm);
+        
+        if (r.IsEmpty)
+          h
+        else if (h.IsEmpty)
+          r
+        else
+          Hiding(r, h)
+        
+      | Union as u =>
+        def results = LightList();
+        foreach (res in u.Results)
+        {
+          def res2 = res.Map.[TConcreteSymbol](algorithm);
+          when (res2.HasResult)
+            results.Add(res2);
+        }
+        
+        match (results.Count)
+        {
+          | 0 => Nil()
+          | 1 => results[0]
+          | _ => NitraUtils.MakeUnion(results.ToImmutableArray())
+        }
+
+      | Nil => Nil()
+    }
+  }
+  
+  public override ToString() : string
+  {
+    def displayCount = 5;
+    def symbols = GetSymbols();
+    if (symbols.Length > displayCount) $"..$(symbols.Take(displayCount))..." else $"..$symbols"
+  }
+}
+
+// ---- Typing2/Scope/EmptyScope.n (Nitra.Declarations) ----
+public sealed class EmptyScope : Scope
+{
+  public static Instance : EmptyScope = EmptyScope();
+
+  private this() { }
+
+  public override AllSymbols : Seq[DeclarationSymbol] { get { [] } }
+
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    IgnoreParams();
+    BindResult.Nil()
+  }
+  
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    IgnoreParams();
+    BindResult.Nil()
+  }
+
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
+  {
+    def id = nodeToIdMap.GetObjectId(this);
+    nodes.Add($<#Obj_$id [label="EmptyScope"]#>);
+  }
+
+  public override ToString() : string
+  {
+    "<Empty>"
+  }
+
+  public override HideWith(scope : Scope) : Scope
+  {
+    scope ?? this
+  }
+
+  public override UnionWith(scope : Scope) : Scope
+  {
+    scope ?? this
+  }
+
+  public override FilterWith(predicate : Predicate[DeclarationSymbol]) : Scope
+  {
+    _ = predicate;
+    this
+  }
+
+  public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    IgnoreParams();
+  }
+
+  public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+  {
+    IgnoreParams();
+    Instance
+  }
+}
+
+// ---- Typing2/Scope/FilteringScope.n (Nitra.Declarations) ----
+[Record, StructuralEquality]
+public sealed class FilteringScope : Scope
+{
+  public Scope     : Scope                         { get; }
+  public Predicate : Predicate[DeclarationSymbol] { get; }
+
+  public override AllSymbols : Seq[DeclarationSymbol]
+  {
+    get
+    {
+      foreach (symbol when this.Predicate(symbol) in this.Scope.AllSymbols)
+        yield symbol;
+    }
+  }
+
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    def compositePredicate(symbol)
+    {
+      this.Predicate(symbol) && isMatch(symbol)
+    }
+    def res = Scope.Bind(compositePredicate);
+    res
+  }
+
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    def res = Scope.Bind(reference);
+    res.Filter(this.Predicate)
+  }
+
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
+  {
+    def id            = nodeToIdMap.GetObjectId(this);
+    def idScope       = nodeToIdMap.GetObjectId(this.Scope);
+
+    nodes.Add($<#Obj_$id [label="FilteringScope"]#>);
+    edges.Add($<#Obj_$id -> Obj_$idScope#>);
+
+    this.Scope.ToDot(nodeToIdMap, nodes, edges);
+  }
+
+  public override ToString() : string
+  {
+    "Filter"
+  }
+
+  public override FilterWith(predicate : Predicate[DeclarationSymbol]) : Scope
+  {
+    if (this.Predicate == predicate)
+      this
+    else
+      base.FilterWith(predicate)
+  }
+
+  public override UnionWith(scope : Scope) : Scope
+  {
+    // filter(s1, p) + filter(s2, p) -> filter(s1 + s2, p)
+    if (scope is FilteringScope(Scope = otherScope, Predicate = otherPred) when this.Predicate == otherPred)
+      Scope.UnionWith(otherScope).FilterWith(this.Predicate)
+    else
+      base.UnionWith(scope)
+  }
+
+  public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(Scope, writer);
+
+    def method = this.Predicate.Method;
+    metadataWriter.WriteType(method.DeclaringType, writer);
+    writer.Write(method.Name);
+
+    if (method.IsStatic)
+      metadataWriter.WriteObject(null, writer);
+    else if (this.Predicate.Target is ISerializable as target)
+      metadataWriter.WriteObject(target, writer);
+    else
+      assert(false, $"Cannot serialize predicate '$(this.Predicate)': method must be static or target must implement interface 'Nitra.Serlialization2.ISerializable'.")
+  }
+
+  public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def scope      = metadataReader.ReadObject(reader);
+    def type       = metadataReader.ReadType(reader);
+    def name       = reader.ReadString();
+    def target     = metadataReader.ReadObject(reader);
+    def methodInfo = type.GetMethod(name, array[typeof(DeclarationSymbol)]);
+    assert(methodInfo : object != null, $"Method '$(name)' not found in type '$(type)'.");
+    def predicate  = Delegate.CreateDelegate(typeof(Predicate[DeclarationSymbol]), target, methodInfo) :> Predicate[DeclarationSymbol];
+    FilteringScope(scope, predicate)
+  }
+}
+
+// ---- Typing2/Scope/HidingScope.n (Nitra.Declarations) ----
+[StructuralEquality]
+public sealed class HidingScope : Scope
+{
+  public Hidden : Scope { get; }
+  public Scope  : Scope { get; }
+
+  internal this(hidden : Scope, scope  : Scope)
+  {
+    Hidden = hidden;
+    Scope  = scope;
+  }
+
+  public override AllSymbols : Seq[DeclarationSymbol]
+  {
+    get
+    {
+      def enumerated = HashSet();
+      def result = List();
+      foreach (symbol in this.Scope.AllSymbols)
+      {
+        _ = enumerated.Add(symbol);
+        result.Add(symbol);
+      }
+      foreach (symbol in this.Hidden.AllSymbols)
+      {
+        unless (enumerated.Contains(symbol))
+          result.Add(symbol);
+      }
+        
+      result.OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+    }
+  }
+  
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    def result       = this.Scope.Bind(isMatch);
+    def resultHidden = this.Hidden.Bind(isMatch);
+    
+    if (result.IsEmpty)
+      resultHidden
+    else if (resultHidden.IsEmpty)
+      result
+    else
+      BindResult.Hiding(result, resultHidden)
+  }
+
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    def result       = this.Scope.Bind(reference);
+    def resultHidden = this.Hidden.Bind(reference);
+    
+    if (result.IsEmpty)
+      resultHidden
+    else if (resultHidden.IsEmpty)
+      result
+    else
+      BindResult.Hiding(result, resultHidden)
+  }
+  
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
+  {
+    def id            = nodeToIdMap.GetObjectId(this);
+    def idScope       = nodeToIdMap.GetObjectId(this.Scope);
+    def idHidingScope = nodeToIdMap.GetObjectId(this.Hidden);
+
+    nodes.Add($<#Obj_$id [label="HidingScope"]#>);
+    edges.Add($<#Obj_$id -> Obj_$idScope#>);
+    edges.Add($<#Obj_$id -> Obj_$idHidingScope  [color=darkgray]#>);
+
+    this.Scope.ToDot(nodeToIdMap, nodes, edges);
+    this.Hidden.ToDot(nodeToIdMap, nodes, edges);
+  }
+  
+  public override ToString() : string
+  {
+    <#HidingScope#>
+  }
+
+  public override HideWith(scope : Scope) : Scope
+  {
+    if (this.Scope.Equals(scope))
+      this
+    else
+      base.HideWith(scope)
+  }
+
+  public override UnionWith(scope : Scope) : Scope
+  {
+    // hide(h1, s) + hide(h2, s) -> hide(h1 + h2, s)
+    if (scope is HidingScope(Hidden = otherHidden, Scope = otherScope) when this.Scope.Equals(otherScope))
+      Hidden.UnionWith(otherHidden).HideWith(Scope)
+    else
+      base.UnionWith(scope)
+  }
+
+  public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(Hidden, writer);
+    metadataWriter.WriteObject(Scope, writer);
+  }
+
+  public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def hidden = metadataReader.ReadObject(reader);
+    def scope  = metadataReader.ReadObject(reader);
+    HidingScope(hidden, scope)
+  }
+}
+
+// ---- Typing2/Scope/Scope.n (Nitra.Declarations) ----
+public abstract class Scope : ISerializable
+{
+  public abstract AllSymbols : Seq[DeclarationSymbol] { get; }
+  public abstract Bind[TSymbol](reference : Reference)        : BindResult[TSymbol] where TSymbol : DeclarationSymbol;
+  public abstract Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol] where TSymbol : DeclarationSymbol;
+  public abstract ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void;
+  public virtual ToDot() : string
+  {
+    def nodes       = List();
+    def edges       = List();
+    def nodeToIdMap = Dictionary();
+    
+    ToDot(nodeToIdMap, nodes, edges);
+    
+    def typeName = GetType().Name;
+    def content = $<#
+      digraph RecoveryParser
+      {
+        compound=true;
+        label="$typeName";
+
+        ..$(nodes; "\r\n          ")
+
+        ..$(edges; "\r\n          ")
+      }
+    #>;
+    content
+  }
+
+  public virtual HideWith(scope : Scope) : Scope
+  {
+    if (IsNullOrEmpty(scope))
+      this
+    else
+      HidingScope(this, scope)
+  }
+
+  public virtual UnionWith(scope : Scope) : Scope
+  {
+    mutable builder = UnionScopeBuilder();
+    UnionScopeBuilder.Add(this, ref builder);
+    UnionScopeBuilder.Add(scope, ref builder);
+    builder.ToScope();
+  }
+
+  public virtual FilterWith([NotNull] predicate : Predicate[DeclarationSymbol]) : Scope
+  {
+    FilteringScope(this, predicate)
+  }
+
+  public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
+
+  public static IsNullOrEmpty(scope : Scope) : bool
+  {
+    scope : object == null || scope : object == EmptyScope.Instance
+  }
+}
+
+// ---- Typing2/Scope/StaticScope.n (Nitra.Declarations) ----
+public sealed class StaticScope : TableScope
+{
+  private static _instance : StaticScope = StaticScope();
+
+  private this()
+  {
+    base("Static scope")
+  }
+
+  public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    IgnoreParams();
+  }
+
+  public static new Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+  {
+    IgnoreParams();
+    _instance
+  }
+
+  public static CreateSymbol[TSymbol](nameStr : string) : TSymbol
+    where TSymbol : DeclarationSymbol
+  {
+    def name = Nitra.Declarations.Name(Location.Default, nameStr);
+    def decl = ExternalDeclaration.[TSymbol](name);
+    decl.DefineSymbol(_instance)
+  }
+}
+
+// ---- Typing2/Scope/TableScope.n (Nitra.Declarations) ----
+  public class TableScope : Scope
+  {
+    public this(name : string)
+    {
+      this(null, name);
+    }
+
+    public this(owner : DeclarationSymbol, name : string)
+    {
+      _owner     = owner;
+      _name      = name;
+      _nameTable = Hashtable();
+    }
+
+    private _owner     : DeclarationSymbol;
+    private _name      : string;
+    private _nameTable : Hashtable[int, list[DeclarationSymbol]]; //TODO: replace with LightList[DeclarationSymbol]?
+
+    public Owner   : DeclarationSymbol { get { _owner } }
+    public Name    : string            { get { _name } }
+
+    public override AllSymbols : Seq[DeclarationSymbol]
+    {
+      get { _nameTable.Values.SelectMany(symbols => symbols).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray() }
+    }
+    public virtual Symbols : Hashtable[int, list[DeclarationSymbol]].ValueCollection { get { _nameTable.Values } }
+
+    public virtual Define[TSymbol](declaration : Declaration, context : DependentPropertyEvalContext, name : Name = null) : TSymbol
+      where TSymbol : DeclarationSymbol
+    {
+      when (name != null)
+        (declaration :> DeclarationBase).UpdateName(name);
+        
+      def     name2            = declaration.Name;
+      def     candidateSymbols = LightList();
+      mutable ambiguousSymbols : HashSet[DeclarationSymbol];
+
+      mutable lookupResult;
+      when (_nameTable.TryGetValue(name2.Id, out lookupResult))
+      {
+        ambiguousSymbols = HashSet(lookupResult);
+        foreach (symbol is TSymbol when symbol.CanMerge(declaration) in lookupResult)
+          candidateSymbols.Add(symbol);
+      }
+
+      def concreteSymbol =
+        match (candidateSymbols.Count)
+        {
+          | 0 =>
+            def newSymbol = declaration.CreateSymbol();
+            (newSymbol :> SymbolBase).Owner = this;
+            newSymbol :> TSymbol;
+
+          | 1 => candidateSymbols[0] // merge
+          | _ => assert(false)
+        };
+
+      if (ambiguousSymbols : object == null)
+        _nameTable.Add(name2.Id, [concreteSymbol]);
+      else when (ambiguousSymbols.Add(concreteSymbol))
+      {
+        // фильтруем без учета конкретного типа
+        def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsSameIdentity(declaration));
+        when (realAmbiguousSymbols.Length > 0)
+        {
+          def cm = declaration.Source.File.TypingMessages;
+          using (nested = cm.RootError(name2, $"Redefinition of '$name2'"))
+            foreach (ambiguous in realAmbiguousSymbols)
+              foreach (d in ambiguous.Declarations)
+                nested.Hint(d.Name, "previous definition.");
+        }
+        _nameTable[name2.Id] = ambiguousSymbols.NToList();
+      }
+
+      concreteSymbol.AddDeclaration(declaration);
+      when (context : object != null)
+      when (candidateSymbols.Count == 0)
+        concreteSymbol.EvalProperties(context); // initialize symbol default values
+
+      assert(!name2.IsSymbolEvaluated);
+      name2.Symbol = concreteSymbol;
+
+      concreteSymbol
+    }
+
+    public virtual Undefine(shouldRemove : Predicate[Declaration]) : void
+    {
+      def undefine(lst : list[DeclarationSymbol]) : list[DeclarationSymbol]
+      {
+        | []      => []
+        | x :: xs =>
+          assert(x.Owner : object == this, $"Symbol '$x' is not defined in table scope.");
+
+          def survivedDeclarations = x.RemoveDeclarations(shouldRemove);
+          if (survivedDeclarations > 0)
+          {
+            def newXs = undefine(xs);
+            if (newXs : object != xs)
+              x :: newXs
+            else
+              lst
+          }
+          else
+          {
+            (x :> SymbolBase).Owner = null;
+            undefine(xs)
+          }
+      }
+
+      foreach (pair in _nameTable.ToArray())
+      {
+        def newList = undefine(pair.Value);
+
+        when (newList : object != pair.Value)
+          if (newList.IsEmpty)
+            _nameTable.Remove(pair.Key);
+          else
+            _nameTable[pair.Key] = newList;
+      }
+    }
+
+    public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+    {
+      def res = LightList();
+      
+      foreach (symbols in _nameTable.Values)
+      foreach (symbol is TSymbol when isMatch(symbol) in symbols)
+        res.Add(symbol);
+
+      res.ToBindResult()
+    }
+
+    public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+    {
+      mutable lookupResult;
+      if (_nameTable.TryGetValue(reference.Id, out lookupResult))
+      {
+        def res = LightList();
+        foreach (x is TSymbol in lookupResult)
+          res.Add(x);
+        res.ToBindResult()
+      }
+      else
+        BindResult.Nil()
+    }
+
+    public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
+    {
+      def id = nodeToIdMap.GetObjectId(this);
+      def symbols = AllSymbols.ToArray();
+      
+      // make DOT HTML table for symbols
+      
+      def maxCols = 6;
+      def last = symbols.Length - 1;
+      mutable cols = Math.Min(maxCols, symbols.Length);
+      mutable rows = symbols.Length / cols;
+      when (symbols.Length % cols != 0)
+        rows++;
+
+      def builder = StringBuilder();
+      def owner = if (Owner == null) "" 
+                  else
+                  {
+                    "Owner: " + (if (Owner.IsKindEvaluated) " <FONT COLOR='blue'>" + Owner.Kind + "</FONT>&nbsp;" else "")
+                    + AstUtils.XmlEscape(if (Owner.IsFullNameEvaluated) Owner.FullName else Owner.InitialName);
+                  };
+      _ = builder.Append(
+$<#<table border='0' cellspacing='0' cellpadding='3' bgcolor='lightskyblue'>
+<tr>
+	<td colspan="$cols" align="center" bgcolor="WhiteSmoke" border='1'>TableScope: '<B>$(AstUtils.XmlEscape(_name))</B>' $owner</td>
+</tr>
+#>);
+      for (mutable row = 0; row < rows; row++)
+      {
+        _ = builder.Append("  <tr>\r\n");
+        for (mutable col = 0; col < cols; col++)
+        {
+          def i = row * cols + col;
+          if (i > last)
+            _ = builder.Append("    <td border='1'></td>\r\n");
+          else
+          {
+            def symbol  = symbols[i];
+            def content = if (symbol.IsKindEvaluated) "<FONT COLOR='blue'>" + symbol.Kind + "</FONT><BR/>" + AstUtils.XmlEscape(symbol.InitialName) else AstUtils.XmlEscape(symbol.InitialName);
+            _ = builder.Append($"    <td border='1'>$content</td>\r\n");
+          }
+        }
+        _ = builder.Append("  </tr>\r\n");
+      }
+
+      _ = builder.Append(<#
+</table>#>);
+
+      nodes.Add($<#Obj_$id [shape=none label=<$builder>]#>);
+    }
+    
+    public override ToString() : string
+    {
+      $<#TableScope($(AllSymbols.Count()))]#>
+    }
+
+    internal EnqueueSymbols(metadataWriter : MetadataWriter) : void
+    {
+      foreach (pair in _nameTable)
+        foreach (s when s.HasParsedDeclarations in pair.Value)
+          metadataWriter.EnqueueSymbol(s)
+    }
+
+    public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(_owner, writer);
+      when (metadataWriter.BeginWriteObject(this, writer))
+      {
+        writer.Write(_name : string);
+        EnqueueSymbols(metadataWriter);
+      }
+    }
+
+    public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+    {
+      // TODO: сделать более эффективной десериализацию
+      def owner = metadataReader.ReadObject.[DeclarationSymbol](reader);
+      mutable scope;
+      _ = metadataReader.BeginReadObject(reader, out scope, GetTableScope(owner));
+      scope
+    }
+
+    private static GetTableScope(owner : DeclarationSymbol) : Func[BinaryReader, MetadataReader, TableScope]
+    {
+      fun (reader, _metadataReader)
+      {
+        def name  = reader.ReadString();
+        if (owner == null)
+          TableScope(name)
+        else
+        {
+          def result = owner.GetTable(name);
+          assert(result.HasValue, $"Table '$name' not found in symbol '$owner'");
+          result.GetValueOrDefault()
+        }
+      }
+    }
+  }
+
+// ---- Typing2/Scope/UnionScope.n (Nitra.Declarations) ----
+public sealed class UnionScope : Scope
+{
+  public Scopes : ImmutableArray[Scope] { get; }
+
+  internal this(scopes : ImmutableArray[Scope])
+  {
+    Scopes = scopes;
+  }
+
+  public override AllSymbols : Seq[DeclarationSymbol]
+  {
+    get
+    {
+      Scopes.SelectMany(scope => scope.AllSymbols).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+    }
+  }
+
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    def res = this.Scopes.Select(s => s.Bind(isMatch)).Where(r => r.HasResult).ToImmutableArray();
+    res.ToBindResult()
+  }
+
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    def result = LightList();
+    foreach (scope in this.Scopes)
+    {
+      def br = scope.Bind(reference);
+      when (br.HasResult)
+        result.Add(br);
+    }
+    result.ToBindResult()
+  }
+
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
+  {
+    def id = nodeToIdMap.GetObjectId(this);
+    
+    nodes.Add($<#Obj_$id [label="UnionScope"]#>);
+    foreach (scope in Scopes)
+    {
+      edges.Add($<#Obj_$id -> Obj_$(nodeToIdMap.GetObjectId(scope))#>);
+      scope.ToDot(nodeToIdMap, nodes, edges);
+    }
+  }
+
+  public override ToString() : string
+  {
+    $<# UnionScope($(Scopes.Length))#>
+  }
+
+  public override Equals(other : object) : bool
+  {
+    | UnionScope(Scopes = otherScopes) =>
+      // TODO: use LightSet[T]
+      this.Scopes.Length == otherScopes.Length && HashSet(this.Scopes).SetEquals(otherScopes)
+
+    | _ => false
+  }
+
+  public override GetHashCode() : int
+  {
+    unchecked 
+    {
+      mutable acc = Scopes.Length << 2;
+      foreach (s in Scopes)
+        acc ^= s.GetHashCode();
+      acc
+    }
+  }
+
+  public override UnionWith(scope : Scope) : Scope
+  {
+    if (IsNullOrEmpty(scope))
+      this
+    else
+    {
+      mutable builder = UnionScopeBuilder(Scopes);
+      UnionScopeBuilder.Add(scope, ref builder);
+      builder.ToScope();
+    }
+  }
+
+  public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObjects(Scopes, writer);
+  }
+
+  public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def scopes = metadataReader.ReadObjects(reader);
+    UnionScope(ImmutableArray.Create(scopes));
+  }
+}
+
+// ---- Typing2/Scope/UnionScopeBuilder.n (Nitra.Declarations) ----
+public struct UnionScopeBuilder
+{
+  mutable _scopes : HashSet[Scope];
+  mutable _scope1 : Scope;
+  mutable _scope2 : Scope;
+  mutable _scope3 : Scope;
+  mutable _scope4 : Scope;
+
+  public this(scopes : ImmutableArray[Scope])
+  {
+    def length = scopes.Length;
+    if (length > 4)
+      _scopes = HashSet(scopes);
+    else
+    {
+      when (length > 3)
+        _scope4 = scopes[3];
+      when (length > 2)
+        _scope3 = scopes[2];
+      when (length > 1)
+        _scope2 = scopes[1];
+      when (length > 0)
+        _scope1 = scopes[0];
+    }
+  }
+
+  public static Add(scope : Scope, builder : ref UnionScopeBuilder) : void
+  {
+    // TODO: create LightSet[T]
+
+    if (Scope.IsNullOrEmpty(scope))
+      ()
+    else if (scope is UnionScope(Scopes = scopes))
+      foreach (s in scopes)
+        Add(s, ref builder);
+    else if (builder._scopes : object != null)
+      _ = builder._scopes.Add(scope)
+    else if (builder._scope1 : object == null)
+      builder._scope1 = scope;
+    else if (builder._scope2 : object == null)
+      unless (builder._scope1.Equals(scope))
+        builder._scope2 = scope;
+    else if (builder._scope3 : object == null)
+      unless (builder._scope1.Equals(scope))
+      unless (builder._scope2.Equals(scope))
+        builder._scope3 = scope;
+    else if (builder._scope4 : object == null)
+      unless (builder._scope1.Equals(scope))
+      unless (builder._scope2.Equals(scope))
+      unless (builder._scope3.Equals(scope))
+        builder._scope4 = scope;
+    else
+    {
+      def scopes = HashSet();
+      _ = scopes.Add(builder._scope1);
+      _ = scopes.Add(builder._scope2);
+      _ = scopes.Add(builder._scope3);
+      _ = scopes.Add(builder._scope4);
+      _ = scopes.Add(scope);
+      builder._scopes = scopes;
+    }
+  }
+
+  public ToScope() : Scope
+  {
+    if (_scopes != null)
+      UnionScope(_scopes.ToImmutableArray())
+    else if (_scope4 : object != null)
+      UnionScope(ImmutableArray.Create(_scope1, _scope2, _scope3, _scope4))
+    else if (_scope3 : object != null)
+      UnionScope(ImmutableArray.Create(_scope1, _scope2, _scope3))
+    else if (_scope2 : object != null)
+      UnionScope(ImmutableArray.Create(_scope1, _scope2))
+    else if (_scope1 : object != null)
+      _scope1
+    else
+      EmptyScope.Instance
+  }
+}
+
+// ---- Typing2/Symbols/CollectSymbolRefsAstVisitor.n (Nitra.Declarations) ----
+[Record]
+public class CollectSymbolRefsAstVisitor : IAstVisitor
+{
+  _cancellationToken    : CancellationToken;
+  _projectSupport       : IProjectSupport { get; }
+  public Symbol         : DeclarationSymbol { get; }
+  
+  [RecordIgnore] public FoundSymbols : List[IRef] { get; default List(); }
+
+  public Visit(parseTree : IAst) : void
+  {
+    when (_cancellationToken.IsCancellationRequested)
+      return;
+      
+    parseTree.Accept(this);
+  }
+
+  public Visit(reference : Reference) : void implements IAstVisitor.Visit
+  {
+    unless (reference.IsRefEvaluated)
+      return;
+
+    def loop(r : IRef) : void
+    {
+      if (r.IsSymbolEvaluated)
+      {
+        if (r.Symbol.Equals(Symbol))
+          FoundSymbols.Add(r);
+        else if (r.IsResolvedToEvaluated)
+          loop(r.ResolvedTo);
+        else
+        {
+          mutable type;
+          mutable typeArgs;
+
+          when (_projectSupport.DeconstructType(r.Symbol, out type, out typeArgs))
+            when (type.Equals(Symbol))
+              FoundSymbols.Add(r);
+        }
+      }
+      else when (r.IsAmbiguous)
+      {
+        foreach (a when a.Equals(Symbol) in r.Ambiguities)
+        {
+          FoundSymbols.Add(r);
+          return;
+        }
+      }
+    }
+    
+    loop(reference.Ref)
+  }
+
+  public Visit(r : IRef) : void
+  {
+    _ = r;
+  }
+}
+
+// ---- Typing2/Symbols/CollectSymbolsAndRefsInSpanAstVisitor.n (Nitra.Declarations) ----
+[Record]
+public class CollectSymbolsAndRefsInSpanAstVisitor : IAstVisitor
+{
+  _cancellationToken : CancellationToken;
+  _span              : NSpan;
+
+  [RecordIgnore] public Refs  : List[IRef] { get; private set; default List(); }
+  [RecordIgnore] public Names : List[Name] { get; private set; default List(); }
+
+  public Visit(parseTree : IAst) : void
+  {
+    when (_cancellationToken.IsCancellationRequested)
+      return;
+    
+    when (parseTree.Span.IntersectsWith(_span))
+      parseTree.Accept(this);
+  }
+
+  public Visit(name : Name) : void implements IAstVisitor.Visit
+  {
+    def span = name.Span;
+
+    when (!span.IntersectsWith(_span) || !name.IsSymbolEvaluated)
+      return;
+
+    Names.Add(name);
+  }
+
+  public Visit(reference : Reference) : void implements IAstVisitor.Visit
+  {
+    def span = reference.Span;
+
+    when (!span.IntersectsWith(_span) || !reference.IsRefEvaluated)
+      return;
+
+    Refs.Add(reference.Ref);
+  }
+
+  public Visit(r : IRef) : void
+  {
+    _ = r;
+  }
+}
+
+// ---- Typing2/Symbols/IRef.n (Nitra.Declarations) ----
+public interface IRef : ILocated, ISerializable
+{
+  Name              : string                 { get; }
+  IsNameValid       : bool                   { get; }
+  IsUnresolved      : bool                   { get; }
+  IsAmbiguous       : bool                   { get; }
+  Ambiguities       : Seq[DeclarationSymbol] { get; }
+  IgnoreAmbiguities : bool                   { get; }
+
+  [DependentProperty("IsFullNameEvaluated")]
+  FullName            : string { get; }
+  IsFullNameEvaluated : bool   { get; }
+
+  [DependentProperty("IsKindEvaluated")]
+  Kind            : string { get; }
+  IsKindEvaluated : bool   { get; }
+
+  [DependentProperty("IsSpanClassEvaluated")]
+  SpanClass            : SpanClass { get; }
+  IsSpanClassEvaluated : bool      { get; }
+
+  [DependentProperty("IsSymbolEvaluated")]
+  Symbol            : DeclarationSymbol { get; }
+  IsSymbolEvaluated : bool              { get; }
+
+  [DependentProperty("IsScopeEvaluated")]
+  Scope             : Scope    { get; }
+  IsScopeEvaluated  : bool     { get; }
+
+  [DependentProperty("IsResolvedToEvaluated")]
+  ResolvedTo            : IRef { get; }
+  IsResolvedToEvaluated : bool { get; }
+
+  Resolve[TConcreteSymbol](algorithm : Predicate[TConcreteSymbol]) : Ref[TConcreteSymbol]
+    where TConcreteSymbol : class, DeclarationSymbol;
+
+  Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[DeclarationSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol;
+
+  GetSymbols() : Seq[DeclarationSymbol];
+}
+
+// ---- Typing2/Symbols/Ref.n (Nitra.Declarations) ----
+public abstract class Ref[TSymbol] : IRef
+  where TSymbol : DeclarationSymbol
+{
+          _result     : BindResult[TSymbol];
+          _symbols    : ImmutableArray[TSymbol];
+  mutable _resolvedTo : IRef;
+
+  public this(result : BindResult[TSymbol])
+  {
+    _result = result;
+
+    match (result)
+    {
+      | Nil => _symbols = ImmutableArray.Empty;
+      | _   => _symbols = result.Symbols;
+    }
+  }
+  
+  public          Result               : BindResult[TSymbol]     { get { _result } }
+  public          Symbols              : ImmutableArray[TSymbol] { get { _symbols } }
+  
+  public abstract Location             : Location                 { get; }
+  public virtual  IgnoreAmbiguities    : bool                     { get { false } }
+
+  public          Span                  : NSpan                   { get { Location.Span } }
+  public          IsUnresolved          : bool                    { get { _result.IsEmpty } }
+  public          IsAmbiguous           : bool                    { get { _symbols.Length > 1 } }
+
+  [DependentProperty("IsResolvedToEvaluated")]
+  public          ResolvedTo            : IRef                    { get { _resolvedTo } }
+  public          IsResolvedToEvaluated : bool                    { get { _resolvedTo != null } }
+
+  [DependentProperty("IsSymbolEvaluated")]
+  public abstract Symbol                : TSymbol                 { get; }
+  public abstract IsSymbolEvaluated     : bool                    { get; }
+
+  public abstract Name                  : string                  { get; }
+  public abstract IsNameValid           : bool                    { get; }
+
+  [DependentProperty("IsFullNameEvaluated")]
+  public virtual  FullName              : string                  { get { Symbol.FullName } }
+  public virtual  IsFullNameEvaluated   : bool                    { get { Symbol.IsFullNameEvaluated } }
+
+  [DependentProperty("IsKindEvaluated")]
+  public          Kind                  : string
+  {
+    get
+    {
+      if(IsUnresolved) 
+        "unresolved"
+      else if (IsAmbiguous)
+        "ambiguous"
+      else if (Symbol.IsKindEvaluated)
+        Symbol.Kind
+      else
+        "<unknown>"
+    }
+  }
+  public          IsKindEvaluated       : bool                    { get { true } }
+
+  [DependentProperty("IsSpanClassEvaluated")]
+  public          SpanClass             : SpanClass
+  {
+    get
+    {
+      if (IsUnresolved)
+        Language.ErrorSpanClass
+      else if (IsAmbiguous)
+        if (IgnoreAmbiguities)
+          this.Symbols.First(s => s.IsSpanClassEvaluated).SpanClass
+        else
+          Language.ErrorSpanClass
+      else if (Symbol.IsSpanClassEvaluated)
+        Symbol.SpanClass
+      else
+        Language.DefaultSpanClass
+    }
+  }
+  public          IsSpanClassEvaluated  : bool                    { get { true } }
+  
+  [DependentProperty("IsScopeEvaluated")]
+  public          Scope                 : Scope
+  {
+    [Memoize(InvalidValue=null)] get
+    {
+      if (IsUnresolved)
+        EmptyScope.Instance
+      else if (IsAmbiguous)
+      {
+        mutable builder = UnionScopeBuilder();
+        foreach (s when s.IsScopeEvaluated in Symbols)
+          UnionScopeBuilder.Add(s.Scope, ref builder);
+        builder.ToScope();
+      }
+      else
+        Symbol.Scope
+    }
+  }
+  public          IsScopeEvaluated      : bool
+  {
+    get
+    {
+      if (IsUnresolved)
+        true
+      else if (IsAmbiguous)
+      {
+        foreach (s when s.IsScopeEvaluated in Symbols)
+          return true;
+        false
+      }
+      else
+        Symbol.IsScopeEvaluated
+    }
+  }
+  
+  public          Ambiguities           : Seq[DeclarationSymbol] { get { Symbols } }
+
+  public GetSymbols() : Seq[DeclarationSymbol] { Symbols }
+  
+  public Resolve[TConcreteSymbol](predicate : Predicate[TConcreteSymbol]) : Ref[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol
+    //where TConcreteSymbol : TSymbol
+    requires !IsResolvedToEvaluated
+  {
+    def bindResult = _result.Filter.[TConcreteSymbol](predicate);
+    CreateRevole(bindResult)
+  }
+
+  public Resolve[TConcreteSymbol]() : Ref[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol
+    //where TConcreteSymbol : TSymbol
+    requires !IsResolvedToEvaluated
+  {
+    def bindResult = _result.Filter.[TConcreteSymbol](null);
+    CreateRevole(bindResult)
+  }
+  
+  public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol
+    requires !IsResolvedToEvaluated
+  {
+    def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
+    def bindResult = _result.Map.[TConcreteSymbol](algorithm);
+    CreateRevole(bindResult)
+  }
+  
+  public ResolveAsIgnoreAmbiguities() : Ref[TSymbol]
+  {
+    def result = Ignore(_result, this);
+    _resolvedTo = result;
+    result
+  }
+
+  public Contains[TSoughtForSymbol]() : bool
+    where TSoughtForSymbol : DeclarationSymbol
+  {
+    foreach (_ is TSoughtForSymbol in this.Symbols)
+      return true;
+
+    false
+  }
+
+  public Count[TSoughtForSymbol]() : int
+    where TSoughtForSymbol : DeclarationSymbol
+  {
+    mutable count = 0;
+    foreach (_ is TSoughtForSymbol in this.Symbols)
+      count++;
+
+    count
+  }
+
+  public static CreateUnresolved(location : Location) : Ref[TSymbol]
+  {
+    BindUnresolved(BindResult.Nil(), location, location.GetText())
+  }
+  
+  public static CreateUnresolved(location : Location, text : string) : Ref[TSymbol]
+  {
+    BindUnresolved(BindResult.Nil(), location, text)
+  }
+  
+  public static CreateUnresolved(text : string) : Ref[TSymbol]
+  {
+    BindUnresolved(BindResult.Nil(), Location.NoLocation, text)
+  }
+  
+  public static CreateBind(location : Location, bindResult : BindResult[TSymbol]) : Ref[TSymbol]
+  {
+    match (bindResult)
+    {
+      | Nil => BindUnresolved(bindResult, location, location.GetText())
+      | _   => Bind(bindResult, location)
+    }
+  }
+
+  public static CreateBind(location : Location, text : string, bindResult : BindResult[TSymbol]) : Ref[TSymbol]
+  {
+    match (bindResult)
+    {
+      | Nil => BindUnresolved(bindResult, location, text)
+      | _   => Bind(bindResult, location)
+    }
+  }
+
+  public static CreateBind(location : Location, textId : int, bindResult : BindResult[TSymbol]) : Ref[TSymbol]
+  {
+    match (bindResult)
+    {
+      | Nil => BindUnresolved(bindResult, location, StringIndex.GetText(textId))
+      | _   => Bind(bindResult, location)
+    }
+  }
+  
+  public static CreateBind(location : Location, symbol : TSymbol) : Ref[TSymbol]
+  {
+    Bind(BindResult.Single(symbol), location)
+  }
+  
+  public CreateRevole[TConcreteSymbol](bindResult : BindResult[TConcreteSymbol]) : Ref[TConcreteSymbol]
+    where TConcreteSymbol : DeclarationSymbol
+    requires !IsResolvedToEvaluated
+  {
+    def res =
+      match (bindResult)
+      {
+        | Nil => Unresolved(bindResult, this)
+        | _   => Resolved(bindResult, this)
+      };
+    _resolvedTo = res;
+    res
+  }
+
+  private class Bind : Ref[TSymbol]
+  {
+    public this(result : BindResult[TSymbol], location : Location)
+    {
+      base(result);
+      Location = location;
+      Symbol   = Symbols[0];
+    }
+
+    public override Location            : Location { get; }
+    public override Symbol              : TSymbol  { get; }
+    public override IsSymbolEvaluated   : bool     { get { true } }
+    public override IgnoreAmbiguities   : bool     { get { false } }
+    public override IsNameValid         : bool     { get { Symbol.IsNameValid } }
+    public override Name                : string   { get { Symbol.Name } }
+    public override IsFullNameEvaluated : bool     { get { Symbol.IsFullNameEvaluated } }
+    public override FullName            : string   { get { Symbol.FullName } }
+    
+    public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(_result, writer);
+    }
+    public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def location = Nitra.Runtime.Location(metadataReader.Source, 0);
+      def result   = metadataReader.ReadObject(reader);
+      Bind(result, location)
+    }
+  }
+
+  [Record]
+  private class BindUnresolved : Ref[TSymbol]
+  {
+    public override Location            : Location { get; }
+    public override Name                : string   { get; }
+    public override IsNameValid         : bool     { get { true } }
+    public override IgnoreAmbiguities   : bool     { get { false } }
+    public override IsSymbolEvaluated   : bool     { get { false } }
+    public override Symbol              : TSymbol  { get { assert(false, "The property Symbol is not evaluated.") } }
+    public override IsFullNameEvaluated : bool     { get { true } }
+    public override FullName            : string   { get { Name } }
+
+    public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(_result, writer);
+      writer.Write(Name);
+    }
+    public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def location   = Nitra.Runtime.Location(metadataReader.Source, 0);
+      def result     = metadataReader.ReadObject(reader);
+      def name       = reader.ReadString();
+      BindUnresolved(result, location, name)
+    }
+  }
+
+  [Record]
+  private abstract class ResolvedBase : Ref[TSymbol]
+  {
+    public From : IRef;
+    public override Location            : Location { get { From.Location } }
+    public override IsNameValid         : bool     { get { From.IsNameValid } }
+    public override Name                : string   { get { From.Name } }
+    public override IsFullNameEvaluated : bool     { get { true } }
+    public override FullName            : string   { get { Name } }
+
+    public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObject(_resolvedTo, writer);
+      metadataWriter.WriteObject(_result, writer);
+      metadataWriter.WriteObject(From, writer);
+    }
+  }
+  
+  [Record]
+  private class Resolved : ResolvedBase
+  {
+    public this(result : BindResult[TSymbol], from : IRef)
+    {
+      base(result, from);
+      Symbol = Symbols[0];
+    }
+
+    public override Symbol              : TSymbol  { get; }
+    public override IsNameValid         : bool     { get { Symbol.IsNameValid } }
+    public override Name                : string   { get { Symbol.Name } }
+    public override IsSymbolEvaluated   : bool     { get { true } }
+    public override IsFullNameEvaluated : bool     { get { Symbol.IsFullNameEvaluated } }
+    public override FullName            : string   { get { Symbol.FullName } }
+
+    public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def resolvedTo = metadataReader.ReadObject(reader);
+      def result     = metadataReader.ReadObject(reader);
+      def from       = metadataReader.ReadObject(reader);
+      def res = Resolved(result, from);
+      res._resolvedTo = resolvedTo;
+      res
+    }
+  }
+    
+  [Record]
+  private class Unresolved : ResolvedBase
+  {
+    public override IsSymbolEvaluated   : bool     { get { false } }
+    public override Symbol              : TSymbol  { get { assert(false, "The property Symbol is not evaluated.") } }
+
+    public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def resolvedTo = metadataReader.ReadObject(reader);
+      def result     = metadataReader.ReadObject(reader);
+      def from       = metadataReader.ReadObject(reader);
+      def res = Unresolved(result, from);
+      res._resolvedTo = resolvedTo;
+      res
+    }
+  }
+
+  [Record]
+  private class Ignore : ResolvedBase
+  {
+    public override IgnoreAmbiguities : bool     { get { true } }
+    public override IsSymbolEvaluated : bool     { get { From.IsSymbolEvaluated } }
+    public override Symbol            : TSymbol  { get { From.Symbol :> TSymbol } }
+
+    public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def resolvedTo = metadataReader.ReadObject(reader);
+      def result     = metadataReader.ReadObject(reader);
+      def from       = metadataReader.ReadObject(reader);
+      def res = Ignore(result, from);
+      res._resolvedTo = resolvedTo;
+      res
+    }
+  }
+
+  public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
+  
+  public override ToString() : string
+  {
+    def displayCount = 5;
+    def symbols = _symbols;
+    def syms = if (symbols.Length > displayCount) $"..$(symbols.Take(displayCount))..." else $"..$symbols";
+    def typeName = typeof(TSymbol).Name;
+    def resolvedTo = if (_resolvedTo != null) "R " else "";
+    $"$resolvedTo$syms [$typeName]"
+  }
+}
+
+// ---- Typing2/Symbols/ResolutionAlgorithm.n (Nitra.Declarations) ----
+public delegate ResolutionAlgorithm[TConcreteSymbol](candidate : DeclarationSymbol) : bool
+  where TConcreteSymbol : DeclarationSymbol;
+
+public delegate ResolutionAlgorithm[-TSymbol, TConcreteSymbol](candidate : TSymbol) : ValueOption[TConcreteSymbol]
+  where TSymbol         : DeclarationSymbol;
+
+public delegate ResolveManyAlgorithm[TSymbol, TConcreteSymbol](candidates : LightList[TSymbol]) : LightList[TConcreteSymbol]
+  where TSymbol         : DeclarationSymbol
+  where TConcreteSymbol : DeclarationSymbol;
+
+public module ResolutionAlgorithms[TSymbol, TConcreteSymbol]
+  where TSymbol         : DeclarationSymbol
+  where TConcreteSymbol : DeclarationSymbol
+{
+  public static TryCast : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = TryCastImpl;
+
+  private static TryCastImpl(candidate : TSymbol) : ValueOption[TConcreteSymbol]
+  {
+    | symbol is TConcreteSymbol => VSome(symbol)
+    | _ => VNone()
+  }
+}
+
+// ---- Typing2/Symbols/SymbolBase.n (Nitra.Declarations) ----
+public abstract class SymbolBase
+{
+  protected this()
+  {
+    _id = Interlocked.Increment(ref _symbolIdCounter);
+  }
+
+  private static mutable _symbolIdCounter : int = 0;
+
+  private         _id           : int;
+  private mutable _nameId       : int;
+  private mutable _declarations : object;
+  private mutable _owner        : TableScope;
+
+  public Id          : int    { get { _id } }
+  public IsNameValid : bool   { get { _nameId > 0 } }
+  public NameId      : int    { get { _nameId } }
+  public Name        : string { get { if (_nameId > 0) StringIndex.GetText(_nameId) else "<invalid name>" } }
+  public InitialName : string { get { if (_nameId < 0) StringIndex.GetText(~_nameId) else Name } }
+
+  public Owner : TableScope
+  {
+    get { _owner }
+    internal set
+    {
+      when (value : object != null)
+        assert(_owner : object == null, "Property 'Owner' is already set.");
+
+      _owner = value;
+    }
+  }
+
+  public override GetHashCode() : int { _id }
+  public override Equals(other : object) : bool { other == this }
+
+  /// If return value is greater than 0 it is valid name ID which can be used in StringIndex.GetText().
+  /// If return value is 0 the name of symbol is not set.
+  /// If return value is less then 0 the name of symbol set more then one time (is ambiguous). 
+  ///   * You can use bitwise complement (~ operator in C#) to convert returned value to first name id of this symbol if value less then 0.
+  ///   * All names of symbol you can get in declarations (see GetDeclarations*() methods).
+  public TryGetNameId() : int { _nameId }
+
+  public FirstDeclarationOrDefault : Declaration
+  {
+    get
+    {
+      match (_declarations)
+      {
+        | null                     => null
+        | d   is Declaration       => d
+        | lst is list[Declaration] => lst.Head
+        | _ => assert(false)
+      }
+    }
+  }
+
+  public DeclarationsCount : int
+  {
+    get
+    {
+      match (_declarations)
+      {
+        | null                     => 0
+        | _   is Declaration       => 1
+        | lst is list[Declaration] => lst.Length
+        | _ => assert(false)
+      }
+    }
+  }
+
+  public HasDeclarations : bool
+  {
+    get
+    {
+      match (_declarations)
+      {
+        | null => false
+        | _    => true
+      }
+    }
+  }
+
+  public HasParsedDeclarations : bool
+  {
+    get
+    {
+      match (_declarations)
+      {
+        | null                     => false
+        | d   is Declaration       => d.IsParsed
+        | lst is list[Declaration] =>
+          foreach (d when d.IsParsed in lst)
+            return true;
+          false
+
+        | _ => assert(false)
+      }
+    }
+  }
+
+  public GetDeclarationsUntyped() : Seq[Declaration]
+  {
+    match (_declarations)
+    {
+      | null                     => []
+      | d   is Declaration       => [d]
+      | lst is list[Declaration] => lst
+      | _ => assert(false)
+    }
+  }
+
+  public GetDeclarationsOfType[TDeclaration]() : Seq[TDeclaration]
+    where TDeclaration : Declaration
+  {
+    match (_declarations)
+    {
+      | d is TDeclaration => yield d;
+      | lst is list[Declaration] =>
+        foreach (d is TDeclaration in lst)
+          yield d;
+
+      | _ => ()
+    }
+  }
+  
+  public IsParsed : bool
+  {
+    get
+    {
+      match (_declarations)
+      {
+        | null                     => false
+        | d   is Declaration       => d.IsParsed
+        | lst is list[Declaration] =>
+          foreach (decl when decl.IsParsed in lst)
+            return true;
+          false
+          
+        | _ => assert(false)
+      }
+    }
+  }
+
+  /// <summary>Call the callback for symbol and each nested symbol.</summary>
+  /// <param name="getNestedSymbol">Returns nested symbol for a symbol.</param>
+  /// <param name="callback">Call for each found symbol. If 'callback' returns true, the symbols visiting will be stopped..</param>
+  /// <returns>True if visiting was stopped by 'callback'.</returns>
+  public VisitChildrenAndSelf(getNestedSymbol : Func[DeclarationSymbol, Seq[DeclarationSymbol]], callback : Predicate[DeclarationSymbol]) : bool
+  {
+    def symbol = this :> DeclarationSymbol;
+    when (symbol.IsParsed && callback(symbol))
+      return true;
+      
+    foreach (childSymbol when childSymbol.VisitChildrenAndSelf(getNestedSymbol, callback) in getNestedSymbol(symbol))
+      return true;
+      
+    false
+  }
+
+  public AddDeclaration([NotNull] newDeclaration : Declaration) : void
+  {
+    _declarations =
+      match (_declarations)
+      {
+        | null                     => newDeclaration
+        | d is Declaration         => [newDeclaration, d] : object
+        | lst is list[Declaration] => newDeclaration :: lst
+        | _ => assert(false, $"Unable to add declaration '$newDeclaration' to symbol declaration store")
+      };
+
+    UpdateName(newDeclaration.Name.Id);
+  }
+
+  public RemoveDeclarations(shouldRemove : Predicate[Declaration]) : int
+  {
+    match (_declarations)
+    {
+      | null => 0
+      | d is Declaration =>
+        if (shouldRemove(d))
+        {
+          _declarations = null;
+          0
+        }
+        else
+          1
+
+      | lst is list[Declaration] =>
+        mutable removed  = 0;
+        mutable survived = LightList();
+        foreach (d in lst)
+          if (shouldRemove(d))
+            ++removed;
+          else
+            survived.Add(d);
+
+        when (removed > 0)
+          match (survived.Count)
+          {
+            | 0 => _declarations = null
+            | 1 => _declarations = survived.FirstItem
+            | _ => _declarations = survived.ToNList()
+          }
+
+        survived.Count
+
+      | _ => assert(false)
+    }
+  }
+
+  internal UpdateName(newId : int) : void
+  {
+    when (_nameId != newId)
+    {
+      if (_nameId == 0)
+        _nameId = newId
+      else when (_nameId > 0)
+        _nameId = ~_nameId
+    }
+  }
+
+  public virtual CanMerge(candidate : Declaration) : bool
+  {
+    _ = candidate;
+    false
+  }
+
+  public virtual IsSameIdentity(candidate : Declaration) : bool
+  {
+    _ = candidate;
+    true
+  }
+
+  public virtual AfterStage(stage : int) : void
+  {
+    _ = stage;
+  }
+
+  public virtual DecomposeType() : ValueOption[TypeStructure]
+  {
+    VNone()
+  }
+
+  public virtual MakeHint()                 : string
+  {
+    def builder = StringBuilder();
+    try
+    {
+      def symbol  = this :> DeclarationSymbol;
+      _ = builder.Append("<keyword>").HintMlEscape(symbol.Kind).Append("</keyword> ").MakeHintMlPath(symbol, ".", needSubhint=false)
+          .MakeLocations(symbol);
+    }
+    catch { e => _ = builder.HintMlException(e); }
+    builder.ToString()
+  }
+
+  public virtual GetTable(tableName : string) : ValueOption[TableScope]
+  {
+    _ = tableName;
+    VNone()
+  }
+
+  public override ToString() : string
+  {
+    def symbol  = this :> DeclarationSymbol;
+    def builder = StringBuilder(symbol.Name);
+    when (symbol.IsKindEvaluated)
+      _ = builder.Append(" (").Append(symbol.Kind).Append(")");
+    builder.ToString();
+  }
+}
+
+// ---- Typing2/Symbols/TypeStructure.n (Nitra.Declarations) ----
+public struct TypeStructure
+{
+  public this(typeInfo : TypeSymbol)
+  {
+    TypeInfo = typeInfo;
+  }
+
+  public this(typeInfo : TypeSymbol, typeArgument : TypeSymbol)
+  {
+    this(typeInfo);
+    mutable args = LightList();
+    args.Add(typeArgument);
+    TypeArguments = args;
+  }
+
+  public this(typeInfo : TypeSymbol, typeArguments : Seq[TypeSymbol])
+  {
+    this(typeInfo);
+    mutable args = LightList();
+    args.AddRange(typeArguments);
+    TypeArguments = args;
+  }
+
+  public this(typeInfo : TypeSymbol, typeArguments : LightList[TypeSymbol])
+  {
+    this(typeInfo);
+    TypeArguments = typeArguments;
+  }
+
+  public TypeInfo      : TypeSymbol            { get; }
+  public TypeArguments : LightList[TypeSymbol] { get; }
+}

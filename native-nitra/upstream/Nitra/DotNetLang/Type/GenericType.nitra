@@ -1,6 +1,7 @@
 ﻿using Nemerle.Collections;
 
 using Nitra;
+using Nitra.Runtime;
 using Nitra.Declarations;
 using Nitra.Internal;
 

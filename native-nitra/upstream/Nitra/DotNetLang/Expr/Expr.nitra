@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Nitra;
+using Nitra.Runtime;
 using Nitra.Declarations;
 using DotNet;
 namespace DotNet

@@ -1,6 +1,7 @@
 ﻿using DotNet;
 
 using Nitra;
+using Nitra.Runtime;
 using Nitra.Declarations;
 
 namespace DotNet

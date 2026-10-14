@@ -1,5 +1,0 @@
-﻿namespace Nitra.Typing
-{
-  public type RuleRef = SymbolRef[RuleSymbol];
-  public type ExtensibleRuleRef = SymbolRef[ExtensibleRuleSymbol];
-}

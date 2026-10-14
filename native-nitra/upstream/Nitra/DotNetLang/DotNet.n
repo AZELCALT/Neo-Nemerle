@@ -1,0 +1,1626 @@
+using Nitra;
+using Nitra.Declarations;
+using Nitra.Serialization2;
+using Nitra.Staging;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using NemerleMacros;
+using System.Globalization;
+using System.Collections.Immutable;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
+using SCG = System.Collections.Generic;
+using System.IO;
+using Nitra.Internal;
+using System.Text;
+using Nitra.ProjectSystem;
+using Nemerle.UtilityMacros;
+using Nitra.Runtime;
+using NitraMacros;
+using Nitra.Serialization2Macros;
+using Nitra.InternalMacros;
+
+#if !(BOOT || BOOT2)
+[assembly: GeneratedAssemblyVersion("$GitTag.$GitRevision.0", Defaults(GitTag="1.0", GitRevision="9999"))]
+#endif
+
+internal mask AssemblyConstants
+{
+  public Company                    = "RSDN";
+  public Product                    = "Nitra Language Framework";
+  public Copyright                  = "Copyright © RSDN 2017";
+  public Trademark                  = "";
+  public GrammarImplName            = "GrammarImpl";
+
+  public TargetedPatchingOptOutText = "Performance critical to inline across NGen image boundaries";
+}
+
+// General Information about an assembly is controlled through the following 
+// set of attributes. Change these attribute values to modify the information
+// associated with an assembly.
+[assembly: AssemblyTitle("DotNetLang")]
+[assembly: AssemblyDescription("")]
+[assembly: AssemblyConfiguration("")]
+[assembly: AssemblyCompany(AssemblyConstants.Company)]
+[assembly: AssemblyProduct(AssemblyConstants.Product)]
+[assembly: AssemblyCopyright(AssemblyConstants.Copyright)]
+[assembly: AssemblyTrademark(AssemblyConstants.Trademark)]
+[assembly: AssemblyCulture("")]
+
+// Setting ComVisible to false makes the types in this assembly not visible 
+// to COM components.  If you need to access a type in this assembly from 
+// COM, set the ComVisible attribute to true on that type.
+[assembly: ComVisible(false)]
+
+// The following GUID is for the ID of the typelib if this project is exposed to COM
+[assembly: Guid("7818c347-00d5-46af-8925-a544155bf41d")]
+
+// ---- Collectors/BaseTypeReferenceSet.n (DotNet) ----
+public sealed class BaseTypeReferenceSet : ICollector
+{
+  private this(parentTypes : Seq[TypeSymbol])
+  {
+    _parentTypes = HashSet(parentTypes);
+  }
+
+  public this(context : DependentPropertyEvalContext)
+  {
+    if (context != null)
+      context.NotifyCollectorCreated(out CreatedOnStage, out CreatedOnPass);
+    else
+    {
+      CreatedOnStage = -1;
+      CreatedOnPass = -1;
+    }
+
+    _parentTypes  = HashSet();
+  }
+
+  private mutable _isEvaluationInProgress : bool;
+  private mutable _isCycled               : bool;
+  private mutable _ancestorTypes          : HashSet[TypeSymbol];
+  private mutable _parentClassScope       : Scope;
+  private mutable _parentFullScope        : Scope;
+  private mutable _ancestorsFullScope     : Scope;
+  private         _parentTypes            : HashSet[TypeSymbol];
+  private mutable _implicitBaseTypeResolver : Seq[TypeSymbol] -> TypeSymbol;
+  
+  public CreatedOnStage       : int                { get; }
+  public CreatedOnPass        : int                { get; }
+  public IsCycled             : bool               { get { TryEvaluateHierarchy(); _isCycled } }
+  public AncestorTypes        : Seq[TypeSymbol]    { get { TryEvaluateHierarchy(); _ancestorTypes } }
+  public ParentTypes          : Seq[TypeSymbol]    { get { _parentTypes } }
+  public ParentClassScope     : Scope              { get { TryEvaluateHierarchy(); _parentClassScope } }
+  public ParentStructScope    : Scope              { get { EmptyScope.Instance } } //TODO: use scope of System.ValueType type
+  public ParentInterfaceScope : Scope              { get { ParentFullScope } } //TODO: gather only Interface types from parent type lists and System.Object
+  public ParentFullScope      : Scope              { get { TryEvaluateHierarchy(); _parentFullScope } }
+  public AncestorsFullScope   : Scope              { get { TryEvaluateHierarchy(); _ancestorsFullScope } }
+
+  [Collect]
+  public AddParent(type : TypeSymbol) : void
+  {
+    _ = _parentTypes.Add(type);
+  }
+
+  [Collect]
+  public AddParent(set : Seq[TypeSymbol]) : void
+  {
+    _parentTypes.UnionWith(set);
+  }
+
+  [Collect]
+  public AddParent(implicitBaseTypeResolver : Seq[TypeSymbol] -> TypeSymbol) : void
+  {
+    _implicitBaseTypeResolver = implicitBaseTypeResolver;
+  }
+
+  public ContainsParent(type : TypeSymbol) : bool
+  {
+    _parentTypes.Contains(type)
+  }
+
+  public ContainsAncestor(type : TypeSymbol) : bool
+  {
+    TryEvaluateHierarchy();
+    _ancestorTypes.Contains(type)
+  }
+
+  private TryEvaluateHierarchy() : void
+  {
+    when (_ancestorTypes != null)
+      return;
+
+    if (_isEvaluationInProgress)
+    {
+      _isCycled         = true;
+      _ancestorTypes    = HashSet();
+      _parentClassScope = EmptyScope.Instance;
+      _parentFullScope  = EmptyScope.Instance;
+    }
+    else
+    {
+      _isEvaluationInProgress = true;
+
+      when (_implicitBaseTypeResolver != null)
+      {
+        def implicitBaseType = _implicitBaseTypeResolver(_parentTypes);
+        when (implicitBaseType != null)
+        {
+          _ = _parentTypes.Add(implicitBaseType);
+        }
+        _implicitBaseTypeResolver = null;
+      }
+
+      def ancestorTypes = HashSet(_parentTypes);
+      mutable parentClassScope;
+      mutable parentFullScope = EmptyScope.Instance : Scope;
+      mutable ancestorsFullScope = EmptyScope.Instance : Scope;
+      
+      foreach (type in _parentTypes)
+      {
+        | SupportsInheritanceTypeSymbol(BaseTypeSet = parentTypeSet, MemberTable = symbolScope) as symbol
+        | ConstructedTypeSymbol(IsTypeInfoEvaluated = true, TypeInfo = GenericContainerTypeSymbol(BaseTypeSet = parentTypeSet, MemberTable = symbolScope) as symbol) =>
+          // TODO: need subst of type parameters
+          ancestorTypes.UnionWith(parentTypeSet.AncestorTypes);
+
+          parentFullScope = parentFullScope.UnionWith(parentTypeSet.ParentFullScope.HideWith(symbolScope));
+
+          when (parentClassScope : object == null)
+          when (symbol is ClassSymbol)
+            parentClassScope = parentTypeSet.ParentClassScope.HideWith(symbolScope);
+
+        | _ => ()
+      }
+      
+      foreach (type in ancestorTypes) 
+      {
+        | SupportsInheritanceTypeSymbol(MemberTable = symbolScope)
+        | ConstructedTypeSymbol(IsTypeInfoEvaluated = true, TypeInfo = GenericContainerTypeSymbol(MemberTable = symbolScope)) =>
+          ancestorsFullScope = ancestorsFullScope.HideWith(symbolScope);
+        | _ => ()
+      }
+      
+      unless (_isCycled)
+      {
+        _ancestorTypes    = ancestorTypes;
+        _parentClassScope = parentClassScope ?? EmptyScope.Instance;
+        _parentFullScope  = parentFullScope;
+        _ancestorsFullScope = ancestorsFullScope;
+      }
+
+      _isEvaluationInProgress = false;
+    }
+  }
+
+  public Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObjects(_parentTypes, writer)
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def parentTypes = metadataReader.ReadObjects(reader);
+    BaseTypeReferenceSet(parentTypes)
+  }
+  
+  public override ToString() : string
+  {
+    $"$CreatedOnStage($CreatedOnPass): ..$_parentTypes"
+  }
+}
+
+// ---- Collectors/ModifierSet.n (DotNet) ----
+public sealed class ModifierSet : ICollector, IEquatable[ModifierSet]
+{
+  private this(modifiers : Modifiers)
+  {
+    _modifiers = modifiers;
+  }
+
+  public this(context : DependentPropertyEvalContext)
+  {
+    if (context != null)
+      context.NotifyCollectorCreated(out CreatedOnStage, out CreatedOnPass);
+    else
+    {
+      CreatedOnStage = -1;
+      CreatedOnPass = -1;
+    }
+  }
+
+  public CreatedOnStage           : int  { get; }
+  public CreatedOnPass : int  { get; }
+  public IsEmpty                  : bool { get { _modifiers == Modifiers.None } }
+
+  private mutable _modifiers : Modifiers;
+
+  [Collect]
+  public Add(modifiers : Modifiers) : void
+  {
+    _modifiers |= modifiers;
+  }
+
+  [Collect]
+  public Add(modifiers : ModifierSet) : void
+  {
+    _modifiers |= modifiers.GetModifiers();
+  }
+
+  public GetModifiers() : Modifiers
+  {
+    _modifiers
+  }
+
+  public Contains(modifiers : Modifiers) : bool
+  {
+    _modifiers %&& modifiers
+  }
+
+  public override ToString() : string
+  {
+    $"$CreatedOnStage($CreatedOnPass): $_modifiers"
+  }
+
+  public Equals(other : ModifierSet) : bool
+    implements IEquatable[ModifierSet].Equals
+  {
+    | null => false
+    | _    => this._modifiers == other._modifiers
+  }
+
+  public override Equals(other : object) : bool
+  {
+    | ModifierSet as other => Equals(other)
+    | _                    => false
+  }
+
+  public override GetHashCode() : int
+  {
+    _modifiers :> int
+  }
+
+  public Serialize(writer : IO.BinaryWriter, _metadataWriter : MetadataWriter) : void
+  {
+    writer.Write(_modifiers :> int);
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, _metadataReader : MetadataReader) : this
+  {
+    def modifiers = reader.ReadInt32() :> Modifiers;
+    ModifierSet(modifiers)
+  }
+}
+
+// ---- Collectors/TypeConstraintSet.n (DotNet) ----
+[Flags]
+public enum TypeConstraint : byte
+{
+  | None   = 0
+  | Class  = 1
+  | Struct = 2
+  | Ctor   = 4
+}
+
+public sealed class TypeConstraintSet : ICollector, IEquatable[TypeConstraintSet]
+{
+  private this(baseTypes : Seq[TypeSymbol], flags : TypeConstraint)
+  {
+    _baseTypes = HashSet(baseTypes);
+    _flags     = flags;
+  }
+
+  public this(context : DependentPropertyEvalContext)
+  {
+    if (context != null)
+      context.NotifyCollectorCreated(out CreatedOnStage, out CreatedOnPass);
+    else
+    {
+      CreatedOnStage = -1;
+      CreatedOnPass = -1;
+    }
+
+    _baseTypes    = HashSet();
+  }
+
+  public CreatedOnStage           : int  { get; }
+  public CreatedOnPass : int  { get; }
+  public IsEmpty                  : bool { get { _flags == TypeConstraint.None && _baseTypes.Count == 0 } }
+
+  private         _baseTypes : HashSet[TypeSymbol];
+  private mutable _flags     : TypeConstraint;
+  
+  public SpecialConstraintMask : TypeConstraint { get { _flags } }
+  
+  public BaseTypes : Seq[TypeSymbol] { get { _baseTypes } }
+
+  [Collect]
+  public Add(r : Ref[TypeSymbol]) : void
+  {
+    when (r.IsSymbolEvaluated)
+      _ = _baseTypes.Add(r.Symbol);
+  }
+
+  [Collect]
+  public Add(baseType : TypeSymbol) : void
+  {
+    _ = _baseTypes.Add(baseType);
+  }
+
+  [Collect]
+  public Add(flag : TypeConstraint) : void
+  {
+    _flags |= flag;
+  }
+
+  [Collect]
+  public Add(set : TypeConstraintSet) : void
+  {
+    _baseTypes.UnionWith(set._baseTypes);
+    _flags |= set._flags;
+  }
+
+  public Contains(flag : TypeConstraint) : bool
+  {
+    _flags %&& flag
+  }
+
+  public Contains(baseType : TypeSymbol) : bool
+  {
+    _baseTypes.Contains(baseType)
+  }
+
+  public override ToString() : string
+  {
+    $"$CreatedOnStage($CreatedOnPass): $_flags, ..$_baseTypes"
+  }
+
+  public Equals(other : TypeConstraintSet) : bool
+    implements IEquatable[TypeConstraintSet].Equals
+  {
+    | null => false
+    | _ => this._flags == other._flags
+      && this._baseTypes.Count == other._baseTypes.Count
+      && this._baseTypes.SetEquals(other._baseTypes)
+  }
+
+  public override Equals(other : object) : bool
+  {
+    | TypeConstraintSet as other => Equals(other)
+    | _ => false
+  }
+
+  public override GetHashCode() : int
+  {
+    (this._baseTypes.Count << 4) | (this._flags :> int)
+  }
+
+  public Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObjects(_baseTypes, writer);
+    writer.Write(_flags :> int);
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def baseTypes = metadataReader.ReadObjects(reader);
+    def flags     = reader.ReadInt32() :> TypeConstraint;
+    TypeConstraintSet(baseTypes, flags)
+  }
+}
+
+// ---- Expr/ExprExtensions.n (DotNet) ----
+public module AstExprExtensions
+{
+  public static NoLocation : Location       = Location(SourceSnapshot.Default.File, NSpan(0));
+  public static NoFile : ProjectSystem.File = SourceSnapshot.Default.File;
+  public static NoSpan : NSpan              = NSpan(0);
+  
+  public GetArithmeticType(this host : Expr, e1Type : TypeSymbol, e2Type : TypeSymbol) : TypeSymbol
+  {      
+    match (host, e1Type.FullName, e2Type.FullName) {
+      | (Expr.Sum, "System.String", _) => e1Type
+      | (Expr.Sum, _, "System.String") => e2Type
+      | (Expr.Sum, "System.Char", "System.Char") => PlatformTypes.String
+      | (Expr.Sum, _, "System.Char") when e1Type.IsNumeric() => e1Type
+      | (Expr.Sum, "System.Char", _) when e2Type.IsNumeric() => e2Type
+      | (_, "System.Double", _) => PlatformTypes.Double
+      | (_, _, "System.Double") => PlatformTypes.Double
+      | (_, "System.Float", _) => e1Type
+      | (_, _, "System.Float") => e2Type
+      | (_, "System.Int64", _) => e1Type
+      | (_, _, "System.Int64") => e2Type
+      | (_, _, _) when e1Type.IsNumeric() && e2Type.IsNumeric() => e1Type
+      | _ => e1Type
+    }
+  }
+  
+  public GetParameterType(this parameterScope : TableScope, parameterIndex : int) : TypeSymbol
+  {
+    def parm = parameterScope
+                     .Symbols
+                     .SelectMany(s => s)
+                     .OfType.[FormalParameterSymbol]()
+                     .FirstOrDefault(s => s.Index == parameterIndex :> (uint));
+    
+    parm.Type
+  }
+  
+  public IsBinaryOpCompatible(this expr : BinaryExpr, left : TypeSymbol, right : TypeSymbol) : bool
+  {
+    if (left.IsNumeric() && right.IsNumeric()) true
+    else if (left.IsNumeric() && !right.IsNumeric()) false
+    else if ((left.FullName == "System.String" || right.FullName == "System.String") && expr is Expr.Sum) true
+    else true
+  }
+  
+  public FindSuitableConstructor(this ctor : Expr, type : DeclarationSymbol, argumentTypes : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : Ref[Member.ConstructorSymbol]
+  {
+    match (type)
+    {
+      | type is TypeSymbol =>
+        def bind(ctor : Member.ConstructorSymbol) : bool
+        {
+          DoArgumentsMatchParameters(ctor.ParameterScope, argumentTypes)
+        }
+        def res = type.Scope.Bind(bind);
+        Ref.CreateBind(ctor.Location, res)
+        
+      | _ => Ref.CreateBind(ctor.Location, ".ctor", BindResult.Nil())
+    }
+  }
+  
+  private DoArgumentsMatchParameters(parameterScope : TableScope, argumentTypes : ImmutableArray[TypeSymbol]) : bool
+  {
+    def parms = parameterScope.Symbols
+                              .SelectMany(s => s)
+                              .OfType.[FormalParameterSymbol]()
+                              .OrderBy(p => p.Index)
+                              .ToList();
+        
+    when (parms.Count != argumentTypes.Length)
+      return false;
+        
+    def zipped = parms.Zip(argumentTypes, (parm, argType) => (parm, argType));
+        
+    foreach ((parm, argType) in zipped)
+      when(!argType.IsSubtypeOf(parm.Type) && !argType.HasImplicitConversion(parm.Type))
+        return false;
+    
+    true
+  }
+  
+  public GetOverloadResolutionAlgorithm[TSymbol, TConcreteSymbol](this _methodCall : Expr, argumentTypes : ImmutableArray[TypeSymbol]) : ResolutionAlgorithm[TSymbol, TConcreteSymbol]
+    where TSymbol         : DeclarationSymbol
+    where TConcreteSymbol : DeclarationSymbol
+  {      
+    fun (symbol : TSymbol) : ValueOption[TConcreteSymbol] {
+      | x is Member.MethodSymbol when DoArgumentsMatchParameters(x.ParameterScope, argumentTypes) =>
+        VSome(symbol :> TConcreteSymbol);
+      | _ => 
+        VNone()
+    }
+  }
+  
+  public InvocationResolveMethod(this host : Expr, left : Expr, _ : TypeSymbol, argumentTypes : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : Ref[Member.MethodSymbol]
+  {
+    match (left)
+    {
+      | qn is Expr.QualifiedName with symbolRef = qn.Ref
+      | ma is Expr.MemberAccess1 with symbolRef = ma.Ref => 
+        if (symbolRef.IsUnresolved)
+          Ref.CreateUnresolved(host.Location)
+        else
+        {
+          def resolve(x : Member.MethodSymbol) : bool
+          {
+            DoArgumentsMatchParameters(x.ParameterScope, argumentTypes)
+          }
+          symbolRef.Resolve(resolve)
+        }
+
+        | _ => 
+        host.Error(context, "Invocation of " + left + " not supported");
+        Ref.CreateUnresolved(host.Location)
+    }
+  }
+  
+  //private ExprInvocation(leftAst : InitAst, method : Member.MethodSymbol, arguments : array[InitAst]) : InitAst
+  //{
+  //  match (leftAst) {
+  //    | ti is InitAst.TypeInfo => InitAst.StaticCall(ti, method.Name, arguments)
+  //    | _ => InitAst.Call(leftAst, method.Name, arguments)
+  //  }
+  //}
+  
+  //private ExprMemberAccess(host : Expr, leftAst : InitAst, member : DeclarationSymbol, _context : DependentPropertyEvalContext) : InitAst
+  //{
+  //  match (member) {
+  //    | x is Member.PropertySymbol when leftAst is InitAst.TypeInfo => InitAst.StaticProperty(leftAst :> InitAst.TypeInfo, x.Name)
+  //    | x is Member.PropertySymbol when x.IsStatic() =>
+  //      throw ExprException("Instance can't be used to access static property", host);
+
+  //    | x is Member.PropertySymbol => InitAst.Property(leftAst, x.Name)
+  //    | x is Member.FieldSymbol when leftAst is InitAst.TypeInfo => InitAst.StaticField(leftAst :> InitAst.TypeInfo, x.Name)
+  //    | x is Member.FieldSymbol when x.IsStatic() => 
+  //      throw ExprException("Instance can't be used to access static field", host);
+        
+  //    | x is Member.FieldSymbol => InitAst.Field(leftAst, x.Name)
+      
+  //    | _ is Member.MethodSymbol when leftAst is InitAst.TypeInfo => leftAst
+  //    | x is Member.MethodSymbol when x.IsStatic() => 
+  //      throw ExprException("Instance can't be used to access static method", host);
+        
+  //    | _ is Member.MethodSymbol => leftAst
+  //    | x is EnumMemberSymbol =>
+  //      InitAst.PrimitiveValue(x.DeclaredIn.AsTypeInfo(), x.FullName, false)
+        
+  //    | _ => throw ExprException("This member type is not supported as member access in expression", host)
+  //  }
+  //}
+      
+  //private ExprQualifiedName(host : Expr, key : QualifiedReference, symbol : DeclarationSymbol, context : DependentPropertyEvalContext) : InitAst
+  //{
+  //  match (key) {
+  //    | QualifiedReference.Simple => 
+  //      match (symbol) {
+  //        | x is LambdaParameterSymbol => InitAst.Parameter(x.Name, x.Type.FullName)
+  //        | x is TypeSymbol => x.AsTypeInfo()
+  //        | _ => throw ExprException("Invalid qualified name expression", host)
+  //      }
+        
+  //    | qualified is QualifiedReference.Qualified =>
+  //      match (symbol) {
+  //        | prop is Member.PropertySymbol when prop.IsStatic() =>  
+  //          InitAst.StaticProperty(prop.DeclaredIn.AsTypeInfo(), prop.Name)
+  //        | _ => 
+  //          def left = ExprQualifiedName(host, qualified.Qualifier, qualified.Qualifier.Ref.Symbol, context);
+  //          ExprMemberAccess(host, left, symbol, context)
+  //      }
+        
+  //    | _ => throw ExprException("Unknown reference: " + key, host)
+  //  }
+  //}
+  
+  public ResolveLambdaParameterType(this _parm : LambdaParameter, typeRef : ValueOption[Ref[TypeSymbol]]) : TypeSymbol
+  {      
+    if (typeRef.HasValue && typeRef.Value.IsSymbolEvaluated) {
+      match (typeRef.Value.Symbol) {
+        | alias is TypeAliasSymbol => alias.Replacement.Symbol :> TypeSymbol
+        | x => x
+      }
+    } else {
+      PlatformTypes.Object;
+    }
+  }
+  /*
+  public ArrayRefGetType(this expr : Expr, leftType : TypeSymbol, indexType : TypeSymbol, context : DependentPropertyEvalContext) : TypeSymbol
+  {
+    match (leftType.FirstDeclarationOrDefault) {
+      | atd is IExternalTopTypeDeclaration => 
+        def systemType = atd.Type;
+        
+        if (systemType.IsArray) {
+          def elementType = systemType.GetElementType();
+          mutable elementTypeSymbol;
+          
+          if (elementType != null && context.TypeMap.TryGetValue(elementType.FullName, out elementTypeSymbol))
+            elementTypeSymbol;
+          else
+            PlatformTypes.Object
+        } else {
+          def parmTypeMatches(prop) {
+            def indexerParms = prop.GetIndexParameters();
+            mutable parmTypeSymbol;
+            if (indexerParms.Length == 1 && context.TypeMap.TryGetValue(indexerParms[0].ParameterType.FullName, out parmTypeSymbol)) {
+              indexType.IsDescendant(parmTypeSymbol)
+            } else {
+              false
+            }
+          }
+          
+          def indexer = systemType.GetProperties()
+                                  .FirstOrDefault(p => parmTypeMatches(p));
+          
+          mutable indexerTypeSymbol;
+          if (indexer != null && context.TypeMap.TryGetValue(indexer.PropertyType.FullName, out indexerTypeSymbol))
+            indexerTypeSymbol
+          else {
+            expr.Error(context, "Indexer of type " + indexType.GetFullName() + " is not compatible with " + leftType.GetFullName());
+            PlatformTypes.Object
+          }
+        }
+      | _ => {
+        expr.Error(context, "Indexer of type " + indexType.GetFullName() + " is not compatible with " + leftType.GetFullName());
+        PlatformTypes.Object;
+      }
+    }
+  }*/
+  
+  //private BinaryOp(host : BinaryExpr, op : BinaryOp, leftExprType : TypeSymbol, leftAst : InitAst, rightExprType : TypeSymbol, rightAst : InitAst, context : DependentPropertyEvalContext) : InitAst
+  //{
+  //  def context = context.ToAmmyContext();
+  //  def types = context.Types;
+    
+  //  match (host) {
+  //    | Expr.Sum when leftExprType.IsDescendant(types.String)
+  //    | Expr.Sum when rightExprType.IsDescendant(types.String) =>
+              
+  //    if (leftExprType.IsDescendant(types.String) && rightExprType.IsDescendant(types.String))
+  //      InitAst.Binary(op, leftAst, rightAst)                 
+  //    else 
+  //      InitAst.StaticCall(types.String.AsTypeInfo(), "Concat", array[leftAst, rightAst])
+                          
+  //    | EqualExpr when leftExprType.IsNumeric() && rightExprType.IsNumeric()
+  //    | NumericBinary =>
+  //      mutable resultType;
+  //      def (l, r) = BinaryNumericPromotion(op, leftExprType, leftAst, rightExprType, rightAst, context, out resultType);
+              
+  //      when (!host.IsTypeEvaluated)
+  //        host.Type = resultType;
+                
+  //      InitAst.Binary(op, l, r)
+              
+  //    | EqualExpr => 
+  //      InitAst.Binary(op, leftAst, rightAst)
+            
+  //    | OrAndExpr =>
+  //      when (!leftExprType.IsDescendant(context.Types.Boolean))
+  //        host.Expr1.Error(context, "Expected boolean expression, got " + leftExprType.GetFullName());
+                
+  //      when (!rightExprType.IsDescendant(context.Types.Boolean))
+  //        host.Expr2.Error(context, "Expected boolean expression, got " + rightExprType.GetFullName());
+              
+  //      InitAst.Binary(op, leftAst, rightAst)
+              
+  //    | _ => 
+  //      throw Exception("Invalid binary expression: " + host)
+  //  }
+  //}
+      
+  //private BinaryNumericPromotion(_op : BinaryOp, leftExprType : TypeSymbol, leftExprAst : InitAst, rightExprType : TypeSymbol, rightExprAst : InitAst, context : DependentPropertyEvalContext, resultType : out TypeSymbol) : (InitAst*InitAst)
+  //{
+  //  def context = context.ToAmmyContext();
+    
+  //  match (leftExprType.GetFullName(), rightExprType.GetFullName()) {
+  //    | (l, r) when l == r    => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, rightExprAst)
+      
+  //    | ("System.Decimal", _) => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Decimal"), rightExprAst))
+  //    | (_, "System.Decimal") => 
+  //      resultType = rightExprType;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.Decimal"), leftExprAst), rightExprAst)
+      
+  //    | ("System.Double", _) => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Double"), rightExprAst))
+        
+  //    | (_, "System.Double") => 
+  //      resultType = rightExprType;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.Double"), leftExprAst), rightExprAst)
+      
+  //    | ("System.Single", _) => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Single"), rightExprAst))
+        
+  //    | (_, "System.Single") => 
+  //      resultType = rightExprType;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.Single"), leftExprAst), rightExprAst)
+      
+  //    | ("System.System.UInt64", r) => 
+  //        if (r != "System.SByte" && r != "System.Int16" && r != "System.Int32" && r != "System.Int64") {
+  //          resultType = leftExprType;
+  //          (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.UInt64"), rightExprAst))
+  //        } else
+  //           throw Exception($"Operand types $(leftExprType.GetFullName()) and $(rightExprType.GetFullName()) are incompatible")
+          
+  //    | (l, "System.System.UInt64") => 
+  //        if (l != "System.SByte" && l != "System.Int16" && l != "System.Int32" && l != "System.Int64") {
+  //          resultType = rightExprType;
+  //          (InitAst.Cast(InitAst.TypeInfo("System.UInt64"), leftExprAst), rightExprAst)
+  //        } else
+  //          throw Exception($"Operand types $(leftExprType.GetFullName()) and $(rightExprType.GetFullName()) are incompatible")
+          
+          
+  //    | ("System.Int64", _) => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Int64"), rightExprAst))
+        
+  //    | (_, "System.Int64") => 
+  //      resultType = rightExprType;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.Int64"), leftExprAst), rightExprAst)
+     
+  //    | ("System.UInt32", o) when o == "System.SByte" || o == "System.Int16" || o == "System.Int32"
+  //    | (o, "System.UInt32") when o == "System.SByte" || o == "System.Int16" || o == "System.Int32" => 
+  //      resultType = context.Types.Int64;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.Int64"), leftExprAst), InitAst.Cast(InitAst.TypeInfo("System.Int64"), rightExprAst))
+                
+  //    | ("System.UInt32", _) => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.UInt32"), rightExprAst))
+        
+  //    | (_, "System.UInt32") => 
+  //      resultType = rightExprType;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.UInt32"), leftExprAst), rightExprAst)
+      
+  //    | ("System.Int32", _) => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Int32"), rightExprAst))
+        
+  //    | (_, "System.Int32") => 
+  //      resultType = rightExprType;
+  //      (InitAst.Cast(InitAst.TypeInfo("System.Int32"), leftExprAst), rightExprAst)
+  //    | _ => 
+  //      resultType = leftExprType;
+  //      (leftExprAst, rightExprAst);
+  //  }
+  //}
+  
+  //private UnaryNumericPromotion(op : UnaryOp, exprType : TypeSymbol, exprAst : InitAst, context : DependentPropertyEvalContext) : InitAst
+  //{
+  //  def context = context.ToAmmyContext();
+    
+  //  match (exprType.GetFullName()) {
+  //    | "System.Byte" | "System.SByte" | "System.Int16" | "System.UInt16" | "System.Char" =>
+  //      InitAst.Cast(context.Types.Int32.AsTypeInfo(), exprAst)
+  //    | "System.UInt32" when op is UnaryOp.Minus => 
+  //      InitAst.Cast(context.Types.Int64.AsTypeInfo(), exprAst)
+  //    | _ => 
+  //      exprAst
+  //  }
+  //}
+      
+  //public BuildAstValue(this host : LambdaExpr, expr : Expr, _exprType : TypeSymbol, parmName : string, parmType : TypeSymbol, context : DependentPropertyEvalContext) : BuildResult
+  //{
+  //  try {
+  //    def body = BuildAstValueImpl(expr, context.ToAmmyContext());
+  //    BuildResult.Result(InitAst.Lambda(body, array[InitAst.Parameter(parmName, parmType.FullName)], false))
+  //  } catch {
+  //   | e => {
+  //      host.Error(context, e.Message);
+  //     BuildResult.Ignore();
+  //   }
+  //  }
+  //}
+  
+  //private BuildAstValueImpl(expr : Expr, context : AmmyDependentPropertyEvalContext) : InitAst
+  //{
+  //  def types = context.Types;
+  //  def build = BuildAstValueImpl(_, context);
+    
+  //  match (expr) {
+  //    | x is Expr.IntegerLiteral when x.Value.HasValue => InitAst.PrimitiveValue(types.Int32.AsTypeInfo(), x.Value.Value.ToString(), false);
+  //    | x is Expr.FloatLiteral when x.Value.HasValue => InitAst.PrimitiveValue(types.Double.AsTypeInfo(), x.Value.Value.ToString(CultureInfo.InvariantCulture), false);
+  //    | x is Expr.String when x.Value.HasValue => InitAst.PrimitiveValue(types.String.AsTypeInfo(), x.Value.Value.ToString(), false);
+  //    | x is Expr.Char when x.Value.HasValue   => InitAst.PrimitiveValue(types.Char.AsTypeInfo(), x.Value.Value.ToString(), false);
+  //    | _ is Expr.FalseLiteral => InitAst.PrimitiveValue(types.Boolean.AsTypeInfo(), "false", false);
+  //    | _ is Expr.TrueLiteral => InitAst.PrimitiveValue(types.Boolean.AsTypeInfo(), "true", false);
+  //    | _ is Expr.NullLiteral => InitAst.Null(types.Object.AsTypeInfo());
+  //    | x is Expr.QualifiedName => 
+  //      if (x.Ref.IsSymbolEvaluated)
+  //        ExprQualifiedName(x, x.Key, x.Ref.Symbol, context);
+  //      else if (x.Ref.IsResolvedToEvaluated && x.Ref.ResolvedTo.IsSymbolEvaluated)
+  //        ExprQualifiedName(x, x.Key, x.Ref.ResolvedTo.Symbol, context);
+  //      else
+  //        InitAst.Seq([]) 
+          
+  //    | x is Expr.MemberAccess => 
+  //      if (x.Ref.IsSymbolEvaluated)
+  //        ExprMemberAccess(x, build(x.Expr), x.Ref.Symbol, context)
+  //      else if (x.Ref.IsResolvedToEvaluated && x.Ref.ResolvedTo.IsSymbolEvaluated)
+  //        ExprMemberAccess(x, build(x.Expr), x.Ref.ResolvedTo.Symbol, context)
+  //      else 
+  //        InitAst.Seq([])         
+      
+  //    | x is Expr.ArrayRef => InitAst.ArrayAccess(build(x.Left), build(x.Index))
+  //    | x is Expr.Constructor => InitAst.New(x.Type.AsTypeInfo(), x.Arguments.Select(a => build(a)).ToArray())
+  //    | x is Expr.Invocation => ExprInvocation(build(x.Left), x.Method.Symbol, x.Arguments.Select(a => build(a)).ToArray())
+  //    | x is Expr.Argument => build(x.Expr);
+  //    | x is Expr.Ternary => InitAst.Ternary(build(x.Condition), build(x.Left), build(x.Right))
+  //    | x is Expr.Cast => InitAst.Cast(x.Type.AsTypeInfo(), build(x.Right))
+  //    | x is BinaryExpr => BinaryOp(x, x.Operation, x.Expr1.Type, build(x.Expr1), x.Expr2.Type, build(x.Expr2), context)
+  //    | x is Unary => InitAst.Unary(x.Operation, UnaryNumericPromotion(x.Operation, x.Expr1.Type, build(x.Expr1), context))
+  //    | _ => InitAst.Seq([]); // Error should already be registered
+  //  }
+  //}
+  
+  //class ExprException : Exception
+  //{
+  //  public Expr : Expr { get; set; }
+    
+  //  public this(message : string, expr : Expr) {
+  //    base(message);
+  //    Expr = expr;
+  //  }
+  //}
+}
+  
+public variant BinaryOp {
+  | Or
+  | And
+  | Equal
+  | NotEqual
+  | LessEqual
+  | Less
+  | GreaterEqual
+  | Greater
+  | Sum
+  | Sub
+  | Mod
+  | Mul
+  | Div
+}
+
+public variant UnaryOp {
+  | Identity
+  | Negation
+  | LogicalNegation
+  | BitwiseNegation
+  | PreIncrement
+  | PreDecrement
+  | PostIncrement
+  | PostDecrement
+}
+
+// ---- Scopes/NestedSubstScope.n (DotNet) ----
+public class NestedSubstScope : TopSubstScope
+{
+  private _parent : TypeSymbol;
+
+  public this(typeInfo : GenericTypeSymbol, scope : Scope, args : ImmutableArray[TypeSymbol], parent : TypeSymbol)
+  {
+    base(typeInfo, scope, args);
+    _parent = parent;
+  }
+  
+  public override Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
+  {
+    base.Serialize(writer, metadataWriter);
+    metadataWriter.WriteObject(_parent, writer);
+  }
+  
+  new public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : this
+  {
+    def (typeInfo, args) = Read(reader, metadataReader);
+    def parent   = metadataReader.ReadObject(reader);
+    NestedSubstScope(typeInfo, null, ImmutableArray.Create(args), parent)
+  }
+}
+
+// ---- Scopes/TopSubstScope.n (DotNet) ----
+public class TopSubstScope : Scope
+{
+  private _typeInfo : GenericTypeSymbol;
+  private _args     : ImmutableArray[TypeSymbol];
+
+  public this(typeInfo : GenericTypeSymbol, _scope : Scope, args : ImmutableArray[TypeSymbol])
+  {
+    _typeInfo = typeInfo;
+    _args     = args;
+  }
+
+  // TODO: add type subst
+  public override AllSymbols : Seq[DeclarationSymbol] { get { _typeInfo.Scope.AllSymbols } } 
+  
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    _typeInfo.Scope.Bind.[TSymbol](reference)
+  }
+
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    _typeInfo.Scope.Bind.[TSymbol](isMatch)
+  }
+  
+  public override ToDot(nodeToIdMap : SCG.Dictionary[object, int], nodes : SCG.List[string], edges : SCG.List[string]) : void
+  {
+    def id      = nodeToIdMap.GetObjectId(this);
+    def idScope = nodeToIdMap.GetObjectId(this._typeInfo.Scope);
+
+    nodes.Add($<#Obj_$id [label="TopSubstScope $id"]#>);
+    edges.Add($<#Obj_$id -> Obj_$idScope#>);
+
+    this._typeInfo.Scope.ToDot(nodeToIdMap, nodes, edges);
+  }
+
+  public override Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(_typeInfo, writer);
+    metadataWriter.WriteObjects(_args, writer);
+  }
+
+  protected static Read(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : GenericTypeSymbol * array[TypeSymbol]
+  {
+    def typeInfo = metadataReader.ReadObject(reader);
+    def args     = metadataReader.ReadObjects(reader);
+    (typeInfo, args)
+  }
+  
+  public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : this
+  {
+    def (typeInfo, args) = Read(reader, metadataReader);
+    TopSubstScope(typeInfo, null, ImmutableArray.Create(args))
+  }
+}
+
+// ---- Type/ConstructedTypeSymbol.n (DotNet) ----
+public interface ConstructedTypeSymbol : TypeSymbol, IEquatable[ConstructedTypeSymbol]
+{
+}
+
+public class TopConstructedTypeSymbol : SymbolBase, ConstructedTypeSymbol
+{
+  public override Equals(other : object) : bool implements IEquatable[ConstructedTypeSymbol].Equals
+  {
+    | TopConstructedTypeSymbol as other => this.TypeInfo.Equals(other.TypeInfo) && this.Args.Equals(other.Args)
+    | _ => false
+  }
+
+  public override GetHashCode() : int
+  {
+    unchecked
+    {
+      mutable i = TypeInfo.GetHashCode();
+      foreach (arg in Args with index)
+        i ^= arg.GetHashCode() << index;
+      i
+    }
+  }
+}
+
+public class NestedConstructedTypeSymbol : SymbolBase, ConstructedTypeSymbol
+{
+  public override Equals(other : object) : bool implements IEquatable[ConstructedTypeSymbol].Equals
+  {
+    | NestedConstructedTypeSymbol as other => this.TypeInfo.Equals(other.TypeInfo) && this.Args.Equals(other.Args) && this.Parent.Equals(other.Parent)
+    | _ => false
+  }
+
+  public override GetHashCode() : int
+  {
+    unchecked
+    {
+      mutable i = TypeInfo.GetHashCode();
+      i ^= Parent.GetHashCode();
+      foreach (arg in Args with index)
+        i ^= arg.GetHashCode() << index;
+      i
+    }
+  }
+}
+
+// ---- Type/CustomAttributeExpression.n (DotNet) ----
+public variant CustomAttributeExpression
+{
+  | Bool   { Literal : bool; }
+  | Byte   { Literal : byte; }
+  | Char   { Literal : char; }
+  | Double { Literal : double; }
+  | Float  { Literal : float; }
+  | Int    { Literal : int; }
+  | Long   { Literal : long; }
+  | Sbyte  { Literal : sbyte; }
+  | Short  { Literal : short; }
+  | String { Literal : string; }
+  | Uint   { Literal : uint; }
+  | Ulong  { Literal : ulong; }
+  | Ushort { Literal : ushort; }
+  | Type   { Literal : TypeSymbol = null; }
+  | Array
+    {
+      ElemType : TypeSymbol;
+      Elems    : IList[CustomAttributeExpression];
+    }
+    
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Bool  (v) => v.ToString()
+      | Byte  (v) => v.ToString()
+      | Char  (v) => v.ToString()
+      | Double(v) => v.ToString()
+      | Float (v) => v.ToString()
+      | Int   (v) => v.ToString()
+      | Long  (v) => v.ToString()
+      | Sbyte (v) => v.ToString()
+      | Short (v) => v.ToString()
+      | String(v) => v.ToString()
+      | Uint  (v) => v.ToString()
+      | Ulong (v) => v.ToString()
+      | Ushort(v) => v.ToString()
+      | Type  (v) => v.ToString()
+      | Array as x => $<#array[..$(x.Elems)]#>
+    }
+  }
+}
+
+// ---- Type/CustomAttributeLookupScope.n (DotNet) ----
+public class CustomAttributeLookupScope : Scope
+{
+  public this(scope : Scope)
+  {
+    _scope = scope;
+  }
+
+  private _scope : Scope;
+  
+  // TODO: add type subst
+  public override AllSymbols : Seq[DeclarationSymbol] { get { _scope.AllSymbols } } 
+
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    def res = _scope.Bind.[TSymbol](reference);
+    def reference2 = Reference(reference.Location, reference.Text + "Attribute");
+    def res2 = _scope.Bind.[TSymbol](reference2);
+    match (res, res2)
+    {
+      | (BindResult.Nil, BindResult.Nil) => res
+      | (_, BindResult.Nil) => res
+      | (BindResult.Nil, _) => res2
+      | _ => NitraUtils.MakeUnion(ImmutableArray.Create(res, res2))
+    }
+  }
+
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    _scope.Bind.[TSymbol](isMatch)
+  }
+  
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
+  {
+    def id            = nodeToIdMap.GetObjectId(this);
+    def idScope       = nodeToIdMap.GetObjectId(_scope);
+
+    nodes.Add($<#Obj_$id [label="CustomAttributeLookupScope $id"]#>);
+    edges.Add($<#Obj_$id -> Obj_$idScope#>);
+
+    _scope.ToDot(nodeToIdMap, nodes, edges);
+  }
+
+  public override ToString() : string
+  {
+    "attribute lookup for " + _scope
+  }
+
+  public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(_scope, writer);
+  }
+
+  public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def scope = metadataReader.ReadObject(reader);
+    CustomAttributeLookupScope(scope)
+  }
+}
+
+// ---- Type/CustomAttributeNamedArgument.n (DotNet) ----
+[Record]
+public class CustomAttributeNamedArgument
+{
+  public NameId     : int;
+  public Name       : string { get { StringIndex.GetText(NameId) } }
+  public Expression : CustomAttributeExpression;
+  
+  public override ToString() : string
+  {
+    Name + " = " + Expression
+  }
+}
+
+// ---- Type/Member/OperatorKind.n (DotNet) ----
+public enum OperatorKind
+{
+  | Implicit
+  | Explicit
+}
+
+// ---- Type/Modifiers.n (DotNet) ----
+[Flags]
+public enum Modifiers : int
+{
+  | None      = 0
+  | New       = 0b000000000000001
+  | Public    = 0b000000000000010
+  | Protected = 0b000000000000100
+  | Internal  = 0b000000000001000
+  | Private   = 0b000000000010000
+  | Virtual   = 0b000000000100000
+  | Volatile  = 0b000000001000000
+  | Static    = 0b000000010000000
+  | Readonly  = 0b000000100000000
+  | Sealed    = 0b000001000000000
+  | Override  = 0b000010000000000
+  | Abstract  = 0b000100000000000
+  | Extern    = 0b001000000000000
+  | Unsafe    = 0b010000000000000
+  | Async     = 0b100000000000000
+}
+
+// ---- Type/ParameterModifier.n (DotNet) ----
+public enum ParameterModifier
+{
+  | None
+  | Ref
+  | Out
+  | This
+  | Params
+}
+
+// ---- Type/ScopeFactories.n (DotNet) ----
+public delegate ScopeFactory(scope : Scope) : Scope;
+
+public module ScopeFactories
+{
+  public static Default   : ScopeFactory = DefaultImpl;
+  public static Attribute : ScopeFactory = AttributeImpl;
+
+  private static DefaultImpl  (scope : Scope) : Scope { scope }
+  private static AttributeImpl(scope : Scope) : Scope { CustomAttributeLookupScope(scope) }
+}
+
+// ---- Type/TypeParameterSymbol.n (DotNet) ----
+public class TypeParameterSymbol : SymbolBase, TypeSymbol
+{
+  private mutable _aliases : list[TypeParameterAlias] = [];
+
+  public Aliases : list[TypeParameterAlias] { get { _aliases } }
+
+  internal AddAliasSymbol(alias : TypeParameterAlias) : void
+  {
+    _aliases ::= alias;
+    def decl = TypeParameter(alias.Location, alias.Name, alias.Attributes, false);
+    AddDeclaration(decl);
+  }
+}
+
+public class TypeParameterAliasSymbol : SymbolBase, TypeSymbol
+{
+}
+
+// ---- Type/Variance.n (DotNet) ----
+public enum Variance
+{
+  | None
+  | Contravariant
+  | Covariant
+}
+
+// ---- Utils/AstTypeUnifier.n (DotNet) ----
+public sealed class AstTypeUnifier : TypeUnifier
+{
+  public static Instance : AstTypeUnifier = AstTypeUnifier();
+  
+  protected override IsSubtype(subtype : TypeSymbol, supertype : TypeSymbol) : bool
+  {
+    when (supertype : object == PlatformTypes.Object)
+      return true;
+
+    when (subtype is SupportsInheritanceTypeSymbol(IsBaseTypeSetEvaluated = true, BaseTypeSet = baseTypeSet))
+      return baseTypeSet.AncestorTypes.Contains(supertype);
+
+    false
+  }
+}
+
+// ---- Utils/AstUtils.n (DotNet) ----
+public module AstUtils
+{
+  public Append(this lst : QualifiedReference.IAstList, item : QualifiedReference) : QualifiedReference.IAstList
+  {
+    def newItems = array(lst.Count + 1);
+    lst.CopyTo(newItems, 0);
+    newItems[lst.Count] = item;
+    QualifiedReference.AstList(lst, newItems)
+  }
+
+  public MakeMembersScope(currentScope : Scope, opening : Scope, aliases : TableScope) : Scope
+  {
+    def makeCurrentScope(scope : Scope) : Scope
+    {
+      def withAliases =
+        if (aliases.Symbols.Count == 0)
+          scope
+        else
+          scope.UnionWith(aliases);
+
+      opening.HideWith(withAliases)
+    }
+
+    if (currentScope is HidingScope as h)
+      h.Hidden.HideWith(makeCurrentScope(h.Scope))
+    else
+      makeCurrentScope(currentScope)
+  }
+
+  public MakeEnteredScope(parentScope : Scope, parentNs : NamespaceSymbol, enteredNs : NamespaceSymbol) : Scope
+  {
+    def buildEnterNsScope(ns : NamespaceSymbol) : Scope
+    {
+      def declaredIn = ns.DeclaredIn;
+      def scope      = ns.Scope;
+
+      if (declaredIn : object == parentNs)
+        parentScope.HideWith(scope)
+      else
+        buildEnterNsScope(declaredIn).HideWith(scope)
+    }
+    
+    buildEnterNsScope(enteredNs)
+  }
+  
+  [Memoize]
+  public TypeOverloadResolution(argumentsCount : int) : ResolutionAlgorithm[DeclarationSymbol, DeclarationSymbol]
+  {
+    fun (candidate : DeclarationSymbol) : ValueOption[DeclarationSymbol]
+    {
+      | symbol is GenericEntitySymbol when argumentsCount == symbol.TypeParametersCount => VSome(symbol)
+      | _                             when argumentsCount == 0                          => VSome(candidate)
+      | _ => VNone()
+    }
+  }
+
+  public CreateMissingQualifiedReference(loc : Location) : QualifiedReference
+  {
+    QualifiedReference.Simple(loc, Name = Reference.AmbiguousOrMissing(loc))
+  }
+
+  public CreateSimpleName(loc : Location, name : string) : QualifiedReference
+  {
+    QualifiedReference.Simple(loc, Reference(loc, name))
+  }
+
+  public CreateTupleQualifiedReference(loc : Location, items : QualifiedReference.IAstList) : QualifiedReference
+  {
+    QualifiedReference.Generic(loc,
+      CreateSimpleName(loc.FromStart(), "#Tuple"),
+      items)
+  }
+
+  public CreateFuncQualifiedReference(loc : Location, qualifiedReference1 : QualifiedReference, qualifiedReference2 : QualifiedReference) : QualifiedReference
+  {
+    def arguments = 
+      match (qualifiedReference1)
+      {
+        | QualifiedReference.Generic(QualifiedName = QualifiedReference.Simple(Name = Reference(Text = "#Tuple")), Arguments = tupleArguments) => tupleArguments.Append(qualifiedReference2)
+        | _ => QualifiedReference.AstList(qualifiedReference1.Location, qualifiedReference1, qualifiedReference2)
+      };
+
+    QualifiedReference.Generic(loc,
+      CreateSimpleName(loc.FromStart(), "#Func"),
+      arguments)
+  }
+
+  public MakeNamespaceFullName(parentFullName : string, name : string) : string
+  {
+    MakeNamespaceFullName(parentFullName, name, default(ImmutableArray[TypeParameterSymbol]))
+  }
+  
+  public MakeNamespaceFullName(parentFullName : string, name : string, typeParameters : ImmutableArray[TypeParameterSymbol]) : string
+  {
+    def result =
+      if (string.IsNullOrEmpty(parentFullName))
+        name
+      else
+        parentFullName + "." + name;
+        
+    if (typeParameters.IsDefaultOrEmpty)
+      result
+    else
+      $<#$result<..$(typeParameters; ", "; _.Name)>#>
+  }
+
+  public IsSameIdentity(typeParametersCount : int, candidate : Declaration) : bool
+  {
+    match (candidate)
+    {
+      | DotNet.GenericType as t => t.TypeParameterAliases.Count == typeParametersCount
+      | Namespace
+      | _ is ExternalDeclaration[NamespaceSymbol]
+      | Nitra.Declarations.Type => typeParametersCount == 0
+      | _                       => false
+    }
+  }
+
+  public CanMerge[T](typeParametersCount : int, candidate : Declaration) : bool
+    where T : GenericType
+  {
+    match (candidate)
+    {
+      | genericType is T => genericType.TypeParameterAliases.Count == typeParametersCount
+      | _ => false
+    }
+  }
+
+   public CanMerge[T](symbol : GenericEntitySymbol, candidate : Declaration) : bool
+    where T : GenericEntity
+  {
+    match (candidate)
+    {
+      | genericType is T => genericType.TypeParameterAliases.Count == symbol.TypeParametersCount
+      | _ => false
+    }
+  }
+
+  public CanMerge[T](symbol : GenericContainerTypeSymbol, candidate : Declaration) : bool
+    where T : GenericContainerType
+  {
+    match (candidate)
+    {
+      | genericType is T => genericType.TypeParameterAliases.Count == symbol.TypeParametersCount && symbol.IsPartial && genericType.IsPartial.ValueOrDefault
+      | _ => false
+    }
+  }
+
+  public FilterResolved(refs : ImmutableArray[Ref[DeclarationSymbol]]) : Seq[TypeSymbol]
+  {
+    def lst = List(refs.Length);
+
+    foreach (r in refs)
+    {
+      def r2 = r.Resolve.[TypeSymbol]();
+      when (r2.IsSymbolEvaluated)
+        lst.Add(r2.Symbol);
+    }
+
+    lst
+  }
+
+  public CreateNestedConstructedTypeSymbol(t : NestedGenericTypeSymbol, parentTypeSubst : TypeSymbol, context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+  {
+    def resultSymbol      = NestedConstructedTypeSymbol();
+    resultSymbol.Parent   = parentTypeSubst;
+    resultSymbol.TypeSubst = resultSymbol;
+    foreach (decl in t.Declarations)
+      resultSymbol.AddDeclaration(decl);
+    resultSymbol.TypeInfo = t;
+    resultSymbol.Args     = t.TypeParameters.CastArray();
+    resultSymbol.EvalProperties(context);
+    resultSymbol
+  }
+
+  public CreateNestedConstructedTypeSymbol(loc : Location, parentTypeSubst : TypeSymbol, typeInfo : GenericTypeSymbol, arguments : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+  {
+    def name              = Name(loc, "#ConstructedType");
+    def decl              = NestedConstructedType(loc, name);
+    def resultSymbol      = NestedConstructedTypeSymbol();
+    resultSymbol.Parent   = parentTypeSubst;
+    resultSymbol.TypeSubst = resultSymbol;
+    name.Symbol = resultSymbol;
+    resultSymbol.AddDeclaration(decl);
+    resultSymbol.TypeInfo = typeInfo;
+    resultSymbol.Args     = arguments;
+    resultSymbol.EvalProperties(context);
+    resultSymbol
+  }
+
+  public CreateConstructedTypeSymbol(loc : Location, typeInfo : GenericTypeSymbol, arguments : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+  {
+    def name              = Name(loc, "#ConstructedType");
+    def decl              = TopConstructedType(loc, name);
+    def resultSymbol      = TopConstructedTypeSymbol();
+    name.Symbol = resultSymbol;
+    resultSymbol.AddDeclaration(decl);
+    resultSymbol.TypeInfo = typeInfo;
+    resultSymbol.Args     = arguments;
+    resultSymbol.EvalProperties(context);
+    resultSymbol
+  }
+
+  public MakeConstructedType(ast : ILocated, args : ImmutableArray[Ref[DeclarationSymbol]], context : DependentPropertyEvalContext) : ResolutionAlgorithm[DeclarationSymbol, DeclarationSymbol]
+  {
+    def loc = ast.Location;
+    mutable resolvedArgs;
+    def allArgumentsResolved = ResolveAll.[TypeSymbol, _](args, out resolvedArgs);
+    fun (symbol)
+    {
+      def makeArguments(symbol : GenericTypeSymbol) : ImmutableArray[TypeSymbol]
+      {
+        unless (allArgumentsResolved)
+        {
+          def typeParameters = symbol.TypeParameters;
+          foreach (arg when arg == null in resolvedArgs with index)
+            resolvedArgs[index] = typeParameters[index];
+        }
+        resolvedArgs.MoveToImmutable()
+      }
+
+      match (symbol)
+      {
+        | symbol is NestedGenericTypeSymbol => VSome(CreateNestedConstructedTypeSymbol(loc, symbol.DeclaredIn.TypeSubst, symbol, makeArguments(symbol), context))
+        | symbol is TopGenericTypeSymbol    => VSome(CreateConstructedTypeSymbol(loc, symbol, makeArguments(symbol), context))
+        | _ => VNone()
+      }
+    }
+  }
+
+  public static ResolveAll[TSymbol, TRef](refs : ImmutableArray[TRef], result : out ImmutableArray[TSymbol].Builder) : bool
+    where TSymbol : DeclarationSymbol
+    where TRef    : IRef
+  {
+    mutable isResolvedAll = true;
+    def symbols = ImmutableArray.CreateBuilder(refs.Length);
+    foreach (r in refs with index)
+    {
+      def resolvedArg = r.Resolve.[TSymbol]();
+      if (resolvedArg.IsSymbolEvaluated)
+        symbols.Add(resolvedArg.Symbol)
+      else
+      {
+        isResolvedAll  = false; 
+        symbols.Add(default(TSymbol));
+      }
+    }
+    result = symbols;
+    isResolvedAll
+  }
+
+  public GetTypeParametersCount(declaration : Declaration) : int
+  {
+    (declaration :> GenericEntity).TypeParameterAliases?.Count
+  }
+
+  public GetTypeParameter(alias : TypeParameterAlias, typeParameterSymbols : IList[TypeParameterSymbol], IndexIn : int) : TypeParameterSymbol
+  {
+    def typeParameterSymbol = typeParameterSymbols[IndexIn];
+    typeParameterSymbol.AddAliasSymbol(alias);
+    typeParameterSymbol
+  }
+
+  public NoTypeParameters : array[TypeParameterSymbol] = array(0);
+
+  public CreateTypeParameters(count : int) : ImmutableArray[TypeParameterSymbol]
+  {
+    if (count == 0)
+      ImmutableArray.Empty
+    else
+    {
+      def result = ImmutableArray.CreateBuilder(count);
+      for (mutable i = 0; i < count; ++i)
+        result.Add(TypeParameterSymbol());
+      result.MoveToImmutable()
+    }
+  }
+
+  public IsPartial(declarations : Seq[GenericContainerType]) : bool
+  {
+    declarations.FirstOrDefault()?.IsPartial.ValueOrDefault
+  }
+  
+  public FilterDeclaredTypeSymbol(memberTable : TableScope) : IList[NestedTypeSymbol]
+  {
+    def symbols = memberTable.Symbols;
+    symbols.SelectMany(s => s.OfType.[NestedTypeSymbol]()).ToArray()
+  }
+
+  public IsSubtypeOf(this symbol1 : TypeSymbol, symbol2 : TypeSymbol) : bool
+  {
+    AstTypeUnifier.Instance.Require(symbol1, symbol2)
+  }
+  
+  public IsNumeric(this symbol : TypeSymbol) : bool
+  {
+    match (symbol) 
+    {
+      | x when x.FullName == PlatformTypes.Byte.FullName
+      | x when x.FullName == PlatformTypes.SByte.FullName
+      | x when x.FullName == PlatformTypes.Int16.FullName
+      | x when x.FullName == PlatformTypes.UInt16.FullName
+      | x when x.FullName == PlatformTypes.Int32.FullName
+      | x when x.FullName == PlatformTypes.UInt32.FullName
+      | x when x.FullName == PlatformTypes.Int64.FullName
+      | x when x.FullName == PlatformTypes.UInt64.FullName
+      | x when x.FullName == PlatformTypes.Single.FullName
+      | x when x.FullName == PlatformTypes.Double.FullName
+      | x when x.FullName == PlatformTypes.Decimal.FullName => true
+      | _ => false
+    }
+  }
+  
+  public HasImplicitConversion(this from : TypeSymbol, to : TypeSymbol) : bool 
+  {
+    def char = PlatformTypes.Char.FullName;
+    def byte = PlatformTypes.Byte.FullName;
+    def sbyte = PlatformTypes.SByte.FullName;
+    def short = PlatformTypes.Int16.FullName;
+    def ushort = PlatformTypes.UInt16.FullName;
+    def int = PlatformTypes.Int32.FullName;
+    def uint = PlatformTypes.UInt32.FullName;
+    def long = PlatformTypes.Int64.FullName;
+    def ulong = PlatformTypes.UInt64.FullName;
+    def float = PlatformTypes.Single.FullName;
+    def double = PlatformTypes.Double.FullName;
+    def decimal = PlatformTypes.Decimal.FullName;
+    
+    match(from) {
+      | x when x.FullName == sbyte => [short, int, long, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == byte => [short, ushort, int, uint, long, ulong, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == short => [int, long, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == ushort => [int, uint, long, ulong, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == int => [long, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == uint => [long, ulong, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == long => [float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == ulong => [float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == char => [ushort, int, uint, long, ulong, float, double, decimal].Any(s => s == to.FullName)
+      | x when x.FullName == float => [double].Any(s => s == to.FullName)
+      | _ => false
+    }
+  }
+  
+  public GetMemberReturnType(this member : DeclarationSymbol) : TypeSymbol
+  {
+    match (member)
+    {
+      | x is Member.PropertySymbol => x.Type
+      | x is Member.MethodSymbol => x.ReturnType
+      | x is Member.FieldSymbol => x.Type
+      | x is Member.ConstantSymbol => x.Type
+      | x is LambdaParameterSymbol => x.Type
+      | x is EnumMemberSymbol => x.DeclaredIn
+      | TypeSymbol => PlatformTypes.Type
+      | _ => PlatformTypes.GetFreeVar()
+    }
+  }
+}
+
+// ---- Utils/PlatformTypes.n (DotNet) ----
+public module PlatformTypes
+{
+  // TODO: must be contextual! Should not be global!
+  
+  public GetFreeVar() : TypeSymbol { Object }  // TODO: must generate free type var
+  
+  public Void    : TypeSymbol { get; set; }
+  public Object  : TypeSymbol { get; set; }
+  public Type    : TypeSymbol { get; set; }
+  public String  : TypeSymbol { get; set; }
+  public Char    : TypeSymbol { get; set; }
+  public Byte    : TypeSymbol { get; set; }
+  public SByte   : TypeSymbol { get; set; }
+  public Int16   : TypeSymbol { get; set; }
+  public Int32   : TypeSymbol { get; set; }
+  public Int64   : TypeSymbol { get; set; }
+  public UInt16  : TypeSymbol { get; set; }
+  public UInt32  : TypeSymbol { get; set; }
+  public UInt64  : TypeSymbol { get; set; }
+  public Single  : TypeSymbol { get; set; }
+  public Double  : TypeSymbol { get; set; }
+  public Decimal : TypeSymbol { get; set; }
+  public Boolean : TypeSymbol { get; set; }
+}
+
+// ---- Utils/SymbolUtils.n (DotNet) ----
+public module SymbolUtils
+{
+  public GetNestedSymbol(ns : NamespaceSymbol) : Seq[DeclarationSymbol]
+  {
+    foreach (symbols in ns.MemberTable.Symbols)
+      foreach (symbol in symbols)
+        yield symbol;
+  }
+
+  public GetNestedSymbol(type : TopGenericContainerTypeSymbol) : Seq[DeclarationSymbol]
+  {
+    when (type.IsNestedTypesEvaluated)
+      foreach (symbol in type.NestedTypes)
+        yield symbol;
+  }
+
+  public GetNestedSymbol(symbol : DeclarationSymbol) : Seq[DeclarationSymbol]
+  {
+    | ns   is NamespaceSymbol               => GetNestedSymbol(ns)
+    | type is TopGenericContainerTypeSymbol => GetNestedSymbol(type)
+    | _                                     => Enumerable.Empty()
+  }
+}

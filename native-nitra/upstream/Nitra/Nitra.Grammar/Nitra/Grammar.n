@@ -1,0 +1,1474 @@
+using DotNet;
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nitra.Ast;
+using Nitra.Declarations;
+using Nitra.ProjectSystem;
+using Nitra.Internal;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using Nitra.Serialization2;
+using Nitra.Model;
+using Nitra.Runtime;
+using Nitra.Typing;
+using Nemerle.Compiler.main_parser;
+using Nemerle.Compiler.Parsetree;
+using G = NitraSyntaxParseTree;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.manager_class;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Nemerle.Assertions;
+using System.Diagnostics;
+using System.IO;
+using System.Resources;
+using System.Text;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.UtilityMacros;
+using Nitra.InternalMacros;
+using Nitra.Serialization2Macros;
+using Nitra.Runtime.Typing;
+using NitraMacros;
+
+#if !(BOOT || BOOT2)
+[assembly: GeneratedAssemblyVersion("$GitTag.$GitRevision.0", Defaults(GitTag="1.0", GitRevision="9999"))]
+#endif
+
+internal mask AssemblyConstants
+{
+  public Company                    = "RSDN";
+  public Product                    = "Nitra Language Framework";
+  public Copyright                  = "Copyright © RSDN 2017";
+  public Trademark                  = "";
+  public GrammarImplName            = "GrammarImpl";
+
+  public TargetedPatchingOptOutText = "Performance critical to inline across NGen image boundaries";
+}
+
+// General Information about an assembly is controlled through the following
+// set of attributes. Change these attribute values to modify the information
+// associated with an assembly.
+[assembly: AssemblyTitle("Nitra.Grammar")]
+[assembly: AssemblyDescription("")]
+[assembly: AssemblyConfiguration("")]
+[assembly: AssemblyCompany(AssemblyConstants.Company)]
+[assembly: AssemblyProduct(AssemblyConstants.Product)]
+[assembly: AssemblyCopyright(AssemblyConstants.Copyright)]
+[assembly: AssemblyTrademark(AssemblyConstants.Trademark)]
+[assembly: AssemblyCulture("")]
+
+// Setting ComVisible to false makes the types in this assembly not visible
+// to COM components.  If you need to access a type in this assembly from
+// COM, set the ComVisible attribute to true on that type.
+[assembly: ComVisible(false)]
+
+// The following GUID is for the ID of the typelib if this project is exposed to COM
+[assembly: Guid("7b3b913f-c248-44fa-9859-ba3fded523b6")]
+
+[assembly: DefineSerialization(System.Drawing.Color,                    Write = Nitra.Grammar.SerializationHelper.WriteColor, Read = Nitra.Grammar.SerializationHelper.ReadColor)]
+[assembly: DefineSerialization(Nemerle.Collections.Map[string, string], Write = Nitra.Grammar.SerializationHelper.WriteMap,   Read = Nitra.Grammar.SerializationHelper.ReadMap)]
+
+// ---- AST/AstUtils.n (Nitra) ----
+public module AstUtils
+{
+  public static GetAstId : int = StringIndex.GetId("GetAst");
+
+  public Wait[V, R](value : V, result : R) : R
+  {
+    _ = value;
+    result
+  }
+
+  public UpdateLiterals(inMap : Map[string, string], literals : StringLiteral.IAstList, name : string) : Map[string, string]
+  {
+    when (string.IsNullOrEmpty(name))
+      return inMap;
+
+    def xs = literals.Select(x => x.Value.ValueOrDefault).Where(x => !string.IsNullOrEmpty(x)).Select(x => (x, name));
+    inMap.ReplaceRange(xs)
+  }
+
+  public MakeName(loc : Location, value : string, userDefined : bool) : ParsedValue[string * bool]
+  {
+    def text  = loc.GetText().TrimEnd();
+    def start = loc.Span.StartPos;
+    ParsedValue(NSpan(start, start + text.Length), (value, userDefined))
+  }
+  
+  public MakeName(loc : Location, parsedValue : ParsedValue[string * bool]) : ParsedValue[string * bool]
+  {
+    unless (parsedValue.HasValue)
+      return parsedValue;
+
+    def (value, userDefined) = parsedValue.Value;
+    MakeName(loc, value, userDefined)
+  }
+  
+  public MakeOptionalName(loc : Location, parsedValue : ParsedValue[string * bool]) : ParsedValue[string * bool]
+  {
+    unless (parsedValue.HasValue)
+      return parsedValue;
+
+    MakeName(loc, parsedValue.Value[0] + "Opt", parsedValue.Value[1])
+  }
+
+  public MakePlural(loc : Location, parsedValue : ParsedValue[string * bool]) : ParsedValue[string * bool]
+  {
+    unless (parsedValue.HasValue)
+      return parsedValue;
+
+    MakeName(loc, JetBrains.Util.NounUtil.GetPlural(parsedValue.Value[0]), parsedValue.Value[1])
+  }
+
+  public NMakeLiteralName(parsedValue : ParsedValue[string], literals : Map[string, string]) : ParsedValue[string * bool]
+  {
+    unless (parsedValue.HasValue)
+      return ParsedValue(parsedValue.Span.StartPos);
+      
+    def value = parsedValue.ValueOrDefault;
+    
+    if (literals.Find(value) is Some(name))
+      ParsedValue(parsedValue.Span, (name, true))
+    else if (Utils.IsIdentifier(value))
+      ParsedValue(parsedValue.Span, (Utils.ToPascalCase(value, "Kw"), false))
+    else
+      ParsedValue(parsedValue.Span, ("Literal", false))
+  }
+
+  public MakeCallFieldName(parsedValue : ParsedValue[int]) : ParsedValue[string * bool]
+  {
+    if (parsedValue.HasValue)
+      ParsedValue(parsedValue.Span, (StringIndex.GetText(parsedValue.ValueOrDefault), false))
+    else
+      ParsedValue(parsedValue.Span.StartPos)
+  }
+
+  public TryGetLiterals(reference : Ref[DeclarationSymbol], literals : Map[string, string]) : Map[string, string]
+  {
+    when (reference.IsSymbolEvaluated)
+    when (reference.Symbol is Nitra.Ast.SyntaxModuleSymbol/*(IsLiteralsEvaluated = true)*/ as m)
+      return literals.ReplaceRange(m.Literals);
+      
+    literals
+  }
+  
+  public static Init[T](this context : DependentPropertyEvalContext, symbol : T) : T
+    where T: DeclarationSymbol
+  {
+    symbol.EvalProperties(context);
+    symbol
+  }
+
+  public CanBeTupleElem(x : RuleTypeSymbol) : bool
+  {
+    !(x is RuleVoidTypeSymbol)
+  }
+
+  public InitTuple(context : DependentPropertyEvalContext, arg1 : RuleTypeSymbol, restArgs : ImmutableArray[RuleTypeSymbol]) : RuleTypeSymbol
+  {
+    when (restArgs.Length == 0)
+    {
+      if (CanBeTupleElem(arg1))
+        return arg1;
+      else
+        return WellKnownSymbols.VoidRuleType;
+    }
+      
+    def args = List();
+    
+    when (CanBeTupleElem(arg1))
+      args.Add(arg1);
+      
+    foreach (arg when CanBeTupleElem(arg) in restArgs)
+      args.Add(arg);
+
+    match (args.Count)
+    {
+      | 0 => WellKnownSymbols.VoidRuleType
+      | 1 => args[0]
+      | _ => CreateTupleRuleType(args, context)
+    }
+  }
+
+  public InitTuple(context : DependentPropertyEvalContext, arg1 : RuleTypeSymbol, arg2 : RuleTypeSymbol) : RuleTypeSymbol
+  {
+    match (CanBeTupleElem(arg1), CanBeTupleElem(arg2))
+    {
+      | (false,  true) => arg2
+      | (true,  false) => arg1
+      | (false, false) => WellKnownSymbols.VoidRuleType
+      | (true,   true) => CreateTupleRuleType(array[arg1, arg2], context)
+    }
+  }
+
+  public CreateTupleRuleType(args : IList[RuleTypeSymbol], context : DependentPropertyEvalContext) : RuleTypeSymbol
+  {
+    def symbol = RuleTupleTypeSymbol();
+    symbol.ElemTypes = args;
+    symbol.EvalProperties(context);
+    symbol
+  }
+
+  public InitList(context : DependentPropertyEvalContext, elemType : RuleTypeSymbol) : RuleTypeSymbol
+  {
+    unless (CanBeTupleElem(elemType))
+      return WellKnownSymbols.VoidRuleType;
+
+    def symbol = RuleListTypeSymbol();
+    symbol.ElemType = elemType;
+    context.Init(symbol)
+  }
+
+  public InitOption(context : DependentPropertyEvalContext, valueType : RuleTypeSymbol) : RuleTypeSymbol
+  {
+    unless (CanBeTupleElem(valueType))
+      return WellKnownSymbols.VoidRuleType;
+
+    def symbol = RuleOptionTypeSymbol();
+    symbol.ValueType = valueType;
+    context.Init(symbol)
+  }
+
+  public CreateRuleTypeVar(context : DependentPropertyEvalContext) : RuleTypeVarSymbol
+  {
+    def symbol = RuleTypeVarSymbol();
+    symbol.EvalProperties(context);
+    symbol
+  }
+
+  public CreateAstTypeVar(context : DependentPropertyEvalContext) : AstTypeVarSymbol
+  {
+    def symbol = AstTypeVarSymbol();
+    symbol.EvalProperties(context);
+    symbol
+  }
+
+  public CreateListAstType(loc : ILocated, item : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[DeclarationSymbol]
+  {
+    // TODO: handle unresolved Ref
+    item.Resolve(fun (_)
+    {
+      | symbol is Nitra.Ast.AstSymbol => VSome(CreateListAstType(loc, symbol, context))
+      | _ => VNone()
+    })
+  }
+
+  public CreateListAstType(loc : ILocated, elemType : AstTypeSymbol, context : DependentPropertyEvalContext) : ListAstTypeSymbol
+  {
+    def name       = Nitra.Declarations.Name(loc.Location, "#List");
+    def decl       = ListAstType(loc.Location, name);
+    def listSymbol = ListAstTypeSymbol();
+    listSymbol.AddDeclaration(decl);
+    name.Symbol    = listSymbol;
+    listSymbol.ElemType = elemType;
+    listSymbol.EvalProperties(context);
+    listSymbol
+  }
+
+  public CreateOptionAstType(loc : ILocated, item : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[DeclarationSymbol]
+  {
+    // TODO: handle unresolved Ref
+    item.Resolve(fun (_)
+    {
+      | symbol is Nitra.Ast.AstSymbol => VSome(CreateOptionAstType(loc, symbol, context))
+      | _ => VNone()
+    })
+  }
+
+  public CreateOptionAstType(loc : ILocated, valueType : AstTypeSymbol, context : DependentPropertyEvalContext) : OptionAstTypeSymbol
+  {
+    def name         = Nitra.Declarations.Name(loc.Location, "#Option");
+    def decl         = OptionAstType(loc.Location, name);
+    def optionSymbol = OptionAstTypeSymbol();
+    optionSymbol.AddDeclaration(decl);
+    name.Symbol      = optionSymbol;
+    optionSymbol.ValueType = valueType;
+    optionSymbol.EvalProperties(context);
+    optionSymbol
+  }
+
+  public CreateFunctionType(loc : ILocated, thisType : TypeSymbol, parameters : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : FunctionTypeSymbol
+  {
+    def parametersWithThis = List();
+    parametersWithThis.Add(thisType);
+    parametersWithThis.AddRange(parameters);
+    CreateFunctionType(loc, parametersWithThis, returnType, context)
+  }
+
+  public CreateFunctionType(loc : ILocated, parameters : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : FunctionTypeSymbol
+  {
+    def name = Nitra.Declarations.Name(loc.Location, "#Func");
+    def decl = FunctionType(loc.Location, name);
+    def funcSymbol = FunctionTypeSymbol();
+    funcSymbol.AddDeclaration(decl);
+    name.Symbol = funcSymbol;
+    funcSymbol.Parameters = parameters;
+    funcSymbol.ReturnType = returnType;
+    funcSymbol.EvalProperties(context);
+    funcSymbol
+  }
+
+  public BindAstExtension(name : Reference, scope : Scope, defaultReturnType : AstTypeSymbol) : Ref[AstTypeSymbol]
+  {
+    def bindRes = scope.Bind(name);
+    
+    if (bindRes.IsEmpty)
+      Ref.CreateBind(name.Location, BindResult.Single(defaultReturnType))
+    else
+      Ref.CreateBind(name.Location, bindRes)
+  }
+
+  public CreateRuleField(parseTree : NitraSyntaxParseTree.RuleExpression) : RuleField
+  {
+    def name = Nitra.Declarations.Name(parseTree.Location.FromStart(), "<none>");
+    def expr = parseTree.GetAst();
+    RuleField(parseTree.Location, name, expr)
+  }
+
+  public CreateRuleFieldList(parseTree : NitraSyntaxParseTree.RuleExpression) : RuleField.IAstList
+  {
+    RuleField.AstList(parseTree, AstUtils.CreateRuleField(parseTree));
+  }
+
+  public CreateName(loc : Location, desiredName : ParsedValue[string * bool]) : Nitra.Declarations.Name
+  {
+    Nitra.Declarations.Name(loc.WithSpan(desiredName.Span), desiredName.ValueOrDefault[0] ?? "")
+  }
+
+  public IsLooksLikeVariableName(text : string) : bool
+  {
+    text.Length > 0 && (text[0] == '_' || char.IsLower(text[0]))
+  }
+
+  public CreateThisDeclaration(parseTree : ParseTree) : ThisDeclaration
+  {
+    def loc = parseTree.Location.FromStart();
+    ThisDeclaration(loc, Nitra.Declarations.Name(loc, "this"))
+  }
+
+  public CreateSymbolName(astName : Nitra.Declarations.Name) : Nitra.Declarations.Name
+  {
+    Nitra.Declarations.Name(astName.Location, astName.Text + "Symbol")
+  }
+
+  public CreateMapSyntaxName(parseTree : ParseTree) : Nitra.Declarations.Name
+  {
+    Nitra.Declarations.Name(parseTree.Location.FromStart(), GetAstId)
+  }
+
+  public CreateMapSyntaxRef(loc : Location, scope : Scope, argumentTypes : ImmutableArray[TypeSymbol]) : Ref[MapSyntaxSymbol]
+  {
+    def getAstIdRef = Reference(loc, GetAstId);
+    def len = argumentTypes.Length;
+    def r = getAstIdRef.Bind(scope);
+    def isMatch(symbol : MapSyntaxSymbol) : bool
+    {
+      def parms = symbol.Parameters;
+      when (parms.Count != len)
+        return false;
+
+      for (mutable i = 0; i < argumentTypes.Length; ++i)
+      {
+        def p = parms[i];
+        def t = argumentTypes[i];
+        unless (p.IsTypeEvaluated)
+          return false;
+        unless (AstTypeUnifier.Instance.TryRequire(t, p.Type))
+          return false;
+      }
+      true
+    }
+    r.Resolve(isMatch)
+  }
+
+  public TypeParseTreePatternTuple(loc : IAst, expectedType : TypeSymbol, members : Nitra.Ast.ParseTreePattern.IAstList, context : DependentPropertyEvalContext) : TypeSymbol
+  {
+    if (expectedType is Nitra.Ast.SyntaxRuleSymbol(IsFieldsEvaluated = true, Fields = fields) as returnType)
+    {
+      def nonVoidTypes = List();
+      foreach (field when field.IsTypeEvaluated in fields)
+      {
+        when (field.Type is RuleTypeSymbol as t)
+        unless (t is RuleVoidTypeSymbol)
+          nonVoidTypes.Add(t);
+      }
+      TypeParseTreePatternCtor(loc, members, nonVoidTypes, returnType, context)
+    }
+    else
+    {
+      def args = array(members.Count);
+      foreach (m in members with index)
+      {
+        def typeVar = CreateRuleTypeVar(context);
+        args[index] = typeVar;
+        m.ExpectedType = typeVar;
+      }
+      CreateTupleRuleType(args, context)
+    }
+  }
+
+  public TypeParseTreePatternCtor(loc : IAst, members : Nitra.Ast.ParseTreePattern.IAstList, expectedMemberTypes : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : TypeSymbol
+  {
+    if (members.Count == expectedMemberTypes.Count)
+    {
+      foreach (type in expectedMemberTypes with index)
+        members[index].ExpectedType = type;
+    }
+    else
+      loc.Error(context, $"Expected pattern of $(expectedMemberTypes.Count), got pattern of $(members.Count).");
+
+    returnType
+  }
+
+  public TypeOptionExpression(loc : ILocated, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : TypeSymbol
+  {
+    def t = CreateOptionAstType(loc, CreateAstTypeVar(context), context);
+    _ = AstTypeUnifier.Instance.Unify(t, expectedType);
+    t
+  }
+
+  public UnifyAndReturn[T](t1 : TypeSymbol, t2 : TypeSymbol, r : T) : T
+  {
+    _ = AstTypeUnifier.Instance.Unify(t1, t2);
+    r
+  }
+
+  public CreateImplicitRuleTypeCast(loc : ILocated, thisType : TypeSymbol, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : Ref[FunctionTypeSymbol]
+  {
+    mutable validCasts = BindResult.Nil();
+
+    when (expectedType : object != WellKnownSymbols.AnyType)
+    {
+      def castTemplate = CreateFunctionType(loc, array[thisType], AstTypeUnifier.Instance.CreateTypeVar(expectedType, null), context);
+      def canBeImplicitCast(mapSyntax : MapSyntaxSymbol) : bool
+      {
+        mapSyntax.IsTypeEvaluated && AstTypeUnifier.Instance.TryUnify(mapSyntax.Type, castTemplate);
+      }
+      def scope = if (thisType.IsScopeEvaluated) thisType.Scope else EmptyScope.Instance;
+      validCasts = scope.Bind.[MapSyntaxSymbol](canBeImplicitCast);
+    }
+    
+    if (validCasts.IsEmpty)
+      Ref.CreateBind(loc.Location, CreateFunctionType(loc, array[thisType], thisType, context))
+    else
+      Ref.CreateBind(loc.Location, "MapSyntaxCast", validCasts.Filter());
+  }
+  
+  public FilterResolvedLanguage(refs : ImmutableArray[Ref[DeclarationSymbol]]) : Seq[Nitra.Ast.LanguageSymbol]
+  {
+    def lst = List(refs.Length);
+
+    foreach (r in refs)
+    {
+      def r2 = r.Resolve.[Nitra.Ast.LanguageSymbol]();
+      when (r2.IsSymbolEvaluated)
+        lst.Add(r2.Symbol);
+    }
+
+    lst
+  }
+
+  public ResolveStructuralPropertyType(candidates : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[TypeSymbol]
+  {
+    mutable candidates2 = candidates.Result;
+    when (candidates.IsAmbiguous)
+    {
+      when (candidates.Contains.[AstTypeSymbol]() && (candidates.Contains.[ClassSymbol]() || candidates.Contains.[InterfaceSymbol]()))
+        candidates2 = candidates.Result.Filter(s => !(s is ClassSymbol || s is InterfaceSymbol));
+    }
+      
+    mutable parsedValueType;
+    def resolve(candidate) : ValueOption[TypeSymbol]
+    {
+      | ast is AstTypeSymbol => VSome(ast)
+      | typeSymbol is TypeSymbol =>                
+        when (parsedValueType == null)
+          parsedValueType = context.BindFullName(1, "Nitra", "Runtime", "ParsedValue");
+        def constructedType = TopConstructedTypeSymbol();
+        constructedType.TypeInfo = parsedValueType;
+        constructedType.Args = ImmutableArray.Create(typeSymbol);
+        constructedType.EvalProperties(context);
+        //constructedType.Scope = parsedValueType.Scope;
+        VSome(constructedType)
+
+      | _ => VNone()
+    }
+    def result = candidates2.Map(resolve);
+    candidates.CreateRevole(result)
+  }
+  
+  public GetImplicitBaseTypeForLanguage(context : DependentPropertyEvalContext, symbol : Nitra.Ast.LanguageSymbol) : Seq[TypeSymbol] -> TypeSymbol
+  {
+    def isBaseLanguage(symbol)
+    {
+      // the base language: its FullName (Nitra.Runtime.Language, a two-part namespace) may not be evaluated yet here
+      symbol.Name == "Language" && (!symbol.IsFullNameEvaluated || symbol.FullName == "Nitra.Runtime.Language")
+    }
+
+    when (isBaseLanguage(symbol))
+      return null;
+
+    fun (parentTypes)
+    {
+      foreach (parent in parentTypes)
+        when (parent is Nitra.Ast.LanguageSymbol)
+          return null;
+
+      context.GetLanguage()
+    }
+  }
+
+  public FilterResolvedAstType(refs : ImmutableArray[Ref[DeclarationSymbol]], _for_dependency : Nitra.Ast.AstSymbol) : Seq[AstTypeSymbol]
+  {
+    def lst = List(refs.Length);
+
+    foreach (r in refs)
+    {
+      def r2 = r.Resolve.[AstTypeSymbol]();
+      when (r2.IsSymbolEvaluated)
+        lst.Add(r2.Symbol);
+    }
+
+    lst
+  }
+  
+  public GetImplicitBaseTypeForDeclaration(context : DependentPropertyEvalContext, symbol : Nitra.Ast.AstSymbol, _for_dependency : ImmutableArray[Ref[DeclarationSymbol]]) : Seq[TypeSymbol] -> TypeSymbol
+  {
+    def isBaseDeclaration(symbol)
+    {
+      symbol.Name == "Declaration" && symbol.FullName == "Nitra.Declarations.Declaration"
+    }
+
+    def isDeclaration(symbol : Nitra.Ast.AstSymbol)
+    {
+      symbol.IsIsDeclarationEvaluated && symbol.IsDeclaration
+    }
+
+    when (isBaseDeclaration(symbol) || !isDeclaration(symbol))
+      return null;
+
+    fun (parentTypes : Seq[TypeSymbol]) : TypeSymbol
+    {
+      foreach (parent is Nitra.Ast.AstSymbol in parentTypes)
+        when (isDeclaration(parent))
+          return null;
+
+      context.GetDeclaration()
+    }
+  }
+} // module
+
+// ---- AST/SerializationHelper.n (Nitra.Internal) ----
+internal module SerializationHelper
+{
+  public WriteColor(color : System.Drawing.Color, writer : IO.BinaryWriter, _metadataWriter : MetadataWriter) : void
+  {
+    writer.Write(color.ToArgb() : int);
+  }
+
+  public ReadColor(_memberName : string, _tag : Nitra.Serialization.TypeTag, reader : IO.BinaryReader, _metadataReader : MetadataReader) : System.Drawing.Color
+  {
+    System.Drawing.Color.FromArgb(reader.ReadInt32())
+  }
+
+  public WriteMap(map : Map[string, string], writer : IO.BinaryWriter, _metadataWriter : MetadataWriter) : void
+  {
+    writer.Write(map.Count : int);
+    foreach ((key, value) in map)
+    {
+      writer.Write(key);
+      writer.Write(value);
+    }
+  }
+
+  public ReadMap(_memberName : string, _tag : Nitra.Serialization.TypeTag, reader : IO.BinaryReader, _metadataReader : MetadataReader) : Map[string, string]
+  {
+    def count  = reader.ReadInt32();
+    def buffer = array(count);
+    for (mutable i = 0; i < count; ++i)
+    {
+      def key   = reader.ReadString();
+      def value = reader.ReadString();
+      buffer[i] = (key, value);
+    }
+    Map(buffer)
+  }
+}
+
+// ---- Model/Precedence.n (Nitra.Grammar) ----
+public variant Precedence
+{
+  | Value { IsLeftMost : bool; BindingPower : int; IsRightAssociative : bool; }
+  | None
+}
+
+// ---- NemerleParser.n (Nitra) ----
+public module NemerleParser
+{
+  public Parse(body : G.RuleMethodBody, context : Context) : PExpr
+  {
+    match (body)
+    {
+      | G.RuleMethodBody.Block      as b => ParseImpl(b.Block, context)
+      | G.RuleMethodBody.Expression as b => ParseImpl(b.Expression, context)
+      | G.RuleMethodBody.Empty           => <[ () ]>
+      | _                                => <[ () ]>
+    }
+  }
+
+  public Parse(body : G.Expression, context : Context) : PExpr
+  {
+    ParseImpl(body, context)
+  }
+
+  public Parse(body : G.ArgumentExpression, context : Context) : PExpr
+  {
+    ParseImpl(body, context)
+  }
+
+  public Parse(body : G.DependentProperty.Nested.PropertyValue, context : Context) : PExpr
+  {
+    match (body)
+    {
+      | G.DependentProperty.Nested.PropertyValue.Expression as b => ParseImpl(b.Expression, context)
+      | G.DependentProperty.Nested.PropertyValue.Empty           => <[ () ]>
+      | _                                                        => <[ () ]>
+    }
+  }
+
+  public Parse(body : G.MapSyntaxCode, context : Context) : PExpr
+  {
+    match (body)
+    {
+      | G.MapSyntaxCode.Block      as b => ParseImpl(b.Block, context)
+      | G.MapSyntaxCode.Expression as b => ParseImpl(b.Expression, context)
+      | _                                     => <[ () ]>
+    }
+  }
+
+  ParseImpl(parseTree : Nitra.Runtime.ParseTree, context : Context) : PExpr
+  {
+    def env = context.GetNemerleEnvironment();
+    def simpleParse(parseTree : Nitra.Runtime.ParseTree) : PExpr
+    {
+      def text = parseTree.Location.GetText();
+      MainParser.ParseExpr(env, text, parseTree.NLocation())
+    }
+    simpleParse(parseTree)
+  }
+}
+
+// ---- ProjectSystem/NemerleFile.n (Nitra.ProjectSystem) ----
+public abstract class NemerleFile : ConcreteFile
+{
+  protected this(project : Project, index : int)
+  {
+    base(null);
+    Project = project;
+    Index   = index;
+  }
+
+  public override Project  : Project  { get; }
+  public override FullName : string   { get { Location.GetFileName(Index) } }
+  public override Language : Nitra.Runtime.Language { get { NitraLang.Instance } }
+  public          Index    : int      { get; }
+  public override Id       : int      { get { Index } }
+}
+
+public class InMemoryNemerleFile : NemerleFile
+{
+  public this(project : Project, source : ISource)
+  {
+    base(project, source.FileIndex);
+    _source = source;
+  }
+
+  private mutable _source : ISource;
+
+  public override GetSource() : SourceSnapshot  { SourceSnapshot(_source.GetText(), this) }
+  public override Length      : int             { get { _source.GetText().Length } }
+
+  public SourceChanged(newSource : ISource) : void
+  {
+    _source = newSource;
+
+    ReParse();
+    GetCompilerMessages().TranslateTo(Project.CompilerMessages);
+  }
+}
+
+public class FakeNemerleFile : NemerleFile
+{
+  public this (project : Project, index : int)
+  {
+    base(project, index);
+    _source = SingleLineSourceSnapshot("", this);
+  }
+
+  private _source : SourceSnapshot;
+
+  public override GetSource() : SourceSnapshot  { _source }
+  public override Length      : int             { get { 0 } }
+}
+
+// ---- ProjectSystem/NitraProject.n (Nitra.ProjectSystem) ----
+public abstract class NitraProject : Project
+{
+  protected this(compilerMessages : ICompilerMessages)
+  {
+    base(compilerMessages)
+  }
+
+  public abstract Manager : ManagerClass { get; }
+
+  public ReferenceSymbolOpt : option[Nitra.Typing.AstSymbol]
+  {
+    mutable _reference : option[Nitra.Typing.AstSymbol];
+    get
+    {
+      when (_reference : object == null)
+        _reference = BindWellKnownSymbol(["Nitra", "Declarations", "Reference"]);
+      _reference
+    }
+  }
+
+  public NameSymbolOpt : option[Nitra.Typing.AstSymbol]
+  {
+    mutable _name : option[Nitra.Typing.AstSymbol];
+    get
+    {
+      when (_name : object == null)
+        _name = BindWellKnownSymbol(["Nitra", "Declarations", "Name"]);
+      _name
+    }
+  }
+
+  public DeclarationSymbolOpt : option[Nitra.Typing.AstSymbol]
+  {
+    mutable _declaration : option[Nitra.Typing.AstSymbol];
+    get
+    {
+      when (_declaration : object == null)
+        _declaration = BindWellKnownSymbol(["Nitra", "Declarations", "Declaration"]);
+      _declaration
+    }
+  }
+
+  public LanguageSymbolOpt : option[Nitra.Typing.LanguageSymbol]
+  {
+    mutable _language : option[Nitra.Typing.LanguageSymbol];
+    get
+    {
+      when (_language : object == null)
+        _language = BindWellKnownSymbol(["Nitra", "Runtime", "Language"]);
+      _language
+    }
+  }
+
+  public KeywordSpanClassSymbolOpt : option[Nitra.Typing.SpanClassSymbol]
+  {
+    mutable _keywordSpanClass : option[Nitra.Typing.SpanClassSymbol];
+    get
+    {
+      when (_keywordSpanClass : object == null)
+        _keywordSpanClass = BindWellKnownSymbol(["Nitra", "Runtime", "Language", "Keyword"]);
+      _keywordSpanClass
+    }
+  }
+
+  public abstract GetNemerleType(symbol : Symbol) : FixedType;
+  public abstract MakeFakeNitraLocation(location : Nemerle.Compiler.AST.Location) : Nitra.Runtime.Location;
+  public abstract MakeNitraLocation(location : Nemerle.Compiler.AST.Location) : Nitra.Runtime.Location;
+  public abstract CreateNemerleFile(source : ISource) : NemerleFile;
+  public virtual EmitSymbol(symbol : DeclarationSymbol, context : DependentPropertyEvalContext) : void
+  {
+    IgnoreParams();
+  }
+
+  private BindWellKnownSymbol[T](path : list[string]) : option[T]
+    where T : Symbol
+  {
+    match (this.RootNamespace.Node.BindMany.[T](path))
+    {
+      | [one] => Some(one)
+      | []  =>
+        this.Error(Location.Default, $<#Unbound name '..$(path; ".")'.#>);
+        None()
+
+      | many =>
+        using (root = this.RootWarning(Location.Default, $<#Ambiguous '..$(path; ".")' symbol.#>))
+          foreach (s in many)
+            root.Hint(s.FirstLocation, "Previous definition.");
+        None()
+    }
+  }
+}
+
+// ---- Utils.n (Nitra) ----
+  //[DebuggerStepThroughAttribute]
+  public module Utils
+  {
+    //RuleCallExpressionAlgorithm(candidate : DeclarationSymbol) : ValueOption[RuleTypeSymbol]
+    //{
+		//  //TSymbol	Nitra.Declarations.DeclarationSymbol	Nitra.Declarations.DeclarationSymbol
+		//  //TConcreteSymbol	Nitra.Ast.RuleTypeSymbol	Nitra.Ast.RuleTypeSymbol
+    //  
+    //}
+    
+    [DebuggerStepThroughAttribute]
+    public PassThrough[TElem, TValue](elems : ListParseTree[TElem], value : TValue, func : TElem * TValue -> TValue) : TValue
+      where TElem : IParseTree
+    {
+      mutable acc = value;
+
+      foreach (elem in elems)
+        acc = func(elem, acc);
+
+      value
+    }
+
+    [DebuggerStepThroughAttribute]
+    public FoldThrough[TElem, TValue](elems : ListParseTree[TElem], mutable value : TValue, func : TElem * TValue -> TValue) : TValue
+      where TElem : IParseTree
+    {
+      foreach (elem in elems)
+        value = func(elem, value);
+
+      value
+    }
+
+    public Map[TElem, TValue](this opt : OptionParseTree[TElem], func : TElem -> TValue) : option[TValue]
+      where TElem : IParseTree
+    {
+      if (opt.HasValue)
+        Some(func(opt.Value))
+      else
+        None()
+    }
+
+    //public FoldRightThrough[TElem, TValue](elems : list[TElem], mutable value : TValue, func : TElem * TValue -> TValue) : TValue
+    //{
+    //  def elems = List(elems);
+    //  elems.Reverse();
+    //  foreach (elem in elems)
+    //    value = func(elem, value);
+    //
+    //  value
+    //}
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(this loc : Nitra.Runtime.Location) : Nemerle.Compiler.AST.Location
+    {
+      def (startLine, startCol) = loc.StartLineColumn;
+      def (endLine, endCol) = loc.EndLineColumn;
+      def file = loc.Source.File;
+      if (file is NemerleFile(Index = index))
+        Nemerle.Compiler.AST.Location(index, startLine, startCol, endLine, endCol)
+      else
+        Nemerle.Compiler.AST.Location.Default
+    }
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(this located : Nitra.Runtime.Located) : Nemerle.Compiler.AST.Location
+    {
+      assert2(located != null);
+      NLocation(located.Location)
+    }
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(located : Nitra.Runtime.Located, tok : NSpan) : Nemerle.Compiler.AST.Location
+    {
+      def loc = located.Location;
+      def source = loc.Source;
+      def (startLine, startCol) = source.PositionToLineColumn(tok.StartPos);
+      def (endLine,   endCol)   = source.PositionToLineColumn(tok.EndPos);
+      if (source.File is NemerleFile(Index = index))
+        Nemerle.Compiler.AST.Location(index, startLine, startCol, endLine, endCol)
+      else
+        Nemerle.Compiler.AST.Location.Default
+    }
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(this symbol : Nitra.Declarations.DeclarationSymbol) : Nemerle.Compiler.AST.Location
+    {
+      symbol.FirstDeclarationOrDefault.Location.NLocation()
+    }
+
+    public Identifiers(this parseTree : ListParseTree[G.Reference]) : list[Identifier]
+    {
+      mutable acc = [];
+      for(mutable i = parseTree.Count - 1; i >= 0; --i)
+        acc ::= parseTree[i].Identifier();
+      acc
+    }
+
+    [DebuggerStepThroughAttribute]
+    private HexDigit(c : char) : int
+    {
+      | c when '0' <= c && c <= '9' => c : int - '0' : int
+      | c when 'a' <= c && c <= 'f' => c : int - 'a' : int + 10
+      | c when 'A' <= c && c <= 'F' => c : int - 'A' : int + 10
+      | _ => assert3(false)
+    }
+
+    [DebuggerStepThroughAttribute]
+    private DecDigit(c : char) : int
+    {
+      | c when '0' <= c && c <= '9' => c : int - '0' : int
+      | _ => assert3(false)
+    }
+
+    [DebuggerStepThroughAttribute]
+    public HexToChar(parseTree : Nitra.Runtime.ParseTree, startPos : int, endPos : int) : char
+    {
+      unchecked HexToInt(parseTree, startPos, endPos) :> char
+    }
+
+    [DebuggerStepThroughAttribute]
+    public HexToInt(parseTree : Nitra.Runtime.ParseTree, startPos : int, endPos : int) : int
+    {
+      assert2(startPos < endPos);
+
+      def text = parseTree.Location.Source.OriginalText;
+      mutable result = HexDigit(text[startPos]);
+
+      for (mutable i = startPos + 1; i < endPos; i++)
+        unchecked result = (result << 4) + HexDigit(text[i]);
+
+      result
+    }
+
+    [DebuggerStepThroughAttribute]
+    public DecToInt(parseTree : Nitra.Runtime.ParseTree, startPos : int, endPos : int) : int
+    {
+      assert2(startPos < endPos);
+
+      def text = parseTree.Location.Source.OriginalText;
+      mutable result = DecDigit(text[startPos]);
+
+      for (mutable i = startPos + 1; i < endPos; i++)
+        unchecked result = result * 10 + DecDigit(text[i]);
+
+      result
+    }
+
+    [DebuggerStepThroughAttribute]
+    public static UnescapeChar(c : char) : char
+    {
+      | '\'' => '\'' | '\"' => '\"' | '\\' => '\\' | '0'  => '\0'
+      | 'a'  => '\a' | 'b'  => '\b' | 'f'  => '\f' | 'n'  => '\n'
+      | 'r'  => '\r' | 't'  => '\t' | 'v'  => '\v' | c    => c
+    }
+
+    [DebuggerStepThroughAttribute]
+    public EscapeChar(ch : char) : string
+    {
+      | '\0' => @"'\0'"
+      | '\t' => @"'\t'"
+      | '\n' => @"'\n'"
+      | '\r' => @"'\r'"
+      | '\\' => @"'\\'"
+      | '\'' => @"'\''"
+      | x when x == char.MaxValue  => @" char.MaxValue"
+      | c when char.IsLetter(c)
+      | c when char.IsDigit(c)
+      | c when char.IsPunctuation(c)
+      | c when char.IsSeparator(c)
+      | c when char.IsSymbol(c)      => $"'$c'"
+      | c =>
+        def c = c : uint;
+        string.Format(<#'\u{0,4:X}'#>, c).Replace(' ', '0');
+    }
+
+    [DebuggerStepThroughAttribute]
+    public EscapeStringChar(ch : char) : string
+    {
+      | '\0' => @"\0"
+      | '\t' => @"\t"
+      | '\n' => @"\n"
+      | '\r' => @"\r"
+      | '\\' => @"\\"
+      | '\'' => @"\'"
+      | c when char.IsLetter(c)
+      | c when char.IsDigit(c)
+      | c when char.IsPunctuation(c)
+      | c when char.IsSeparator(c)
+      | c when char.IsSymbol(c)      => $"$c"
+      | c =>
+        def c = c : uint;
+        string.Format(<#\u{0,4:X}#>, c).Replace(' ', '0');
+    }
+
+    public InvertRange(range : RangeSet) : list[RangeSet]
+    {
+      //assert2(false);
+      [range.Invert()]
+    }
+
+    ///////////////////
+
+    public MakeName(fieldName : option[string], rules : list[Nitra.Model.Rule], _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ =>
+          match (rules.Filter(r => !(r.Type is Nitra.Typing.RuleType.Void || r.Type is Nitra.Typing.RuleType.Chars)))
+          {
+            | [rule] => rule.FieldName
+            | _ => ""
+          }
+      }
+    }
+
+    public MakePlural(name : string) : string
+    {
+      JetBrains.Util.NounUtil.GetPlural(name);
+    }
+
+    public MakePlural(fieldName : option[string], _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => "Token"
+      }
+    }
+
+    public MakePlural(fieldName : option[string], rule : Nitra.Model.Rule, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => MakePlural(rule.FieldName)
+      }
+    }
+
+    public MakePlural(fieldName : option[string], rule : Nitra.Model.Rule, _separatorRule : Nitra.Model.Rule, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => MakePlural(rule.FieldName)
+      }
+    }
+
+    public MakeLiteralName(fieldName : option[string], value : string, context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ =>
+          def nameMap = context.GetContext.[ITokenNamesMapContext]().TokenNamesMap;
+          if (nameMap.Find(value) is Some(symbol))
+            symbol.Name
+          else if (IsIdentifier(value))
+            ToPascalCase(value, "Kw")
+          else
+            ""
+      }
+    }
+
+    public ToPascalCase(str : string, suffix : string = null) : string
+    {
+      def suffixIsEmpty = string.IsNullOrEmpty(suffix);
+      if (str.Length == 0 || (char.IsUpper(str[0]) && suffixIsEmpty))
+        str
+      else
+      {
+        def suffixLength = if (suffixIsEmpty) 0 else suffix.Length;
+        def buffer = array(suffixLength + str.Length);
+        when (suffixLength > 0)
+          suffix.CopyTo(0, buffer, 0, suffixLength);
+        str.CopyTo(0, buffer, suffixLength, str.Length);
+        buffer[suffixLength] = char.ToUpperInvariant(buffer[suffixLength]);
+        string(buffer)
+      }
+    }
+
+    public IsIdentifier(str : string) : bool
+    {
+      if (str.Length == 0)
+        false
+      else
+      {
+        def ch = str[0];
+
+        if (ch == '_' || char.IsLetter(ch))
+        {
+          foreach (ch in str)
+            unless (ch == '_' || char.IsLetterOrDigit(ch))
+              return false;
+          true
+        }
+        else
+          false
+      }
+    }
+
+    public MakeSymbolRefWithMessages[T](result : BindingResult[T], compilerMessages : ICompilerMessages) : SymbolRef[T]
+      where T: Symbol
+    {
+      when (result.Messages.Count > 0)
+        result.Messages.TranslateTo(compilerMessages);
+
+      MakeSymbolRef(result)
+    }
+
+    public MakeSymbolRef[T](result : BindingResult[T]) : SymbolRef[T]
+      where T: Symbol
+    {
+      match (result.Candidates)
+      {
+        | [one] => SymbolRef.Some(result.Location, false, one)
+        | _     => SymbolRef.None(result.Location, false)
+      }
+    }
+
+    public Bind[T](this context : Context, name : G.QualifiedReference) : SymbolRef[T]
+      where T: Symbol
+    {
+      MakeSymbolRefWithMessages(context.BindMany.[T](name.CalcLocations()), context)
+    }
+
+    public Bind[T](this context : Context, name : G.Reference) : SymbolRef[T]
+      where T: Symbol
+    {
+      MakeSymbolRefWithMessages(context.BindMany.[T](name.Location), context)
+    }
+
+    public Bind[T](this context : Context, name : NType.Qualified) : SymbolRef[T]
+      where T: Symbol
+    {
+      def buffer = List();
+      foreach (x in name.Parts)
+      {
+        unless (x.TypeArguments.IsEmpty)
+        {
+          def bindingResult = BindingUtils.UnboundBindingResult(name.Location);
+          return MakeSymbolRefWithMessages(bindingResult, context)
+        }
+
+        def loc =
+          if (x.Location.IsEmpty)
+          {
+            def fakeSource = SingleLineSourceSnapshot(x.Name, x.Location.Source.File);
+            Location(fakeSource, 0, fakeSource.Text.Length)
+          }
+          else
+            x.Location;
+        buffer.Add(loc);
+      }
+      def bindingResult = context.BindMany(buffer.ToNList());
+      MakeSymbolRefWithMessages(bindingResult, context)
+    }
+
+    public BindByHierarchy[T](this symbol : Symbol, name : G.QualifiedReference, compilerMessages : ICompilerMessages) : SymbolRef[T]
+      where T: Symbol
+    {
+      def candidates    = symbol.Node.BindMany(name.CalcLocations());
+      def bindingResult = BindingUtils.MakeBindingResult(name.Location, candidates);
+      MakeSymbolRefWithMessages(bindingResult, compilerMessages)
+    }
+
+    public BindByHierarchy[T](this symbol : Symbol, name : G.Reference, compilerMessages : ICompilerMessages) : SymbolRef[T]
+      where T: Symbol
+    {
+      BindByHierarchyImpl(symbol, name, compilerMessages)
+    }
+
+    public BindByHierarchy[T](this symbol : Symbol, name : G.Name, compilerMessages : ICompilerMessages) : SymbolRef[T]
+      where T: Symbol
+    {
+      BindByHierarchyImpl(symbol, name, compilerMessages)
+    }
+    
+    BindByHierarchyImpl[T](symbol : Symbol, name : Nitra.Runtime.Located, compilerMessages : ICompilerMessages) : SymbolRef[T]
+      where T: Symbol
+    {
+      def candidates    = symbol.Node.BindMany(name.Location);
+      def bindingResult = BindingUtils.MakeBindingResult(name.Location, candidates);
+      MakeSymbolRefWithMessages(bindingResult, compilerMessages)
+    }
+
+    public TryBind[T](this context : Context, name : G.QualifiedReference) : SymbolRef[T]
+      where T: Symbol
+    {
+      MakeSymbolRef(context.BindMany.[T](name.CalcLocations()))
+    }
+
+    public TryBind[T](this context : Context, name : G.Reference) : SymbolRef[T]
+      where T: Symbol
+    {
+      MakeSymbolRef(context.BindMany.[T](name.Location))
+    }
+
+    public TryBind[T](this context : Context, name : NType.Qualified) : SymbolRef[T]
+      where T: Symbol
+    {
+      def buffer = List();
+      foreach (x in name.Parts)
+      {
+        unless (x.TypeArguments.IsEmpty)
+        {
+          def bindingResult = BindingUtils.UnboundBindingResult(name.Location);
+          return MakeSymbolRef(bindingResult)
+        }
+
+        def loc =
+          if (x.Location.IsEmpty)
+          {
+            def fakeSource = SingleLineSourceSnapshot(x.Name, x.Location.Source.File);
+            Location(fakeSource, 0, fakeSource.Text.Length)
+          }
+          else
+            x.Location;
+        buffer.Add(loc);
+      }
+      def bindingResult = context.BindMany(buffer.ToNList());
+      MakeSymbolRef(bindingResult)
+    }
+
+    public ConvertRegularRuleToFsm(this regularRule : RegularRule, compilerMessages : ICompilerMessages) : FSM
+    {
+      def visitedRules = HashSet();
+      def convert(_ : RegularRule) : FSM
+      {
+        | Choice(rules)                            => FSMBuilder.Choice(rules.Map(convert))
+        | Sequence(rules)                          => FSMBuilder.Seq(rules.Map(convert))
+        | Chars(chars)                             => FSMBuilder.Seq(chars)
+        | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
+        | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
+        | Subtract(rule1, rule2)                   => FSMTransform.Sub(convert(rule1), convert(rule2))
+        | Call(RuleRef.Some(symbol) as ruleRef) =>
+          if (visitedRules.Add(symbol))
+          {
+            def result = convert(symbol.Rule);
+            _ = visitedRules.Remove(symbol);
+            result
+          }
+          else
+          {
+            compilerMessages.Error(ruleRef, "Cyclic rule call found.");
+            FSM()
+          }
+
+        | Call(RuleRef.None) =>
+          // binding error already reported
+          FSM()
+      }
+      convert(regularRule)
+    }
+
+    public ValidateRegularRule(this regularRule : RegularRule, compilerMessages : ICompilerMessages) : void
+    {
+      _ = ConvertRegularRuleToFsm(regularRule, compilerMessages);
+    }
+
+    public MakeMatcher(this regularRule : RegularRule, compilerMessages : ICompilerMessages) : RegularExpressionMatcher
+    {
+      FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(regularRule, compilerMessages))
+    }
+
+    IsNewLine(ch : char) : bool
+    {
+      ch == '\n' || ch == '\r'
+    }
+
+    public MakeLastLocation(parseTree : ParseTree) : Location
+    {
+      def loc    = parseTree.Location;
+      def source = loc.Source;
+      def text   = source.Text;
+      mutable start = -1;
+      for (mutable i = loc.EndPos - 1; i >= 0; i--)
+      {
+        def ch = text[i];
+        if (char.IsWhiteSpace(ch))
+          start = i;
+        else when (!IsNewLine(ch))
+          break;
+      }
+
+      if (start >= 0)
+        Location(source, start, start + 1)
+      else
+        Location(source, loc.EndPos, loc.EndPos + 1)
+    }
+
+    public MakeLastLocation(parseTree : ParseTree, tok : NSpan) : Location
+    {
+      def source = parseTree.Location.Source;
+      def text   = source.Text;
+      mutable start = -1;
+      for (mutable i = tok.StartPos - 1; i >= 0; i--)
+      {
+        def ch = text[i];
+        if (char.IsWhiteSpace(ch))
+          start = i;
+        else when (!IsNewLine(ch))
+          break;
+      }
+
+      if (start >= 0)
+        Location(source, start, start + 1)
+      else
+        Location(source, tok)
+    }
+
+    public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context) : Nitra.Model.Rule
+    {
+      def newFieldName   = MakeLiteralName(fieldName, value, context);
+      def loc            = loc.FromEnd();
+      def languageRef    = context.GetContext.[SyntaxModuleContext]().SyntaxModuleSymbol.Language;
+      def spanClass      = if (languageRef is SymbolRef.Some(language)) GetSpanClassForString(loc, language, value) else null;
+      Nitra.Model.Rule.String(loc, newFieldName, value, false, spanClass)
+    }
+
+    public MakeNamespaceSymbol(currentNs : Nitra.Runtime.Typing.NamespaceSymbol, path : list[Nitra.Runtime.Location]) : Nitra.Runtime.Typing.NamespaceSymbol
+    {
+      def enter(currentNs : Nitra.Runtime.Typing.NamespaceSymbol, path : list[Location]) : Nitra.Runtime.Typing.NamespaceSymbol
+      {
+        match (path)
+        {
+          | name :: tail =>
+            match (currentNs.Node.BindMany.[Nitra.Runtime.Typing.NamespaceSymbol](name.GetText()))
+            {
+              | ns :: _ =>
+                ns.AddDefinition(name);
+                if (tail.IsEmpty)
+                  ns
+                else
+                  enter(ns, tail)
+
+              | [] =>
+                def newNs = Nitra.Runtime.Typing.NamespaceSymbol(name);
+                currentNs.AddChild(newNs, name);
+                newNs.AddDefinition(name);
+                if (tail.IsEmpty)
+                  newNs
+                else
+                  enter(newNs, tail)
+            }
+
+          | [] => assert2(false); currentNs
+        }
+      }
+
+      enter(currentNs, path)
+    }
+
+    public GetSpanClassForString(loc : Location, language : Nitra.Typing.LanguageSymbol, str : string) : Nitra.Typing.SpanClassSymbol
+    {
+      mutable candidates = LightList();
+      foreach (spanClass when spanClass.Matcher(str) in language.SpanClassesWithMatchers)
+        candidates.Add(spanClass);
+
+      match (candidates.Count)
+      {
+        | 0 => null
+        | 1 => candidates.FirstItem
+        | _ =>
+          using (root = language.Node.Project.RootWarning(loc, $"Ambiguity between imported span class matchers for the \"$str\" literal rule, span class '$(candidates.FirstItem.FullName)' is used"))
+          {
+            def e = candidates.GetEnumerator();
+            while(e.MoveNext())
+            {
+              def symbol = e.Current;
+              root.Hint(symbol.FirstLocation, $"Ambiguous span class '$(symbol.FullName)'");
+            }
+          }
+          candidates.FirstItem
+      }
+    }
+
+    [DebuggerStepThroughAttribute]
+    public EvaluateSequenceRuleType(rules : IEnumerable[Nitra.Model.Rule]) : Nitra.Typing.RuleType
+    {
+      EvaluateSequenceRuleType(rules.Select(_.Type))
+    }
+
+    [DebuggerStepThroughAttribute]
+    public EvaluateSequenceRuleType(types : IEnumerable[Nitra.Typing.RuleType]) : Nitra.Typing.RuleType
+    {
+      def nonVoidTypes = LightList();
+      foreach (ty in types)
+        unless (ty is Nitra.Typing.RuleType.Void)
+          nonVoidTypes.Add(ty);
+      match (nonVoidTypes.Count)
+      {
+        | 0 => Nitra.Typing.RuleType.Void();
+        | 1 => nonVoidTypes.FirstItem
+        | _ => Nitra.Typing.RuleType.Tuple(nonVoidTypes.ToNList())
+      }
+    }
+
+    public EvaluateOptionRuleType(rule : Nitra.Model.Rule) : Nitra.Typing.RuleType
+    {
+      if (rule.Type is Nitra.Typing.RuleType.Void)
+        Nitra.Typing.RuleType.Void()
+      else
+        Nitra.Typing.RuleType.Option(rule.Type)
+    }
+
+    public EvaluateListWithSeparatorRuleType(itemRule : Nitra.Model.Rule, sepRule : Nitra.Model.Rule) : Nitra.Typing.RuleType
+    {
+      match (itemRule.Type : Nitra.Typing.RuleType, sepRule.Type : Nitra.Typing.RuleType)
+      {
+        | (Void,     Void)    => Nitra.Typing.RuleType.Void()
+        | (itemType, Void)    => Nitra.Typing.RuleType.List(itemType)
+        | (Void,     sepType) => Nitra.Typing.RuleType.List(sepType)
+        | (itemType, sepType) => Nitra.Typing.RuleType.Tuple([Nitra.Typing.RuleType.List(itemType), Nitra.Typing.RuleType.List(sepType)])
+      }
+    }
+
+    public EvaluateListRuleType(rule : Nitra.Model.Rule) : Nitra.Typing.RuleType
+    {
+      // match list of predicates (flattening nested sequences)
+      def isOnlyPredicatesPattern(_)
+      {
+        | [] => true
+        | Rule.Not :: tail
+        | Rule.And :: tail => isOnlyPredicatesPattern(tail)
+        | Rule.Sequence(rules) :: tail => isOnlyPredicatesPattern(rules) && isOnlyPredicatesPattern(tail)
+        | _ => false
+      }
+      // match list of predicates ended with regular rule 'Any' call (flattening nested sequences)
+      def isOptimizedList(_)
+      {
+        | Rule.Not :: tail
+        | Rule.And :: tail => isOptimizedList(tail)
+        | Rule.Call(RuleRef.Some(RegularRuleSymbol), _) as call :: [] when call.BindingPower.IsZero =>
+          true
+
+        | Rule.Sequence(rules) :: []   => isOptimizedList(rules)
+        | Rule.Sequence(rules) :: tail => isOnlyPredicatesPattern(rules) && isOptimizedList(tail)
+        | _ => false
+      }
+
+      if (isOptimizedList([rule]))
+        Nitra.Typing.RuleType.Chars(None())
+      else if (rule.Type is Nitra.Typing.RuleType.Void)
+        Nitra.Typing.RuleType.Void()
+      else
+        Nitra.Typing.RuleType.List(rule.Type)
+    }
+
+    public GetDefaultAstParentType(loc : Location) : NType
+    {
+      NType.Predefined(loc, NPredefinedType.Ast)
+    }
+
+    public MakeNTypeQualified(loc : Location, qid : list[string], env : Nemerle.Compiler.global_env.GlobalEnv = null) : NType
+    {
+      NType.Qualified(loc, qid.Map(id => TypeNamePart(Location.Default, id, [], env)))
+    }
+  } // module

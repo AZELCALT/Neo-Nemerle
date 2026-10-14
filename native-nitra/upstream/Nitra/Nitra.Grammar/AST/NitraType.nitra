@@ -1,4 +1,6 @@
-﻿using Nitra.AstUtils;
+﻿using Nitra.Runtime;
+using Nitra.Grammar;
+using Nitra.Grammar.AstUtils;
 using Nitra.Runtime.Binding;
 
 namespace Nitra.Ast.NitraTypes

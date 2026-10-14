@@ -1,5 +1,5 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0" DefaultTargets="Build">
   <PropertyGroup>
     <Stage Condition=" '$(Stage)' == '' ">Stage1</Stage>
     <CommonFilesPath Condition=" '$(CommonFilesPath)' == '' ">..\..\Common</CommonFilesPath>
@@ -117,18 +117,6 @@
     <Compile Include="Expr\Expr.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Expr\ExprExtensions.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\ConstructedTypeSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\CustomAttributeExpression.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\CustomAttributeNamedArgument.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="Type\DeclaredType.nitra">
       <SubType>Code</SubType>
     </Compile>
@@ -138,32 +126,10 @@
     <Compile Include="Type\ModifierHost.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Collectors\BaseTypeReferenceSet.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Collectors\ModifierSet.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Collectors\TypeConstraintSet.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="DotNetLang.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Properties\AssemblyInfo.n" />
-    <Compile Include="$(CommonFilesPath)\AssemblyConstants.Common.n">
-      <Link>Properties\AssemblyConstants.Common.n</Link>
-    </Compile>
-    <Compile Include="Scopes\NestedSubstScope.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Scopes\TopSubstScope.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="Type\CustomAttribute.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\CustomAttributeLookupScope.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Type\ConstructedType.nitra">
@@ -190,22 +156,10 @@
     <Compile Include="Type\Member\Member.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Type\Member\OperatorKind.n">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="Type\Member\TypeMember.nitra">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Type\Modifier.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\Modifiers.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\ParameterModifier.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\ScopeFactories.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Type\SupportsInheritanceType.nitra">
@@ -221,12 +175,6 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Type\TypeParameterConstraintsClause.nitra">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\TypeParameterSymbol.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Type\Variance.n">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Core\QualifiedReference.nitra">
@@ -247,19 +195,7 @@
     <Compile Include="Namespace\UsingDirective.nitra">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Utils\AstTypeUnifier.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Utils\AstUtils.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Utils\PlatformTypes.n">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="Utils\SymbolUtils.n">
-      <SubType>Code</SubType>
-    </Compile>
-  </ItemGroup>
+    <Compile Include="DotNet.n" /></ItemGroup>
   <ItemGroup>
     <Folder Include="Collectors\" />
     <Folder Include="Core\" />

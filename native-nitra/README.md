@@ -1,5 +1,8 @@
 # Native Nitra integration
 
+Nitra is written as file modules, one module per (dll, namespace): `Nitra.Runtime/Nitra/Declarations.n` is the module `Nitra.Declarations`. The runtime's root types live in `Nitra.Runtime` (`Nitra.Runtime.Location`), macros under another dll's path carry the `Macros` suffix (`NitraMacros`, `Nitra.Serialization2Macros`), and `NITRA-SYMBOLS.json` lists every name that moved. Our integration code is part of those modules; nothing is patched or appended at build time.
+
+
 `upstream/` contains unchanged source from Nitra commit
 `b287b8a42237fac4d993444e7e3af9240b601503`. `NITRA-UPSTREAM.json` records
 every copied file and its SHA-256; the original license is retained.
@@ -19,12 +22,12 @@ using the source-built Boot2 bootstrap. The port fixes persisted generic method
 overrides, assembly attributes, generic-array tuple constructors and redundant
 `Enum`/`ValueType` constraints.
 
-`integration/RecognizedNemerleFile.n` adds an experimental input entry point to
+`RecognizedNemerleFile` (in `upstream/Nitra/Nitra.Compiler/Nitra/Compiler.n`) adds an experimental input entry point to
 the native semantic project. It holds the selected native tree and its original
 source, supports semantic cache resets, and refuses upstream reparsing.
 `CompilingNitraProject.AddRecognizedFile` registers it before native typing starts.
 
-`integration/ChemicalConstruction.n.inc` extends Nitra's tree generator with
+The chemical-construction part of the parse-tree emitter (in `upstream/Nitra/Nitra.Compiler/Nitra/Compiler.n`) extends Nitra's tree generator with
 typed `CreateRecognizedParseTree` factories. They accept the original source
 provider, span and native fields, then construct Nitra's existing temporary tree
 objects. They do not recognize input, invent a foreign executable AST, or use
@@ -59,14 +62,14 @@ is still accepted and does nothing). The Integrated.* dlls must sit next to
 The toolchain directory keeps its historical name `toolchain/nitra-native-core-experimental`. It supplies the native semantic compiler as an internal
 component; hosts do not register mappings or construct native fields.
 
-`integration/RecognitionEmitter.n` generates a recognition graph from the same
+`RecognitionEmitter` (in `upstream/Nitra/Nitra.Compiler/Nitra/Compiler.n`) generates a recognition graph from the same
 normalized native rules that define tree fields. Its typed `CreateSelected`
 adapters construct spans, references, tuples, lists and optional fields directly
 from settled structural evidence. Singleton sequences select their non-void
 member, including the member's span. Reflection discovers generated entry-point
 delegates; it does not infer fields or construct them reflectively.
 
-`integration/NativeSourceHost.n` recognizes grammar definitions with that graph,
+`NativeSourceHost` (in `upstream/Nitra/Nitra.Compiler/Nitra/Compiler.n`) recognizes grammar definitions with that graph,
 registers selected trees through `AddRecognizedFile`, and runs the existing
 native symbol, typing, mapping and emission passes in a grammar-only compilation.
 Automatic hosting obtains module names from the resulting native schemas; it

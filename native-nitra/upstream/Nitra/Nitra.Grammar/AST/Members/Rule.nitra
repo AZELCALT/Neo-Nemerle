@@ -1,6 +1,9 @@
-﻿using DotNet;
+﻿using Nitra.Runtime;
+using Nitra.Grammar;
+using DotNet;
+using Nitra.Ast;
 
-using Nitra.AstUtils;
+using Nitra.Grammar.AstUtils;
 using Nitra.Declarations;
 
 using System.Collections.Generic;

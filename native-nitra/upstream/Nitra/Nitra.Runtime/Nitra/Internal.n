@@ -1,0 +1,4882 @@
+using Nitra.Declarations;
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nitra.ProjectSystem;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nitra.Runtime.Reflection;
+using Nitra.Runtime.Internal;
+using Nemerle.Imperative.GoTo;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle.Extensions;
+using Nemerle.ExtensionsMacros;
+using Nitra.Runtime;
+using System.Threading;
+using System.Collections.Concurrent;
+using NitraMacros;
+using Nitra.InternalMacros;
+
+using Nitra.Internal.Recovery;
+// ---- Declarations/AstUtils.n (Nitra.Internal) ----
+public module AstUtils
+{
+  public GetAstAmbiguities[TParseTree, TAst](ambiguities : array[TParseTree]) : array[TAst]
+    where TParseTree   : ParseTree
+    where TAst         : IAst
+  {
+    def result = array(ambiguities.Length);
+    foreach (node in ambiguities with index)
+      result[index] = node.GetAstUntyped() :> TAst;
+    result
+  }
+
+  public EvalAmbiguitiesProperties(context : DependentPropertyEvalContext, ast : IAmbiguousAst) : void
+  {
+    foreach (ambiguity in ast.Ambiguities)
+      ambiguity.EvalProperties(context);
+  }
+
+  public ResetAmbiguitiesProperties(ast : IAmbiguousAst) : void
+  {
+    foreach (ambiguity in ast.Ambiguities)
+      ambiguity.ResetProperties();
+  }
+
+  public AcceptToAll[T](visitor : IAstVisitor, asts : array[T]) : void
+    where T: IAst
+  {
+    when (asts != null)
+      foreach (ast in asts)
+        ast.Accept(visitor);
+  }
+
+  public GetFirstAmbiguity[T](parseTree : T) : T * int
+    where T: ParseTree
+  {
+    if (parseTree.IsAmbiguous)
+    {
+      def ambiguities = (parseTree :> IAmbiguousParseTree).Ambiguities;
+      (ambiguities[0] :> T, ambiguities.Count - 1)
+    }
+    else
+      (parseTree, 0)
+  }
+
+  public GetNextAmbiguity[T](parseTree : T, state : int) : T * int
+    where T: ParseTree
+  {
+    def ambiguities = (parseTree :> IAmbiguousParseTree).Ambiguities;
+    (ambiguities[ambiguities.Count - state] :> T, state - 1)
+  }
+
+  internal XmlEscape(text : string) : string
+  {
+    text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+  }
+}
+
+// ---- DependentProperties/DependentPropertyAttribute.n (Nitra.Internal) ----
+[Record, AttributeUsage(AttributeTargets.Property)]
+public sealed class DependentPropertyAttribute : Attribute
+{
+  public IsEvaluatedName : string { get; }
+}
+
+// ---- DependentProperties/PropertyAttribute.n (Nitra.Internal) ----
+[Record, AttributeUsage(AttributeTargets.Property)]
+public sealed class PropertyAttribute : Attribute
+{
+  public FullName : string { get; }
+  public Mask     : int    { get; }
+  public IsIn     : bool   { get; }
+  public IsOut    : bool   { get; }
+  public IsDependent : bool { get { IsIn || IsOut } }
+}
+
+// ---- ExtensibleRuleParser/Constants.n (Nitra.Internal) ----
+//TODO:Move to Nitre.Internal.Constants
+
+// ---- ExtensibleRuleParser/Constructor.n (Nitra.Internal) ----
+
+
+// ---- ExtensibleRuleParser/ExtensibleRuleParser.n (Nitra.Internal) ----
+
+
+// ---- ExtensibleRuleParser/FindExtension.n (Nitra.Internal) ----
+
+
+// ---- ExtensibleRuleParser/Parse.n (Nitra.Internal) ----
+
+
+// ---- ExtensibleRuleParser/ParsePostfix.n (Nitra.Internal) ----
+public sealed class ExtensibleRuleParser : StartRuleParser
+{
+  public BestPostfix(mutable bestResult : int, parseResult : ParseResult) : int
+  {
+    // пропускаем правила с низкой силой связывания.
+    while (bestResult > 0 && (parseResult.rawTree[bestResult] & RawTreeMask.Id) < FirstPostfixRuleId)
+      bestResult = parseResult.rawTree[bestResult + RawTreeOfs.Next];
+    // ищем лучшее правило среди тех у кого подходящая сила связывания.
+    while (bestResult > 0 && (parseResult.rawTree[bestResult] & RawTreeMask.Flags) != RawTreeFlags.Best)
+      bestResult = parseResult.rawTree[bestResult + RawTreeOfs.Next];
+    bestResult;
+  }
+
+  public ParsePostfix(mutable curTextPos : int, text : string, parseResult : ParseResult) : int
+  {
+    unchecked
+    {
+      mutable postfixRawTreePtr;
+      mutable state = ExtensionRuleParserState();
+      state.parseResult = parseResult;
+      state.curTextPos = curTextPos;
+
+      mutable i;
+      mutable c; // временная переменная для отсечения правил по первой букве
+
+      when (curTextPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
+        return curTextPos;// при достижении конца текста есть нечего
+      //ищем запомненое
+      postfixRawTreePtr = parseResult.TryGetRawTree(curTextPos, PostfixId);
+      when (postfixRawTreePtr > 0)
+      {
+        def maxFailPos = parseResult.rawTree[postfixRawTreePtr + PostfixOfs.MaxFailPos];
+        when (parseResult.MaxFailPos < maxFailPos)
+          parseResult.MaxFailPos = maxFailPos;
+        state.lastResult = parseResult.GetPostfix(postfixRawTreePtr);//список разобраных с этого места правил
+        state.bestResult = state.lastResult;
+        i = parseResult.rawTree[postfixRawTreePtr + PostfixOfs.FirstRuleIndex] - 1;//индекс первого не разобранного правила
+        if (i >= FirstPostfixRule)// не всё разобрано
+        {
+          state.bestResult = BestPostfix(state.bestResult, parseResult);
+          if (state.bestResult > 0 && parseResult.rawTree[state.bestResult + RawTreeOfs.State] == ParseResult.RawTreeParsedState)//Убеждаемся что разбор успешный
+            state.bestEndPos = curTextPos + GetPostfixSize(state.bestResult, parseResult);
+          else
+            state.bestEndPos = -1;
+          goto postfix_parse;//парсим то что не распарсили раньше
+        }
+        else
+        {
+          state.bestResult = BestPostfix(state.bestResult, parseResult);
+          if (state.bestResult > 0)
+          {
+            def rawTreeState = parseResult.rawTree[state.bestResult + RawTreeOfs.State];
+            if (rawTreeState == ParseResult.RawTreeParsedState)//Убеждаемся что разбор успешный
+              return curTextPos + GetPostfixSize(state.bestResult, parseResult);
+            else if (rawTreeState < 0)
+              assert3(false)
+            else
+              return curTextPos;//облом. Заканчиваем разбор.
+          }
+          else
+            return curTextPos;//облом. Заканчиваем разбор.
+        }
+      }
+      //нет мемоизации
+      postfixRawTreePtr = parseResult.Allocate(PostfixOfs.NodeSize, PostfixId);
+      parseResult.rawTree[postfixRawTreePtr + PostfixOfs.Next] = parseResult.memoize[curTextPos];
+      parseResult.memoize[curTextPos] = postfixRawTreePtr;
+      state.bestResult = 0;
+      state.bestEndPos = curTextPos;
+      state.lastResult = 0;
+      i = PostfixRules.Length - 1;
+    label postfix_parse;
+      parseResult.rawTree[postfixRawTreePtr + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
+      c = text[curTextPos];
+      for (; i >= FirstPostfixRule; --i)
+      {
+        def postfixRule = PostfixRules[i];
+        when (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
+        {
+          state.newResult = -1;
+          state.newEndPos = postfixRule.Parse(curTextPos, text, ref state.newResult, parseResult);
+          when (state.newResult > 0)
+            state.Append();
+        }
+      }
+
+      parseResult.rawTree[postfixRawTreePtr + PostfixOfs.List] = state.lastResult;
+
+      when (state.bestResult <= 0 || state.bestEndPos < 0)// не смогли разобрать постфикс
+      {
+        when (curTextPos > parseResult.MaxFailPos)
+          parseResult.MaxFailPos = curTextPos;
+        parseResult.rawTree[postfixRawTreePtr + PostfixOfs.MaxFailPos] = parseResult.MaxFailPos;
+        return curTextPos;
+      }
+
+      parseResult.rawTree[postfixRawTreePtr + PostfixOfs.MaxFailPos] = parseResult.MaxFailPos;
+
+      when (state.bestEndPos <= curTextPos)
+        return curTextPos;
+      state.bestEndPos;
+    }
+  }
+
+  // ---- merged from ExtensibleRuleParser/Constants.n ----
+  private static PrefixState = 0;
+  private static PostfixState = 1;
+
+  public module RawTreeOfs
+  {
+    public Id             = 0;
+    public Next           = 1;
+    public State          = 2;
+    public Sizes          = 3;
+  }
+
+  public module PrefixOfs
+  {
+    public Id             = 0;
+    public Next           = 1;
+    public List           = 2;
+    public MaxFailPos     = 3;
+    public NodeSize       = 4;
+  }
+
+  public module PostfixOfs
+  {
+    public Id             = 0;
+    public Next           = 1;
+    public List           = 2;
+    public FirstRuleIndex = 3;
+    public MaxFailPos     = 4;
+    public NodeSize       = 5;
+  }
+
+  public module RawTreeFlags
+  {
+    public Bad            = 0 << 30;
+    public Equal          = 1 << 30;
+    public Best           = 2 << 30;
+  }
+
+  public module RawTreeMask
+  {
+    public Id             = ~(3 << 30);
+    public Flags          =  (3 << 30);
+  }
+
+  // ---- merged from ExtensibleRuleParser/Constructor.n ----
+  public ParserData         : ExtensibleRuleParserData;
+  public BindingPower       : int;
+  public PrefixId           : int;
+  public PostfixId          : int;
+
+  public FirstPostfixRule   : int;
+  public FirstPostfixRuleId : int;
+  public PrefixRules        : array[PrefixRuleParser];
+  public PostfixRules       : array[PostfixRuleParser];
+  public PrefixOffset       : int;
+  public PostfixOffset      : int;
+
+  public          MandatoryTokenCount              : int                               { get { ParserData.MandatoryTokenCount } }
+  public override SequenceInfo                     : SequenceInfo                      { get { null } }
+  public override ParsingSequence                  : ParsingSequence                   { get; internal set; }
+  public override CanParseEmptyString              : bool                              { get { MandatoryTokenCount == 0 } }
+  internal        DynamicExtensibleParsingSequence : ParsingSequence.DynamicExtensible { get; set; }
+  internal        IsDynamicExtensible              : bool                              { get; }
+
+  public this(parserData : ExtensibleRuleParserData, bindingPower : int)
+  {
+    base(parserData.Grammar, parserData.Descriptor);
+    ParserData          = parserData;
+    BindingPower        = bindingPower;
+    PrefixId            = parserData.PrefixId;
+    PostfixId           = parserData.PostfixId;
+    PrefixRules         = parserData.PrefixParsers;
+    PostfixRules        = parserData.PostfixParsers;
+    IsDynamicExtensible = parserData.IsDynamicExtensible;
+    FirstPostfixRule = 0;
+    while (FirstPostfixRule < PostfixRules.Length && bindingPower >= PostfixRules[FirstPostfixRule].BindingPower)
+      ++FirstPostfixRule;
+    if (PostfixRules.Length > 0)
+    {
+      if (FirstPostfixRule == PostfixRules.Length)
+        FirstPostfixRuleId = int.MaxValue;
+      else
+        FirstPostfixRuleId = PostfixRules[FirstPostfixRule].RuleId;
+    }
+    else
+      FirstPostfixRuleId = int.MaxValue;
+    if (PrefixRules.Length > 0)  PrefixOffset   = PrefixRules[0].RuleId;  else PrefixOffset   = 0;
+    if (PostfixRules.Length > 0) PostfixOffset  = PostfixRules[0].RuleId; else PostfixOffset  = 0;
+  }
+
+  public IsExtension(parser : object) : bool
+  {
+    match (parser)
+    {
+      | Nitra.Internal.PrefixRuleParser  as parser => parser.ParserData.Descriptor : object == Descriptor
+      | Nitra.Internal.PostfixRuleParser as parser => parser.ParserData.Descriptor : object == Descriptor && parser.BindingPower >= BindingPower
+      | _ => assert3(false)
+    }
+  }
+
+  public IsExtension(parsingSequencer : ParsingSequence) : bool
+  {
+    PrefixRules.Exists(prefix => prefix.ParsingSequence : object == parsingSequencer) || PostfixRules.Exists(postfix => postfix.ParsingSequence : object == parsingSequencer)
+  }
+
+  // ---- merged from ExtensibleRuleParser/ExtensibleRuleParser.n ----
+  public PrefixRuleParser(ptr : int, parseResult : ParseResult) : PrefixRuleParser
+  {
+    PrefixRules[(parseResult.rawTree[ptr + PrefixOfs.Id] & RawTreeMask.Id) - PrefixOffset]
+  }
+
+  public PostfixRuleParser(ptr : int, parseResult : ParseResult) : PostfixRuleParser
+  {
+    PostfixRules[(parseResult.rawTree[ptr + PostfixOfs.Id] & RawTreeMask.Id) - PostfixOffset]
+  }
+
+  public GetPrefixSize(bestResult : int, parseResult : ParseResult) : int
+  {
+    assert(parseResult.rawTree[bestResult + RawTreeOfs.State] == ParseResult.RawTreeParsedState);
+    mutable size = 0;
+    mutable i = bestResult + RawTreeOfs.Sizes;
+    mutable end = i + PrefixRuleParser(bestResult, parseResult).SubrulesCount;
+    for (; i < end; ++i)
+      size += parseResult.GetSize(i);
+    size;
+  }
+
+  public GetPostfixSize(bestResult : int, parseResult : ParseResult) : int
+  {
+    assert(parseResult.rawTree[bestResult + RawTreeOfs.State] == ParseResult.RawTreeParsedState);
+    mutable size = 0;
+    mutable i = bestResult + RawTreeOfs.Sizes;
+    mutable end = i + PostfixRuleParser(bestResult, parseResult).SubrulesCount;
+    for (; i < end; ++i)
+      size += parseResult.GetSize(i);
+
+    size;
+  }
+  public override IsTokenRule : bool { get { Descriptor.IsTokenRule } }
+  public override IsVoid      : bool { get { Descriptor.IsVoid } }
+  public override ToString()  : string
+  {
+    this.ParsingSequence.RuleName
+  }
+
+  // ---- merged from ExtensibleRuleParser/FindExtension.n ----
+  public FindFirstPrefix(pos : int, parseResult : ParseResult) : int
+  {
+    def rawTreePtr = parseResult.TryGetRawTree(pos, PrefixId);
+    when (rawTreePtr > 0)
+      return SkipBadResults(parseResult.GetPrefix(rawTreePtr), parseResult);
+    0
+  }
+
+  public FindNextPrefix(result : int, parseResult : ParseResult) : int
+  {
+    //если у нас лучшее значение то заканчиваем перебор
+    when ((parseResult.rawTree[result] & ExtensibleRuleParser.RawTreeMask.Flags) == ExtensibleRuleParser.RawTreeFlags.Best)
+      return 0;
+    SkipBadResults(parseResult.rawTree[result + ExtensibleRuleParser.RawTreeOfs.Next], parseResult)
+  }
+
+  public FindFirstPostfix(pos : int, parseResult : ParseResult) : int
+  {
+    mutable rawTreePtr = parseResult.TryGetRawTree(pos, PostfixId);
+    when (rawTreePtr > 0)
+    {
+      mutable result = parseResult.GetPostfix(rawTreePtr);
+      // пропускаем правила с низкой силой связывания.
+      while (result > 0 && (parseResult.rawTree[result] & ExtensibleRuleParser.RawTreeMask.Id) < FirstPostfixRuleId)
+        result = parseResult.rawTree[result + ExtensibleRuleParser.RawTreeOfs.Next];
+      return SkipBadResults(result, parseResult);
+    }
+    0
+  }
+
+  public FindNextPostfix(result : int, parseResult : ParseResult) : int
+  {
+    //если у нас лучшее значение то заканчиваем перебор
+    when ((parseResult.rawTree[result] & ExtensibleRuleParser.RawTreeMask.Flags) == ExtensibleRuleParser.RawTreeFlags.Best)
+      return 0;
+    SkipBadResults(parseResult.rawTree[result + ExtensibleRuleParser.RawTreeOfs.Next], parseResult)
+  }
+
+  private SkipBadResults(mutable result : int, parseResult : ParseResult) : int
+  {
+    while (result > 0 && ((parseResult.rawTree[result] & ExtensibleRuleParser.RawTreeMask.Flags) == ExtensibleRuleParser.RawTreeFlags.Bad || parseResult.rawTree[result + ExtensibleRuleParser.RawTreeOfs.State] != ParseResult.RawTreeParsedState))
+      result = parseResult.rawTree[result + ExtensibleRuleParser.RawTreeOfs.Next];
+    result
+  }
+
+  // ---- merged from ExtensibleRuleParser/Parse.n ----
+  public override Parse(mutable curTextPos : int, text : string, parseResult : ParseResult) : int
+  {
+    parseResult.ParseSession.CancellationToken.ThrowIfCancellationRequested();
+
+    def startTextPos = curTextPos;
+    curTextPos = ParsePrefix(curTextPos, text, parseResult);
+    if (curTextPos >= 0)
+    {
+      when (IsDynamicExtensible)
+      {
+        def bestResult = BestPrefixRawTreeAtPos(startTextPos, parseResult);
+        def ruleParser = PrefixRuleParser(bestResult, parseResult);
+        parseResult.ParseSession.CurrentGrammar = ruleParser.GrammarChangeHandler(bestResult, startTextPos, curTextPos, parseResult, Grammar);
+        return curTextPos;
+      }
+      mutable bestPos;
+      do
+      {
+        bestPos = curTextPos;
+        curTextPos = ParsePostfix(curTextPos, text, parseResult);
+      }
+      while (curTextPos > bestPos);
+      bestPos;
+    }
+    else
+      -1;
+  }
+
+  // ---- merged from ExtensibleRuleParser/ParsePrefix.n ----
+  public BestPrefix(mutable bestResult : int, parseResult : ParseResult) : int
+  {
+    while (bestResult > 0 && (parseResult.rawTree[bestResult] & RawTreeMask.Flags) != RawTreeFlags.Best)
+      bestResult = parseResult.rawTree[bestResult + RawTreeOfs.Next];
+    bestResult;
+  }
+
+  public BestPrefixRawTreeAtPos(mutable curTextPos : int, parseResult : ParseResult) : int
+  {
+    mutable prefixRawTreePtr = parseResult.GetRawTree(curTextPos, PrefixId);
+    def bestRawTree          = BestPrefix(parseResult.GetPrefix(prefixRawTreePtr), parseResult);
+    bestRawTree
+  }
+
+  public ParsePrefix(mutable curTextPos : int, text : string, parseResult : ParseResult) : int
+  {
+    unchecked
+    {
+      mutable prefixRawTreePtr;
+      mutable state = ExtensionRuleParserState();
+      state.parseResult = parseResult;
+      state.curTextPos = curTextPos;
+
+      prefixRawTreePtr = parseResult.TryGetRawTree(curTextPos, PrefixId);
+      when (prefixRawTreePtr > 0)
+      {
+        def maxFailPos = parseResult.rawTree[prefixRawTreePtr + PrefixOfs.MaxFailPos];
+        when (parseResult.MaxFailPos < maxFailPos)
+          parseResult.MaxFailPos = maxFailPos;
+        state.bestResult = BestPrefix(parseResult.GetPrefix(prefixRawTreePtr), parseResult);
+        if (state.bestResult > 0)
+        {
+          def rawTreeState = parseResult.rawTree[state.bestResult + RawTreeOfs.State];
+          if (rawTreeState == ParseResult.RawTreeParsedState)
+            return curTextPos + GetPrefixSize(state.bestResult, parseResult);
+          else if (rawTreeState < 0)
+            assert3(false)
+          else
+          {
+            def prefixRule = PrefixRuleParser(state.bestResult, parseResult);
+            def maxFailPos = parseResult.rawTree[state.bestResult + RawTreeOfs.Sizes + prefixRule.SubrulesCount - 1];
+            when (maxFailPos > parseResult.MaxFailPos)
+              parseResult.MaxFailPos = maxFailPos;
+            return -1;
+          }
+        }
+        else if (state.bestResult < 0)
+          return curTextPos;
+        else
+        {
+          when (curTextPos > parseResult.MaxFailPos)
+            parseResult.MaxFailPos = curTextPos;
+          return -1; // облом разбора
+        }
+      }
+
+      //нет мемоизации префикса
+      prefixRawTreePtr = parseResult.Allocate(PrefixOfs.NodeSize, PrefixId);
+      parseResult.rawTree[prefixRawTreePtr + PrefixOfs.Next] = parseResult.memoize[curTextPos];
+      parseResult.memoize[curTextPos] = prefixRawTreePtr;
+      state.bestResult = 0;
+      state.bestEndPos = -1;
+      state.lastResult = 0;
+      if (curTextPos < text.Length)
+      {
+        def c = text[curTextPos]; // временная переменная для отсечения правил по первой букве
+        for (mutable i = PrefixRules.Length - 1; i >= 0; --i)
+        {
+          def prefixRule = PrefixRules[i];
+          when (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
+          {
+            state.newResult = -1;
+            state.newEndPos = prefixRule.Parse(curTextPos, text, ref state.newResult, parseResult);
+            when (state.newResult > 0)
+              state.Append();
+          }
+        }
+      }
+      else
+      {
+        when (!CanParseEmptyString)
+          return -1;
+        for (mutable i = PrefixRules.Length - 1; i >= 0; --i)
+        {
+          def prefixRule = PrefixRules[i];
+          state.newResult = -1;
+          state.newEndPos = prefixRule.Parse(curTextPos, text, ref state.newResult, parseResult);
+          when (state.newResult > 0)
+            state.Append();
+        }
+      }
+
+      parseResult.rawTree[prefixRawTreePtr + PrefixOfs.List] = state.lastResult;
+
+      when (state.bestResult <= 0 || state.bestEndPos < 0)// не смогли разобрать префикс
+      {
+        when (curTextPos > parseResult.MaxFailPos)
+          parseResult.MaxFailPos = curTextPos;
+        parseResult.rawTree[prefixRawTreePtr + PrefixOfs.MaxFailPos] = parseResult.MaxFailPos;
+        return -1;
+      }
+      parseResult.rawTree[prefixRawTreePtr + PrefixOfs.MaxFailPos] = parseResult.MaxFailPos;
+      state.bestEndPos;
+    }
+  }
+}
+
+// ---- ExtensibleRuleParser/ParsePrefix.n (Nitra.Internal) ----
+
+
+// ---- Internal/DotUtils.n (Nitra.Internal) ----
+public module DotUtils
+{
+  public Contains(this ary : array[int], value : int) : bool
+  {
+    foreach (x in ary)
+      when (x == value)
+        return true;
+
+    false
+  }
+
+  public Sha1(str : string) : string
+  {
+    using (sha = SHA1.Create())
+    {
+      def arr = UTF8Encoding.UTF8.GetBytes(str);
+      _ = sha.TransformFinalBlock(arr, 0, arr.Length);
+      ToBase16String(sha.Hash)
+    }
+  }
+
+  public ToBase16String(arr : array[byte]) : string
+  {
+    def hex(b)
+    {
+      (if (b < 10) '0' + b else 'a' + b - 10) :> char
+    }
+    def str = array(arr.Length * 2);
+    for (mutable i = 0; i < arr.Length; ++i)
+    {
+      str[i * 2    ] = hex((arr[i] >> 4) & 0xf);
+      str[i * 2 + 1] = hex((arr[i])      & 0xf);
+    }
+    String(str);
+  }
+
+  public Contains[T](this ary : array[T], value : T) : bool
+  {
+    Array.IndexOf(ary, value) >= 0
+  }
+
+  public DotEscape(x : string) : string
+  {
+    x.Replace("\\", <#\\#>).Replace(<#"#>, <#\"#>)
+  }
+
+  static ToolsDir = "ExternalTools";
+
+  public ConvertToDot(sourcePath : string, show : bool = true) : void
+  {
+    def svgFileName = Path.ChangeExtension(sourcePath, "svg");
+    def process = Process.Start(FindDotExe(), $<#$sourcePath -o $svgFileName -Tsvg#>);
+    process.WaitForExit();
+    when (show)
+      _ = Process.Start(svgFileName);
+  }
+
+  public ConvertToDot(sourcePaths : Seq[string]) : void
+  {
+    def sourceFileNames = SCG.Queue(sourcePaths);
+
+    while (sourceFileNames.Count > 0)
+    {
+      def batchSize = 200;
+      def sourceFileNamesBatch = List(batchSize);
+      for (mutable i; i < batchSize && sourceFileNames.Count > 0; ++i)
+        sourceFileNamesBatch.Add(sourceFileNames.Dequeue());
+
+      def si = ProcessStartInfo();
+      si.FileName = FindDotExe();
+      si.Arguments = $<#-Tsvg -O ..$(sourceFileNamesBatch; " ")#>;
+      si.RedirectStandardError  = true;
+      //si.RedirectStandardOutput = true;
+      si.UseShellExecute = false;
+
+      using (process = Process.Start(si))
+      {
+        def errors = process.StandardError.ReadToEnd();
+        //def output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        unless (string.IsNullOrWhiteSpace(errors))
+        {
+          assert2(string.IsNullOrWhiteSpace(errors));
+        }
+      }
+    }
+  }
+
+  public ExecuteDot(source : string) : void
+  {
+    def dotFileName = Path.ChangeExtension(Path.GetTempFileName(), "dot");
+    File.WriteAllText(dotFileName, source);
+    def svgFileName = Path.ChangeExtension(dotFileName, "svg");
+    def process = Process.Start(FindDotExe(), $<#$dotFileName -o $svgFileName -Tsvg#>);
+    process.WaitForExit();
+    _ = Process.Start(svgFileName);
+  }
+
+  private FindDotExe() : string
+  {
+    def dir = Path.GetDirectoryName(Path.GetFullPath(Assembly.GetExecutingAssembly().Location));
+    def findDot(dir : string) : string
+    {
+      if (Directory.Exists(Path.Combine(dir, ToolsDir)))
+        Path.Combine(dir, ToolsDir, @"DOT\dot.exe")
+      else
+      {
+        def parent = Directory.GetParent(dir);
+        if (parent == null)
+          null
+        else
+          findDot(parent.FullName)
+      }
+    }
+
+    findDot(dir)
+  }
+
+  public static SafeLeftSubstring(this str : string, pos : int, len : int) : string
+  {
+    assert3(pos >= 0);
+    when (pos == 0)
+      return "";
+
+    // "1234■12345
+    if (pos <= len)
+      str.Substring(0, pos)
+    else
+      str.Substring(pos - len, if (pos > str.Length) str.Length - (pos - len) else len)
+  }
+
+  public static SafeRightSubstring(this str : string, pos : int, len : int) : string
+  {
+    str.Substring(pos, if (pos + len > str.Length) str.Length - pos else len)
+  }
+
+  [DebuggerStepThroughAttribute]
+  public static EscapeSequence(c : char) : char
+  {
+    | '\'' => '\'' | '\"' => '\"' | '\\' => '\\' | '0'  => '\0'
+    | 'a'  => '\a' | 'b'  => '\b' | 'f'  => '\f' | 'n'  => '\n'
+    | 'r'  => '\r' | 't'  => '\t' | 'v'  => '\v' | c    => c
+  }
+
+  [DebuggerStepThroughAttribute]
+  public EscapeChar(ch : char) : string
+  {
+    | '\0' => @"'\0'"
+    | '\t' => @"'\t'"
+    | '\n' => @"'\n'"
+    | '\r' => @"'\r'"
+    | '\\' => @"'\\'"
+    | '\'' => @"'\''"
+    | x when x == char.MaxValue  => @" char.MaxValue"
+    | c when char.IsLetter(c)
+    | c when char.IsDigit(c)
+    | c when char.IsPunctuation(c)
+    | c when char.IsSeparator(c)
+    | c when char.IsSymbol(c)      => $"'$c'"
+    | c =>
+      def c = c : uint;
+      string.Format(<#'\u{0,4:X}'#>, c).Replace(' ', '0');
+  }
+
+  [DebuggerStepThroughAttribute]
+  public EscapeStringChar(ch : char) : string
+  {
+    | '\0' => @"\0"
+    | '\t' => @"\t"
+    | '\n' => @"\n"
+    | '\r' => @"\r"
+    | '\\' => @"\\"
+    | '\'' => @"\'"
+    | c when char.IsLetter(c)
+    | c when char.IsDigit(c)
+    | c when char.IsPunctuation(c)
+    | c when char.IsSeparator(c)
+    | c when char.IsSymbol(c)      => $"$c"
+    | c =>
+      def c = c : uint;
+      string.Format(<#\u{0,4:X}#>, c).Replace(' ', '0');
+  }
+
+  [DebuggerStepThroughAttribute]
+  public EscapeString(str : string) : string
+  {
+    def sb = Text.StringBuilder(str.Length);
+    _ = sb.AppendEscapedString(str);
+    sb.ToString()
+  }
+
+  [DebuggerStepThroughAttribute]
+  public AppendEscapedString(this sb : Text.StringBuilder, str : string) : Text.StringBuilder
+  {
+    sb.AppendEscapedString(str, 0, str.Length);
+  }
+
+  [DebuggerStepThroughAttribute]
+  public AppendEscapedString(this sb : Text.StringBuilder, str : string, startIndex : int, count : int) : Text.StringBuilder
+  {
+    def endIndex = startIndex + count;
+    for (mutable i = startIndex; i < endIndex; ++i)
+      _ = sb.Append(EscapeStringChar(str[i]));
+    sb
+  }
+}
+
+// ---- Internal/ExtensibleRuleParseTreeConstructor.n (Nitra.Internal) ----
+public module ExtensibleRuleParseTreeConstructor
+{
+  public Create[T](startPos : int, endPos : int, parseResult : ParseResult, bindingPower : string, ruleDescriptor : ExtensibleRuleDescriptor, grammar : CompositeGrammar) : T
+    where T: ParseTree
+  {
+    def ruleParser = grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
+    if (startPos < endPos || ruleParser.CanParseEmptyString)
+    {
+      match (parseResult.TryGetRecoveredSequence(startPos, endPos, ruleParser.ParsingSequence))
+      {
+        | null =>
+          mutable pos = startPos;
+          Create(ref pos, endPos - startPos, parseResult, bindingPower, ruleDescriptor, grammar)
+
+        | Unambiguous(recoveredSubrulesIndex) => CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, recoveredSubrulesIndex)
+        | Ambiguous(indexes) =>
+          def ambiguities = array(indexes.Length);
+          foreach (recoveredSubrulesIndex in indexes with i)
+            ambiguities[i] = CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, recoveredSubrulesIndex);
+          CreateAmbiguous(ruleDescriptor, ambiguities, ParseTreeAmbiguityType.Recovery);
+      }
+    }
+    else
+      CreateMissing(parseResult, ruleDescriptor, startPos)
+  }
+
+  private CreateImpl[T](startPos : int, parseResult : ParseResult, ruleParser : ExtensibleRuleParser, ruleDescriptor : ExtensibleRuleDescriptor, recoveredSubrulesIndex : int) : T
+    where T: ParseTree
+  {
+    def (subruleStarts, _parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
+    def host = parseResult.ParserHost;
+
+    mutable resultParseTree;
+
+    for (mutable i = 0; i < subruleStarts.Length - 1; ++i)
+    {
+      def begin    = subruleStarts[i].Pos;
+      def end      = subruleStarts[i + 1].Pos;
+      def state    = host.ParsingStates[subruleStarts[i].State];
+
+      match (state)
+      {
+        | ExtensionPrefix =>
+          assert(resultParseTree == null);
+
+          resultParseTree =
+            if (begin == end)
+              CreateMissing(parseResult, ruleDescriptor, begin);
+            else
+            {
+              def prefixBuffer = LightList();
+
+              foreach (prefix in ruleParser.PrefixRules)
+              {
+                match (parseResult.TryGetRecoveredSequence(begin, end, prefix.ParsingSequence))
+                {
+                  | null => ()
+                  | Unambiguous(recoveredSubrulesIndex) =>
+                    prefixBuffer.Add(CreatePrefix(begin, end, recoveredSubrulesIndex, prefix, parseResult));
+
+                  | Ambiguous(indexes) =>
+                    foreach (recoveredSubrulesIndex in indexes)
+                      prefixBuffer.Add(CreatePrefix(begin, end, recoveredSubrulesIndex, prefix, parseResult));
+                }
+              }
+
+              match (prefixBuffer.Count)
+              {
+                | 0 => assert(false)
+                | 1 => prefixBuffer.FirstItem
+                | _ => CreateAmbiguous(ruleDescriptor, prefixBuffer.ToArray(), ParseTreeAmbiguityType.Prefix)
+              }
+            };
+
+        | ExtensionPostfix =>
+          assert(resultParseTree != null);
+
+          def postfixBuffer = LightList();
+
+          foreach (postfix when (postfix.RuleId >= ruleParser.FirstPostfixRuleId) in ruleParser.PostfixRules)
+          {
+            match (parseResult.TryGetRecoveredSequence(begin, end, postfix.ParsingSequence))
+            {
+              | null => ()
+              | Unambiguous(recoveredSubrulesIndex) =>
+                postfixBuffer.Add(CreatePostfix(resultParseTree, startPos, begin, end, recoveredSubrulesIndex, postfix, parseResult));
+
+              | Ambiguous(indexes) =>
+                foreach (recoveredSubrulesIndex in indexes)
+                  postfixBuffer.Add(CreatePostfix(resultParseTree, startPos, begin, end, recoveredSubrulesIndex, postfix, parseResult));
+            }
+          }
+
+          resultParseTree =
+            match (postfixBuffer.Count)
+            {
+              | 0 => assert(false)
+              | 1 => postfixBuffer.FirstItem
+              | _ => CreateAmbiguous(ruleDescriptor, postfixBuffer.ToArray(), ParseTreeAmbiguityType.Postfix)
+            };
+
+        | _ => assert(false, "ExtensionPrefix or ExtensionPostfix expected");
+      }
+    }
+
+    assert(resultParseTree != null);
+    resultParseTree
+  }
+
+  public Create[T](pos : ref int, size : int, parseResult : ParseResult, bindingPower : string, ruleDescriptor : ExtensibleRuleDescriptor, grammar : CompositeGrammar) : T
+    where T: ParseTree
+  {
+    def ruleParser = grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
+    if (size > 0 || ruleParser.CanParseEmptyString)
+    {
+      mutable newPos;
+      mutable rawTreePtr = ruleParser.FindFirstPrefix(pos, parseResult);
+      mutable prefixValue;
+      def prefixStartPos = pos;
+      if (rawTreePtr > 0)
+      {
+        def prefixParserOffset = GetExtensionParserOffset(ruleParser.PrefixRules);
+
+        mutable extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, rawTreePtr, prefixParserOffset);
+        newPos = pos;
+        prefixValue = CreatePrefix(ref newPos, rawTreePtr, extensionParser, parseResult);
+        rawTreePtr = ruleParser.FindNextPrefix(rawTreePtr, parseResult);
+        when (rawTreePtr > 0)
+        {
+          def firstNewPos = newPos;
+          def ambiguitys = SCG.List();
+          ambiguitys.Add(prefixValue);
+          def parsers = SCG.List();
+          parsers.Add(extensionParser);
+          while (rawTreePtr > 0)
+          {
+            def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, rawTreePtr, prefixParserOffset);
+            newPos = pos;
+            def _nextValue = CreatePrefix(ref newPos, rawTreePtr, nextExtensionParser, parseResult);
+            assert(newPos == firstNewPos);
+            ambiguitys.Add(_nextValue);
+            parsers.Add(nextExtensionParser);
+            extensionParser = nextExtensionParser;
+            rawTreePtr = ruleParser.FindNextPrefix(rawTreePtr, parseResult);
+          }
+          // prefix ambiguity
+          prefixValue = CreateAmbiguous(ruleDescriptor, ambiguitys.ToArray(), ParseTreeAmbiguityType.Prefix);
+        }
+        pos = newPos;
+      }
+      else
+      {
+        // missing prefix
+        prefixValue = CreateMissing(parseResult, ruleDescriptor, prefixStartPos);
+      }
+
+      def postfixParserOffset = GetExtensionParserOffset(ruleParser.PostfixRules);
+      mutable extensionParser;
+      mutable postfixValue;
+      while (pos < parseResult.ParseEnd && { rawTreePtr = ruleParser.FindFirstPostfix(pos, parseResult); rawTreePtr > 0 })
+      {
+        extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, rawTreePtr, postfixParserOffset);
+        newPos = pos;
+        postfixValue = CreatePostfix(prefixValue, prefixStartPos, ref newPos, rawTreePtr, extensionParser, parseResult);
+        when (newPos == pos)
+          break;
+        rawTreePtr = ruleParser.FindNextPostfix(rawTreePtr, parseResult);
+        when (rawTreePtr > 0)
+        {
+          def firstNewPos = newPos;
+          def ambiguitys = SCG.List();
+          ambiguitys.Add(postfixValue);
+          def parsers = SCG.List();
+          parsers.Add(extensionParser);
+          while (rawTreePtr > 0)
+          {
+            def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, rawTreePtr, postfixParserOffset);
+            newPos = pos;
+            def _nextValue = CreatePostfix(prefixValue, prefixStartPos, ref newPos, rawTreePtr, nextExtensionParser, parseResult);
+            assert(newPos == firstNewPos);
+            ambiguitys.Add(_nextValue);
+            parsers.Add(nextExtensionParser);
+            extensionParser = nextExtensionParser;
+            rawTreePtr = ruleParser.FindNextPostfix(rawTreePtr, parseResult);
+          }
+          // postfix ambiguity
+          postfixValue = CreateAmbiguous(ruleDescriptor, ambiguitys.ToArray(), ParseTreeAmbiguityType.Postfix);
+        }
+        prefixValue = postfixValue;
+        pos = newPos;
+      }
+
+      prefixValue
+    }
+    else
+      CreateMissing(parseResult, ruleDescriptor, pos)
+  }
+
+  private GetExtensionParserOffset[T](parsers : array[T]) : int
+    where T: ExtensionRuleParser
+  {
+    //FIXME empty array
+    if (parsers.Length > 0) parsers[0].RuleId else 0
+  }
+
+  private GetExtensionParser[T](parseResult : ParseResult, parsers : array[T], rawTreePtr : int, offset : int) : T
+    where T: ExtensionRuleParser
+  {
+    def ruleId = parseResult.rawTree[rawTreePtr + ExtensibleRuleParser.RawTreeOfs.Id] & ExtensibleRuleParser.RawTreeMask.Id;
+    parsers[ruleId - offset]
+  }
+
+  private CreateAmbiguous[T](ruleDescriptor : ExtensibleRuleDescriptor, ambiguitys : array[T], ambiguityType : ParseTreeAmbiguityType) : T
+    where T: ParseTree, class
+  {
+    ruleDescriptor.CreateAmbiguousParseTree(ambiguitys :> array[ParseTree], ambiguityType) :> T
+  }
+
+  private CreateMissing[T](parseResult : ParseResult, ruleDescriptor : ExtensibleRuleDescriptor, pos : int) : T
+    where T: ParseTree
+  {
+    ruleDescriptor.CreateMissingParseTree(parseResult, pos) :> T
+  }
+
+  private CreatePrefix[T](pos : ref int, rawTreePtr : int, ruleParser : PrefixRuleParser, parseResult : ParseResult) : T
+    where T: ParseTree
+  {
+    (ruleParser.Descriptor :> PrefixRuleDescriptor).CreateParseTree(ref pos, rawTreePtr, parseResult) :> T
+  }
+
+  private CreatePrefix[T](startPos : int, endPos : int, recoveredSubrulesIndex : int, ruleParser : PrefixRuleParser, parseResult : ParseResult) : T
+    where T: ParseTree
+  {
+    (ruleParser.Descriptor :> PrefixRuleDescriptor).CreateParseTree(startPos, endPos, recoveredSubrulesIndex, parseResult) :> T
+  }
+
+  private CreatePostfix[T](prefix : T, prefixStartPos : int, pos : ref int, rawTreePtr : int, ruleParser : PostfixRuleParser, parseResult : ParseResult) : T
+    where T: ParseTree
+  {
+    (ruleParser.Descriptor :> PostfixRuleDescriptor).CreateParseTree(prefix, prefixStartPos, ref pos, rawTreePtr, parseResult) :> T
+  }
+
+  private CreatePostfix[T](prefix : T, prefixStartPos : int, startPos : int, endPos : int, recoveredSubrulesIndex : int, ruleParser : PostfixRuleParser, parseResult : ParseResult) : T
+    where T: ParseTree
+  {
+    (ruleParser.Descriptor :> PostfixRuleDescriptor).CreateParseTree(prefix, prefixStartPos, startPos, endPos, recoveredSubrulesIndex, parseResult) :> T
+  }
+}
+
+// ---- Internal/ExtensibleRuleParserData.n (Nitra.Internal) ----
+public sealed class ExtensibleRuleParserData : IParserInfo
+{
+  public   Grammar             : CompositeGrammar           { get; }
+  public   Descriptor          : ExtensibleRuleDescriptor   { get; }
+  internal PrefixDescriptors   : array[PrefixRuleDescriptor];
+  internal PostfixDescriptors  : array[PostfixRuleDescriptor];
+  internal PrefixParsers       : array[PrefixRuleParser];
+  internal PostfixParsers      : array[PostfixRuleParser];
+  internal PrefixId            : int;
+  internal PostfixId           : int;
+  internal Parsers             : List[ExtensibleRuleParser] = List();
+  internal MandatoryTokenCount : int { get; set; }
+  internal IsDynamicExtensible : bool { get { Descriptor.IsDynamicExtensible } }
+
+  internal this(grammar : CompositeGrammar, rd : ExtensibleRuleDescriptor, prefixDescriptors : array[PrefixRuleDescriptor], postfixDescriptors : array[PostfixRuleDescriptor], ruleIdBuilder : RuleIdBuilder)
+  {
+    Grammar             = grammar;
+    Descriptor          = rd;
+    PrefixDescriptors   = prefixDescriptors;
+    PostfixDescriptors  = postfixDescriptors;
+    PrefixId            = ruleIdBuilder.NewRuleId(this);
+    PostfixId           = ruleIdBuilder.NewRuleId(this);
+    def newPostfix(postfixRd : PostfixRuleDescriptor)
+    {
+      def parser = postfixRd.NewParser(Grammar, ruleIdBuilder, this);
+      parser.BindingPower = Grammar.GetBindingPower(rd, postfixRd.BindingPower);
+      parser
+    }
+    PrefixParsers       = PrefixDescriptors.Map(rd => rd.NewParser(Grammar, ruleIdBuilder, this));
+    PostfixParsers      = PostfixDescriptors.Map(newPostfix);
+  }
+
+  internal GetParser(bindingPowerName : string) : ExtensibleRuleParser
+  {
+    def bindingPower = Grammar.GetBindingPower(Descriptor, bindingPowerName);
+    while (Parsers.Count <= bindingPower)
+      Parsers.Add(null);
+
+    mutable ruleParser = Parsers[bindingPower];
+    when (ruleParser == null)
+    {
+      ruleParser = Nitra.Internal.ExtensibleRuleParser(this, bindingPower);
+      Parsers[bindingPower] = ruleParser;
+    }
+    ruleParser
+  }
+
+  public Init(ruleIdBuilder : RuleIdBuilder) : void
+  {
+    foreach (ruleParser in PrefixParsers)
+      ruleParser.Init(ruleIdBuilder);
+    foreach (ruleParser in PostfixParsers)
+      ruleParser.Init(ruleIdBuilder);
+  }
+
+  public override ToString() : string
+  {
+    $"$(Descriptor.Name) ($(Descriptor.Grammar.FullName))"
+  }
+}
+
+// ---- Internal/ExtensionRuleParser.n (Nitra.Internal) ----
+public abstract class ExtensionRuleParser : RuleParser, IRuleParserReflection
+{
+  public RuleId       : int;
+
+  public LowerBound   : char { get; internal set; default char.MinValue; }
+  public UpperBound   : char { get; internal set; default char.MaxValue; }
+
+  public override SequenceInfo : SequenceInfo    { get { Reflection(RuleId) } }
+  public ParserData   : ExtensibleRuleParserData;
+
+  public override ParsingSequence : ParsingSequence { get; internal set; }
+
+  public this(grammar : CompositeGrammar, ruleIdBuilder : RuleIdBuilder, parserData : ExtensibleRuleParserData, descriptor : RuleDescriptor)
+  {
+    base(grammar, descriptor);
+    RuleId     = ruleIdBuilder.NewRuleId(this);
+    ParserData = parserData;
+  }
+
+  public SubrulesCount : int { get { SequenceInfo.Subrules.Length } }
+
+  public abstract Init(ruleIdBuilder : RuleIdBuilder) : void;
+  public abstract Reflection(ruleId : int) : SequenceInfo;
+
+  public abstract Parse(pos : int, text : string, resultRef : ref int, parseResult : ParseResult) : int;
+
+  public virtual GrammarChangeHandler(rawTreePtr : int, startPos : int, endPos : int, parseResult : IParseResult, grammar : CompositeGrammar) : CompositeGrammar
+  {
+    IgnoreParams();
+    grammar
+  }
+}
+
+[Record]
+public abstract class PrefixRuleParser : ExtensionRuleParser
+{
+}
+
+[Record]
+public abstract class PostfixRuleParser : ExtensionRuleParser
+{
+  [RecordIgnore]
+  public BindingPower : int { get; internal set; }
+}
+
+// ---- Internal/IParserInfo.n (Nitra.Internal) ----
+public interface IParserInfo
+{
+  Grammar    : CompositeGrammar { get; }
+  Descriptor : RuleDescriptor   { get; }
+}
+
+// ---- Internal/RuleIdBuilder.n (Nitra.Internal) ----
+public sealed class RuleIdBuilder
+{
+  private mutable _isBuilding      : bool;
+  private         _existingParsers : array[IParserInfo];
+  private         _newParsers      : List[IParserInfo];
+  private         _existingStates  : array[ParsingState];
+  private         _newStates       : List[ParsingState];
+
+  public this(existingParsers : array[IParserInfo], existingStates  : array[ParsingState])
+  {
+    _isBuilding      = true;
+    _existingParsers = existingParsers;
+    _newParsers      = List();
+    _existingStates  = existingStates;
+    _newStates       = List();
+  }
+
+  public NewRuleId(parser : IParserInfo) : int
+  {
+    assert(_isBuilding);
+
+    def id = _existingParsers.Length + _newParsers.Count;
+    _newParsers.Add(parser);
+    id
+  }
+
+  public AddParsingStateAndSetId(state : ParsingState) : void
+  {
+    assert(_isBuilding);
+
+    def id = _existingStates.Length + _newStates.Count;
+    state.Id = id;
+    _newStates.Add(state);
+  }
+
+  public GetParsingState(stateId : int) : ParsingState
+  {
+    assert(_isBuilding);
+
+    _newStates[stateId - _existingStates.Length]
+  }
+
+  public GetResult() : array[IParserInfo] * array[ParsingState]
+  {
+    _isBuilding = false;
+
+    def newParsers = array(_existingParsers.Length + _newParsers.Count);
+    _existingParsers.CopyTo(newParsers, 0);
+    _newParsers.CopyTo(newParsers, _existingParsers.Length);
+
+    def newStates = array(_existingStates.Length + _newStates.Count);
+    _existingStates.CopyTo(newStates, 0);
+    _newStates.CopyTo(newStates, _existingStates.Length);
+
+    Threading.Thread.MemoryBarrier(); // make WolfHound happy
+    (newParsers, newStates)
+  }
+}
+
+// ---- Internal/RuleParser.n (Nitra.Internal) ----
+[Record]
+public abstract class RuleParser : INitraReflection, IParserInfo
+{
+  public          Grammar             : CompositeGrammar { get; }
+  public          Descriptor          : RuleDescriptor   { get; }
+  public abstract IsVoid              : bool { get; }
+  public abstract IsTokenRule         : bool { get; }
+  [RecordIgnore]
+  public abstract ParsingSequence     : ParsingSequence { get; internal set; }
+  [RecordIgnore]
+  public abstract SequenceInfo        : SequenceInfo { get; }
+
+  public          ShortName           : string { get { this.Descriptor.Name } }
+  public          FullName            : string { get { this.Descriptor.Name } }
+  public          IsMarker            : bool   { get { false } }
+  public virtual  CanParseEmptyString : bool   { get { this.SequenceInfo?.CanParseEmptyString } }
+}
+
+// ---- Internal/SimpleRuleParser.n (Nitra.Internal) ----
+  public abstract class SimpleRuleParser : StartRuleParser, IRuleParserReflection
+  {
+    public RuleId     : int;
+
+    public this(grammar : CompositeGrammar, ruleIdBuilder : RuleIdBuilder, descriptor : RuleDescriptor)
+    {
+      base(grammar, descriptor);
+      RuleId = ruleIdBuilder.NewRuleId(this)
+    }
+
+    public abstract Init(ruleIdBuilder : RuleIdBuilder) : void;
+    public abstract Reflection(ruleId : int) : SequenceInfo;
+
+    public override SequenceInfo    : SequenceInfo    { get { Reflection(RuleId) } }
+    public override ParsingSequence : ParsingSequence { get; internal set; }
+ }
+
+// ---- Internal/StartRuleParser.n (Nitra.Internal) ----
+[Record]
+public abstract class StartRuleParser : RuleParser
+{
+  public abstract Parse(pos : int, text : string, parseResult : ParseResult) : int;
+}
+
+// ---- Internal/TokenEnumerator/ParseFrame.n (Nitra.Internal) ----
+[Record]
+public struct ParseFrame
+{
+  public SequenceInfo  : SequenceInfo;
+  public RawTreePtr         : int;
+  public FieldIndex     : int;
+  public CurTextPos     : int;
+  public ListCurentItem : int;
+  public ListSep        : bool;
+
+  public override ToString() : string
+  {
+    $"SequenceInfo=$SequenceInfo  RawTreePtr = $RawTreePtr  FieldIndex = $FieldIndex  CurTextPos = $CurTextPos  ListCurentItem=$ListCurentItem  ListSep=$ListSep"
+  }
+}
+
+// ---- Internal/TokenEnumerator/TokenEnumerator.n (Nitra.Internal) ----
+public class TokenEnumerator
+{
+  _parseResult : ParseResult;
+
+  public this(parseResult : ParseResult) { _parseResult = parseResult; }
+
+  _stack  : SCG.Stack[ParseFrame] = SCG.Stack();
+
+  mutable _sequence      : SequenceInfo;
+  mutable _subruleIndex  : int;
+  mutable _rawTreePtr    : int;
+  mutable _curTextPos    : int;
+  mutable _listEndPos    : int;
+  mutable _listSep       : bool;
+
+  public Start(rawTreePtr : int, curTextPos : int) : TokenEnumerator
+  {
+    assert3(_parseResult != null);
+    _stack.Clear();
+
+    _sequence       = _parseResult.GetSequenceInfo(rawTreePtr);
+    _rawTreePtr     = rawTreePtr;
+    _subruleIndex   = -1;
+    _curTextPos     = curTextPos;
+    _listEndPos     = -1;
+    this
+  }
+
+  public NextTokenSize() : int
+  {
+    _subruleIndex++;
+    def rules = _sequence.Subrules;
+    if (_subruleIndex >= rules.Length)
+    {
+      if (_stack.Count > 0)
+      {
+        (_sequence, _rawTreePtr, _subruleIndex, _curTextPos, _listEndPos, _listSep) = _stack.Pop();
+        NextTokenSize()
+      }
+      else
+        -1
+    }
+    else
+    {
+      def state = _parseResult.rawTree[_rawTreePtr + ExtensibleRuleParser.RawTreeOfs.State];
+      def invalidState = state >= 0 && _sequence.Subrules[_subruleIndex].State >= state;
+      def ruleInfo = rules[_subruleIndex];
+      mutable fullSize;
+
+      unless (invalidState)
+      {
+        def sizePtr = _rawTreePtr + ruleInfo.Offset;
+        fullSize = _parseResult.GetSize(sizePtr);
+        when (fullSize == 0)
+          return NextTokenSize();
+      }
+
+      match (ruleInfo)
+      {
+        | ListItem => assert(false)
+        | Empty =>
+          if (invalidState)
+            -1
+          else
+          {
+            _curTextPos += fullSize;
+            NextTokenSize()
+          }
+
+        | RegularCall
+        | TokenString
+        | ExtensibleCall as extensibleCall when extensibleCall.RuleParser.IsTokenRule
+        | SimpleCall     as simpleCall     when simpleCall.RuleParser.IsTokenRule
+        | List           as list           when list.IsOptimized
+          =>
+          if (invalidState)
+            -1
+          else
+          {
+            _curTextPos += fullSize;
+            fullSize
+          }
+
+        | SimpleCall        (ruleParser) =>
+          if (invalidState)
+          {
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, int.MaxValue - 1, _curTextPos + fullSize, _listEndPos, _listSep));
+            _rawTreePtr = _parseResult.TryGetRawTree(_curTextPos, ruleParser.RuleId);
+            if (_rawTreePtr > 0)
+            {
+              _sequence     = _parseResult.GetSequenceInfo(_rawTreePtr);
+              _subruleIndex = -1;
+              _listEndPos   = -1;
+              NextTokenSize()
+            }
+            else
+              -1
+          }
+          else
+          {
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex, _curTextPos + fullSize, _listEndPos, _listSep));
+            _rawTreePtr     = _parseResult.GetRawTree(_curTextPos, ruleParser.RuleId);
+            _sequence       = _parseResult.GetSequenceInfo(_rawTreePtr);
+            _subruleIndex   = -1;
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+
+        | ExtensibleCall(ruleParser)    =>
+          if (invalidState)
+          {
+            _listEndPos     = -1;
+            mutable prefixRawTreePtr = _parseResult.TryGetRawTree(_curTextPos, ruleParser.PrefixId);
+            if (prefixRawTreePtr > 0)
+            {
+              def rawTreePtr      = _parseResult.GetPrefix(prefixRawTreePtr);
+              if (rawTreePtr > 0)
+              {
+                _stack.Push(ParseFrame(_sequence, _rawTreePtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+                _rawTreePtr     = rawTreePtr;
+                _sequence       = _parseResult.GetSequenceInfo(rawTreePtr);
+                _subruleIndex   = -1;
+                _listEndPos     = -1;
+                NextTokenSize()
+              }
+              else
+                -1;
+            }
+            else
+              -1;
+          }
+          else if (fullSize == 0)
+            NextTokenSize()
+          else if (_listEndPos == -1)
+          {
+            _listEndPos     = _curTextPos + fullSize;
+            mutable prefixRawTreePtr = _parseResult.GetRawTree(_curTextPos, ruleParser.PrefixId);
+            def rawTreePtr      = ruleParser.BestPrefix(_parseResult.GetPrefix(prefixRawTreePtr), _parseResult);
+            assert3(rawTreePtr > 0);
+            def rule        = _parseResult.GetSequenceInfo(rawTreePtr);
+            def rawTreeSize = rule.GetSize(rawTreePtr, _parseResult);
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex - 1, _curTextPos + rawTreeSize, _listEndPos, _listSep));
+            _rawTreePtr     = rawTreePtr;
+            _sequence       = rule;
+            _subruleIndex   = -1;
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+          else if (_curTextPos < _listEndPos)
+          {
+            mutable postfixRawTreePtr = _parseResult.GetRawTree(_curTextPos, ruleParser.PostfixId);
+            def bestResult = ruleParser.BestPostfix(_parseResult.GetPostfix(postfixRawTreePtr), _parseResult);
+            assert3(bestResult > 0);
+            def rule        = _parseResult.GetSequenceInfo(bestResult);
+            def rawTreeSize = rule.GetSize(bestResult, _parseResult);
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex - 1, _curTextPos + rawTreeSize, _listEndPos, _listSep));
+            _rawTreePtr     = bestResult;
+            _sequence       = rule;
+            _subruleIndex   = -1;
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+          else
+          {
+            assert3(_curTextPos == _listEndPos);
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+
+        | Option            as rule =>
+          if (invalidState)
+          {
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+            _rawTreePtr = _parseResult.TryGetRawTree(_curTextPos, rule.Rule.Id);
+            if (_rawTreePtr > 0)
+            {
+              _sequence     = _parseResult.GetSequenceInfo(_rawTreePtr);
+              _subruleIndex = -1;
+              _listEndPos   = -1;
+              NextTokenSize()
+            }
+            else
+              -1
+          }
+          else if (fullSize == 0)
+            NextTokenSize()
+          else
+          {
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex, _curTextPos + fullSize, _listEndPos, _listSep));
+            _rawTreePtr     = _parseResult.GetRawTree(_curTextPos, rule.Rule.Id);
+            _sequence       = _parseResult.GetSequenceInfo(_rawTreePtr);
+            _subruleIndex   = -1;
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+
+        | List              as rule =>
+          if (invalidState)
+          {
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+            _rawTreePtr = _parseResult.TryGetRawTree(_curTextPos, rule.Item.Id);
+            if (_rawTreePtr > 0)
+            {
+              _sequence     = _parseResult.GetSequenceInfo(_rawTreePtr);
+              _subruleIndex = -1;
+              _listEndPos   = -1;
+              NextTokenSize()
+            }
+            else
+              -1
+          }
+          else if (fullSize == 0)
+            NextTokenSize()
+          else if (_listEndPos == -1)
+          {
+            _listEndPos     = _curTextPos + fullSize;
+            def rawTreePtr  = _parseResult.GetRawTree(_curTextPos, rule.Item.Id);
+            def rawTreeSize = rule.Item.GetSize(rawTreePtr, _parseResult);
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex - 1, _curTextPos + rawTreeSize, _listEndPos, _listSep));
+            _rawTreePtr     = rawTreePtr;
+            _sequence       = _parseResult.GetSequenceInfo(_rawTreePtr);
+            _listEndPos     = -1;
+            _subruleIndex   = -1;
+            NextTokenSize()
+          }
+          else if (_curTextPos < _listEndPos)
+          {
+            def rawTreePtr  = _parseResult.GetRawTree(_curTextPos, rule.Item.Id);
+            def rawTreeSize = rule.Item.GetSize(rawTreePtr, _parseResult);
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex - 1, _curTextPos + rawTreeSize, _listEndPos, _listSep));
+            _rawTreePtr     = rawTreePtr;
+            _sequence       = _parseResult.GetSequenceInfo(_rawTreePtr);
+            _listEndPos     = -1;
+            _subruleIndex   = -1;
+            NextTokenSize()
+          }
+          else
+          {
+            assert3(_curTextPos == _listEndPos);
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+
+        | ListWithSeparator as rule =>
+          if (invalidState)
+          {
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+            _rawTreePtr = _parseResult.TryGetRawTree(_curTextPos, rule.Item.Id);
+            if (_rawTreePtr > 0)
+            {
+              _sequence     = _parseResult.GetSequenceInfo(_rawTreePtr);
+              _subruleIndex = -1;
+              _listEndPos   = -1;
+              NextTokenSize()
+            }
+            else
+              -1
+          }
+          else if (fullSize == 0)
+            NextTokenSize()
+          else if (_listEndPos == -1)
+          {
+            _listEndPos     = _curTextPos + fullSize;
+            def rawTreePtr  = _parseResult.GetRawTree(_curTextPos, rule.Item.Id);
+            def rawTreeSize = rule.Item.GetSize(rawTreePtr, _parseResult);
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex - 1, _curTextPos + rawTreeSize, _listEndPos, true));
+            _rawTreePtr     = rawTreePtr;
+            _sequence       = _parseResult.GetSequenceInfo(_rawTreePtr);
+            _listEndPos     = -1;
+            _subruleIndex   = -1;
+            NextTokenSize()
+          }
+          else if (_curTextPos < _listEndPos)
+          {
+            def curRule = if (_listSep) rule.Separator else rule.Item;
+            def rawTreePtr  = _parseResult.GetRawTree(_curTextPos, curRule.Id);
+            def rawTreeSize = curRule.GetSize(rawTreePtr, _parseResult);
+            _stack.Push(ParseFrame(_sequence, _rawTreePtr, _subruleIndex - 1, _curTextPos + rawTreeSize, _listEndPos, !_listSep));
+            _rawTreePtr     = rawTreePtr;
+            _sequence       = _parseResult.GetSequenceInfo(_rawTreePtr);
+            _listEndPos     = -1;
+            _subruleIndex   = -1;
+            NextTokenSize()
+          }
+          else
+          {
+            assert3(_curTextPos == _listEndPos);
+            _listEndPos     = -1;
+            NextTokenSize()
+          }
+
+        | Marker                   => assert3(false); //NextTokenSize()
+      }
+    }
+  }
+}
+
+// ---- Internal/TokenParser.n (Nitra.Internal) ----
+[StructuralEquality]
+public variant TokenParser
+{
+  [EqualsIgnore]
+  public Callers : SCG.HashSet[ParsingCallerInfo] = SCG.HashSet();
+
+  | RegularCall    { Descriptor : RegularRuleDescriptor; }
+  | ExtensibleCall { RuleParser : ExtensibleRuleParser; }
+  | SimpleCall     { RuleParser : SimpleRuleParser; }
+  | TokenString    { Str : string; }
+
+  public Parse(pos : int, text : string, parseResult : ParseResult) : int
+  {
+    match (this)
+    {
+      | RegularCall    as p => p.Descriptor.Parse(pos, text)
+      | ExtensibleCall as p => p.RuleParser.Parse(pos, text, parseResult)
+      | SimpleCall     as p => p.RuleParser.Parse(pos, text, parseResult)
+      | TokenString    as p =>
+        def str = p.Str;
+        if (pos + str.Length <= text.Length)
+        {
+          for (mutable i = 0; i < str.Length; ++i)
+            when (str[i] != text[pos + i])
+              return -1;
+          pos + str.Length
+        }
+        else
+          -1
+    }
+  }
+
+  public IsVoid : bool
+  {
+    get
+    {
+      match (this)
+      {
+        | RegularCall    as p => p.Descriptor.IsVoid
+        | ExtensibleCall as p => p.RuleParser.IsVoid
+        | SimpleCall     as p => p.RuleParser.IsVoid
+        | TokenString    as p => p.Str == " "
+      }
+    }
+  }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | RegularCall    as p => $"regex:      $(p.Descriptor)"
+      | ExtensibleCall as p => $"extensible: $(p.RuleParser.Descriptor) BP=$(p.RuleParser.BindingPower)"
+      | SimpleCall     as p => $"simple:     $(p.RuleParser.Descriptor)"
+      | TokenString    as p => $"string:     \"$(p.Str)\""
+    }
+  }
+}
+
+// ---- Outlining/OutliningWalkerContext.n (Nitra.Internal) ----
+[Record]
+public class OutliningWalkerContext
+{
+                 public         Result            : List[OutliningInfo] = List();
+  [RecordIgnore] public mutable LastSpaceStartPos : int;
+  [RecordIgnore] public mutable LastSpaceEndPos   : int;
+}
+
+// ---- ParseTree/ISequenceParseTreeLoader.n (Nitra.Internal) ----
+public interface ISequenceParseTreeLoader[T]
+  where T : IParseTree
+{
+  ReadSequence(id : int, pos : ref int) : T;
+  ReadSequence(id : int, recoveredSubrulesIndex : int) : T;
+  ReadEmptySequence(id : int, pos : int) : T;
+  CreateAmbiguousSequence(id : int, ambiguities : array[T]) : T;
+}
+
+// ---- ParseTree/ParseTreeCastHelper.n (Nitra.Internal) ----
+//BUG: interface leads to malformed DLL file
+public abstract class ParseTreeCastHelper[TLoader, TParseTree]
+  where TLoader    : IParseTree
+  where TParseTree : TLoader
+{
+  public abstract Cast(x : TLoader) : TParseTree;
+}
+
+public sealed class ParseTreeCast[TParseTree] : ParseTreeCastHelper[ParseTree, TParseTree]
+  where TParseTree : ParseTree
+{
+  public static Instance : ParseTreeCast[TParseTree];
+
+  static this () { Instance = ParseTreeCast() }
+
+  public override Cast(x : ParseTree) : TParseTree { x :> TParseTree }
+}
+
+public sealed class NSpanCast : ParseTreeCastHelper[NSpan, NSpan]
+{
+  public static Instance : NSpanCast;
+
+  static this () { Instance = NSpanCast() }
+
+  public override Cast(x : NSpan) : NSpan { x }
+}
+
+// ---- ParseTree/ParseTreeFactory.n (Nitra.Internal) ----
+public module ParseTreeFactory
+{
+  public CreateOption[TLoader, TItem](
+    parseResult    : ParseResult,
+    itemLoader     : ISequenceParseTreeLoader[TLoader],
+    itemSequenceId : int,
+    itemConverter  : ParseTreeCastHelper[TLoader, TItem],
+    rawTreePtr     : int,
+    offset         : int,
+    pos            : ref int
+  ) : OptionParseTree[TItem]
+    where TLoader : IParseTree
+    where TItem   : TLoader
+  {
+    if (parseResult.GetSize(rawTreePtr + offset) > 0)
+    {
+      def optionStartPos = pos;
+      def item           = itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast;
+      OptionParseTree.Some(Location(parseResult, optionStartPos, pos), item)
+    }
+    else
+      OptionParseTree.None(Location(parseResult, pos))
+  }
+
+  public CreateList[TLoader, TItem](
+    parseResult    : ParseResult,
+    itemLoader     : ISequenceParseTreeLoader[TLoader],
+    itemSequenceId : int,
+    itemConverter  : ParseTreeCastHelper[TLoader, TItem],
+    rawTreePtr     : int,
+    offset         : int,
+    pos            : ref int
+  ) : ListParseTree[TItem]
+    where TLoader : IParseTree
+    where TItem   : TLoader
+  {
+    def listEnd = pos + parseResult.GetSize(rawTreePtr + offset);
+    if (listEnd > pos)
+    {
+      def itemBuffer = SCG.List(16);
+      def listStartPos = pos;
+      do
+        itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast |> itemBuffer.Add;
+      while (pos < listEnd);
+      assert(pos == listEnd);
+
+      ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), itemBuffer)
+    }
+    else
+      EmptyListParseTree(Location(parseResult, pos))
+  }
+
+  public CreateDynamicExtensionPointList[TItem](
+    parseResult      : ParseResult,
+    rawTreePtr       : int,
+    offset           : int,
+    pos              : ref int,
+    descriptor       : ExtensibleRuleDescriptor,
+    bindingPower     : string
+  ) : ListParseTree[TItem]
+    where TItem   : ParseTree
+  {
+    def listEnd = pos + parseResult.GetSize(rawTreePtr + offset);
+    if (listEnd > pos)
+    {
+      def itemBuffer = SCG.List(16);
+      def listStartPos = pos;
+      mutable grammar    = parseResult.GetRuleParser(rawTreePtr).Grammar;
+      mutable ruleParser = grammar.GetExtensibleRuleParser(descriptor, "0");
+      do
+      {
+        def itemStart = pos;
+        mutable prefixRawTreePtr = parseResult.GetRawTree(itemStart, ruleParser.PrefixId);
+        def bestRawTree          = ruleParser.BestPrefix(parseResult.GetPrefix(prefixRawTreePtr), parseResult);
+        def extensionRuleParser  = ruleParser.PrefixRuleParser(bestRawTree, parseResult);
+
+        def item = ExtensibleRuleParseTreeConstructor.Create(ref pos, 1, parseResult, bindingPower, descriptor, grammar);
+        itemBuffer.Add(item);
+
+        def newGrammar = extensionRuleParser.GrammarChangeHandler(bestRawTree, itemStart, pos, parseResult, grammar);
+        when (grammar : object != newGrammar)
+        {
+          grammar    = newGrammar;
+          ruleParser = grammar.GetExtensibleRuleParser(descriptor, "0");
+        }
+      }
+      while (pos < listEnd);
+      assert(pos == listEnd);
+
+      ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), itemBuffer)
+    }
+    else
+      EmptyListParseTree(Location(parseResult, pos))
+  }
+
+  public CreateListWithSeparator[TItemLoader, TItem, TSeparatorLoader, TSeparator](
+    parseResult         : ParseResult,
+    itemLoader          : ISequenceParseTreeLoader[TItemLoader],
+    itemSequenceId      : int,
+    itemConverter       : ParseTreeCastHelper[TItemLoader, TItem],
+    separatorLoader     : ISequenceParseTreeLoader[TSeparatorLoader],
+    separatorSequenceId : int,
+    separatorConverter  : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+    rawTreePtr          : int,
+    offset              : int,
+    pos                 : ref int
+  ) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+    where TItemLoader      : IParseTree
+    where TItem            : TItemLoader
+    where TSeparatorLoader : IParseTree
+    where TSeparator       : TSeparatorLoader
+  {
+    def listEnd = pos + parseResult.GetSize(rawTreePtr + offset);
+    if (listEnd > pos)
+    {
+      def itemBuffer      = SCG.List(16);
+      def separatorBuffer = SCG.List(16);
+      def listStartPos    = pos;
+      def loop()
+      {
+        itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast |> itemBuffer.Add;
+
+        if (pos < listEnd)
+        {
+          separatorLoader.ReadSequence(separatorSequenceId, ref pos) |> separatorConverter.Cast |> separatorBuffer.Add;
+
+          if (pos < listEnd)
+            loop();
+          else
+            assert(pos == listEnd);
+        }
+        else
+          assert(pos == listEnd);
+      }
+      loop();
+
+      def loc = Location(parseResult, listStartPos, listEnd);
+      ConcreteSequenceParseTree(loc, ConcreteListParseTree(loc, itemBuffer), ConcreteListParseTree(loc, separatorBuffer))
+    }
+    else
+    {
+      def loc = Location(parseResult, pos);
+      ConcreteSequenceParseTree(loc, EmptyListParseTree(loc), EmptyListParseTree(loc))
+    }
+  }
+
+  public CreateListWithSeparatorOnlyItems[TItemLoader, TItem, TSeparatorLoader](
+    parseResult         : ParseResult,
+    itemLoader          : ISequenceParseTreeLoader[TItemLoader],
+    itemSequenceId      : int,
+    itemConverter       : ParseTreeCastHelper[TItemLoader, TItem],
+    separatorLoader     : ISequenceParseTreeLoader[TSeparatorLoader],
+    separatorSequenceId : int,
+    rawTreePtr          : int,
+    offset              : int,
+    pos                 : ref int
+  ) : ListParseTree[TItem]
+    where TItemLoader      : IParseTree
+    where TItem            : TItemLoader
+    where TSeparatorLoader : IParseTree
+  {
+    def listEnd = pos + parseResult.GetSize(rawTreePtr + offset);
+    if (listEnd > pos)
+    {
+      def itemBuffer      = SCG.List(16);
+      def listStartPos    = pos;
+      def loop()
+      {
+        itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast |> itemBuffer.Add;
+
+        if (pos < listEnd)
+        {
+          _ = separatorLoader.ReadSequence(separatorSequenceId, ref pos);
+
+          if (pos < listEnd)
+            loop();
+          else
+            assert(pos == listEnd);
+        }
+        else
+          assert(pos == listEnd);
+      }
+      loop();
+
+      ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), itemBuffer)
+    }
+    else
+      EmptyListParseTree(Location(parseResult, pos))
+  }
+
+  public CreateListWithSeparatorOnlySeparators[TItemLoader, TSeparatorLoader, TSeparator](
+    parseResult         : ParseResult,
+    itemLoader          : ISequenceParseTreeLoader[TItemLoader],
+    itemSequenceId      : int,
+    separatorLoader     : ISequenceParseTreeLoader[TSeparatorLoader],
+    separatorSequenceId : int,
+    separatorConverter  : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+    rawTreePtr          : int,
+    offset              : int,
+    pos                 : ref int
+  ) : ListParseTree[TSeparator]
+    where TItemLoader      : IParseTree
+    where TSeparatorLoader : IParseTree
+    where TSeparator       : TSeparatorLoader
+  {
+    def listEnd = pos + parseResult.GetSize(rawTreePtr + offset);
+    if (listEnd > pos)
+    {
+      def separatorBuffer = SCG.List(16);
+      def listStartPos    = pos;
+      def loop()
+      {
+        _ = itemLoader.ReadSequence(itemSequenceId, ref pos);
+
+        if (pos < listEnd)
+        {
+          separatorLoader.ReadSequence(separatorSequenceId, ref pos) |> separatorConverter.Cast |> separatorBuffer.Add;
+
+          if (pos < listEnd)
+            loop();
+          else
+            assert(pos == listEnd);
+        }
+        else
+          assert(pos == listEnd);
+      }
+      loop();
+
+      ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), separatorBuffer)
+    }
+    else
+      EmptyListParseTree(Location(parseResult, pos))
+  }
+
+  public CreateOption[TLoader, TItem](
+    parseResult           : ParseResult,
+    itemLoader            : ISequenceParseTreeLoader[TLoader],
+    itemSequenceId        : int,
+    itemConverter         : ParseTreeCastHelper[TLoader, TItem],
+    state                 : int,
+    startPos              : int,
+    endPos                : int
+  ) : OptionParseTree[TItem]
+    where TLoader : IParseTree
+    where TItem   : TLoader
+  {
+    def parsingSequence = (parseResult.ParserHost.ParsingStates[state].SubruleInfo :> SubruleInfo.Option).Rule.ParsingSequence;
+    RecoveryModeOptionParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter));
+  }
+
+  public CreateList[TLoader, TItem](
+    parseResult           : ParseResult,
+    itemLoader            : ISequenceParseTreeLoader[TLoader],
+    itemSequenceId        : int,
+    itemConverter         : ParseTreeCastHelper[TLoader, TItem],
+    state                 : int,
+    startPos              : int,
+    endPos                : int
+  ) : ListParseTree[TItem]
+    where TLoader : IParseTree
+    where TItem   : TLoader
+  {
+    def parsingSequence = (parseResult.ParserHost.ParsingStates[state].SubruleInfo :> SubruleInfo.List).ParsingSequence;
+    RecoveryModeListParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter))
+  }
+
+  public CreateDynamicExtensionPointList[TItem](
+    parseResult      : ParseResult,
+    state            : int,
+    startPos         : int,
+    endPos           : int,
+    descriptor       : ExtensibleRuleDescriptor,
+    bindingPower     : string
+  ) : ListParseTree[TItem]
+    where TItem : ParseTree
+  {
+    def parsingSequence = ((parseResult.ParserHost.ParsingStates[state].SubruleInfo :> SubruleInfo.List).Item.Subrules[0] :> SubruleInfo.ExtensibleCall).RuleParser.DynamicExtensibleParsingSequence;
+    def context         = RecoveryModeDynamicExtensionListParseTreeReaderContext(descriptor, bindingPower);
+    RecoveryModeDynamicExtensionListParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, context);
+  }
+
+  public CreateListWithSeparator[TItemLoader, TItem, TSeparatorLoader, TSeparator](
+    parseResult           : ParseResult,
+    itemLoader            : ISequenceParseTreeLoader[TItemLoader],
+    itemSequenceId        : int,
+    itemConverter         : ParseTreeCastHelper[TItemLoader, TItem],
+    separatorLoader       : ISequenceParseTreeLoader[TSeparatorLoader],
+    separatorSequenceId   : int,
+    separatorConverter    : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+    state                 : int,
+    startPos              : int,
+    endPos                : int
+  ) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+    where TItemLoader      : IParseTree
+    where TItem            : TItemLoader
+    where TSeparatorLoader : IParseTree
+    where TSeparator       : TSeparatorLoader
+  {
+    def parsingSequence = (parseResult.ParserHost.ParsingStates[state].SubruleInfo :> SubruleInfo.ListWithSeparator).ParsingSequence;
+    RecoveryModeListWithSeparatorParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, (RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter), RecoveryModeParseTreeReaderContext(separatorLoader, separatorSequenceId, separatorConverter)))
+  }
+
+  public CreateListWithSeparatorOnlyItems[TItemLoader, TItem](
+    parseResult           : ParseResult,
+    itemLoader            : ISequenceParseTreeLoader[TItemLoader],
+    itemSequenceId        : int,
+    itemConverter         : ParseTreeCastHelper[TItemLoader, TItem],
+    state                 : int,
+    startPos              : int,
+    endPos                : int
+  ) : ListParseTree[TItem]
+    where TItemLoader      : IParseTree
+    where TItem            : TItemLoader
+  {
+    def parsingSequence = (parseResult.ParserHost.ParsingStates[state].SubruleInfo :> SubruleInfo.ListWithSeparator).ParsingSequence;
+    RecoveryModeListWithSeparatorOnlyItemsParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter))
+  }
+
+  public CreateListWithSeparatorOnlySeparators[TSeparatorLoader, TSeparator](
+    parseResult            : ParseResult,
+    separatorLoader        : ISequenceParseTreeLoader[TSeparatorLoader],
+    separatorSequenceId    : int,
+    separatorConverter     : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+    state                  : int,
+    startPos               : int,
+    endPos                 : int
+  ) : ListParseTree[TSeparator]
+    where TSeparatorLoader : IParseTree
+    where TSeparator       : TSeparatorLoader
+  {
+    def parsingSequence = (parseResult.ParserHost.ParsingStates[state].SubruleInfo :> SubruleInfo.ListWithSeparator).ParsingSequence;
+    RecoveryModeListWithSeparatorOnlySeparatorsParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(separatorLoader, separatorSequenceId, separatorConverter))
+  }
+
+  public FindRecoveredSubrule(subruleStarts : array[SubruleStart], state : int, startPos : out int, endPos : out int) : bool
+  {
+    foreach (subruleStart when (subruleStart.State == state) in subruleStarts with i)
+    {
+      startPos = subruleStart.Pos;
+      endPos   = subruleStarts[i + 1].Pos;
+      return true;
+    }
+
+    foreach (subruleStart when (subruleStart.State > state) in subruleStarts)
+    {
+      startPos = subruleStart.Pos;
+      endPos   = startPos;
+      return false;
+    }
+
+    def subruleStart = subruleStarts[subruleStarts.Length - 1];
+    assert(subruleStart.State == -1);
+    startPos = subruleStart.Pos;
+    endPos   = startPos;
+    false
+  }
+
+  public CastArray[TConcrete](items : array[ParseTree]) : array[TConcrete]
+    where TConcrete : ParseTree
+  {
+    def result = array(items.Length);
+    Array.Copy(items, result, items.Length);
+    result
+  }
+}
+
+// ---- ParseTree/RecoveryModeBaseListParseTreeReader.n (Nitra.Internal) ----
+internal abstract class RecoveryModeBaseListParseTreeReader[TContext, TListBuffer, TParseTree] : RecoveryModeParseTreeReader[TContext, TParseTree]
+{
+  protected sealed override ReadParseTree(parseResult : ParseResult, startPos : int, endPos : int, recoveredSubruleIndex : int, context : TContext) : TParseTree
+  {
+    def listBuffer = CreateListBuffer();
+    def (subrules, _) = parseResult.RecoveredSubrules[recoveredSubruleIndex];
+    for (mutable i = 0; i < subrules.Length - 1; ++i)
+    {
+      def itemStartPos = subrules[i].Pos;
+      def itemEndPos   = subrules[i + 1].Pos;
+      def stateNumber  = subrules[i].State;
+      def state        = parseResult.ParserHost.ParsingStates[stateNumber];
+      match (state.SubruleInfo)
+      {
+        | ListItem(ParsingSequence = itemParsingSequence, IsItem = isItem) => ReadListItem(isItem, parseResult, itemParsingSequence, itemStartPos, itemEndPos, listBuffer, context)
+        | _ => assert(false, "List items expected")
+      }
+    }
+    CreateListParseTree(parseResult, startPos, endPos, listBuffer)
+  }
+
+  protected sealed override ReadParseTreeInStandardMode(parseResult : ParseResult, startPos : int, endPos : int, context : TContext) : TParseTree
+  {
+    _ = parseResult; _ = startPos; _ = endPos; _ = context;
+    throw NotImplementedException("Fallback to standard parse tree reading");
+  }
+
+  protected abstract CreateListBuffer() : TListBuffer;
+
+  protected abstract ReadListItem(isItem : bool, parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, listBuffer : TListBuffer, context : TContext) : void;
+
+  protected abstract CreateListParseTree(parseResult : ParseResult, startPos : int, endPos : int, listBuffer : TListBuffer) : TParseTree;
+}
+
+// ---- ParseTree/RecoveryModeDynamicExtensionListParseTreeReader.n (Nitra.Internal) ----
+internal sealed class RecoveryModeDynamicExtensionListParseTreeReader[TItem] : RecoveryModeParseTreeReader[RecoveryModeDynamicExtensionListParseTreeReaderContext[TItem], ListParseTree[TItem]]
+  where TItem : ParseTree
+{
+  public static Instance : this;
+
+  static this() { Instance = RecoveryModeDynamicExtensionListParseTreeReader() }
+
+  protected override MakeEmptyParseTree(parseResult : ParseResult, pos : int, context : RecoveryModeDynamicExtensionListParseTreeReaderContext[TItem]) : ListParseTree[TItem]
+  {
+    _ = context;
+    EmptyListParseTree(Location(parseResult, pos))
+  }
+
+  protected override MakeAmbiguousParseTree(ambiguities : array[ListParseTree[TItem]], context : RecoveryModeDynamicExtensionListParseTreeReaderContext[TItem]) : ListParseTree[TItem]
+  {
+    _ = context;
+    AmbiguousListParseTree(ambiguities)
+  }
+
+  protected override ReadParseTreeInStandardMode(parseResult : ParseResult, startPos : int, endPos : int, context : RecoveryModeDynamicExtensionListParseTreeReaderContext[TItem]) : ListParseTree[TItem]
+  {
+    IgnoreParams();
+    assert(false);
+  }
+
+  protected override ReadParseTree(parseResult : ParseResult, startPos : int, endPos : int, recoveredSubruleIndex : int, context : RecoveryModeDynamicExtensionListParseTreeReaderContext[TItem]) : ListParseTree[TItem]
+  {
+    def buffer = SCG.List(16);
+    def (subrules, _) = parseResult.RecoveredSubrules[recoveredSubruleIndex];
+    for (mutable i = 0; i < subrules.Length - 1; ++i)
+    {
+      def itemStartPos = subrules[i].Pos;
+      def itemEndPos   = subrules[i + 1].Pos;
+      def stateNumber  = subrules[i].State;
+      def state        = parseResult.ParserHost.ParsingStates[stateNumber];
+      def grammar      = (state :> ParsingState.DynamicExtensibleItem).RuleParser.Grammar;
+      buffer.Add(ExtensibleRuleParseTreeConstructor.Create(itemStartPos, itemEndPos, parseResult, context.BindingPower, context.Descriptor, grammar));
+    }
+    ConcreteListParseTree(Location(parseResult, startPos, endPos), buffer)
+  }
+}
+
+[Record]
+internal struct RecoveryModeDynamicExtensionListParseTreeReaderContext[TItem]
+{
+  public Descriptor       : ExtensibleRuleDescriptor;
+  public BindingPower     : string;
+}
+
+// ---- ParseTree/RecoveryModeListParseTreeReader.n (Nitra.Internal) ----
+internal class RecoveryModeListParseTreeReader[TLoader, TItem] : RecoveryModeBaseListParseTreeReader[RecoveryModeParseTreeReaderContext[TLoader, TItem], SCG.List[TItem], ListParseTree[TItem]]
+  where TLoader : IParseTree
+  where TItem   : TLoader
+{
+  public static Instance : this;
+
+  static this() { Instance = RecoveryModeListParseTreeReader() }
+
+  protected sealed override MakeAmbiguousParseTree(ambiguities : array[ListParseTree[TItem]], context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : ListParseTree[TItem]
+  {
+    _ = context;
+    AmbiguousListParseTree(ambiguities)
+  }
+
+  protected sealed override MakeEmptyParseTree(parseResult : ParseResult, pos : int, context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : ListParseTree[TItem]
+  {
+    _ = context;
+    EmptyListParseTree(Location(parseResult, pos))
+  }
+
+  protected sealed override CreateListBuffer() : SCG.List[TItem]
+  {
+    SCG.List()
+  }
+
+  protected override ReadListItem(isItem : bool, parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, listBuffer : SCG.List[TItem], context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : void
+  {
+    _ = isItem;
+    RecoveryModeSequenceParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeSequenceParseTreeReaderContext(context.ItemLoader, context.ItemSequenceId))
+      |> context.ItemConverter.Cast
+      |> listBuffer.Add;
+  }
+
+  protected sealed override CreateListParseTree(parseResult : ParseResult, startPos : int, endPos : int, listBuffer : SCG.List[TItem]) : ListParseTree[TItem]
+  {
+    ConcreteListParseTree(Location(parseResult, startPos, endPos), listBuffer)
+  }
+}
+
+// ---- ParseTree/RecoveryModeListWithSeparatorOnlyItemsParseTreeReader.n (Nitra.Internal) ----
+internal sealed class RecoveryModeListWithSeparatorOnlyItemsParseTreeReader[TItemLoader, TItem] : RecoveryModeListParseTreeReader[TItemLoader, TItem]
+  where TItemLoader : IParseTree
+  where TItem       : TItemLoader
+{
+  public new static Instance : this;
+
+  static this() { Instance = RecoveryModeListWithSeparatorOnlyItemsParseTreeReader() }
+
+  protected override ReadListItem(isItem : bool, parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, listBuffer : SCG.List[TItem], context : RecoveryModeParseTreeReaderContext[TItemLoader, TItem]) : void
+  {
+    if (isItem)
+      RecoveryModeSequenceParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeSequenceParseTreeReaderContext(context.ItemLoader, context.ItemSequenceId))
+        |> context.ItemConverter.Cast
+        |> listBuffer.Add;
+    else
+     ()
+  }
+}
+
+// ---- ParseTree/RecoveryModeListWithSeparatorOnlySeparatorsParseTreeReader.n (Nitra.Internal) ----
+internal sealed class RecoveryModeListWithSeparatorOnlySeparatorsParseTreeReader[TSeparatorLoader, TSeparator] : RecoveryModeListParseTreeReader[TSeparatorLoader, TSeparator]
+  where TSeparatorLoader : IParseTree
+  where TSeparator       : TSeparatorLoader
+{
+  public new static Instance : this;
+
+  static this() { Instance = RecoveryModeListWithSeparatorOnlySeparatorsParseTreeReader() }
+
+  protected override ReadListItem(isItem : bool, parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, listBuffer : SCG.List[TSeparator], context : RecoveryModeParseTreeReaderContext[TSeparatorLoader, TSeparator]) : void
+  {
+    if (isItem)
+      ()
+    else
+      RecoveryModeSequenceParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeSequenceParseTreeReaderContext(context.ItemLoader, context.ItemSequenceId))
+        |> context.ItemConverter.Cast
+        |> listBuffer.Add;
+  }
+}
+
+// ---- ParseTree/RecoveryModeListWithSeparatorReader.n (Nitra.Internal) ----
+internal sealed class RecoveryModeListWithSeparatorParseTreeReader[TItemLoader, TItem, TSeparatorLoader, TSeparator] :
+  RecoveryModeBaseListParseTreeReader[
+    /* TContext    */ RecoveryModeParseTreeReaderContext[TItemLoader, TItem] * RecoveryModeParseTreeReaderContext[TSeparatorLoader, TSeparator],
+    /* TListBuffer */ SCG.List[TItem] * SCG.List[TSeparator],
+    /* TParseTree  */ SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]]
+  where TItemLoader      : IParseTree
+  where TItem            : TItemLoader
+  where TSeparatorLoader : IParseTree
+  where TSeparator       : TSeparatorLoader
+{
+  public static Instance : this;
+
+  static this() { Instance = RecoveryModeListWithSeparatorParseTreeReader() }
+
+  protected override MakeAmbiguousParseTree(ambiguities : array[SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]], context : RecoveryModeParseTreeReaderContext[TItemLoader, TItem] * RecoveryModeParseTreeReaderContext[TSeparatorLoader, TSeparator]) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+  {
+    _ = context;
+    AmbiguousSequenceParseTree(ambiguities)
+  }
+
+  protected override MakeEmptyParseTree(parseResult : ParseResult, pos : int, context : RecoveryModeParseTreeReaderContext[TItemLoader, TItem] * RecoveryModeParseTreeReaderContext[TSeparatorLoader, TSeparator]) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+  {
+    _ = context;
+    def loc = Location(parseResult, pos);
+    ConcreteSequenceParseTree(loc, EmptyListParseTree(loc), EmptyListParseTree(loc))
+  }
+
+  protected override CreateListBuffer() : SCG.List[TItem] * SCG.List[TSeparator]
+  {
+    (SCG.List(), SCG.List())
+  }
+
+  protected override ReadListItem(isItem : bool, parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, listBuffer : SCG.List[TItem] * SCG.List[TSeparator], context : RecoveryModeParseTreeReaderContext[TItemLoader, TItem] * RecoveryModeParseTreeReaderContext[TSeparatorLoader, TSeparator]) : void
+  {
+    if (isItem)
+      RecoveryModeSequenceParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeSequenceParseTreeReaderContext(context[0].ItemLoader, context[0].ItemSequenceId))
+        |> context[0].ItemConverter.Cast
+        |> listBuffer[0].Add;
+    else
+      RecoveryModeSequenceParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeSequenceParseTreeReaderContext(context[1].ItemLoader, context[1].ItemSequenceId))
+        |> context[1].ItemConverter.Cast
+        |> listBuffer[1].Add;
+  }
+
+  protected override CreateListParseTree(parseResult : ParseResult, startPos : int, endPos : int, listBuffer : SCG.List[TItem] * SCG.List[TSeparator]) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+  {
+    def loc = Location(parseResult, startPos, endPos);
+    ConcreteSequenceParseTree(loc, ConcreteListParseTree(loc, listBuffer[0]), ConcreteListParseTree(loc, listBuffer[1]))
+  }
+}
+
+// ---- ParseTree/RecoveryModeOptionParseTreeReader.n (Nitra.Internal) ----
+internal sealed class RecoveryModeOptionParseTreeReader[TLoader, TItem] : RecoveryModeParseTreeReader[RecoveryModeParseTreeReaderContext[TLoader, TItem], OptionParseTree[TItem]]
+  where TLoader : IParseTree
+  where TItem   : TLoader
+{
+  public static Instance : this;
+
+  static this() { Instance = RecoveryModeOptionParseTreeReader() }
+
+  protected override MakeEmptyParseTree(parseResult : Nitra.Runtime.ParseResult, pos : int, context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : OptionParseTree[TItem]
+  {
+    _ = context;
+    OptionParseTree.None(Location(parseResult, pos))
+  }
+
+  protected override MakeAmbiguousParseTree(ambiguities : array[Nitra.Runtime.OptionParseTree[TItem]], context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : Nitra.Runtime.OptionParseTree[TItem]
+  {
+    _ = context;
+    AmbiguousOptionParseTree(ambiguities)
+  }
+
+  protected override ReadParseTree(parseResult : Nitra.Runtime.ParseResult, startPos : int, endPos : int, recoveredSubruleIndex : int, context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : OptionParseTree[TItem]
+  {
+    def item = context.ItemLoader.ReadSequence(context.ItemSequenceId, recoveredSubruleIndex) |> context.ItemConverter.Cast;
+    OptionParseTree.Some(Location(parseResult, startPos, endPos), item)
+  }
+
+  protected override ReadParseTreeInStandardMode(parseResult : ParseResult, startPos : int, endPos : int, context : RecoveryModeParseTreeReaderContext[TLoader, TItem]) : OptionParseTree[TItem]
+  {
+    mutable pos = startPos;
+    def item = context.ItemLoader.ReadSequence(context.ItemSequenceId, ref pos) |> context.ItemConverter.Cast;
+    assert(pos == endPos);
+    OptionParseTree.Some(Location(parseResult, startPos, endPos), item)
+  }
+}
+
+// ---- ParseTree/RecoveryModeParseTreeReader.n (Nitra.Internal) ----
+internal abstract class RecoveryModeParseTreeReader[TContext, TParseTree]
+{
+  public Read(parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, context : TContext) : TParseTree
+  {
+    if (startPos == endPos)
+      MakeEmptyParseTree(parseResult, startPos, context)
+    else
+      match (parseResult.TryGetRecoveredSequence(startPos, endPos, parsingSequence))
+      {
+        | null                               => ReadParseTreeInStandardMode(parseResult, startPos, endPos, context)
+        | Unambiguous(recoveredSubruleIndex) => ReadParseTree(parseResult, startPos, endPos, recoveredSubruleIndex, context)
+        | Ambiguous(indexes) =>
+          def ambiguities = array(indexes.Length);
+          foreach (recoveredSubruleIndex in indexes with i)
+            ambiguities[i] = ReadParseTree(parseResult, startPos, endPos, recoveredSubruleIndex, context);
+          MakeAmbiguousParseTree(ambiguities, context)
+      }
+  }
+
+  protected abstract MakeEmptyParseTree(parseResult : ParseResult, pos : int, context : TContext) : TParseTree;
+  protected abstract MakeAmbiguousParseTree(ambiguities : array[TParseTree], context : TContext) : TParseTree;
+  protected abstract ReadParseTreeInStandardMode(parseResult : ParseResult, startPos : int, endPos : int, context : TContext) : TParseTree;
+  protected abstract ReadParseTree(parseResult : ParseResult, startPos : int, endPos : int, recoveredSubruleIndex : int, context : TContext) : TParseTree;
+}
+
+// ---- ParseTree/RecoveryModeParseTreeReaderContext.n (Nitra.Internal) ----
+[Record]
+internal struct RecoveryModeParseTreeReaderContext[TLoader, TItem]
+  where TLoader : IParseTree
+  where TItem : TLoader
+{
+  public ItemLoader     : ISequenceParseTreeLoader[TLoader];
+  public ItemSequenceId : int;
+  public ItemConverter  : ParseTreeCastHelper[TLoader, TItem];
+}
+
+// ---- ParseTree/RecoveryModeSequenceParseTreeReader.n (Nitra.Internal) ----
+[Record]
+internal struct RecoveryModeSequenceParseTreeReaderContext[TLoader]
+  where TLoader : IParseTree
+{
+  public Loader     : ISequenceParseTreeLoader[TLoader];
+  public SequenceId : int;
+}
+
+internal sealed class RecoveryModeSequenceParseTreeReader[TLoader] : RecoveryModeParseTreeReader[RecoveryModeSequenceParseTreeReaderContext[TLoader], TLoader]
+  where TLoader : IParseTree
+{
+  public static Instance : this;
+
+  static this() { Instance = RecoveryModeSequenceParseTreeReader() }
+
+  protected override MakeEmptyParseTree(parseResult : ParseResult, pos : int, context : RecoveryModeSequenceParseTreeReaderContext[TLoader]) : TLoader
+  {
+    _ = parseResult;
+    context.Loader.ReadEmptySequence(context.SequenceId, pos)
+  }
+
+  protected override MakeAmbiguousParseTree(ambiguities : array[TLoader], context : RecoveryModeSequenceParseTreeReaderContext[TLoader]) : TLoader
+  {
+    context.Loader.CreateAmbiguousSequence(context.SequenceId, ambiguities)
+  }
+
+  protected override ReadParseTree(parseResult : ParseResult, startPos : int, endPos : int, recoveredSubruleIndex : int, context : RecoveryModeSequenceParseTreeReaderContext[TLoader]) : TLoader
+  {
+    _ = parseResult; _ = startPos; _ = endPos;
+    context.Loader.ReadSequence(context.SequenceId, recoveredSubruleIndex);
+  }
+
+  protected override ReadParseTreeInStandardMode(parseResult : ParseResult, startPos : int, endPos : int, context : RecoveryModeSequenceParseTreeReaderContext[TLoader]) : TLoader
+  {
+    _ = parseResult;
+    mutable pos = startPos;
+    def result = context.Loader.ReadSequence(context.SequenceId, ref pos);
+    assert(pos == endPos);
+    result
+  }
+}
+
+// ---- ParseTree/TriviaCollector.n (Nitra.Internal) ----
+public module TriviaTypes
+{
+  public Deleted = -1;
+}
+
+public sealed class TriviaCollector : WalkerBase[FakeVoid]
+{
+  public Trivia : Dictionary[NSpan, int] { get; default Dictionary(); }
+
+  public Walk(parseRecord : ParseResult) : void
+  {
+    Walk(parseRecord, FakeVoid());
+  }
+
+  public override OnDeleted(_parseResult : IParseResult, startPos : int, endPos : int, _sequenceInfo : SequenceInfo, _context : FakeVoid) : void
+  {
+    def key = NSpan(startPos, endPos);
+    Trivia[key] = TriviaTypes.Deleted;
+  }
+}
+
+// ---- Typing2/Binding/StringIndex.n (Nitra.Internal) ----
+public module StringIndex
+{
+  public static InvalidId = 0;
+
+  private _initialTableSize = 1024;
+
+  private _tableLock     : object = object();
+  private mutable _table : array[string] = array(_initialTableSize);
+  private mutable _index : int;
+
+  private _internTable : ConcurrentDictionary[string, int] = ConcurrentDictionary(Environment.ProcessorCount * 4, _initialTableSize, StringComparer.InvariantCulture);
+
+  public GetId([NotNull] text : string) : int
+  {
+    def internTable = _internTable;
+    mutable result;
+    when (internTable.TryGetValue(text, out result))
+      return result;
+
+    lock (_tableLock)
+    {
+      when (internTable.TryGetValue(text, out result))
+        return result;
+
+      def id = _index + 1;
+      when (id >= _table.Length)
+        Array.Resize(ref _table, _table.Length * 2);
+      _table[id] = text;
+      _index = id;
+      internTable.GetOrAdd(text, id)
+    }
+  }
+
+  public GetText(id : int) : string
+  {
+    def text =  _table[id];
+    assert(text : object != null, "Text is null");
+    text
+  }
+}
+
+public mask Recovery
+{
+  // ---- Internal/Recovery/FrameInfo.n (Nitra.Internal.Recovery) ----
+  public enum FrameInfo
+  {
+    | None = 0
+    | LoopBody
+    | LoopSeparator
+  }
+
+  // ---- Internal/Recovery/ParsedSequenceKey.n (Nitra.Internal.Recovery) ----
+  [Record]
+  [StructuralEquality]
+  public struct ParsedSequenceKey
+  {
+    public Seq : ParsedSequence;
+    public End : int;
+
+    public override ToString() : string
+    {
+      def sb = Text.StringBuilder();
+      Seq.ToString(sb, -100, End);
+      sb.ToString()
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParseRecord.n (Nitra.Internal.Recovery) ----
+  [Record, StructuralEquality]
+  public struct ParseRecord
+  {
+    public Sequence     : ParsedSequence;
+    public State        : int;
+    public ParsePos     : int;
+
+    public ParsingState : ParsingState             { get { Sequence.RecoveryParser.ParseResult.ParserHost.ParsingStates[State] } }
+    public IsComplete   : bool                     { get { State == -1 } }
+    public Callers	    :	SCG.HashSet[ParseRecord] { get { this.Sequence?.Callers } }
+
+    public Next(next : int, parsePos : int) : ParseRecord
+    {
+      assert3(!IsComplete);
+      ParseRecord(Sequence, next, parsePos);
+    }
+
+    public override ToString() : string
+    {
+      ToString(ParsePos)
+    }
+
+    public ToString(curPos : int) : string
+    {
+      def sb = Text.StringBuilder();
+      Sequence.ToString(sb, State, curPos);
+      sb.ToString()
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsedSequence.n (Nitra.Internal.Recovery) ----
+  [Record, StructuralEquality]
+  public class ParsedSequence
+  {
+    [EqualsIgnore]               public           RecoveryParser    : RecoveryParser;
+                                 public           StartPos          : int;
+                                 public           ParsingSequence   : ParsingSequence;
+    [EqualsIgnore]               public           StartTokenChanges : TokenChanges { get; internal set; }
+
+    [RecordIgnore, EqualsIgnore] public           Callers           : SCG.HashSet[ParseRecord]                     = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public           ParsedSubrules    : Hashtable[ParsedSubrule, TokenChanges]       = Hashtable();
+    [RecordIgnore, EqualsIgnore] public           Ends              : Hashtable[int, TokenChanges]                 = Hashtable();
+
+    public IsToken             : bool       { get { ParsingSequence.IsToken }}
+    public RuleName            : string     { get { ParsingSequence.RuleName } }
+    public ParserHost          : ParserHost { get { ParsingSequence.ParserHost } }
+
+    public StartParse() : void
+    {
+      foreach (startState in ParsingSequence.StartStates)
+        RecoveryParser.StartParseSubrule(ParseRecord(this, startState, StartPos), TokenChanges.None);
+    }
+
+    public UpdateSubrules(end : int) : void
+    {
+      foreach ((subrule, subruleTokenChanges) when (subrule.End == end || subrule.Begin >= end) in ParsedSubrules.KeyValuePairs.ToArray().SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))//TODO:Optimize
+      {
+        def subruleParseRecord = ParseRecord(this, subrule.State, subrule.Begin);
+        mutable startChanges;
+        when (RecoveryParser.Records[subrule.Begin].TryGetValue(subruleParseRecord, out startChanges))
+          RecoveryParser.SubruleParsed(subrule.Begin, subrule.End, subruleParseRecord, startChanges, subruleTokenChanges);
+      }
+    }
+
+    public AddParsedSubrule(subrule : ParsedSubrule, subruleTokenChanges : TokenChanges) : void
+    {
+      mutable oldChanges;
+      if (ParsedSubrules.TryGetValue(subrule, out oldChanges))
+        when (subruleTokenChanges < oldChanges)
+        {
+          ParsedSubrules[subrule] = subruleTokenChanges;
+          UpdateSubrules(subrule.End);
+        }
+      else
+        ParsedSubrules[subrule] = subruleTokenChanges;
+    }
+
+    public GetSequencesForSubrule(parsedSubrule : ParsedSubrule) : Seq[ParsedSequence]
+    {
+      //this.ParsingSequence.GetSequencesForSubrule(parsedSubrule, this.RecoveryParser);
+      when (parsedSubrule.IsEmpty)
+        return;
+
+      def begin = parsedSubrule.Begin;
+      def end   = parsedSubrule.End;
+      mutable sequence;
+
+      match (this.RecoveryParser.ParseResult.ParserHost.ParsingStates[parsedSubrule.State])
+      {
+        | Simple           as state =>
+          when (RecoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | Extensible       as state =>
+          when (RecoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | DynamicExtensibleItem as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            when (RecoveryParser.Sequences.TryGetValue((begin, prefixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | ExtensionPrefix  as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            when (RecoveryParser.Sequences.TryGetValue((begin, prefixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | ExtensionPostfix as state =>
+          foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+            when (RecoveryParser.Sequences.TryGetValue((begin, postfixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | List              as state1 with seq = state1.Sequence
+        | ListWithSeparator as state2 with seq = state2.Sequence
+        | Subsequence       as state3 with seq = state3.Sequence
+        | DynamicExtensible as state4 with seq = state4.Sequence =>
+          when (RecoveryParser.Sequences.TryGetValue((begin, seq), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | Scan => ()
+        | Predicate => ()
+      }
+    }
+
+    public AddCaller(caller : ParseRecord) : void
+    {
+      when (Callers.Add(caller))
+        foreach (end in Ends.Keys)
+          RecoveryParser.Completion(end, caller, this);
+    }
+
+    public AddEnd(end : int, newTokenChanges : TokenChanges) : void
+    {
+      mutable oldTokenChanges;
+      if (Ends.TryGetValue(end, out oldTokenChanges))
+      {
+        when (newTokenChanges < oldTokenChanges)
+        {
+          Ends[end] = newTokenChanges;
+          foreach (caller in Callers)
+            caller.Sequence.AddParsedSubrule(ParsedSubrule(caller.ParsePos, end, caller.State), newTokenChanges);
+        }
+      }
+      else
+      {
+        Ends[end] = newTokenChanges;
+        foreach (caller in Callers)
+          RecoveryParser.Completion(end, caller, this);
+      }
+    }
+
+    public override ToString() : string
+    {
+      def invalidState = -100;
+      def invalidCurPos = -1;
+      def sb = Text.StringBuilder();
+      ToString(sb, invalidState, invalidCurPos);
+      sb.ToString()
+    }
+
+    public ToString(sb : Text.StringBuilder, beforeState : int, curPos : int) : void
+    {
+      def startPos = this.StartPos;
+
+      ParsingSequence.ToString(sb, beforeState);
+
+      _ = sb.Append(", StartPos=");
+
+      _ = sb.Append(startPos);
+      _ = sb.Append(")");
+
+      //when (IsSpeculative)
+      //  _ = sb.Append(" !!! ");
+
+      def text = this.RecoveryParser.ParseResult.Text;
+
+      when (startPos <= text.Length)
+      {
+        _ = sb.Append("   «");
+        def showLen = 30;
+
+        when (startPos - showLen > 0)
+          _ = sb.Append("…");
+
+        _ = sb.Append(text.SafeLeftSubstring(startPos, showLen));
+
+        _ = sb.Append("■");
+
+        def middle = if (curPos >= 0) curPos - startPos else showLen;
+
+        _ = sb.Append(text.SafeRightSubstring(startPos, middle));
+
+        when (curPos >= 0)
+          _ = sb.Append("▸");
+
+        when (middle < showLen)
+        _ = sb.Append(text.SafeRightSubstring(startPos + middle, showLen - middle));
+
+        when (startPos + showLen <= text.Length)
+          _ = sb.Append("…");
+
+        _ = sb.Append("»");
+
+        _ = sb.Append($" Name=«$RuleName»");
+      }
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsedSequenceAndSubrule.n (Nitra.Internal.Recovery) ----
+  [Record, StructuralEquality]
+  public class ParsedSequenceAndSubrule
+  {
+    public Sequence : ParsedSequence;
+    public Subrule : ParsedSubrule;
+    public override ToString() : string { Subrule + " " + Sequence }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsedSubrule.n (Nitra.Internal.Recovery) ----
+  [Record, StructuralEquality]
+  public struct ParsedSubrule
+  {
+    public Begin : int;
+    public End   : int;
+    public State : int;
+
+    public IsEmpty : bool { get { Begin == End } }
+    public Length  : int  { get { End - Begin } }
+
+    public override ToString() : string
+    {
+      State + ":(" + Begin + "," + End + ")";
+    }
+
+    public class ComparerEndBeginIndex : SCG.IComparer[ParsedSubrule]
+    {
+      public Compare(l : ParsedSubrule, r : ParsedSubrule) : int
+      {
+        mutable c;
+        c = l.End.CompareTo(r.End);     when (c != 0) return c;
+        c = l.Begin.CompareTo(r.Begin); when (c != 0) return c;
+        c = l.State.CompareTo(r.State); when (c != 0) return c;
+        0
+      }
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsingCallerInfo.n (Nitra.Internal.Recovery) ----
+  [Record, StructuralEquality]
+  public class ParsingCallerInfo
+  {
+    public Sequence     : ParsingSequence;
+    public State        : int;
+
+    [RecordIgnore, EqualsIgnore]
+    public mutable Mask : int;
+
+    public ParsingState : ParsingState { get { this.Sequence.ParserHost.ParsingStates[State] } }
+    public IsComplete   : bool         { get { State == -1 } }
+
+    public override ToString() : string
+    {
+      def sb = Text.StringBuilder();
+      this.Sequence.ToString(sb, State);
+      sb.ToString()
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsingSequence.ToDot.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/RecoveryParser/ParsingSequence.n (Nitra.Internal.Recovery) ----
+  [Record]
+  public variant ParsingSequence
+  {
+    public SequenceInfo        : SequenceInfo;
+    public RuleName            : string;
+    public RuleDesc            : string;
+    public IsToken             : bool;
+    public MandatoryTokenCount : int;
+    public StartStates         : array[int];
+    public EndStates           : array[int];
+    public States              : array[ParsingState];
+
+    private _staticStateToEarleyMap : Hashtable[int, int];
+
+    public Grammar             : CompositeGrammar;
+    public ParserHost          : ParserHost { get { Grammar.ParserHost } }
+
+    [RecordIgnore]
+    public CanConsumeErrorTokens : bool { get; internal set; default false; }
+
+    [RecordIgnore]
+    public FirstTokens : SCG.HashSet[TokenParser] = SCG.HashSet();
+
+    | Sequence   { }
+    | Extensible { RuleParser : ExtensibleRuleParser }
+    | DynamicExtensible { RuleParser : ExtensibleRuleParser }
+
+    [RecordIgnore]
+    public Callers             : SCG.HashSet[ParsingCallerInfo] = SCG.HashSet();
+
+    public GetEarleyState(staticState : int) : int
+    {
+      def earleyState = _staticStateToEarleyMap[staticState];
+      assert2(States.Exists(s => s.Id == earleyState));
+      earleyState
+    }
+
+    public IsStartState(state : int) : bool
+    {
+      foreach (startState in StartStates)
+        when (state == startState)
+          return true;
+      false
+    }
+
+    public IsNullable : bool
+    {
+      get
+      {
+        foreach (startState in StartStates)
+          when (startState == -1)
+            return true;
+        false
+      }
+    }
+
+    public Id : string
+    {
+      get
+      {
+        match (this)
+        {
+          | Sequence          as ps => $"s$(ps.SequenceInfo.Id)"
+          | Extensible        as ps => $"e$(ps.RuleParser.PrefixId)bp$(ps.RuleParser.BindingPower)"
+          | DynamicExtensible as ps => $"e$(ps.RuleParser.PrefixId)dyn"
+        }
+      }
+    }
+
+    public static CreateSimple(ruleParser : SimpleRuleParser, idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule, Hashtable(), idBuilder, grammar)
+    }
+
+    public static CreateExtension(ruleParser : ExtensionRuleParser, idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule, Hashtable(), idBuilder, grammar)
+    }
+
+    public static CreateExtensible(ruleParser : ExtensibleRuleParser, idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      def sequenceCtor = ParsingSequence.Extensible(null, ruleParser.Descriptor.Name, "Extensible: " + ruleParser.Descriptor.Name, ruleParser.IsTokenRule, ruleParser.MandatoryTokenCount, _, _, _, _, grammar, ruleParser);
+      def builder = ParsingSequenceBuilder(sequenceCtor, idBuilder, null);
+      def _prefixState = builder.AddState(ParsingState.ExtensionPrefix (null, false, ruleParser));
+      def postfixState = builder.AddState(ParsingState.ExtensionPostfix(null, false, ruleParser));
+
+      builder.AddTransition(postfixState.End,   postfixState.Start);
+      builder.AddTransition(postfixState.Start, postfixState.End);
+
+      builder.AddDefaultTransitions();
+      builder.CreateSequence();
+    }
+
+    public static CreateDynamicExtensible(ruleParser : ExtensibleRuleParser, idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      when (ruleParser.DynamicExtensibleParsingSequence != null)
+        return ruleParser.DynamicExtensibleParsingSequence;
+      def sequenceCtor = ParsingSequence.DynamicExtensible(null, ruleParser.Descriptor.Name, "DynamicExtensible: " + ruleParser.Descriptor.Name, ruleParser.IsTokenRule, ruleParser.MandatoryTokenCount, _, _, _, _, grammar, ruleParser);
+      def builder = ParsingSequenceBuilder(sequenceCtor, idBuilder, null);
+      def state = builder.AddState(ParsingState.DynamicExtensibleItem(null, false, ruleParser));
+      builder.AddTransition(state.End, state.Start);
+      builder.AddDefaultTransitions();
+      ruleParser.DynamicExtensibleParsingSequence = builder.CreateSequence();
+      ruleParser.DynamicExtensibleParsingSequence;
+    }
+
+    public static CreateListSequence(subrule : SubruleInfo.List, staticStateToEarley : Hashtable[int, int], idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      def sequenceCtor = ParsingSequence.Sequence(null, "List", subrule.Description, false, subrule.MandatoryTokenCount, _, _, _, _, grammar);
+      def builder = ParsingSequenceBuilder(sequenceCtor, idBuilder, staticStateToEarley);
+
+      def canConsumeErrorTokens = subrule.Item.Subrules.Length == 1 && subrule.Item.Subrules[0] is (SubruleInfo.ExtensibleCall as call when call.RuleParser.ParserData.Descriptor.Name == "IgnoreToken");
+
+      def rule = CreateSequence(subrule.Item, false, staticStateToEarley, idBuilder, grammar);
+      def subruleRule = SubruleInfo.ListItem(-1, subrule.Item.Description, -1, false, null, array[], rule, true);
+      subruleRule.MandatoryTokenCount = subrule.Item.MandatoryTokenCount;
+      subrule.ListItemRule = subruleRule;
+      if (subrule.Max.HasValue)
+      {
+        for (mutable i = 0; i < subrule.Max.Value; ++i)
+        {
+          def state = builder.AddState(ParsingState.Subsequence(subruleRule, canConsumeErrorTokens, rule, subrule.Item));
+          when (i >= subrule.Min)
+            builder.AddTransition(state.Start, builder.EndState);
+        }
+      }
+      else
+      {
+        mutable lastState;
+        for (mutable i = 0; i < if (subrule.Min == 0) 1 else subrule.Min; ++i)
+        {
+          lastState = builder.AddState(ParsingState.Subsequence(subruleRule, canConsumeErrorTokens, rule, subrule.Item));
+        }
+        builder.AddTransition(lastState.End, lastState.Start);
+      }
+
+      when (subrule.CanParseEmptyString)
+        builder.AddTransition(builder.StartState, builder.EndState);
+
+      builder.AddDefaultTransitions();
+      def parsingSequence = builder.CreateSequence();
+      subrule.ParsingSequence = parsingSequence;
+      parsingSequence.CanConsumeErrorTokens = canConsumeErrorTokens;
+      parsingSequence
+    }
+
+    public static CreateListWithSeparatorSequence(subrule : SubruleInfo.ListWithSeparator, staticStateToEarley : Hashtable[int, int], idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      def sequenceCtor = ParsingSequence.Sequence(null, "ListWithSeparator", subrule.Description, false, subrule.MandatoryTokenCount, _, _, _, _, grammar);
+      def builder = ParsingSequenceBuilder(sequenceCtor, idBuilder, staticStateToEarley);
+
+      def rule = CreateSequence(subrule.Item, false, staticStateToEarley, idBuilder, grammar);
+      def separator = CreateSequence(subrule.Separator, false, staticStateToEarley, idBuilder, grammar);
+      def subruleRule = SubruleInfo.ListItem(-1, subrule.Item.Description, -1, false, null, array[], rule, true);
+      def subruleSeparator = SubruleInfo.ListItem(-1, subrule.Separator.Description, -1, false, null, array[], separator, false);
+      subruleRule.MandatoryTokenCount = subrule.Item.MandatoryTokenCount;
+      subruleSeparator.MandatoryTokenCount = subrule.Separator.MandatoryTokenCount;
+      subrule.ListItemRule = subruleRule;
+      subrule.ListItemSeparator = subruleSeparator;
+
+      if (subrule.Max.HasValue)
+      {
+        def count = subrule.Max.Value;
+        mutable ruleState;
+        for (mutable i = 0; i < count; ++i)
+        {
+          ruleState = builder.AddState(ParsingState.Subsequence(subruleRule, false, rule, subrule.Item));
+          when (i == 0)
+            builder.AddTransition(builder.StartState, ruleState.Start);
+          when (i >= subrule.Min)
+            builder.AddTransition(ruleState.Start, builder.EndState);
+          when (i < count - 1)
+            _ = builder.AddState(ParsingState.Subsequence(subruleSeparator, false, separator, subrule.Separator));
+        }
+        builder.AddDefaultSequenceTransitions();
+        builder.AddTransition(ruleState.End, builder.EndState);
+        when (subrule.HangingSeparator)
+        {
+          def separatorState = builder.AddState(ParsingState.Subsequence(subruleSeparator, false, separator, subrule.Separator));
+          builder.AddTransition(separatorState.Start, builder.EndState);
+          builder.AddTransition(separatorState.End, builder.EndState);
+        }
+      }
+      else
+      {
+        def count = if (subrule.Min == 0) 1 else subrule.Min;
+        mutable ruleState;
+        mutable separatorState;
+        for (mutable i = 0; i < count; ++i)
+        {
+          ruleState = builder.AddState(ParsingState.Subsequence(subruleRule, false, rule, subrule.Item));
+          when (i == 0)
+            builder.AddTransition(builder.StartState, ruleState.Start);
+          separatorState = builder.AddState(ParsingState.Subsequence(subruleSeparator, false, separator, subrule.Separator));
+        }
+        builder.AddDefaultSequenceTransitions();
+        builder.AddTransition(separatorState.End, ruleState.Start);
+        builder.AddTransition(ruleState.End, builder.EndState);
+        when (subrule.HangingSeparator)
+          builder.AddTransition(separatorState.End, builder.EndState);
+      }
+
+      when (subrule.CanParseEmptyString)
+        builder.AddTransition(builder.StartState, builder.EndState);
+
+      def parsingSequence = builder.CreateSequence();
+      subrule.ParsingSequence = parsingSequence;
+      parsingSequence
+    }
+
+    private static CreateSequence(sequence : SequenceInfo, isToken : bool, staticStateToEarley : Hashtable[int, int], idBuilder : RuleIdBuilder, grammar : CompositeGrammar) : ParsingSequence
+    {
+      def sequenceCtor = ParsingSequence.Sequence(sequence, sequence.RuleName, sequence.Description, isToken, sequence.MandatoryTokenCount, _, _, _, _, grammar);
+      def builder = ParsingSequenceBuilder(sequenceCtor, idBuilder, staticStateToEarley);
+
+      foreach (subrule in sequence.Subrules)
+      {
+        when (subrule.HeadPredicate != null)
+          _ = builder.AddState(ParsingState.Predicate(subrule, false, subrule.HeadPredicate));
+
+        def state = match (subrule)
+        {
+          | ListItem                     => assert(false)
+          | Marker                       => assert3(false)
+          | List              as subrule when subrule.IsDynamicSyntaxExtentionPoint
+                                         => ParsingState.DynamicExtensible(subrule, false, CreateDynamicExtensible((subrule.Item.Subrules[0] :> SubruleInfo.ExtensibleCall).RuleParser, idBuilder, grammar))
+          | ExtensibleCall    as subrule => ParsingState.Extensible       (subrule, false, subrule.RuleParser)
+          | SimpleCall        as subrule => ParsingState.Simple           (subrule, false, subrule.RuleParser)
+          | Empty             as subrule => ParsingState.Scan             (subrule, false)
+          | RegularCall       as subrule => ParsingState.Scan             (subrule, false)
+          | TokenString       as subrule => ParsingState.Scan             (subrule, false)
+          | Option            as subrule => ParsingState.Subsequence      (subrule, false, CreateSequence(subrule.Rule, false, staticStateToEarley, idBuilder, grammar), subrule.Rule)
+          | List              as subrule => ParsingState.List             (subrule, false, CreateListSequence(subrule, staticStateToEarley, idBuilder, grammar))
+          | ListWithSeparator as subrule => ParsingState.ListWithSeparator(subrule, false, CreateListWithSeparatorSequence(subrule, staticStateToEarley, idBuilder, grammar))
+        }
+        _ = builder.AddState(state);
+      }
+      builder.AddDefaultTransitions();
+      def parsingSequence = builder.CreateSequence();
+      sequence.ParsingSequence = parsingSequence;
+      parsingSequence
+    }
+
+    public override ToString() : string
+    {
+      def invalidState = -100;
+      def sb = Text.StringBuilder();
+      ToString(sb, invalidState);
+      sb.ToString()
+    }
+
+    public ToString(sb : Text.StringBuilder, beforeState : int) : void
+    {
+      def contains[T](ary : array[T], value : T) : bool
+      {
+        Array.IndexOf(ary, value) >= 0
+      }
+      def isNullableLoop(state : ParsingState, seq : ParsingSequence, withSeparator : bool) : bool
+      {
+        def nextIndex = if (withSeparator) state.Id + 2 else state.Id + 1;
+        seq.IsNullable
+          || contains(seq.StartStates, state.Id) && contains(seq.StartStates, nextIndex)
+          || state.Prev.Any(s => s < state.Id && (contains(seq.ParserHost.ParsingStates[s].Next, nextIndex) || contains(seq.ParserHost.ParsingStates[s].Next, -1)))
+      }
+      def printState(sb : Text.StringBuilder, state : ParsingState) : void
+      {
+        def trimmed = state.Description.Trim();
+        def desc = if (trimmed == state.Description) state.Description else "(" + trimmed + ")";
+        _ = sb.Append(state.Id).Append(":").Append(desc);
+      }
+      def seq      = this;
+      def bp       =
+        if (seq is ParsingSequence.Extensible as p)
+          p.RuleParser.BindingPower
+        else if (seq.SequenceInfo?.Parser is ExtensibleRuleParser as p)
+          p.BindingPower
+        else 0;
+
+      mutable skip = false;
+      foreach (state in seq.States)
+      {
+        when (skip)
+        {
+          skip = false;
+          continue;
+        }
+
+        if (contains(state.Next, state.Id)) // loop
+        {
+          _ = sb.Append("(");
+          when (beforeState == state.Id)
+            _ = sb.Append("●  ");
+          printState(sb, state);
+          _ = sb.Append(")");
+          if (isNullableLoop(state, seq, withSeparator=false))
+            _ = sb.Append("*");
+          else
+            _ = sb.Append("+");
+        }
+        else if (contains(state.Next, state.Id + 1) && contains(seq.ParserHost.ParsingStates[state.Id + 1].Next, state.Id)) // loop with separator
+        {
+          _ = sb.Append("(");
+          when (beforeState == state.Id)
+            _ = sb.Append("●  ");
+          printState(sb, state);
+          _ = sb.Append("; ");
+          def sepState = seq.ParserHost.ParsingStates[state.Id + 1];
+          when (beforeState == sepState.Id)
+            _ = sb.Append("●  ");
+          printState(sb, sepState);
+          when (sepState.Next.Length > 1)
+            _ = sb.Append("; ?");
+          _ = sb.Append(")");
+          if (isNullableLoop(state, seq, withSeparator=true))
+            _ = sb.Append("*");
+          else
+            _ = sb.Append("+");
+          skip = true;
+        }
+        else
+        {
+          when (state.Id > 0)
+            _ = sb.Append("  ");
+          when (beforeState == state.Id)
+            _ = sb.Append("●  ");
+          printState(sb, state);
+        }
+      }
+
+      when (beforeState == -1)
+          _ = sb.Append(" ♦");
+
+      when (bp > 0)
+        _ = sb.Append(" ^ " + bp);
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/ParsingSequence.ToDot.n ----
+    public ToDot() : string
+    {
+      def nodes = SCG.List();
+      def edges = SCG.List();
+
+      foreach (state in States)
+      {
+        nodes.Add($<#$(Name(state)) [@label="$(Label(state))"]#>);
+        foreach (next in state.Next)
+        {
+          if (next < 0)
+            edges.Add($<#$(Name(state)) -> End#>);
+          else
+            edges.Add($<#$(Name(state)) -> $(Name(ParserHost.ParsingStates[next]))#>);
+        }
+      }
+
+      nodes.Add(<#End [@label="-1: End"]#>);
+
+      def graphLabel = GraphLabel();
+      def content = $<#
+        digraph RecoveryParser
+        {
+          rankdir=LR;
+          compound=true;
+          @label="$graphLabel";
+
+          ..$(nodes; "\r\n          ")
+
+          ..$(edges; "\r\n          ")
+        }
+      #>;
+
+      content
+    }
+
+    public MakeGraph(parsedSubrules : Seq[ParsedSubrule], end : int) : Hashtable[int * int, list[int * int]]
+    {
+      def nodeEdges     = Hashtable();
+
+      foreach (subrule in parsedSubrules)
+      {
+        nodeEdges[subrule.State, subrule.Begin] = [];
+        when (subrule.End == end && ParserHost.ParsingStates[subrule.State].Next.Contains(-1))
+          nodeEdges[-1, subrule.End] = [];
+      }
+
+      foreach (subrule in parsedSubrules)
+      {
+        def from = (subrule.State, subrule.Begin);
+        foreach (nextState in ParserHost.ParsingStates[subrule.State].Next)
+        {
+          def to = (nextState, subrule.End);
+          when (nodeEdges.Contains(to))
+            nodeEdges[from] = to :: nodeEdges[from];
+        }
+      }
+
+      nodeEdges
+    }
+
+    public MakeGraph(parsedSubrules : Seq[ParsedSubrule * TokenChanges], end : int) : Hashtable[int * int, list[(int * int) * TokenChanges]]
+    {
+      def nodeEdges     = Hashtable();
+
+      foreach ((subrule, _) in parsedSubrules)
+      {
+        nodeEdges[subrule.State, subrule.Begin] = [];
+        when (subrule.End == end && ParserHost.ParsingStates[subrule.State].Next.Contains(-1))
+          nodeEdges[-1, subrule.End] = [];
+      }
+
+      foreach ((subrule, subruleChanges) in parsedSubrules)
+      {
+        def from = (subrule.State, subrule.Begin);
+        foreach (nextState in ParserHost.ParsingStates[subrule.State].Next)
+        {
+          def to = (nextState, subrule.End);
+          when (nodeEdges.Contains(to))
+            nodeEdges[from] = (to, subruleChanges) :: nodeEdges[from];
+        }
+      }
+
+      nodeEdges
+    }
+
+    public FindValidPaths(graph : Hashtable[int * int, list[int * int]], startPos : int, end : int) : Hashtable[int * int, int]
+    {
+      def nodeData = Hashtable.[int * int, int]();
+      def walk(stateIndex : int, pos : int) : int
+      {
+        def nodeFrom = (stateIndex, pos);
+        mutable res;
+        when (nodeData.TryGetValue(nodeFrom, out res))
+          return res;
+
+        when (stateIndex < 0)
+        {
+          res = if (pos == end) 1 else 0;
+          nodeData[nodeFrom] = res;
+          return res;
+        }
+
+        nodeData[nodeFrom] = int.MaxValue;
+
+        def edges = graph[nodeFrom];
+
+        foreach (nodeTo in edges)
+        {
+          def res2 = walk(nodeTo);
+
+          when (res2 == 1)
+            res = res2;
+        }
+
+        nodeData[nodeFrom] = res;
+        res
+      }
+
+      foreach (stateIndex in this.StartStates)
+        when (graph.ContainsKey(stateIndex, startPos))
+          _ = walk(stateIndex, startPos);
+
+      nodeData
+    }
+    public GraphLabel() : string
+    {
+      when (this.SequenceInfo == null)
+        return this.ToString();
+
+      def fullName = (this.SequenceInfo.Parser :> RuleParser).Descriptor.ToString();
+      def seqName =
+        match (this.SequenceInfo)
+        {
+          | ListWithSeparatorSeparator => "Loop Separator (in " + fullName + ")"
+          | ListWithSeparatorItem      => "Loop With Separator Body (in " + fullName + ")"
+          | ListItem                   => "Loop Body (in " + fullName + ")"
+          | Option                     => "Option (in " + fullName + ")"
+          | Predicate                  => "Predicate (in " + fullName + ")"
+          | Root                       => fullName
+        };
+      def graphLabel = seqName + " = " + this;
+      graphLabel
+    }
+
+    public Visualize() : void
+    {
+      def fileName = GetFilePath();
+      File.WriteAllText(fileName, ToDot());
+      DotUtils.ConvertToDot(fileName);
+    }
+
+    internal GetFilePath() : string
+    {
+      def ruleParser =
+        match (this)
+        {
+          | Extensible as ext => ext.RuleParser : RuleParser
+          | _ => this.SequenceInfo.Parser :> RuleParser
+        };
+      def path = Path.Combine(Path.GetTempPath(), "Nitra", "Seq", $<#..$(ruleParser.Grammar.Grammars; "-"; g => g.Name)#>, ruleParser.Descriptor.Name);
+      def filePath = path + ".dot";
+      def dir = Path.GetDirectoryName(filePath);
+      unless (Directory.Exists(dir))
+        _ = Directory.CreateDirectory(dir);
+      filePath
+    }
+
+    public GetFilePath(dir : string, startPos : int, end : int) : string
+    {
+      def escape(str : string) : string
+      {
+        def sb = StringBuilder(str);
+
+        _ = sb.Replace("*", "ZERO_LOOP");
+        _ = sb.Replace("+", "ONE_ZERO_LOOP");
+        _ = sb.Replace("?", "OPT");
+
+        foreach (ch in Path.GetInvalidPathChars())
+          _ = sb.Replace(ch, '_');
+
+        _ = sb.Replace(Path.PathSeparator, '_');
+        _ = sb.Replace(Path.VolumeSeparatorChar, '_');
+        _ = sb.Replace('<', '_');
+        _ = sb.Replace('>', '_');
+        _ = sb.Replace('/', '_');
+        _ = sb.Replace('\\', '_');
+        _ = sb.Replace(' ', '_');
+        _ = sb.Replace('\t', '_');
+        _ = sb.Replace('\n', '_');
+        _ = sb.Replace('\r', '_');
+        _ = sb.Replace("____", "_");
+        _ = sb.Replace("___", "_");
+        _ = sb.Replace("__", "_");
+
+        sb.ToString()
+      }
+      def fileName =
+        match (this)
+        {
+          | Sequence as seq => startPos + "-" + seq.RuleName + "-" + escape(seq.RuleDesc) + "-" + end
+          | seq => startPos + "-" + seq.RuleName + "-" + end
+        };
+      def filePath = Path.Combine(Path.GetTempPath(), dir, fileName);
+      def dir = Path.GetDirectoryName(filePath);
+      unless (Directory.Exists(dir))
+        _ = Directory.CreateDirectory(dir);
+      filePath
+    }
+
+    public GetUrlForExtensible(dir : string, startPos : int, end : int) : string
+    {
+      Path.GetFileName(GetFilePath(dir, startPos, end)) + "-Extensions.html"
+    }
+
+    public GetUrl(dir : string, startPos : int, end : int) : string
+    {
+      Path.GetFileName(GetFilePath(dir, startPos, end)) + ".svg"
+    }
+
+    public GetFilePathForExtensible(dir : string, startPos : int, end : int) : string
+    {
+      GetFilePath(dir, startPos, end) + "-Extensions.html"
+    }
+
+    Label(state : ParsingState) : string
+    {
+      state.Id + ": " + DotUtils.DotEscape(state.Description)
+    }
+
+    Name(state : ParsingState) : string
+    {
+      "State" + state.Id
+    }
+
+    public Label(stateIndex : int, pos : int) : string
+    {
+      def @label =
+        match (stateIndex)
+        {
+          | -1 => "End"
+          | s  => DotUtils.DotEscape(this.ParserHost.ParsingStates[s].Description)
+        };
+
+      "State: " + stateIndex + "At: " + pos + "\r\n" + @label
+    }
+
+    public Name(stateIndex : int, pos : int) : string
+    {
+      "Node_State_" + (if (stateIndex < 0) "End" else stateIndex.ToString()) + "_Pos_" + pos
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsingSequenceBuilder.n (Nitra.Internal.Recovery) ----
+  [Record]
+  internal class ParsingSequenceBuilder[T]
+    where T : ParsingSequence
+  {
+                   private         parsingSequenceCtor : (array[int] * array[int] * array[ParsingState] * Hashtable[int, int]) -> T;
+                   private         idBuilder           : RuleIdBuilder;
+                   private         staticStateToEarley : Hashtable[int, int];
+    [RecordIgnore] private         parsingStates       : SCG.List[ParsingState * int * int] = SCG.List();
+    [RecordIgnore] private         transitions         : Hashtable[int, SCG.HashSet[int]] = Hashtable();
+    [RecordIgnore] private mutable stateCount          : int = 2;
+    [RecordIgnore] private         startStates         : Hashtable[int, ParsingState] = Hashtable();
+    [RecordIgnore] private         endStates           : Hashtable[int, ParsingState] = Hashtable();
+
+    public StartState : int { get { 0 } }
+    public EndState   : int { get { 1 } }
+    public NewState() : int { stateCount++; stateCount - 1 }
+
+    [Record]
+    public class StateIds
+    {
+      public Start : int;
+      public End   : int;
+    }
+
+    public AddState(state : ParsingState) : StateIds
+    {
+      idBuilder.AddParsingStateAndSetId(state);
+      when (staticStateToEarley != null)
+        staticStateToEarley[state.SubruleInfo.State] = state.Id;
+      def startState = NewState();
+      def endState   = NewState();
+      parsingStates.Add(state, startState, endState);
+      startStates.Add(startState, state);
+      endStates.Add(endState, state);
+      when (state.SubruleInfo?.CanParseEmptyString && !(state is ParsingState.Predicate))
+        AddTransition(startState, endState);
+      StateIds(startState, endState);
+    }
+
+    public AddTransition(from : int, to : int) : void
+    {
+      _ = transitions.Update(from, SCG.HashSet, (set) => { _ = set.Add(to); set });
+    }
+
+    public AddDefaultTransitions() : void
+    {
+      AddDefaultSequenceTransitions();
+      AddDefaultStartAndEndTransitions();
+    }
+
+    public AddDefaultSequenceTransitions() : void
+    {
+      for (mutable i = 1; i < parsingStates.Count; ++i)
+        AddTransition(parsingStates[i - 1][2], parsingStates[i][1]);
+    }
+
+    public AddDefaultStartAndEndTransitions() : void
+    {
+      def firsStateStart = parsingStates[0][1];
+      def lastStateEnd = parsingStates[parsingStates.Count - 1][2];
+      AddTransition(StartState, firsStateStart);
+      AddTransition(lastStateEnd, EndState);
+    }
+
+    public CreateSequence() : T
+    {
+      startStates.Add(EndState, null);
+      endStates.Add(StartState, null);
+      def tmpStateSet = SCG.HashSet();
+      def collectStates(state)
+      {
+        def collectAll(fromState)
+        {
+          mutable toStates;
+          when (transitions.TryGetValue(fromState, out toStates))
+            foreach (toState in toStates)
+              when (tmpStateSet.Add(toState))
+                collectAll(toState);
+        }
+        tmpStateSet.Clear();
+        collectAll(state);
+        tmpStateSet
+          .MapToArrayFiltered(state => startStates.Contains(state), state => { def ps = startStates[state]; if (ps == null) -1 else ps.Id })
+          .SortInplace(_.CompareTo(_));
+      }
+      def startStates = collectStates(StartState);
+
+      def prevStates = Hashtable();
+      foreach ((state, _startState, endState) in parsingStates)
+      {
+        state.Next = collectStates(endState);
+        foreach (nextState in state.Next)
+          when (nextState != -1)
+            _ = prevStates.Update(nextState, SCG.HashSet, (set) => { _ = set.Add(state.Id); set });
+      }
+      foreach ((state, _startState, _endState) in parsingStates)
+      {
+        mutable prev;
+        state.Prev = if (prevStates.TryGetValue(state.Id, out prev))
+          prev.ToArray().SortInplace(_.CompareTo(_));
+        else
+          array[];
+      }
+
+      foreach (startState in startStates)
+        when (startState >= 0)
+          idBuilder.GetParsingState(startState).IsStart = true;
+
+      def endStates = SCG.List();
+      foreach ((state, _, _) in parsingStates)
+        when (state.Next.Exists(_ == -1))
+          endStates.Add(state.Id);
+
+      def parsingSequence = parsingSequenceCtor(startStates, endStates.ToArray().SortInplace(_.CompareTo(_)), parsingStates.MapToArray((state, _, _) => state), staticStateToEarley);
+      foreach (state in parsingSequence.States)
+        state.Owner = parsingSequence;
+      parsingSequence
+    }
+
+    public _Visualize() : void
+    {
+      def fileName = Path.Combine(Path.GetTempPath(), "Nitra", "ParsingSequenceBuilder");
+      File.WriteAllText(fileName, ToDot());
+      DotUtils.ConvertToDot(fileName);
+    }
+
+    public ToDot() : string
+    {
+      def nodes = SCG.List();
+      def edges = SCG.List();
+      for (mutable i = 0; i < this.stateCount; ++i)
+      {
+        mutable prefix = "";
+        when (startStates.Contains(i))
+          prefix += "s";
+        when (endStates.Contains(i))
+          prefix += "e";
+        nodes.Add($<#$(i) [@label="$(prefix)$(i)"]#>);
+      }
+
+      foreach ((state, s, e) in parsingStates)
+        edges.Add($<#$(s) -> $(e) [@label="($(state.Id)) $(DotUtils.DotEscape(state.Description))"]#>);
+
+      foreach ((s, ends) in transitions.KeyValuePairs)
+        foreach (e in ends)
+          edges.Add($<#$(s) -> $(e) [color=red]#>);
+
+      def content = $<#
+        digraph RecoveryParser
+        {
+          rankdir=LR;
+          compound=true;
+
+          ..$(nodes; "\r\n          ")
+
+          ..$(edges; "\r\n          ")
+        }
+      #>;
+
+      content
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/ParsingState.n (Nitra.Internal.Recovery) ----
+  [Record]
+  public variant ParsingState
+  {
+    [RecordIgnore] public Id                    : int                          { get; internal set; }
+    [RecordIgnore] public Next                  : array[int]                   { get; internal set; }
+    [RecordIgnore] public Prev                  : array[int]                   { get; internal set; }
+    [RecordIgnore] public IsStart               : bool                         { get; internal set; }
+    [RecordIgnore] public Owner                 : ParsingSequence              { get; internal set; }
+                   public SubruleInfo           : SubruleInfo                  { get; }
+                   public CanConsumeErrorTokens : bool                         { get; }
+
+    [RecordIgnore]
+    public FirstTokens : SCG.HashSet[TokenParser] = SCG.HashSet();
+  
+    | Simple                { RuleParser    : SimpleRuleParser; }
+    | DynamicExtensible     { Sequence      : ParsingSequence; }
+    | DynamicExtensibleItem { RuleParser    : ExtensibleRuleParser; }
+    | Extensible            { RuleParser    : ExtensibleRuleParser; }
+    | ExtensionPrefix       { RuleParser    : ExtensibleRuleParser; }
+    | ExtensionPostfix      { RuleParser    : ExtensibleRuleParser; }
+    | Subsequence           { Sequence      : ParsingSequence; SequenceInfo : SequenceInfo; }
+    | List                  { Sequence      : ParsingSequence; }
+    | ListWithSeparator     { Sequence      : ParsingSequence; }
+    | Scan                  { }
+    | Predicate             { HeadPredicate : SubruleInfo.PredicateDelegate; }
+
+    public IsNullable : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Simple                as state => state.RuleParser.ParsingSequence.IsNullable
+          | Extensible                     => false
+          | ExtensionPrefix                => false
+          | ExtensionPostfix               => true
+          | Subsequence           as state => state.Sequence.IsNullable
+          | List                  as state => state.SubruleInfo.MandatoryTokenCount == 0
+          | ListWithSeparator     as state => state.SubruleInfo.MandatoryTokenCount == 0
+          | Scan                  as state => if (state.SubruleInfo == null) false else state.SubruleInfo.CanParseEmptyString
+          | Predicate                      => false
+          | DynamicExtensible              => false
+          | DynamicExtensibleItem          => false
+        }
+      }
+    }
+
+    public MandatoryTokenCount : int
+    {
+      get
+      {
+        match (this)
+        {
+          | Simple                as state => state.RuleParser.SequenceInfo.MandatoryTokenCount
+          | Extensible            as state => state.RuleParser.MandatoryTokenCount
+          | ExtensionPrefix       as state => state.RuleParser.MandatoryTokenCount
+          | ExtensionPostfix               => 0
+          | Subsequence           as state => state.SequenceInfo.MandatoryTokenCount
+          | List                  as state => state.SubruleInfo.MandatoryTokenCount
+          | ListWithSeparator     as state => state.SubruleInfo.MandatoryTokenCount
+          | Scan                  as state => state.SubruleInfo.MandatoryTokenCount
+          | Predicate                      => 0
+          | DynamicExtensible     as state => state.Sequence.States[0].MandatoryTokenCount;
+          | DynamicExtensibleItem as state => state.RuleParser.MandatoryTokenCount
+        }
+      }
+    }
+
+    public CalleeSequences : Seq[ParsingSequence]
+    {
+      get
+      {
+        match (this)
+        {
+          | Scan                           => ()
+          | Predicate                      => ()
+          | Simple                as state => yield state.RuleParser.ParsingSequence
+          | List                  as state => yield state.Sequence
+          | ListWithSeparator     as state => yield state.Sequence
+          | Subsequence           as state => yield state.Sequence
+          | Extensible            as state => yield state.RuleParser.ParsingSequence
+          | ExtensionPrefix       as state =>
+            foreach (parser in state.RuleParser.PrefixRules)
+              yield parser.ParsingSequence;
+
+          | ExtensionPostfix      as state =>
+            foreach (parser in state.RuleParser.PostfixRules)
+              when (state.RuleParser.FirstPostfixRuleId <= parser.RuleId)
+                yield parser.ParsingSequence;
+
+          | DynamicExtensible     as state => yield state.Sequence
+          | DynamicExtensibleItem as state => yield state.RuleParser.ParsingSequence
+        }
+      }
+    }
+
+    public IsToken : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Simple                as state => state.RuleParser.IsTokenRule
+          | Extensible            as state => state.RuleParser.IsTokenRule
+          | ExtensionPrefix       as state => state.RuleParser.IsTokenRule
+          | ExtensionPostfix      as state => state.RuleParser.IsTokenRule
+          | DynamicExtensibleItem as state => state.RuleParser.IsTokenRule
+          | DynamicExtensible              => false
+          | Subsequence                    => false
+          | List                           => false
+          | ListWithSeparator              => false
+          | Predicate                      => false
+          | Scan                           => true
+        }
+      }
+    }
+
+    public IsVoid : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Simple                as state => state.RuleParser.IsVoid
+          | Extensible            as state => state.RuleParser.IsVoid
+          | ExtensionPrefix       as state => state.RuleParser.IsVoid
+          | ExtensionPostfix      as state => state.RuleParser.IsVoid
+          | DynamicExtensibleItem as state => state.RuleParser.IsTokenRule
+          | DynamicExtensible              => false
+          | Subsequence           as state => state.SequenceInfo.IsVoid
+          | List                  as state => state.SubruleInfo.IsVoid
+          | ListWithSeparator     as state => state.SubruleInfo.IsVoid
+          | Scan                  as state => state.SubruleInfo.IsVoid
+          | Predicate             as state => state.SubruleInfo.IsVoid
+        }
+      }
+    }
+
+    public Description : string
+    {
+      get
+      {
+        match (this)
+        {
+          | Simple            as state => state.RuleParser.Descriptor.Name
+          | DynamicExtensible          => this.SubruleInfo.ToString()
+          | DynamicExtensibleItem      => "DynamicExtensibleItem"
+          | Extensible        as state => state.RuleParser.Descriptor.Name + if (state.RuleParser.BindingPower > 0) " ^ " + state.RuleParser.BindingPower else null
+          | ExtensionPrefix   as state => state.RuleParser.Descriptor.Name + " Prefix"
+          | ExtensionPostfix  as state => state.RuleParser.Descriptor.Name + " Postfix"
+          | List                       => this.SubruleInfo.ToString()
+          | ListWithSeparator          => this.SubruleInfo.ToString()
+          | Subsequence       as state => state.SequenceInfo.Description
+          | Scan              as state => state.SubruleInfo?.Description ?? "Root"
+          | Predicate                  => "Predicate"
+        }
+      }
+    }
+
+    public override ToString() : string
+    {
+      $"$Id $(Next.NToList()) $(Prev.NToList()) $Description"
+    }
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.Delete.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.FirstErrorRecovery.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.Insert.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.PanicRecovery.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.Parse.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.SaveRecoveredRawTreePart.n (Nitra.Internal.Recovery) ----
+  public class RecoveryParser
+  {
+    private SequencesToRecover : SCG.Queue[ParsedSequence * int] = SCG.Queue();
+
+    private SaveRecoveredRawTreePart() : void
+    {
+      MakeRecoveredSequence(StartSequence, this.ParseResult.Text.Length);
+      while (SequencesToRecover.Count > 0)
+        MakeRecoveredSequence(SequencesToRecover.Dequeue());
+    }
+
+    private AddRecoveredSequence(key : int * int * ParsingSequence, subrules : array[ParsedSubrule * TokenChanges], tokenChanges : TokenChanges) : void
+    {//TODO: Optimize
+      when (this.ParseResult.RecoveredSequences.ContainsKey(key))
+        return;
+
+      def (_startPos, endPos, parsingSequence) = key;
+      def isDynamicExtensible = parsingSequence is ParsingSequence.DynamicExtensible;
+      def host = ParseResult.ParserHost;
+
+      when (parsingSequence.IsToken)
+      {
+        assert2(true);
+      }
+
+      def allFlattenSubrules = SCG.List();
+      def flattenSubrules    = SCG.List();
+      def walk(index)
+      {
+        when (allFlattenSubrules.Count > 10)//TODO: Hack!!! terminate if too many ambiguities
+          return;
+        mutable walkCalled = false;
+        def (subrule, _) = subrules[index];
+        def state = host.ParsingStates[subrule.State];
+        flattenSubrules.Add(subrule);
+
+        if (isDynamicExtensible)
+        {
+          def nextSubrules = LightList();
+          foreach ((nextSubrule, _) in subrules with nextIndex)
+            when (subrule.End == nextSubrule.Begin)
+              nextSubrules.Add(nextSubrule, nextIndex);
+          if (nextSubrules.Count == 1)
+          {
+            walk(nextSubrules[0][1]);
+            walkCalled = true;
+          }
+          else when (nextSubrules.Count > 1)
+          {
+            mutable bestStateId = nextSubrules[0][0].State;
+            for (mutable i = 0; i < nextSubrules.Count; ++i)
+            {
+              def (subrule, _) = nextSubrules[i];
+              def bestState = host.ParsingStates[bestStateId];
+              def curState  = host.ParsingStates[subrule.State];
+              when (bestState.Owner.Grammar.IsExtendedGrammar(curState.Owner.Grammar))
+                bestStateId = curState.Id;
+            }
+            for (mutable i = 0; i < nextSubrules.Count; ++i)
+            {
+              def (subrule, index) = nextSubrules[i];
+              when (subrule.State == bestStateId)
+              {
+                walk(index);
+                walkCalled = true;
+              }
+            }
+          }
+        }
+        else
+          foreach ((nextSubrule, _) in subrules with nextIndex)
+            when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
+            {
+              walk(nextIndex);
+              walkCalled = true;
+            }
+
+        unless (walkCalled)
+        {
+          def positions = array(flattenSubrules.Count + 1);
+          foreach (subrule in flattenSubrules with i)
+            positions[i] = SubruleStart(subrule.Begin, subrule.State);
+          positions[flattenSubrules.Count] = SubruleStart(endPos, -1);
+          allFlattenSubrules.Add(positions);
+        }
+
+        flattenSubrules.RemoveAt(flattenSubrules.Count - 1);
+      }
+
+      def recoveredSequence =
+        if (subrules.Length == 0)
+        {
+          def index = ParseResult.AddRecoveredSubrule(array[SubruleStart(endPos, -1)], parsingSequence);
+          ParseResult.RecoveredSequence.Unambiguous(subrules, tokenChanges, index);
+        }
+        else
+        {
+          walk(0);
+          if (allFlattenSubrules.Count == 1)
+          {
+            def index = ParseResult.AddRecoveredSubrule(allFlattenSubrules[0], parsingSequence);
+            ParseResult.RecoveredSequence.Unambiguous(subrules, tokenChanges, index);
+          }
+          else
+          {
+            def indexes = array(allFlattenSubrules.Count);
+            foreach (subrules in allFlattenSubrules with i)
+              indexes[i] = ParseResult.AddRecoveredSubrule(subrules, parsingSequence);
+            ParseResult.RecoveredSequence.Ambiguous(subrules, tokenChanges, indexes);
+          };
+      }
+
+      this.ParseResult.RecoveredSequences.Add(key, recoveredSequence);
+    }
+
+    private IsDeletedSubrule(subrule : ParsedSubrule) : bool
+    {
+      ParseResult.ParserHost.ParsingStates[subrule.State].CanConsumeErrorTokens &&
+      Deleted.Contains(subrule.Begin) &&
+      Deleted[subrule.Begin].Contains(subrule.End)
+    }
+
+    public MakeRecoveredSequence(seq : ParsedSequence, end : int) : void
+    {
+      def makeSequence(seq : ParsedSequence, mutable end : int) : void
+      {
+        def key = (seq.StartPos, end, seq.ParsingSequence);
+        unless (this.ParseResult.RecoveredSequences.Contains(key))
+        {
+          def subrules = GetSubrulesAndChanges(seq, end);
+          foreach ((subrule, changes) in subrules)
+          {
+            def sequences = seq.GetSequencesForSubrule(subrule).ToArray();
+            if (sequences.Length > 0)
+            {
+              assert(sequences.Length == 1);
+              def sequence = sequences[0];
+              assert(sequence.Ends[subrule.End] == changes);
+              def subruleInfo = ParseResult.ParserHost.ParsingStates[subrule.State].SubruleInfo;
+              //TODO:hardcase
+              //failed test-0014 in C# and test-0002 in extensible C#
+              //remove || subruleInfo is SubruleInfo.Option || subruleInfo is SubruleInfo.List || subruleInfo is SubruleInfo.ListWithSeparator 
+              //implement throw NotImplementedException("Fallback to standard parse tree reading");
+              when (changes.HasChanges || subruleInfo is SubruleInfo.ListItem || subruleInfo is SubruleInfo.Option || subruleInfo is SubruleInfo.List || subruleInfo is SubruleInfo.ListWithSeparator || subruleInfo.Parse(subrule.Begin, ParseResult.Text, ParseResult) != subrule.End)
+                SequencesToRecover.Enqueue(sequence, subrule.End);
+            }
+            else when (IsDeletedSubrule(subrule))
+            {
+              def sequence = match (seq.ParsingSequence.States[0])
+              {
+                | ParsingState.Subsequence as state => state.Sequence
+                | ParsingState.List        as state => state.Sequence
+                | _                                 => assert(false);
+              }
+              def key = (subrule.Begin, subrule.End, sequence);
+              AddRecoveredSequence(key, array[], changes);
+            }
+          }
+          AddRecoveredSequence(key, subrules, seq.Ends[end]);
+        }
+      }
+
+      match (seq.ParsingSequence)
+      {
+        | Sequence =>
+          makeSequence(seq, end);
+
+        | DynamicExtensible =>
+          def key = (seq.StartPos, end, seq.ParsingSequence);
+          when (this.ParseResult.RecoveredSequences.Contains(key))
+            return;
+          def subrules = GetSubrulesAndChanges(seq, end);
+          foreach ((subrule, _changes) in subrules)
+          {
+            def state = ParseResult.ParserHost.ParsingStates[subrule.State] :> ParsingState.DynamicExtensibleItem;
+            mutable parsedSequence;
+            when (Sequences.TryGetValue((subrule.Begin, state.RuleParser.ParsingSequence), out parsedSequence))
+              SequencesToRecover.Enqueue(parsedSequence, subrule.End);
+          }
+          AddRecoveredSequence(key, subrules, seq.Ends[end]);
+
+        | Extensible =>
+          def key = (seq.StartPos, end, seq.ParsingSequence);
+          when (this.ParseResult.RecoveredSequences.Contains(key))
+            return;
+          def filteredSubrules = SCG.List();
+          foreach ((subrule, changes) in GetSubrulesAndChanges(seq, end) with i)
+          {
+            when (i > 0 && subrule.Begin == subrule.End)
+              continue;
+
+            filteredSubrules.Add((subrule, changes));
+
+            foreach (sequence in seq.GetSequencesForSubrule(subrule))
+            {
+              mutable seqChanges;
+              when (sequence.Ends.TryGetValue(subrule.End, out seqChanges))
+              when (seqChanges == changes)
+                makeSequence(sequence, subrule.End);
+            }
+          }
+          AddRecoveredSequence(key, filteredSubrules.ToArray(), seq.Ends[end]);
+      }
+    }
+
+    private static SubrulesComparison : Comparison[ParsedSubrule * TokenChanges] = ((l, _), (r, _)) =>
+    {
+      res:
+        {
+          mutable c;
+          // Группируем по хвостам.
+          c = l.End.CompareTo(r.End); when (c != 0) res(c);
+          // Двигаем пустылки назад.
+          c = l.Begin.CompareTo(r.Begin); when (c != 0) res(c);
+          // Сдвигаем большие состояния в конец.
+          // При текущей форме графа это позволяет произвести рассчёт за одн проход.
+          // Если граф состояний парсинга изменится для пустышек может понадоится итерировать до фиксированной точки.
+          l.State.CompareTo(r.State);
+        }
+    };
+
+    private GetSubrulesAndChanges(seq : ParsedSequence, mutable end : int) : array[ParsedSubrule * TokenChanges]
+    {
+      def dynamicExtensibleStates = if (seq.ParsingSequence is ParsingSequence.DynamicExtensible)
+      {
+        def states = SCG.HashSet();
+        foreach (subrule in seq.ParsedSubrules.Keys)
+          _ = states.Add(subrule.State);
+        states;
+      }
+      else
+        null;
+      def subrules = SCG.List();
+      mutable changes = seq.Ends[end];
+      def stateEndChanges = Hashtable();
+      if (dynamicExtensibleStates == null)
+        foreach (endState in seq.ParsingSequence.EndStates)
+          stateEndChanges[endState, end] = changes;
+      else
+        foreach (state in dynamicExtensibleStates)
+          stateEndChanges[state, end] = changes;
+
+      def allSubrules = seq.ParsedSubrules.KeyValuePairs.ToArray().SortInplace(SubrulesComparison);
+      def host = ParseResult.ParserHost;
+
+      for (mutable i = allSubrules.Length - 1; i >= 0; --i)
+      {
+        def (subrule, subruleChanges) = allSubrules[i];
+        mutable endChanges;
+        mutable startChanges;
+        def record = ParseRecord(seq, subrule.State, subrule.Begin);
+        when (stateEndChanges.TryGetValue((subrule.State, subrule.End), out endChanges))
+        when (Records[subrule.Begin].TryGetValue(record, out startChanges))
+        {
+          when (startChanges + subruleChanges == endChanges)
+          {
+            def state = host.ParsingStates[subrule.State];
+            when (!subrule.IsEmpty || record.ParsingState.MandatoryTokenCount > 0 || record.ParsingState is ParsingState.Predicate)
+              subrules.Add(subrule, subruleChanges);
+            if (dynamicExtensibleStates == null)
+              foreach (prevState in state.Prev)
+                stateEndChanges[prevState, subrule.Begin] = startChanges;
+            else
+              foreach (state in dynamicExtensibleStates)
+                stateEndChanges[state, subrule.Begin] = startChanges;
+          }
+        }
+      }
+
+      subrules.ToArray().SortInplace(ParsingOrderSubrulesComparison);
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.Delete.n ----
+    public Deleted : Hashtable[int, SCG.HashSet[int]] = Hashtable();
+
+    public Delete(begin : int, end : int) : void
+    {
+      mutable ends;
+      unless (Deleted.TryGetValue(begin, out ends))
+      {
+        ends = SCG.HashSet();
+        Deleted[begin] = ends;
+      }
+      when (ends.Add(end))
+      {
+        def records = Records[begin];
+        when (records != null)
+          foreach ((record, tokenChanges) in records.KeyValuePairs)
+            when (!record.IsComplete && record.ParsingState.CanConsumeErrorTokens)
+              SubruleParsed(begin, end, record, tokenChanges, TokenChanges(inserted = 0, deleted = 1));
+      }
+    }
+
+    private DeleteTokenOrGarbage(maxPos : int, forceDelete : bool) : void
+    {
+      def text = ParseResult.Text;
+      when (maxPos >= text.Length)
+        return;
+
+      def getTokens(pos)
+      {
+        def grammar = ParseResult.RuleParser.Grammar;
+        def res = grammar.ParseAllNonVoidGrammarTokens(pos, ParseResult);
+        _ = res.RemoveWhere(x => x <= pos);
+        res
+      }
+
+      def tokens = getTokens(maxPos);
+
+      if (tokens.Count == 0)
+      {
+        mutable i = maxPos + 1;
+        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
+        {
+          def tokens = getTokens(i);
+          when (tokens.Count > 0)
+            break;
+        }
+
+        Delete(maxPos, i);
+      }
+      else
+      {
+        def canDelete(pos, nextPos)
+        {
+          // TODO: Надо неализовать эту функцию на базе метаинформации из грамматик.
+          match (text.Substring(pos, nextPos - pos))
+          {
+            | "," | ";" => false
+            | _         => true;
+          }
+        }
+        foreach (nextPos in tokens)
+          when (forceDelete || canDelete(maxPos, nextPos))
+            Delete(maxPos, nextPos);
+      }
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.FirstErrorRecovery.n ----
+    public FirstErrorRecovery() : void
+    {
+      def textPos = 0;
+      Records[textPos] = Hashtable();
+      def rootParsingSequence =
+        match (ParseResult.RuleParser)
+        {
+          | SimpleRuleParser     as ruleParser => ruleParser.ParsingSequence
+          | ExtensibleRuleParser as ruleParser => ruleParser.ParsingSequence
+          | _                                  => assert3(false)
+        };
+      _ = StartParseSequence(textPos, rootParsingSequence, TokenChanges.None);
+      Parse();
+      while (BestSolution.IsFail)
+      {
+        ParseToFailPos();
+        def curMaxPos = MaxPos;
+        _ = ErrorPositions.Add(curMaxPos);
+        InsertSubrules(curMaxPos);
+        Delete(curMaxPos, ParseResult.Text.Length);
+        Parse();
+      }
+      SaveRecoveredRawTreePart();
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.Insert.n ----
+    private InsertSubrules(maxPos : int) : void
+    {
+      //def sequences = SCG.HashSet(Records[maxPos].Keys.Select(r => r.Sequence));
+
+      def toProcess = SCG.Stack(Records[maxPos].KeyValuePairs);
+      def processed = Hashtable();
+      while (toProcess.Count > 0)
+      {
+        def (record, tokenChanges) = toProcess.Pop();
+
+        mutable oldTokenChanges;
+        when (processed.TryGetValue(record, out oldTokenChanges) && oldTokenChanges <= tokenChanges)
+          continue;
+
+        processed[record] = tokenChanges;
+        when (record.IsComplete)
+          continue;
+
+        when (record.Sequence.IsToken && record.ParsingState.IsStart)
+          continue;
+
+        def state = record.ParsingState;
+        when (record.ParsingState.IsNullable)
+          continue;
+
+        def subruleTokenChanges = TokenChanges(inserted = record.ParsingState.MandatoryTokenCount, deleted = 0);
+        SubruleParsed(maxPos, maxPos, record, tokenChanges, subruleTokenChanges);
+        foreach (nextState in state.Next)
+        {
+          def nextRecord = ParseRecord(record.Sequence, nextState, maxPos);
+          toProcess.Push(nextRecord, tokenChanges + subruleTokenChanges);
+        }
+      }
+
+      //foreach (sequence in sequences)
+      //{
+      //  when (sequence.IsToken)
+      //    continue;
+      //  foreach (subrule in sequence.ParsedSubrules.Keys.ToArray())
+      //  {
+      //    def state = sequence.ParsingSequence.States[subrule.State];
+      //    def subruleTokenChanges = TokenChanges(inserted = state.MandatoryTokenCount, deleted = 0);
+      //    def pos = subrule.Begin;
+      //    def record = ParseRecord(sequence, subrule.State, pos);
+      //    def tokenChanges = Records[pos][record];
+      //    SubruleParsed(pos, pos, record, tokenChanges, subruleTokenChanges);
+      //  }
+      //}
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.PanicRecovery.n ----
+    public PanicRecovery() : void
+    {
+      def textPos = 0;
+      Records[textPos] = Hashtable();
+      def rootParsingSequence =
+        match (ParseResult.RuleParser)
+        {
+          | SimpleRuleParser     as ruleParser => ruleParser.ParsingSequence
+          | ExtensibleRuleParser as ruleParser => ruleParser.ParsingSequence
+          | _                                  => assert3(false)
+        };
+      def rootSeq        = StartParseSequence(textPos, rootParsingSequence, TokenChanges.None);
+      def completeRecord = ParseRecord(rootSeq, -1, ParseResult.Text.Length);
+      Parse();
+
+      def memoization = SCG.Dictionary();
+      def grammar = this.ParseResult.RuleParser.Grammar;
+      def parseResult = this.ParseResult;
+    
+      def isRootRecordCompleted() { def records = Records[ParseResult.Text.Length]; records != null && records.Contains(completeRecord) }
+      mutable prevMaxPos = -1;
+      while (!isRootRecordCompleted())
+      {
+        ParseToFailPos();
+        mutable curMaxPos = MaxPos;
+        when (curMaxPos == prevMaxPos)
+        {
+          DeleteTokenOrGarbage(curMaxPos, forceDelete=true);
+          Parse();
+          continue;
+        }
+        prevMaxPos = MaxPos;
+      
+        def records = Records[curMaxPos].MapToArrayFiltered(r => !r.Key.IsComplete && !IsInsideToken(memoization, grammar, r.Key.Sequence), r => r.Key);
+        def leafRecords = GetLeafTokens(records);
+      
+        Debug.IndentSize = 2;
+        //Debug.WriteLine("----------------------------------------");
+        //foreach (record in records)
+        //  PrintRecordParents(record);
+        //Debug.WriteLine("++++++++++++++++++++++++++++++++++++++++");
+        //foreach (record in leafRecords)
+        //  PrintRecordParents(record);
+        //Debug.WriteLineWriteLine("========================================");
+      
+        def text = parseResult.Text;
+        when (curMaxPos == text.Length)
+        {
+          while (!isRootRecordCompleted())
+          {
+            InsertSubrules(text.Length);
+            Parse();
+          }
+          break;
+        }
+      
+        def addStopperToken(record : ParseRecord, next : int, result : Hashtable[_, _], tokenParser : TokenParser)
+        {
+          mutable value;
+          unless (result.TryGetValue(tokenParser, out value))
+          {
+            value = HashSet();
+            result.Add(tokenParser, value);
+          }
+                
+          _ = value.Add((record, next));
+        }
+        def calcFollowSet(record : ParseRecord, result : Hashtable[TokenParser, _], memoization : HashSet[_]) : void
+        {
+          unless (memoization.Add(record))
+            return;
+        
+          def processNextState(parsingState : ParsingState)
+          {
+            def record = record;
+            def result = result;
+            foreach (next in parsingState.Next)
+            {
+              when (next >= 0)
+              {
+                def nextState = record.Sequence.ParserHost.ParsingStates[next];
+                def tokenParser = grammar.GetTokenParser(nextState.SubruleInfo);
+                if (tokenParser != null)
+                {
+                  if (tokenParser.IsVoid)
+                    processNextState(nextState);
+                  else
+                    addStopperToken(record, next, result, tokenParser);
+                }
+                else
+                  foreach (tokenParser in nextState.FirstTokens)
+                    addStopperToken(record, next, result, tokenParser);
+              }
+            }
+          
+          }
+        
+          processNextState(record.ParsingState);
+          foreach (caller in record.Sequence.Callers)
+            calcFollowSet(caller, result, memoization);
+        }
+      
+        def stopperTokens = Hashtable();
+        def memoization = HashSet();
+        foreach (leafRecord in leafRecords)
+          if (leafRecord.ParsingState.IsStart)
+          {
+            foreach (tokenParser in leafRecord.ParsingState.FirstTokens)
+              addStopperToken(leafRecord, -1, stopperTokens, tokenParser);
+            foreach (caller in leafRecord.Sequence.Callers)
+              calcFollowSet(caller, stopperTokens, memoization);
+          }
+          else
+            calcFollowSet(leafRecord, stopperTokens, memoization);
+        
+      
+        deletToken :
+        {
+          // зачем тут цикл? Видимо хватит и when-а
+          while (curMaxPos < text.Length)
+          {
+            foreach (stopperToken in stopperTokens)
+            {
+              def pos = stopperToken.Key.Parse(curMaxPos, text, parseResult);
+              when (pos <= curMaxPos)
+                continue;
+            
+              Parse();
+              foreach ((oldRecord, newState) in stopperToken.Value.Distinct())
+              {
+                when (newState < 0)
+                  break;
+                def newRecord = ParseRecord(oldRecord.Sequence, newState, curMaxPos);
+                
+                def callees = HashSet();
+                foreach (leafRecord in leafRecords)
+                {
+                  def isCallee(leafRecord : ParseRecord, oldRecord : ParseRecord,  callees : HashSet[ParseRecord])
+                  {
+
+                    if (leafRecord == oldRecord)
+                      true
+                    else
+                    {
+                      mutable ok = false;
+                    
+                      foreach (caller in leafRecord.Callers)
+                        when (isCallee(caller, oldRecord, callees))
+                          ok = true;
+                      
+                      when (ok)
+                        _ = callees.Add(leafRecord);
+                    
+                      ok
+                    }
+                  }
+                
+                  _ = isCallee(leafRecord, oldRecord, callees);
+                }
+                def curRecords = Records[curMaxPos];
+                def toProcess = SCG.Queue(callees);
+                def processed = SCG.HashSet();
+                toProcess.Enqueue(oldRecord);
+                while (toProcess.Count > 0)
+                {
+                  def record = toProcess.Dequeue();
+                  when (record.ParsePos == curMaxPos && !record.IsComplete && processed.Add(record) && record != newRecord)
+                  {
+                    def tokenChanges = curRecords[record];
+                    def subruleTokenChanges = TokenChanges(inserted = record.ParsingState.MandatoryTokenCount, deleted = 0);
+                    SubruleParsed(curMaxPos, curMaxPos, record, tokenChanges, subruleTokenChanges);
+                    foreach (nextState in record.ParsingState.Next)
+                      toProcess.Enqueue(record.Next(nextState, curMaxPos));
+                  }
+                }
+              }
+              //InsertSubrules(curMaxPos);
+              // востановление состояния парсера, так чтобы он парсил с сабруля для которого 
+            }
+            // это тоже, похоже, лишнее.
+            Parse();
+            when (this.MaxPos > curMaxPos)
+              deletToken();
+            DeleteTokenOrGarbage(curMaxPos, forceDelete = curMaxPos == prevMaxPos);
+          }
+        }
+      
+        Parse();
+      }
+
+      SaveRecoveredRawTreePart();
+    }
+  
+    PrintRecordParents(record : ParseRecord) : void
+    {
+      Debug.WriteLine(record);
+      Debug.Indent();
+      foreach (caller in record.Sequence.Callers)
+        PrintRecordParents(caller);
+      Debug.Unindent();
+    }
+  
+    GetLeafTokens(records : array[ParseRecord]) : SCG.List[ParseRecord]
+    {
+      def parents = SCG.HashSet();
+    
+      foreach (record in records)
+        foreach (caller in record.Sequence.Callers)
+          _ = parents.Add(caller);
+        
+      def result = SCG.List();
+    
+      foreach (record in records)
+        unless (parents.Contains(record))
+          unless (record.ParsingState.IsVoid)
+            result.Add(record);
+      
+      result
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.Parse.n ----
+    internal RecordsToComplete : SCG.Queue[int * ParseRecord * ParsedSequence] = SCG.Queue();
+    public Parse() : void
+    {
+      def completeAll() : void
+      {
+        while (RecordsToComplete.Count > 0)
+        {
+          def (endPos, caller, sequence) = RecordsToComplete.Dequeue();
+          SubruleParsed(sequence.StartPos, endPos, caller, Records[caller.ParsePos][caller], sequence.Ends[endPos]);
+        }
+      }
+      completeAll();
+      while (RecordsToProcess.Count > 0)
+      {
+        when (IsRecordsToProcessCorrupted)
+        {
+          RecordsToProcess.RebuildHeap();
+          IsRecordsToProcessCorrupted = false;
+        }
+        def (record, tokenChanges) = RecordsToProcess.ExtractFirst();
+        when (!BestSolution.IsFail && tokenChanges > BestSolution)
+        {
+          RecordsToProcess.Insert(record, tokenChanges);
+          return;
+        }
+        PredictionOrScanning(record, tokenChanges, optimize = !ErrorPositions.Contains(record.ParsePos));
+        completeAll();
+      }
+    }
+
+    public Completion(endPos : int, caller : ParseRecord, sequence : ParsedSequence) : void
+    {
+      RecordsToComplete.Enqueue(endPos, caller, sequence);
+    }
+
+    public PredictionOrScanning(record : ParseRecord, tokenChanges : TokenChanges, optimize : bool) : void
+    {
+      when (record.IsComplete)
+      {
+        when (record.ParsePos == ParseResult.Text.Length && StartSequence : object == record.Sequence)
+          BestSolution = TokenChanges.Min(BestSolution, tokenChanges);
+        record.Sequence.AddEnd(record.ParsePos, tokenChanges);
+        return;
+      }
+
+      def state = record.ParsingState;
+      when (state.CanConsumeErrorTokens)
+      {
+        def begin = record.ParsePos;
+        mutable ends;
+        when (Deleted.TryGetValue(begin, out ends))
+          foreach (end in ends)
+            SubruleParsed(begin, end, record, tokenChanges, TokenChanges(inserted = 0, deleted = 1));
+      }
+
+      def textPos = record.ParsePos;
+      mutable endPos;
+      //def skipRecord()
+      //{
+      //  when (record.Sequence.StartTokenChanges < tokenChanges)
+      //  {
+      //    def subruleTokenChanges = TokenChanges(inserted = record.ParsingState.MandatoryTokenCount, deleted = 0);
+      //    SubruleParsed(textPos, textPos, record, tokenChanges, subruleTokenChanges);
+      //  }
+      //}
+      match (state)
+      {
+        | Simple           as state =>
+          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 &&
+            {
+              def p = ParseResult.ParseSession.CompletionStartPos;
+              textPos >= p || endPos < p
+            }})
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            when (textPos == endPos)
+            {
+              _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence, tokenChanges);
+              //skipRecord();
+            }
+          }
+          else
+          {
+            _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence, tokenChanges);
+            //skipRecord();
+          }
+
+        | DynamicExtensibleItem as state =>
+          def parser = state.RuleParser;
+          ParseResult.ParseSession.CurrentGrammar = parser.Grammar;
+          endPos = parser.Parse(textPos, ParseResult.Text, ParseResult);
+          def grammarChanged = ParseResult.ParseSession.CurrentGrammar : object != parser.Grammar;
+          when (grammarChanged)
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            def newParser = ParseResult.ParseSession.CurrentGrammar.GetExtensibleRuleParser(parser.Descriptor :> ExtensibleRuleDescriptor, "0");
+            def newState = newParser.DynamicExtensibleParsingSequence.States[0];
+            StartParseSubrule(ParseRecord(record.Sequence, newState.Id, endPos), tokenChanges);
+          }
+
+          if (optimize && { endPos >= 0 && 
+            { 
+              def p = ParseResult.ParseSession.CompletionStartPos;
+              textPos >= p || endPos < p
+            }})
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            when (textPos == endPos)
+            {
+              _ = StartParseSequence(record, textPos, parser.ParsingSequence, tokenChanges);
+              //skipRecord();
+            }
+          }
+          else
+          {
+            _ = StartParseSequence(record, textPos, parser.ParsingSequence, tokenChanges);
+            //skipRecord();
+          }
+
+        | Extensible       as state =>
+          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 && 
+            { 
+              def p = ParseResult.ParseSession.CompletionStartPos;
+              textPos >= p || endPos < p
+            }})
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            when (textPos == endPos)
+            {
+              _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence, tokenChanges);
+              //skipRecord();
+            }
+          }
+          else
+          {
+            _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence, tokenChanges);
+            //skipRecord();
+          }
+
+        | ExtensionPrefix  as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            _ = StartParseSequence(record, textPos, prefixRule.ParsingSequence, tokenChanges);
+          //skipRecord();
+
+        | ExtensionPostfix as state =>
+          foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+            _ = StartParseSequence(record, textPos, postfixRule.ParsingSequence, tokenChanges);
+          //skipRecord();
+
+        | List(SubruleInfo = SubruleInfo.List as subrule) when subrule.IsOptimized =>
+          endPos = subrule.Parse(textPos, ParseResult.Text, ParseResult);
+          when (endPos >= textPos)
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+
+        | List              as state1 with seq = state1.Sequence
+        | ListWithSeparator as state2 with seq = state2.Sequence
+        | Subsequence       as state3 with seq = state3.Sequence
+        | DynamicExtensible as state4 with seq = state4.Sequence =>
+          _ = StartParseSequence(record, textPos, seq, tokenChanges);
+          //skipRecord();
+
+        | Scan             as state =>
+          endPos = state.SubruleInfo.Parse(textPos, ParseResult.Text, ParseResult);
+          when (endPos >= 0)
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+          //else
+            //skipRecord();
+
+        | Predicate        as state =>
+          when (state.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+            SubruleParsed(textPos, textPos, record, tokenChanges, TokenChanges.None);
+          //else
+            //skipRecord();
+      }
+    }
+
+    public StartParseSequence(startPos : int, parsingSequence : ParsingSequence, startTokenChanges : TokenChanges) : ParsedSequence
+    {
+      def key = (startPos, parsingSequence);
+      mutable sequence;
+      if (Sequences.TryGetValue(key, out sequence))
+      {
+        when (startTokenChanges < sequence.StartTokenChanges)
+        {
+          IsRecordsToProcessCorrupted = true;
+          sequence.StartTokenChanges = startTokenChanges;
+          sequence.StartParse();
+          sequence.UpdateSubrules(sequence.StartPos);
+        }
+      }
+      else
+      {
+        sequence = ParsedSequence(this, startPos, parsingSequence, startTokenChanges);
+        Sequences.Add(key, sequence);
+        sequence.StartParse();
+      }
+      sequence;
+    }
+
+    public StartParseSequence(caller : ParseRecord, startPos : int, parsingSequence : ParsingSequence, startTokenChanges : TokenChanges) : ParsedSequence
+    {
+      def sequence = StartParseSequence(startPos, parsingSequence, startTokenChanges);
+      sequence.AddCaller(caller);
+      sequence;
+    }
+
+    public StartParseSubrule(record : ParseRecord, tokenChanges : TokenChanges) : void
+    {
+      mutable set = Records[record.ParsePos];
+      when (set == null)
+      {
+        set = Hashtable();
+        Records[record.ParsePos] = set;
+        MaxPos = Math.Max(MaxPos, record.ParsePos);
+      }
+      mutable oldTokenChanges;
+      def newRecord =
+        if (set.TryGetValue(record, out oldTokenChanges))
+        {
+          if (tokenChanges < oldTokenChanges)
+          {
+            set[record] = tokenChanges;
+            true
+          }
+          else
+            false
+        }
+        else
+        {
+          set.Add(record, tokenChanges);
+          true
+        };
+      when (newRecord)
+        RecordsToProcess.Insert(record, tokenChanges);
+    }
+
+    public SubruleParsed(begin : int, end : int, record : ParseRecord, tokenChanges : TokenChanges, subruleTokenChanges : TokenChanges) : void
+    {
+      unless (begin == end && record.ParsingState.IsNullable)
+      {
+        record.Sequence.AddParsedSubrule(ParsedSubrule(begin, end, record.State), subruleTokenChanges);
+        foreach (next in record.ParsingState.Next)
+          StartParseSubrule(record.Next(next, end), tokenChanges + subruleTokenChanges);
+      }
+    }
+
+    // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.n ----
+    public ParseResult       : ParseResult;
+    public Sequences         : Hashtable[int * ParsingSequence, ParsedSequence] = Hashtable();
+    public Records           : array[Hashtable[ParseRecord, TokenChanges]];
+    public RecordsToProcess  : Heap[ParseRecord * TokenChanges] = Heap(1024,
+      fun ((a, aTokenChanges), (b, bTokenChanges))
+      {
+        if (b.IsComplete) if (a.IsComplete) 0 else -1
+        else              if (a.IsComplete) 1
+        else
+        {
+          def c = (b.Sequence.StartTokenChanges + bTokenChanges).CompareTo(a.Sequence.StartTokenChanges + aTokenChanges);
+          if (c != 0)
+            c
+          else
+            b.ParsePos.CompareTo(a.ParsePos)
+        }
+      });
+
+    public mutable MaxPos       : int = 0;
+    public mutable BestSolution : TokenChanges = TokenChanges.Fail;
+    public mutable IsRecordsToProcessCorrupted : bool = false;
+
+    public StartSequence : ParsedSequence { get { this.Sequences[0, this.ParseResult.RuleParser.ParsingSequence] } }
+
+    public this(parseResult : IParseResult)
+    {
+      def parseResultImpl = parseResult :> ParseResult;
+      Records     = array(parseResultImpl.Text.Length + 1);
+      ParseResult = parseResultImpl;
+    }
+
+    private ErrorPositions : SCG.HashSet[int] = SCG.HashSet();
+
+    public CollectKeywordCompletionList(completionStartPos : int, completionPrefix : string) : void
+    {
+      when (completionStartPos < 0)
+        return;
+
+      def len = completionPrefix.Length;
+      when (len > 42)
+        return;
+      def prefix = completionPrefix;
+      def i1 = Array.FindIndex(Records, completionStartPos, _ != null);
+      def index = if (i1 >= 0) i1 else Array.FindLastIndex(Records, completionStartPos, _ != null);
+      when (index < 0)
+        return;
+      def records = Records[index];
+    
+      when (records == null)
+        return;
+      
+      def result = SCG.HashSet();
+      foreach (record when !record.Key.IsComplete in records)
+        match (record.Key.ParsingState)
+        {
+          | ParsingState.Scan(SubruleInfo = SubruleInfo.TokenString(Str = literal)) =>
+            when (literal.StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase))
+              _ = result.Add(literal);
+            
+          | ParsingState.Scan(SubruleInfo = SubruleInfo.RegularCall as c) when !c.Literals.IsEmpty =>
+            foreach(literal in c.Literals)
+              when (literal.StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase))
+                _ = result.Add(literal);
+          
+          | _ => ()
+        }
+        
+      throw LiteralCompletionException(result.OrderBy(x => x).ToArray())
+    }
+
+    public RecoveryFromAllErrors() : void
+    {
+      def parseSession       = ParseResult.ParseSession;
+      def completionPrefix   = parseSession.CompletionPrefix;
+      def completionStartPos = parseSession.CompletionStartPos;
+      def timer = Stopwatch.StartNew();
+      def timeout = timer.Elapsed + parseSession.RecoveryTimeout;
+      def textPos = 0;
+      Records[textPos] = Hashtable();
+      match (ParseResult.RuleParser)
+      {
+        | SimpleRuleParser     as ruleParser => _ = StartParseSequence(textPos, ruleParser.ParsingSequence, TokenChanges.None);
+        | ExtensibleRuleParser as ruleParser => _ = StartParseSequence(textPos, ruleParser.ParsingSequence, TokenChanges.None);
+        | _                                  => assert3(false)
+      }
+      Parse();
+
+      unless (BestSolution.IsFail)
+        CollectKeywordCompletionList(completionStartPos, completionPrefix);
+    
+      mutable prevMaxPos = -1;
+      while (BestSolution.IsFail)
+      {
+        ParseToFailPos();
+        def curMaxPos = MaxPos;
+        prevMaxPos = MaxPos;
+
+        when (completionPrefix != null && MaxPos >= completionStartPos)
+          CollectKeywordCompletionList(completionStartPos, completionPrefix);
+      
+        _ = ErrorPositions.Add(curMaxPos);
+        InsertSubrules(curMaxPos);
+        //Parse();
+        //when (curMaxPos == MaxPos)
+          DeleteTokenOrGarbage(curMaxPos, forceDelete = curMaxPos == prevMaxPos);
+        //when (RecordsToProcess.Count == 0 && RecordsToComplete.Count == 0)
+        //{
+        //  BestSolution = BestSolution;
+        //  throw Exception("Recovery fail.");
+        //}
+        Parse();
+        when (timer.Elapsed > timeout)
+        {
+          Delete(curMaxPos, ParseResult.Text.Length);
+          Parse();
+        }
+      }
+
+      SaveRecoveredRawTreePart();
+    }
+
+    private ParseToFailPos() : void
+    {
+      def memoization = SCG.Dictionary();
+      def grammar = this.ParseResult.RuleParser.Grammar;
+
+      mutable maxPos;
+      do
+      {
+        maxPos = MaxPos;
+        mutable count;
+        do
+        {
+          def records = Records[maxPos].KeyValuePairs.ToArray(); // to materialize collection
+          count = records.Length;
+
+          // Находим все состояния которые могут съедать мусор
+          foreach ((record, tokenChanges) in records)
+            when (record.State >= 0)
+              foreach (seq in record.ParsingState.CalleeSequences)
+                when (seq.CanConsumeErrorTokens)
+                {
+                  PredictionOrScanning(record, tokenChanges, false);
+                  break;
+                }
+
+          def sequences = SCG.HashSet(Records[maxPos].Keys.Select(r => r.Sequence));
+          foreach (sequence when sequence.ParsingSequence.SequenceInfo != null in sequences)
+          {
+            when (IsInsideToken(memoization, grammar, sequence) && !sequence.ParsingSequence.CanConsumeErrorTokens)
+              continue;
+            foreach ((subrule, _) in sequence.ParsedSubrules.KeyValuePairs.NToArray())//TODO optimize
+              when (subrule.State >= 0 && subrule.End == maxPos)
+              {
+                def record = ParseRecord(sequence, subrule.State, subrule.Begin);
+                PredictionOrScanning(record, Records[record.ParsePos][record], false);
+              }
+          }
+          Parse();
+        }
+        while (count < Records[maxPos].Count);
+      }
+      while (maxPos < MaxPos);
+    }
+
+    private static IsInsideToken(memoization : SCG.Dictionary[ParsedSequence, bool], compositeGrammar : CompositeGrammar, seq : ParsedSequence) : bool
+    {
+      mutable res;
+      when (memoization.TryGetValue(seq, out res))
+        return res;
+
+      when (seq.ParsingSequence.SequenceInfo is SequenceInfo.Root)
+      {
+        def parser = seq.ParsingSequence.SequenceInfo.Parser;
+        res = compositeGrammar.IsVoidToken(parser);
+        memoization[seq] = res;
+        when (res)
+          return res;
+      }
+
+      foreach (caller in seq.Callers)
+      {
+        res = IsInsideToken(memoization, compositeGrammar, caller.Sequence);
+        when (res)
+        {
+          memoization[seq] = true;
+          return true;
+        }
+      }
+
+      memoization[seq] = false;
+      false
+    }
+
+    internal static ParsingOrderSubrulesComparison : Comparison[ParsedSubrule * TokenChanges] = ((l, _), (r, _)) =>
+    {
+      res:
+        {
+          mutable c;
+          c = l.Begin.CompareTo(r.Begin); when (c != 0) res(c);
+          c = l.End.CompareTo(r.End); when (c != 0) res(c);
+          l.State.CompareTo(r.State);
+        }
+    };
+  }
+
+  // ---- Internal/Recovery/RecoveryParser/RecoveryParser.n (Nitra.Internal.Recovery) ----
+
+
+  // ---- Internal/Recovery/SequenceTokenChanges.n (Nitra.Internal.Recovery) ----
+  [Record]
+  [StructuralEquality]
+  public struct SequenceTokenChanges
+  {
+    public SubrulesTokenChanges : Dictionary[ParsedSubrule, TokenChanges];
+    public TotalTokenChanges    : TokenChanges;
+
+    public override ToString() : string
+    {
+      TotalTokenChanges + "..."
+    }
+  }
+
+  // ---- Internal/Recovery/TokenChanges.n (Nitra.Internal.Recovery) ----
+  public struct TokenChanges :  IComparable[TokenChanges]
+  {
+    public static Fail : TokenChanges = TokenChanges(int.MaxValue, int.MaxValue);
+    public static None : TokenChanges = TokenChanges(0, 0);
+
+    public Inserted : int;
+    public Deleted  : int;
+
+    public this(inserted : int, deleted : int)
+    {
+      when (inserted < 0)
+        assert3(false);
+
+      when (deleted < 0)
+        assert3(false);
+
+      Deleted  = deleted;
+      Inserted = inserted;
+    }
+
+    public IsFail     : bool { get { Inserted == int.MaxValue } };
+    public HasChanges : bool { get { Inserted > 0 || Deleted > 0 } }
+
+    public static Min(x : TokenChanges, y : TokenChanges) : TokenChanges { if (x.IsFail) y else if (x >= y) y else x }
+    public static Max(x : TokenChanges, y : TokenChanges) : TokenChanges { if (x.IsFail) y else if (x >= y) x else y }
+
+    public static @+ (x : TokenChanges, y : TokenChanges) : TokenChanges { if (x.IsFail || y.IsFail) Fail else TokenChanges(x.Inserted + y.Inserted, x.Deleted + y.Deleted) }
+    public static @- (x : TokenChanges, y : TokenChanges) : TokenChanges { if (x.IsFail || y.IsFail) Fail else TokenChanges(x.Inserted - y.Inserted, x.Deleted - y.Deleted) }
+
+    public static @< (x : TokenChanges, y : TokenChanges) : bool { x.CompareTo(y) <  0 }
+    public static @> (x : TokenChanges, y : TokenChanges) : bool { x.CompareTo(y) >  0 }
+    public static @<=(x : TokenChanges, y : TokenChanges) : bool { x.CompareTo(y) <= 0 }
+    public static @>=(x : TokenChanges, y : TokenChanges) : bool { x.CompareTo(y) >= 0 }
+    public static @!=(x : TokenChanges, y : TokenChanges) : bool { x.CompareTo(y) != 0 }
+    public static @==(x : TokenChanges, y : TokenChanges) : bool { x.CompareTo(y) == 0 }
+
+    public CompareTo(other : TokenChanges) : int
+    {
+      when (IsFail && other.IsFail)
+        return 0;
+
+      when (IsFail)
+        return 1;
+
+      when (other.IsFail)
+        return -1;
+
+
+      def a = Inserted + Deleted;
+      def b = other.Inserted + other.Deleted;
+
+      if (a > b)
+        1
+      else if (a == b)
+        other.Inserted.CompareTo(Inserted)
+      else
+        -1
+    }
+
+    public override Equals(obj : object) : bool
+    {
+      if (obj is TokenChanges as other)
+        other == this
+      else
+        false
+    }
+
+    public override GetHashCode() : int { if (IsFail) 0 else Inserted ^ (Deleted << 3) }
+
+    public override ToString() : string
+    {
+      if (IsFail)
+        "Fail"
+      else if (Inserted > 0 && Deleted > 0)
+        $"(+$Inserted/-$Deleted)"
+      else if (Inserted > 0)
+        "+" + Inserted
+      else if (Deleted > 0)
+        "-" + Deleted
+      else
+        "0"
+    }
+  }
+
+  // ---- Internal/Recovery/TokenParserApplication.n (Nitra.Internal.Recovery) ----
+  [Record, StructuralEquality]
+  public class TokenParserApplication
+  {
+    public Start  : int;
+    public End    : int;
+    public IsVoid : bool;
+    public Token  : TokenParser;
+
+    public Length : int { get { End - Start } }
+
+    public override ToString() : string
+    {
+      $"$Token ($Start, $End)"
+    }
+  }
+
+  // ---- Internal/Recovery/TokensInsertedForSubrule.n (Nitra.Internal.Recovery) ----
+  [Record]
+  [StructuralEquality]
+  public struct SubruleTokenChanges
+  {
+    public Seq            : ParsedSequence;
+    public Subrule        : ParsedSubrule;
+    public TokenChanges   : TokenChanges;
+
+    public override ToString() : string
+    {
+      Seq.RecoveryParser.ParseResult.ParserHost.ParsingStates[Subrule.State] + " (" + this.TokenChanges + ")"
+    }
+  }
+}

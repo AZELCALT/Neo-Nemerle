@@ -1,0 +1,1255 @@
+using Nitra.Declarations;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using NemerleMacros;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.compilation_options;
+using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.namespace_tree;
+using Nemerle.Compiler.static_type_var;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nitra;
+using Nitra.Internal;
+using Nitra.ProjectSystem;
+using System.Collections.Immutable;
+using System.Globalization;
+using System.Threading;
+using NRB = Nitra.Declarations;
+using Nitra.Serialization2;
+using Nitra.Runtime;
+using Nitra.Grammar;
+using NitraMacros;
+using Nitra.InternalMacros;
+using Nitra.Serialization2Macros;
+using DotNet;
+
+[assembly: ProjectSupport("Nitra DotNet", typeof(Nitra.Ast.CompilationUnit))]
+
+// ---- AST/AstType.n (Nitra.Ast) ----
+public interface AstTypeSymbol : TypeSymbol
+{
+}
+
+public class AstTypeVarSymbol : BoundedTypeVarSymbol, AstTypeSymbol
+{
+  get_Declarations() : Seq[AstType] implements AstTypeSymbol.get_Declarations
+  {
+    GetDeclarationsOfType()
+  }
+}
+
+// ---- AST/DotNet/CompilationUnit.n (DotNet) ----
+public class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
+{
+  [Record]
+  private class ProjectData
+  {
+    public Context       : DependentPropertyEvalContext;
+    public RootNamespace : NamespaceSymbol;
+    public RootScope     : Scope;
+    public Manager       : ManagerClass;
+  }
+  
+  // IProjectSupport
+
+  public RefreshReferences(cancellationToken : CancellationToken, project : Project) : object
+  {
+    def oldManager = ManagerClass.Instance;
+    try
+    {
+      project.OnSymbolAssemblyResolve += OnSymbolAssemblyResolve;
+
+      def context = DependentPropertyEvalContextEx();
+      def manager : ManagerClass =
+        if (project is NitraProject(Manager = manager) as p)
+        {
+          context.OnEmitSymbol += p.EmitSymbol;
+          manager
+        }
+        else
+          StubCompiler(project);
+
+      ManagerClass.Instance = manager;
+
+      context.CancellationToken = cancellationToken;
+      def rootNamespace = NamespaceSymbol();
+      rootNamespace.DeclaredIn  = null;
+      rootNamespace.FullName    = "";
+
+      def writeMetadataCallback(_)
+      {
+        SaveNitraMetadata(project, manager, rootNamespace);
+        manager.BeforeSaveAssembly -= writeMetadataCallback;
+      }
+      unless (manager.IsIntelliSenseMode)
+        manager.BeforeSaveAssembly += writeMetadataCallback;
+
+      def rootScope = CreateNemerleSymbols(cancellationToken, manager, rootNamespace, context);
+      rootNamespace.EvalProperties(context);
+      context.RootNamespace = rootNamespace;
+
+      // ensure static symbols are created
+      _ = WellKnownSymbols.GetSymbolsToEvaluate();
+
+      LoadNitraMetadata(cancellationToken, project, manager, rootNamespace);
+      CreatePredefinedSymbols(rootNamespace.MemberTable, context);
+      ProjectData(context, rootNamespace, rootScope, manager)
+    }
+    finally
+    {
+      ManagerClass.Instance = oldManager;
+      project.OnSymbolAssemblyResolve -= OnSymbolAssemblyResolve;
+    }
+  }
+
+  public RefreshProject(cancellationToken : CancellationToken, files : ImmutableArray[FileEvalPropertiesData], data : object) : void
+  {
+    def oldManager = ManagerClass.Instance;
+    def (context, rootNamespace, rootScope, manager) = data :> ProjectData;
+
+    context.CancellationToken = cancellationToken;
+    
+    try
+    {
+      ManagerClass.Instance = manager;
+
+      def removeParsedSymbols(tableScope : TableScope)
+      {
+        tableScope.Undefine(_.IsParsed);
+        foreach (symbols in tableScope.Symbols)
+        foreach (symbol is NamespaceSymbol in symbols)
+          removeParsedSymbols(symbol.MemberTable);
+      }
+      removeParsedSymbols(rootNamespace.MemberTable);
+      
+      def evalHost = NitraProjectEvalPropertiesHost(files, rootNamespace, rootScope);
+      evalHost.EvalProperties(context, "SymbolHierarchy", 0);
+      evalHost.EvalProperties(context, "Scopes", 1);
+      evalHost.EvalProperties(context, "Type bodies binding", 2);
+    }
+    finally ManagerClass.Instance = oldManager;
+  }
+
+  public GetSymbolById(data : object, symbolId : int) : ValueOption[DeclarationSymbol]
+  {
+    def rootNamespace = (data :> ProjectData).RootNamespace;
+    // TODO: cache symbols an use it cache to find symbol by id
+    def findSymbol(tableScope : TableScope) : ValueOption[DeclarationSymbol]
+    {
+      foreach (symbols in tableScope.Symbols)
+      foreach (symbol in symbols)
+      {
+        when (symbol.Id == symbolId)
+          return ValueOption.Some(symbol);
+
+        when (symbol is NamespaceSymbol as ns)
+        {
+          def result = findSymbol(ns.MemberTable);
+          when (result.IsSome)
+            return result;
+        }
+      }
+      
+      ValueOption.None()
+    }
+    
+    findSymbol(rootNamespace.MemberTable)
+  }
+  
+  public DeconstructType(symbol : DeclarationSymbol, type : out TypeSymbol, typeArgs : out ImmutableArray[TypeSymbol]) : bool
+  {
+    match (symbol)
+    {
+      | s is TopConstructedTypeSymbol    => type = s.TypeInfo; typeArgs = s.Args; true
+      | s is NestedConstructedTypeSymbol => type = s.TypeInfo; typeArgs = s.Args; true
+      | _ => type = null; typeArgs = ImmutableArray.Empty; false
+    }
+  }
+  
+  public VisitGlobalSymbols(data : object, callback : Predicate[DeclarationSymbol]) : void
+  {
+    def rootNamespace = (data :> ProjectData).RootNamespace;
+    _ = rootNamespace.VisitChildrenAndSelf(SymbolUtils.GetNestedSymbol, callback);
+  }
+  
+  // end of IProjectSupport implementation
+  
+  class StubCompiler : ManagerClass
+  {
+    public this(project : Project)
+    {
+      base (CompilationOptions());
+      _isIntelliSenseMode = true;
+      this.Options.ColorMessages = false;
+      def libs            = project.Libs;
+      def localPath       = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
+      def macroLibPath    = project.ProjectDir;
+      def compilerDir     = IO.Path.GetDirectoryName(localPath);
+      this.Options.DoNotLoadMacros = true;
+      unless (string.IsNullOrEmpty(macroLibPath))
+        this.Options.MacrosToLoad ::= macroLibPath;
+      this.Options.LibraryPaths ::= compilerDir;
+      foreach (lib in libs)
+      {
+        | FullNameLibReference     => this.Options.ReferencedLibraries ::= lib.ToString();
+        | FileLibReference as file => this.Options.ReferencedLibraries ::= IO.Path.GetFullPath(IO.Path.Combine(project.ProjectDir, file.Path));
+        | ProjectReference as prj  => this.Options.ReferencedLibraries ::= prj.Path;
+        | _ => assert2(false, "Not supported LibReference");
+      }
+      InitCompiler ();
+      LoadExternalLibraries ();
+    }
+  }
+
+  private static OnSymbolAssemblyResolve(_ : Project, fullName : System.Reflection.AssemblyName) : System.Reflection.Assembly
+  {
+    match (fullName.Name)
+    {
+      | "Boot.DotNetLang"    => typeof(DotNet.ClassSymbol).Assembly;
+      | "Boot.Nitra.Runtime" => typeof(Nitra.Runtime.Location).Assembly;
+      | _ => null
+    }
+  }
+
+  private static NitraMetadataStreamName = "Nitra.Metadata2";
+
+  private static LoadNitraMetadata(cancellationToken : CancellationToken, project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+  {
+    when (manager is StubCompiler)
+      project.Init(manager.ReferencedAssemblies.Select(a => a.Assembly.GetName()));
+
+    def assemblyWithMetadata = Dictionary();
+    foreach (reference in manager.ReferencedAssemblies)
+    {
+      when (cancellationToken.IsCancellationRequested)
+        return;
+
+      def assembly       = reference.Assembly;
+      def metadataStream = assembly.GetManifestResourceStream(NitraMetadataStreamName);
+      when (metadataStream != null)
+      {
+        def assemblyId = project.GetAssemblyId(assembly.GetName());
+        def file       = AssemblyFile(project, assembly.CodeBase);
+        assemblyWithMetadata.Add(assemblyId, (assembly, metadataStream, file));
+      }
+    }
+
+    def visitedAssemblies = HashSet();
+    def visitAssembly(assemblyId)
+    {
+      when (visitedAssemblies.Add(assemblyId))
+      {
+        mutable data;
+        when (assemblyWithMetadata.TryGetValue(assemblyId, out data))
+        {
+          def (assembly, metadataStream, file) = data;
+          foreach (dependency in assembly.GetReferencedAssemblies())
+            visitAssembly(project.GetAssemblyId(dependency));
+
+          def source = SingleLineSourceSnapshot("Fake source: " + file.Name, file);
+          def reader = Nitra.Serialization2.MetadataReader(project, source);
+          reader.ReadRoot(rootNamespace, metadataStream);
+        }
+      }
+    }
+
+    foreach (assemblyId in assemblyWithMetadata.Keys)
+    {
+      when (cancellationToken.IsCancellationRequested)
+        return;
+
+      visitAssembly(assemblyId);
+    }
+  }
+
+  private static CreatePredefinedSymbols(rootScope : TableScope, context : DependentPropertyEvalContextEx) : void
+  {
+    def nitraNs = GetOrCreatePredefinedSymbol.[NamespaceSymbol](rootScope, Location.Default, "Nitra", context, () => NamespaceSymbol());
+
+    // the base language is Nitra.Runtime.Language (Language.nitra), with the runtime's other root types
+    def runtimeNs = GetOrCreatePredefinedSymbol.[NamespaceSymbol](nitraNs.MemberTable, Location.Default, "Runtime", context, () => NamespaceSymbol());
+    context.Language = GetOrCreatePredefinedSymbol.[LanguageSymbol](runtimeNs.MemberTable, Location.Default, "Language", context,
+      fun()
+      {
+        def symbol = LanguageSymbol();
+        symbol.BaseTypeSet = BaseTypeReferenceSet(null);
+        symbol
+      });
+
+    def declarationsNs = GetOrCreatePredefinedSymbol.[NamespaceSymbol](nitraNs.MemberTable, Location.Default, "Declarations", context, () => NamespaceSymbol());
+
+    def scopedAstSymbol = GetOrCreatePredefinedSymbol.[TopAstSymbol](declarationsNs.MemberTable, Location.Default, "ScopedAst", context,
+      fun()
+      {
+        def symbol = TopAstSymbol();
+        symbol.BaseTypeSet = BaseTypeReferenceSet(null);
+        symbol
+      });
+
+    context.Declaration = GetOrCreatePredefinedSymbol.[TopAstSymbol](declarationsNs.MemberTable, Location.Default, "Declaration", context,
+      fun()
+      {
+        def symbol = TopAstSymbol();
+        symbol.BaseTypeSet = BaseTypeReferenceSet(null);
+        symbol.BaseTypeSet.AddParent(scopedAstSymbol);
+        symbol
+      });
+    //assert2(context.Declaration != null);
+  }
+
+  private static GetOrCreatePredefinedSymbol[TSymbol](scope : TableScope, loc : Nitra.Runtime.Location, name : string, context : DependentPropertyEvalContext, symbolFactory : Func[DeclarationSymbol]) : TSymbol
+    where TSymbol : DeclarationSymbol
+  {
+    def result = Reference(loc, name).Bind(scope);
+    if (result.IsSymbolEvaluated)
+    {
+      result.Symbol
+    }
+    else
+    {
+      def decl   = PredefinedDeclaration(Name(loc, name), symbolFactory);
+      def symbol = decl.DefineSymbol(scope) :> TSymbol;
+      symbol.EvalProperties(context);
+      symbol
+    }
+  }
+
+  private static SaveNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+  {
+    def metadataFileName = manager.Options.OutputFileName + ".nitrametadata2";
+    def metadataWriter   = Nitra.Serialization2.MetadataWriter(project);
+    using (stream = IO.File.OpenWrite(metadataFileName))
+      metadataWriter.WriteRoot(rootNamespace, stream);
+    manager.Options.EmbeddedResources ::= metadataFileName + "," + NitraMetadataStreamName;
+  }
+
+  private static CreateNemerleSymbols(cancellationToken : CancellationToken, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
+  {
+    def nemerleNsRoot     = manager.NameTree.NamespaceTree;
+    def loc               = Nitra.Runtime.Location.Default;
+    def nodeToSymbolMap   = Hashtable.[TypeInfo, TypeSymbol]();
+    def aliases           = List();
+
+    def createTypeParameters(tycon : TypeInfo) : ImmutableArray[TypeParameterSymbol]
+    {
+      def count = tycon.TyparmsCount;
+      if (count == 0)
+        ImmutableArray.Empty
+      else
+      {
+        def result = ImmutableArray.CreateBuilder(count);
+        mutable typarms = tycon.Typarms;
+        for (mutable i = 0; i < count; ++i)
+        {
+          def tp    = typarms.Head;
+          def name  = NRB.Name(loc, tp.Name);
+          def tps   = TypeParameterDeclaration(name, tp).DefineSymbol();
+          tps.EvalProperties(context);
+          result.Add(tps);
+          typarms   = typarms.Tail;
+        }
+        result.MoveToImmutable()
+      }
+    }
+    def makeTypeParameters(symbol : GenericTypeSymbol, tycon : TypeInfo) : void
+    {
+      unless (symbol.IsTypeParametersCountEvaluated)
+        symbol.TypeParametersCount = tycon.TyparmsCount;
+      unless (symbol.IsTypeParametersEvaluated)
+        symbol.TypeParameters = createTypeParameters(tycon);
+    }
+    def loadNsMemebers(node : NamespaceTree.Node, declaredIn : DotNet.NamespaceSymbol) : void
+    {
+      def addTopType(node : NamespaceTree.Node, tycon : TypeInfo) : void
+      {
+        def name = NRB.Name(loc, node.PartName);
+        def kind = tycon.GetTydecl();
+        match (kind)
+        {
+          | Interface
+          | Variant      // temporary treat Variants as class
+          | VariantOption
+          | Class =>
+            def symbol : TopGenericTypeSymbol =
+                      if (tycon.IsDelegate) ExternalTypeDeclaration.[TopDelegateSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable) 
+                else if (tycon.IsInterface) ExternalTypeDeclaration.[TopInterfaceSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable)
+                else if (tycon.IsValueType) ExternalTypeDeclaration.[TopStructSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable)
+                else                        ExternalTypeDeclaration.[TopClassSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable);
+            makeTypeParameters(symbol, tycon);
+            unless (symbol.IsDeclaredInEvaluated)
+              symbol.DeclaredIn = declaredIn;
+            nodeToSymbolMap[tycon] = symbol;
+            symbol.Scope = EmptyScope.Instance; // temp
+            symbol.EvalProperties(context);
+              
+          | Alias         =>
+            def symbol = ExternalTypeDeclaration.[TypeAliasSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable);
+            makeTypeParameters(symbol, tycon);
+            unless (symbol.IsDeclaredInEvaluated)
+              symbol.DeclaredIn = declaredIn;
+            aliases.Add(symbol);
+
+            nodeToSymbolMap[tycon] = symbol;
+            symbol.EvalProperties(context);
+        
+          | Enum          =>
+            def symbol = ExternalTypeDeclaration.[TopEnumSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable);
+            nodeToSymbolMap[tycon] = symbol;
+            unless (symbol.IsDeclaredInEvaluated)
+              symbol.DeclaredIn = declaredIn;
+            symbol.EvalProperties(context);
+        }
+      }
+      node.EnsureCached();
+ 
+      match (node.Value)
+      {
+        | No                               => ()
+        | MacroCall                        => ()
+        | null                             => ()
+        | NamespaceReference               => 
+          when (cancellationToken.IsCancellationRequested)
+            return;
+          def name   = NRB.Name(loc, node.PartName);
+          //assert2(!(node.FullName is ["Nemerle", "Core"]));
+          def symbol = ExternalNamespaceDeclaration(name, node).DefineSymbol(declaredIn.MemberTable);
+          unless (symbol.IsDeclaredInEvaluated)
+            symbol.DeclaredIn = declaredIn;
+          symbol.EvalProperties(context);
+          foreach (subNode in node.Children.Values.ToArray())
+            loadNsMemebers(subNode, symbol);
+          
+        // a file module (a top-level static class holding the file's types) is the namespace its path names
+        | Cached(tycon) when (tycon.IsModule || tycon.IsAbstract && tycon.IsSealed) && tycon.DeclaringType == null && node.Children != null && node.Children.Count > 0 =>
+          def name   = NRB.Name(loc, node.PartName);
+          def symbol = ExternalNamespaceDeclaration(name, node).DefineSymbol(declaredIn.MemberTable);
+          unless (symbol.IsDeclaredInEvaluated)
+            symbol.DeclaredIn = declaredIn;
+          symbol.EvalProperties(context);
+          foreach (subNode in node.Children.Values.ToArray())
+            loadNsMemebers(subNode, symbol);
+
+        | Cached(tycon) =>  addTopType(node, tycon);
+        | CachedAmbiguous(elems)       => foreach (e in elems) addTopType(node, e);
+        | NotLoaded(_externalType)     => assert2(false)
+        | NotLoadedList(_externalType) => assert2(false)
+      }
+    }
+    
+    rootNamespace.EvalProperties(context);
+    
+    foreach (node in nemerleNsRoot.Children.Values.ToArray())
+      loadNsMemebers(node, rootNamespace);
+    
+    def nodeToSymbolMap = nodeToSymbolMap;
+
+    foreach (alias in aliases)
+    {
+      def decl     = alias.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+      def a        = decl.NemerleTypeInfo.GetTydecl() :> Nemerle.Compiler.Typedtree.TypeDeclaration.Alias;
+      def typeInfo = a.ty.TypeInfo;
+      def fullName = a.ty.ToString();
+      alias.Replacement =
+        if (typeInfo != null)
+        {
+          mutable value;
+          if (nodeToSymbolMap.TryGetValue(typeInfo, out value))
+            Ref.CreateBind(loc, value)
+          else
+          {
+            assert2(false);
+            Ref.CreateBind(loc, fullName, BindResult.Nil())
+          }
+        }
+        else
+          Ref.CreateBind(loc, fullName, BindResult.Nil())
+    }
+
+    def setParents(ns : NamespaceSymbol) : void
+    {
+      foreach (symbols in ns.MemberTable.Symbols)
+      {
+        foreach (symbol in symbols)
+        {
+          | x is NamespaceSymbol => setParents(x)
+          | x is GenericContainerTypeSymbol =>
+            def baseTypeSet = BaseTypeReferenceSet(context);
+            x.BaseTypeSet = baseTypeSet;
+            def decl = x.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+            def ti = decl.NemerleTypeInfo;
+            def superTypes = ti.GetDirectSuperTypes();
+            foreach (superType in superTypes)
+            {
+              //def baseType = FixedTypeToTypeRef(file, span, superType);
+              //when (baseType != null)
+              //  baseTypeSet.AddParent(baseType);
+            }
+
+          | _ => () //assert2(false);
+        }
+      }
+    }
+    
+    setParents(rootNamespace);
+    
+    def bindTuple(scope : Scope, typeParameterCoiunt : int) : Ref[GenericContainerTypeSymbol]
+    {
+      def alg(symbol : GenericContainerTypeSymbol) : ValueOption[GenericContainerTypeSymbol]
+      {
+        if (symbol.TypeParametersCount == typeParameterCoiunt)
+          ValueOption.Some(symbol)
+        else
+          ValueOption.None()
+      }
+
+      Reference(loc, "Tuple").Bind(scope).Resolve.[GenericContainerTypeSymbol](alg)
+    }
+    def bind(scope : Scope, name : string) : Ref[NamespaceSymbol]
+    {
+      Reference(loc, name).Bind(scope)
+    }
+    
+    def makeTuples() : void
+    {
+      def nemerleNs = bind(rootNamespace.MemberTable, "Nemerle");
+      unless (nemerleNs.IsSymbolEvaluated)
+        return;
+
+      def builtinsNs = bind(nemerleNs.Symbol.MemberTable, "Builtins");
+      unless (builtinsNs.IsSymbolEvaluated)
+        return;
+
+      def declaredIn = rootNamespace;
+      for (mutable i = 2; i <= 20; i++)
+      {
+        def realSymbolRef = bindTuple(builtinsNs.Symbol.MemberTable, i);
+        def realSymbol    = realSymbolRef.Symbol;
+        def realDecl      = realSymbol.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+        def name          = NRB.Name(loc, "#Tuple");
+        def symbol        = ExternalTypeDeclaration.[TypeAliasSymbol](name, realDecl.NemerleTypeInfo).DefineSymbol(declaredIn.MemberTable);
+        symbol.TypeParametersCount = i;
+        symbol.TypeParameters      = AstUtils.CreateTypeParameters(i);
+        symbol.DeclaredIn          = declaredIn;
+        symbol.EvalProperties(context);
+      }
+    }
+    
+    
+    makeTuples();
+    
+    def res1 = bind(rootNamespace.MemberTable, "Nemerle");
+    
+    when (res1.IsSymbolEvaluated)
+    {
+      def res2 = bind(res1.Symbol.MemberTable, "Core");
+      when (res2.IsSymbolEvaluated)
+        return res2.Symbol.MemberTable.HideWith(rootNamespace.MemberTable);
+    }
+
+    rootNamespace.MemberTable
+  }
+
+  static FixedTypeToTypeRef(ti : TypeInfo, typeMap : Hashtable[TypeInfo, TypeSymbol], loc : Nitra.Runtime.Location, t : Nemerle.Compiler.type_var.TypeVar, context : DependentPropertyEvalContext, pos : int = -1) : TypeSymbol
+  {
+    match (t)
+    {
+      | FixedType.Class(ti, []) => 
+        def sym = typeMap[ti];
+        sym
+        
+      //| FixedType.Class(ti, args) =>
+      //  def constructedType = AstUtils.CreateConstructedTypeSymbol(file, span);
+      //  def sym = typeMap[ti] :> GenericTypeSymbol;
+      //  constructedType.TypeInfo = sym;
+      //  def resultArgs = array(args.Length);
+      //  constructedType
+
+      | FixedType.StaticTypeVarRef(staticTypeVar) => 
+        null
+
+      | _ => null
+    }
+  }
+
+  // ---- merged from AST/DotNet/DependentPropertyEvalContextEx.n ----
+  private class DependentPropertyEvalContextEx : DependentPropertyEvalContext
+  {
+    public RootNamespace : NamespaceSymbol   { get; set; }
+    public Language      : LanguageSymbol    { get; set; }
+    public Declaration   : DeclarationSymbol { get; set; }
+  }
+  
+  public static BindFullName[TSymbol](this context : DependentPropertyEvalContext, typeArgsCount : int, params names : array[string]) : GenericTypeSymbol
+    where TSymbol : GenericTypeSymbol
+  {
+    def rootNamespace = (context :> DependentPropertyEvalContextEx).RootNamespace;
+    
+    def loop(ns : NamespaceSymbol, i : int) : GenericTypeSymbol
+    {
+      def name = names[i];
+      def r = Reference(Nitra.Runtime.Location(), name);
+      def res = ns.MemberTable.Bind.[DeclarationSymbol](r);
+      def error() : string
+      {
+        def args = if (typeArgsCount == 0) "" else $"[$typeArgsCount]";
+        $<#Can't find type '..$(names; ".")$args'#>
+      }
+      assert(!res.IsEmpty, error());
+      match (res)
+      {
+        | Single(Symbol=NamespaceSymbol as nestedNs) => loop(nestedNs, i + 1)
+        | Single(Symbol=GenericTypeSymbol as t) when t.IsTypeParametersCountEvaluated && t.TypeParametersCount == typeArgsCount => t
+        | Multiple as m =>
+          def hasNoParams(t : TSymbol) : bool
+          {
+            t.IsTypeParametersCountEvaluated && t.TypeParametersCount == typeArgsCount
+          }
+          
+          if (m.Filter(hasNoParams) is BindResult.Single as s)
+            s.Symbol
+          else
+            assert(false, error())
+
+        | _ => assert2(false, error()); assert(false, error())
+      }
+    }
+    
+    loop(rootNamespace, 0)
+  }
+
+  public static GetRootNamespace(this context : DependentPropertyEvalContext) : NamespaceSymbol
+  {
+    (context :> DependentPropertyEvalContextEx).RootNamespace
+  }
+
+  public static GetLanguage(this context : DependentPropertyEvalContext) : LanguageSymbol
+  {
+    (context :> DependentPropertyEvalContextEx).Language
+  }
+
+  public static GetDeclaration(this context : DependentPropertyEvalContext) : AstSymbol
+  {
+    (context :> DependentPropertyEvalContextEx).Declaration :> AstSymbol
+  }
+}
+
+internal class NitraProjectEvalPropertiesHost : ProjectEvalPropertiesHost
+{
+  private _rootNamespace : NamespaceSymbol;
+  private _rootScope     : Scope;
+
+  public this(files : ImmutableArray[FileEvalPropertiesData], rootNamespace : NamespaceSymbol, rootScope : Scope)
+  {
+    base(files, (rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate()).ToImmutableArray());
+    _rootNamespace = rootNamespace;
+    _rootScope     = rootScope;
+  }
+
+  protected override BeforeStage(context : DependentPropertyEvalContext, _passName : string) : void
+  {
+    match (context.Stage)
+    {
+      | 0 =>
+        foreach (file in _files)
+          when (file.Ast is CompilationUnit as cu)
+            cu.RootNamespace = _rootNamespace;
+
+      | 1 =>
+        foreach (file in _files)
+          when (file.Ast is CompilationUnit as cu)
+            cu.Scope = _rootScope;
+
+      | _ => ()
+    }
+  }
+}
+
+[Record]
+internal class TypeParameterDeclaration : ExternalDeclaration[TypeParameterSymbol]
+{
+  public NemerleTypeParam : StaticTypeVar;
+  public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
+}
+
+[Record]
+internal class TypeParameterStubDeclaration : ExternalDeclaration[TypeParameterSymbol]
+{
+  public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
+}
+
+internal interface IExternalTypeDeclaration
+{
+  NemerleTypeInfo : TypeInfo { get; }
+}
+
+[Record]
+internal class ExternalTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalTypeDeclaration
+  where TSymbol : DeclarationSymbol
+{
+  public NemerleTypeInfo : TypeInfo { get; private set; }
+}
+
+[Record]
+internal class ExternalNamespaceDeclaration : ExternalDeclaration[NamespaceSymbol]
+{
+  public NemerleNode : NamespaceTree.Node { get; private set; }
+  public override CreateSymbol() : DeclarationSymbol { NamespaceSymbol() }
+}
+
+internal sealed class AssemblyFile : ConcreteFile
+{
+  public this(project : Project, fullName : string)
+  {
+    base(null);
+    Project  = project;
+    FullName = fullName;
+  }
+
+  private mutable _source   : SourceSnapshot;
+
+  public override Project     : Project        { get; }
+  public override Length      : int            { get { 0 } }
+  public override FullName    : string         { get; }
+  public override Language    : Nitra.Runtime.Language { get { Nitra.Runtime.Language.Instance } }
+  public override GetSource() : SourceSnapshot { when(_source == null) _source = SingleLineSourceSnapshot("", this); _source }
+  public override IsFake      : bool           { get { true } }
+}
+
+// ---- AST/DotNet/DependentPropertyEvalContextEx.n (DotNet) ----
+
+
+// ---- AST/FileExtensionCollector.n (Nitra.Ast) ----
+public sealed class FileExtensionCollector
+{
+  //TODO: rewrite with actual ICollector implementation
+
+  private _extensions : Dictionary[string, FileExtension] = Dictionary(StringComparer.OrdinalIgnoreCase);
+
+  public Add(fileExtension : FileExtension, context : DependentPropertyEvalContext) : FileExtensionCollector
+  {
+    when (fileExtension.Extension.HasValue)
+    {
+      def extension = fileExtension.Extension.Value;
+      mutable existingFileExtension;
+      if (_extensions.TryGetValue(extension, out existingFileExtension))
+      {
+        // TODO: use RootError, add hint to first definition of the extension
+        fileExtension.Error(context, $"Duplicated file extension '$extension'.");
+      }
+      else
+        _extensions.Add(extension, fileExtension);
+    }
+    this
+  }
+
+  public ToImmutable() : ImmutableArray[string]
+  {
+    def builder = ImmutableArray.CreateBuilder(_extensions.Count);
+    builder.AddRange(_extensions.Keys);
+    builder.MoveToImmutable()
+  }
+}
+
+// ---- AST/Members/RuleFieldNameGenerator.n (Nitra.Ast) ----
+public sealed class RuleFieldNameGenerator
+{
+  private static _plainNameGenerator : RuleFieldNameGenerator = RuleFieldNameGenerator(null);
+
+  private _table : Dictionary[int, bool * int];
+
+  private this(table : Dictionary[int, bool * int])
+  {
+    _table = table;
+  }
+
+  public static Create(names : ImmutableArray[ParsedValue[string * bool]]) : RuleFieldNameGenerator
+  {
+    when (names.Length > 1)
+    {
+      def table = Dictionary(names.Length);
+      mutable containsNonUniqeNames = false;
+      foreach (name in names)
+      {
+        mutable data;
+        def id = GetId(name);
+        if (table.TryGetValue(id, out data))
+        {
+          containsNonUniqeNames = true;
+          data = (false, 0);
+        }
+        else
+          data = (true, 0);
+
+        table[id] = data;
+      }
+      when (containsNonUniqeNames)
+        return RuleFieldNameGenerator(table);
+    }
+    _plainNameGenerator
+  }
+
+  public GetName(loc : Location, desiredName : ParsedValue[string * bool]) : Nitra.Declarations.Name
+  {
+    def isUserDefinedName = IsUserDefinedName(desiredName);
+    def source            = loc.Source;
+    def span              = desiredName.Span;
+    def id                = GetId(desiredName);
+    if (_table : object == null || isUserDefinedName)
+      Nitra.Declarations.Name(Location(source, span), id)
+    else
+    {
+      def data = _table[id];
+      if (data[0])
+        Nitra.Declarations.Name(Location(source, span), id)
+      else
+      {
+        // TODO: generated name can be non unique in some cases
+        def index   = data[1] + 1;
+        _table[id]  = (false, index);
+        def newName = StringIndex.GetText(id) + index.ToString(CultureInfo.InvariantCulture);
+        Nitra.Declarations.Name(Location(source, span), newName)
+      }
+    }
+  }
+
+  private static IsUserDefinedName(desiredName : ParsedValue[string * bool]) : bool
+  {
+    if (desiredName.HasValue) desiredName.Value[1] else false
+  }
+
+  private static GetId(desiredName : ParsedValue[string * bool]) : int
+  {
+    def text = if (desiredName.HasValue) desiredName.Value[0] else "Node";
+    StringIndex.GetId(text)
+  }
+}
+
+// ---- AST/RuleType.n (Nitra.Ast) ----
+public interface RuleTypeSymbol : TypeSymbol
+{
+}
+
+public class RuleTypeVarSymbol : BoundedTypeVarSymbol, RuleTypeSymbol
+{
+  get_Declarations() : Seq[RuleType] implements RuleTypeSymbol.get_Declarations
+  {
+    GetDeclarationsOfType()
+  }
+}
+
+// ---- AST/Scopes/ListRuleTypeScope.n (Nitra.Ast) ----
+public sealed class ListRuleTypeScope : MappableRuleTypeScope
+{
+  private _type : RuleListTypeSymbol;
+
+  public this(type : RuleListTypeSymbol)
+  {
+    _type = type;
+  }
+
+  protected override GetElementType() : RuleTypeSymbol
+  {
+    _type.ElemType
+  }
+
+  protected override TryCreateMapSyntaxSymbol(prototype : MapSyntaxSymbol, context : DependentPropertyEvalContext) : MapSyntaxSymbol
+  {
+    match (prototype.ReturnType)
+    {
+      | ListAstTypeSymbol(IsElemTypeEvaluated = true, ElemType = AstSymbol as t)
+      | OptionAstTypeSymbol(IsValueTypeEvaluated = true, ValueType = AstSymbol as t)
+      | AstSymbol as t =>
+        def decl = CreateMapSyntaxDeclaration(prototype);
+        CreateMapSyntaxSymbol(decl, prototype, _type, Nitra.Grammar.AstUtils.CreateListAstType(decl, t, context), context)
+
+      | _ => null
+    }
+  }
+
+  public override Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(_type, writer);
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def type = metadataReader.ReadObject(reader);
+    ListRuleTypeScope(type)
+  }
+}
+
+// ---- AST/Scopes/MappableRuleTypeScope.n (Nitra.Ast) ----
+public abstract class MappableRuleTypeScope : RuleTypeScope
+{
+  protected abstract GetElementType() : RuleTypeSymbol;
+  protected abstract TryCreateMapSyntaxSymbol(prototype : MapSyntaxSymbol, context : DependentPropertyEvalContext) : MapSyntaxSymbol;
+
+  protected static CreateMapSyntaxDeclaration(prototype : MapSyntaxSymbol) : ExternalDeclaration[MapSyntaxSymbol]
+  {
+    match (prototype.FirstDeclarationOrDefault)
+    {
+      | null with (loc = Location.Default)
+      | d    with (loc = d.Location) => ExternalDeclaration.[MapSyntaxSymbol](loc, prototype.Name);
+    }
+  }
+
+  protected static CreateMapSyntaxSymbol(decl : ExternalDeclaration[MapSyntaxSymbol], prototype : MapSyntaxSymbol, thisType : RuleTypeSymbol, returnType : AstTypeSymbol, context : DependentPropertyEvalContext) : MapSyntaxSymbol
+  {
+    def symbol            = decl.DefineSymbol();
+    symbol.Parameters     = prototype.Parameters;
+    symbol.ReturnType     = returnType;
+    symbol.ParameterTypes = prototype.ParameterTypes;
+    symbol.ThisType       = thisType;
+    symbol.Type           = Nitra.Grammar.AstUtils.CreateFunctionType(decl, thisType, symbol.ParameterTypes, returnType, context);
+    symbol.EvalProperties(context);
+    symbol
+  }
+
+  protected override CreateMembers() : BindResult[DeclarationSymbol]
+  {
+    match (GetElementType())
+    {
+      | SyntaxRuleSymbol(IsScopeEvaluated = true, Scope = scope) =>
+        def bindResult = scope.Bind.[MapSyntaxSymbol](s => s.IsNameValid && s.IsReturnTypeEvaluated && s.IsParametersEvaluated);
+
+        def context = DependentPropertyEvalContext();
+        def toMem(candidate : MapSyntaxSymbol) : ValueOption[DeclarationSymbol]
+        {
+          def mapSyntaxSymbol = TryCreateMapSyntaxSymbol(candidate, context);
+          if (mapSyntaxSymbol == null)
+            VNone()
+          else
+            VSome(mapSyntaxSymbol)
+        }
+        bindResult.Map(toMem);
+
+      | _ => BindResult.Nil()
+    }
+  }
+}
+
+// ---- AST/Scopes/OptionRuleTypeScope.n (Nitra.Ast) ----
+public sealed class OptionRuleTypeScope : MappableRuleTypeScope
+{
+  private _type : RuleOptionTypeSymbol;
+
+  public this(type : RuleOptionTypeSymbol)
+  {
+    _type = type;
+  }
+
+  protected override GetElementType() : RuleTypeSymbol
+  {
+    _type.ValueType
+  }
+
+  protected override TryCreateMapSyntaxSymbol(prototype : MapSyntaxSymbol, context : DependentPropertyEvalContext) : MapSyntaxSymbol
+  {
+    match (prototype.ReturnType)
+    {
+      | AstSymbol as t =>
+        def decl = CreateMapSyntaxDeclaration(prototype);
+        CreateMapSyntaxSymbol(decl, prototype, _type, Nitra.Grammar.AstUtils.CreateOptionAstType(decl, t, context), context)
+
+      | _ => null
+    }
+  }
+
+  public override Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(_type, writer);
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def type = metadataReader.ReadObject(reader);
+    OptionRuleTypeScope(type)
+  }
+}
+
+// ---- AST/Scopes/ParseTreeTypeCtorScope.n (Nitra.Ast) ----
+public sealed class ParseTreeTypeCtorScope : Scope
+{
+  public static Instance : ParseTreeTypeCtorScope = ParseTreeTypeCtorScope();
+  public static SupportedTypes : ImmutableArray[Reference];
+
+  static this()
+  {
+    def loc = Location();
+    SupportedTypes = ImmutableArray.Create(Reference(loc, "Some"), Reference(loc, "None"), Reference(loc, "Cons"), Reference(loc, "Nil"));
+  }
+  
+  private this()
+  {
+  }
+
+  // TODO: add type subst
+  public override AllSymbols : Seq[DeclarationSymbol] { get { [] } } 
+
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    match (TryCreateTypeCtor(reference))
+    {
+      | s is TSymbol => BindResult.Single(s)
+      | _ => BindResult.Nil()
+    }
+  }
+  
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    def res = LightList();
+
+    foreach (type in SupportedTypes)
+    {
+      def sym = TryCreateTypeCtor(type);
+      match (sym)
+      {
+        | null => assert(sym != null)
+        | ctor is TSymbol when isMatch(ctor) => res.Add(ctor);
+        | _ => ()
+      }
+    }
+
+    res.ToBindResult()
+  }
+  
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
+  {
+    def id            = nodeToIdMap.GetObjectId(this);
+
+    nodes.Add($<#Obj_$id [label="ParseTreeTypeCtorScope"]#>);
+  }
+
+  private TryCreateTypeCtor(reference : Reference) : DeclarationSymbol
+  {
+    match (reference.Text)
+    {
+      | "Some" =>
+        def context = DependentPropertyEvalContext();
+        def typeVar = Nitra.Grammar.AstUtils.CreateRuleTypeVar(context);
+        Nitra.Grammar.AstUtils.CreateFunctionType(reference, array[typeVar], Nitra.Grammar.AstUtils.InitOption(context, typeVar), context)
+
+      | "None" =>
+        def context = DependentPropertyEvalContext();
+        def typeVar = Nitra.Grammar.AstUtils.CreateRuleTypeVar(context);
+        Nitra.Grammar.AstUtils.CreateFunctionType(reference, array[], Nitra.Grammar.AstUtils.InitOption(context, typeVar), context)
+
+      | "Cons" =>
+        def context = DependentPropertyEvalContext();
+        def typeVar = Nitra.Grammar.AstUtils.CreateRuleTypeVar(context);
+        def lst     = Nitra.Grammar.AstUtils.InitList(context, typeVar);
+        Nitra.Grammar.AstUtils.CreateFunctionType(reference, array[typeVar, lst], lst, context)
+
+      | "Nil"  =>
+        def context = DependentPropertyEvalContext();
+        def typeVar = Nitra.Grammar.AstUtils.CreateRuleTypeVar(context);
+        Nitra.Grammar.AstUtils.CreateFunctionType(reference, array[], Nitra.Grammar.AstUtils.InitList(context, typeVar), context)
+
+      | _      => null
+    }
+  }
+
+  public override ToString() : string
+  {
+    "pattern scope"
+  }
+
+  public override Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    IgnoreParams();
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    IgnoreParams();
+    Instance
+  }
+}
+
+// ---- AST/Scopes/RuleTypeScope.n (Nitra.Ast) ----
+public abstract class RuleTypeScope : Scope
+{
+  private mutable _members  : BindResult[DeclarationSymbol];
+
+  protected abstract CreateMembers() : BindResult[DeclarationSymbol];
+
+  Init() : void
+  {
+    when (_members : object == null)
+      _members = CreateMembers();
+  }
+  
+  // TODO: add type subst
+  public override AllSymbols : Seq[DeclarationSymbol]
+  {
+    get
+    {
+      Init();
+      _members.Symbols.OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+    }
+  } 
+
+  public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
+  {
+    def id = reference.Id;
+    
+    when (id <= StringIndex.InvalidId)
+      return BindResult.Nil();
+
+    Init();
+    
+    def isMatch(symbol : TSymbol) : bool
+    {
+      symbol.NameId == id
+    }
+    _members.Filter.[TSymbol](isMatch);
+
+  }
+
+  public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
+  {
+    Init();
+    _members.Filter(isMatch)
+  }
+
+  public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
+  {
+    Init();
+    
+    def id = nodeToIdMap.GetObjectId(this);
+
+    nodes.Add($<#Obj_$id [label="RuleTypeScope"]#>);
+    foreach (symbol in AllSymbols)
+    {
+      def symbolId = nodeToIdMap.GetObjectId(symbol);
+      def symbolName = symbol.InitialName;
+      nodes.Add($<#Sym_$symbolId [label="$symbolName", shape=box, style=filled, color=lightskyblue]#>);
+      edges.Add($<#Obj_$id -> Sym_$symbolId#>);
+    }
+  }
+
+  public override ToString() : string
+  {
+    "rule"
+  }
+}
+
+// ---- AST/Scopes/TupleRuleTypeScope.n (Nitra.Ast) ----
+public sealed class TupleRuleTypeScope : RuleTypeScope
+{
+  private _type : RuleTupleTypeSymbol;
+
+  public this(type : RuleTupleTypeSymbol)
+  {
+    _type = type;
+  }
+
+  protected override CreateMembers() : BindResult[DeclarationSymbol]
+  {
+    unless (_type.IsElemTypesEvaluated)
+      return BindResult.Nil();
+
+    def context = DependentPropertyEvalContext();
+    mutable result = LightList();
+    mutable index  = 0;
+    foreach (t in _type.ElemTypes)
+    {
+      ++index;
+      match (t.FirstDeclarationOrDefault)
+      {
+        | null with (loc = Location.Default)
+        | d    with (loc = d.Location) =>
+          def symbol = ExternalDeclaration.[RuleFieldSymbol](loc, "Item" + index).DefineSymbol();
+          symbol.Type = t;
+          symbol.EvalProperties(context);
+          result.Add(symbol);
+      }
+    }
+    
+    result.ToBindResult()
+  }
+
+  public override Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+  {
+    metadataWriter.WriteObject(_type, writer);
+  }
+
+  public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+  {
+    def type = metadataReader.ReadObject(reader);
+    TupleRuleTypeScope(type)
+  }
+}
+
+// ---- AST/SyntaxModuleCollector.n (Nitra.Ast) ----
+public sealed class SyntaxModuleCollector
+{
+  //TODO: rewrite with actual ICollector implementation
+
+  private _syntaxModules : Dictionary[SyntaxModuleSymbol, SyntaxModuleReference] = Dictionary();
+
+  public Add(declaration : SyntaxModuleReference, symbolRef : Ref[SyntaxModuleSymbol], context : DependentPropertyEvalContext) : SyntaxModuleCollector
+  {
+    when (symbolRef.IsSymbolEvaluated)
+    {
+      def syntaxModule = symbolRef.Symbol;
+      mutable existingSyntaxModuleReference;
+      if (_syntaxModules.TryGetValue(syntaxModule, out existingSyntaxModuleReference))
+      {
+        // TODO: use RootError, add hint to first definition of the symbol reference
+        declaration.Error(context, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
+      }
+      else
+        _syntaxModules.Add(syntaxModule, declaration);
+    }
+    this
+  }
+
+  public ToImmutable() : ImmutableArray[SyntaxModuleSymbol]
+  {
+    def builder = ImmutableArray.CreateBuilder(_syntaxModules.Count);
+    builder.AddRange(_syntaxModules.Keys);
+    builder.MoveToImmutable()
+  }
+}
+
+// ---- AST/WellKnownSymbols.n (Nitra.Ast) ----
+public module WellKnownSymbols
+{
+  public AnyType        : AnyTypeSymbol          = StaticScope.CreateSymbol("Any");
+  public OptionAstType  : WellKnownTypeSymbol    = StaticScope.CreateSymbol("OptionAst");
+  public ListAstType    : WellKnownTypeSymbol    = StaticScope.CreateSymbol("ListAst");
+  public VoidRuleType   : RuleVoidTypeImplSymbol = StaticScope.CreateSymbol("VoidRule");
+  public TupleRuleType  : WellKnownTypeSymbol    = StaticScope.CreateSymbol("TupleRule");
+  public OptionRuleType : WellKnownTypeSymbol    = StaticScope.CreateSymbol("OptionRule");
+  public ListRuleType   : WellKnownTypeSymbol    = StaticScope.CreateSymbol("ListRule");
+  public FunctionType   : WellKnownTypeSymbol    = StaticScope.CreateSymbol("Function");
+
+  public GetSymbolsToEvaluate() : list[DeclarationSymbol]
+  {
+    mutable result = [];
+    TryAddSymbol(ref result, AnyType);
+    TryAddSymbol(ref result, OptionAstType);
+    TryAddSymbol(ref result, ListAstType);
+    TryAddSymbol(ref result, VoidRuleType);
+    TryAddSymbol(ref result, TupleRuleType);
+    TryAddSymbol(ref result, OptionRuleType);
+    TryAddSymbol(ref result, ListRuleType);
+    TryAddSymbol(ref result, FunctionType);
+    result
+  }
+
+  private TryAddSymbol(buffer : ref list[DeclarationSymbol], symbol : DeclarationSymbol) : void
+  {
+    unless (symbol.IsAllPropertiesEvaluated)
+      buffer ::= symbol;
+  }
+}

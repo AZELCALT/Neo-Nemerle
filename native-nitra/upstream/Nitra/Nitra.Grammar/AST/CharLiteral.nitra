@@ -1,4 +1,6 @@
-﻿namespace Nitra.Ast
+﻿using Nitra.Runtime;
+using Nitra.Grammar;
+namespace Nitra.Ast
 {
   ast CharLiteral
   {

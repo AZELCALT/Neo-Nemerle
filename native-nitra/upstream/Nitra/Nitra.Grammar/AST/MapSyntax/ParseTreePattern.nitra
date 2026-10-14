@@ -1,5 +1,8 @@
 ﻿using DotNet;
+using Nitra.Ast;
 using Nitra;
+using Nitra.Runtime;
+using Nitra.Grammar;
 using Nitra.Declarations;
 
 namespace Nitra.Ast
