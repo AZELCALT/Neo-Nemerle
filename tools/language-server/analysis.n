@@ -1,0 +1,399 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using SCG = System.Collections.Generic;
+using Nemerle.Imperative;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.CompilationOptions;
+using Nemerle.Compiler.Lexer;
+using Nemerle.Compiler.MainParser;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.NitraEditor;
+using Nemerle.Compiler.NitraSourceCompilation;
+using Nemerle.Compiler.NitraSyntaxModel;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.Utility;
+using Nemerle.Compiler.Parsetree;
+
+public enum Severity { | Error = 1 | Warning = 2 | Information = 3 | Hint = 4 }
+
+public sealed class Diagnostic
+{
+  public Start : int; public End : int; public Severity : Severity; public Message : string; public Source : string;
+  public this(start : int, end : int, severity : Severity, message : string, source : string)
+  { Start = start; End = Math.Max(start, end); Severity = severity; Message = message; Source = source; }
+}
+
+public sealed class SymbolInfo
+{
+  public Name : string; public Kind : int; public Start : int; public End : int; public NameStart : int; public NameEnd : int;
+  public Children : SCG.List[SymbolInfo] = SCG.List();
+  public this(name : string, kind : int, start : int, end : int, nameStart : int, nameEnd : int)
+  { Name = name; Kind = kind; Start = start; End = Math.Max(start, end); NameStart = nameStart; NameEnd = Math.Max(nameStart, nameEnd); }
+}
+
+/// Offsets <-> LSP positions (0-based line, UTF-16 column) for one text.
+public sealed class LineMap
+{
+  starts : SCG.List[int] = SCG.List();
+  public Length : int;
+  public this(text : string)
+  {
+    Length = text.Length; starts.Add(0);
+    for (mutable i = 0; i < text.Length; ++i) when (text[i] == '\n') starts.Add(i + 1);
+  }
+  public LineCount : int { get { starts.Count } }
+  public LineStart(line : int) : int { starts[Math.Max(0, Math.Min(line, starts.Count - 1))] }
+  public LineEnd(line : int) : int { if (line + 1 < starts.Count) starts[line + 1] - 1 else Length }
+  public Line(offset : int) : int
+  {
+    mutable lo = 0; mutable hi = starts.Count - 1;
+    while (lo < hi) { def mid = (lo + hi + 1) / 2; if (starts[mid] <= offset) lo = mid else hi = mid - 1; }
+    lo
+  }
+  public Column(offset : int) : int { offset - starts[Line(offset)] }
+  /// 1-based line/column (Nemerle locations) to an offset.
+  public Offset(line : int, column : int) : int
+  {
+    if (line <= 0) 0
+    else if (line > starts.Count) Length
+    else Math.Min(LineEnd(line - 1), starts[line - 1] + Math.Max(0, column - 1))
+  }
+}
+
+public sealed class AnalysisResult
+{
+  public Version : int;
+  public Text : string;
+  public Lines : LineMap;
+  public Diagnostics : SCG.List[Diagnostic] = SCG.List();
+  /// (offset, length, token type index)
+  public Tokens : SCG.List[int * int * int] = SCG.List();
+  /// (start line, end line), 0-based
+  public Folds : SCG.List[int * int] = SCG.List();
+  public Symbols : SCG.List[SymbolInfo] = SCG.List();
+  public this(version : int, text : string) { Version = version; Text = text; Lines = LineMap(text); }
+  public AddFold(start : int, end : int) : void
+  {
+    def a = Lines.Line(start); def b = Lines.Line(Math.Max(start, end));
+    when (b > a) Folds.Add((a, b));
+  }
+}
+
+/// Semantic token legend shared by both parsers.
+public module Legend
+{
+  public Types : array[string] = array["keyword", "comment", "string", "number", "operator", "type", "macro", "variable", "namespace", "regexp", "function"];
+  public Keyword = 0; public Comment = 1; public String = 2; public Number = 3; public Operator = 4; public Type = 5; public Macro = 6;
+  public Variable = 7; public Namespace = 8; public Regexp = 9; public Function = 10;
+  /// Nitra span classes are matched by name (Keyword, Operator, String, Char, Number, Comment, Type, ...).
+  public OfSpanClass(name : string) : int
+  {
+    def n = name.ToLowerInvariant();
+    if (n.Contains("comment")) Comment
+    else if (n.Contains("keyword")) Keyword
+    else if (n.Contains("string") || n.Contains("char")) String
+    else if (n.Contains("number") || n.Contains("integer") || n.Contains("float")) Number
+    else if (n.Contains("operator") || n.Contains("brace") || n.Contains("bracket") || n.Contains("punct")) Operator
+    else if (n.Contains("type")) Type
+    else if (n.Contains("regex")) Regexp
+    else if (n.Contains("identifier") || n.Contains("name")) Variable
+    else Macro
+  }
+}
+
+/// Runs on one thread only (the compiler's ManagerClass.Instance is thread-static).
+public sealed class Analyzer
+{
+  manager : ManagerClass;
+  messages : SCG.List[Location * string * Severity] = SCG.List();
+  hosts : SCG.Dictionary[string, INitraNativeSourceHost] = SCG.Dictionary();
+  hostOrder : SCG.List[string] = SCG.List();
+  mutable nitraSyntaxStart : Nitra.StartRuleDescriptor;
+  // Grammars compiled in memory by Nitra are not loadable by name; descriptors reference them in attributes.
+  static generated : System.Collections.Concurrent.ConcurrentDictionary[string, Assembly] = System.Collections.Concurrent.ConcurrentDictionary();
+  static this()
+  {
+    AppDomain.CurrentDomain.AssemblyResolve += fun(_, e)
+    {
+      mutable found;
+      if (generated.TryGetValue(AssemblyName(e.Name).Name, out found)) found else null
+    };
+  }
+
+  root : string;
+  public this(references : string, root : string, legacyNamespaces : bool, fileNameNamespaces : bool)
+  {
+    this.root = root;
+    def options = CompilationOptions();
+    options.FileModules = !legacyNamespaces; options.FileNameNamespaces = fileNameNamespaces;
+    options.CompileToMemory = true; options.TargetIsLibrary = true; options.TargetIsSet = true;
+    options.ProgressBar = false; options.ColorMessages = false; options.IgnoreConfusion = true;
+    options.DisableExternalParsers = true; options.TargetReferenceDirectory = references;
+    options.OutputFileName = "LanguageServerScope.dll";
+    options.Sources = [];
+    manager = ManagerClass(options);
+    manager.InitOutput(StringWriter());
+    manager.ErrorOccured += fun(loc, msg) { messages.Add((loc, msg, Severity.Error)) };
+    manager.WarningOccured += fun(loc, msg) { messages.Add((loc, msg, Severity.Warning)) };
+    _ = manager.ParseGrammarSources(); // initializes the compiler scope only (core environment, references)
+  }
+
+  public Analyze(path : string, version : int, text : string) : AnalysisResult
+  {
+    def result = AnalysisResult(version, text);
+    def fileIndex = Location.GetFileIndex(path);
+    def previous = ManagerClass.Instance;
+    try
+    {
+      ManagerClass.Instance = manager; messages.Clear();
+      manager.Options.Sources = [StringSource(fileIndex, text) : ISource];
+      when (manager.Options.FileModules)
+      {
+        // The workspace folder is the source root; a file outside it is its own root's only module.
+        def full = Path.GetFullPath(path);
+        def inside = root != null && full.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        manager.Options.SourceRoot = if (inside) root else Path.GetDirectoryName(full);
+        manager.FileModuleRegistry.IndexSources();
+      }
+      def index = NitraEditorIndex.Scan(manager, Func(ProvideHost));
+      def nemerleText = index.Text(fileIndex) ?? text;
+
+      def foreign = SCG.List.[int * int]();
+      foreach (g in index.Grammars) when (g.File == fileIndex) foreign.Add((g.Start, g.End));
+      foreach (z in index.Zones) when (z.File == fileIndex) foreign.Add((z.Start, z.End + 1));
+      foreach (c in index.InactiveConstructs) foreign.Add((c.Start, c.End));
+      Nemerle(result, fileIndex, nemerleText, foreign);
+      try { Nitra(result, fileIndex, text, index) }
+      catch { | e is Exception => result.Diagnostics.Add(Diagnostic(0, 1, Severity.Error, "Nitra analysis failed: " + e.Message, "nitra")) }
+      // The compiler's own indexing error: shown unless Nitra already located the problem in a grammar block.
+      when (index.Error != null)
+      {
+        def d = IndexDiagnostic(index.Error, text);
+        def located = result.Diagnostics.Exists(x => x.Source == "nitra" && x.Severity == Severity.Error);
+        unless (located && d.Start == 0)
+        {
+          def anchor = if (d.Start == 0 && index.Grammars.Count > 0) index.Grammars[0].Start else d.Start;
+          result.Diagnostics.Add(Diagnostic(anchor, if (d.Start == 0) anchor + 7 else d.End, Severity.Error, d.Message, "grammar"));
+        }
+      }
+    }
+    catch { | e is Exception => result.Diagnostics.Add(Diagnostic(0, 1, Severity.Error, "analysis failed: " + e.Message, "nemerle-lsp")) }
+    finally { ManagerClass.Instance = previous; }
+    result
+  }
+
+  // ---- Nemerle: main lexer and parser on the indexed text (grammar/space blocks blanked) ----
+
+  Nemerle(result : AnalysisResult, fileIndex : int, text : string, foreign : SCG.List[int * int]) : void
+  {
+    def lines = LineMap(text);
+    def offset(loc : Location) { lines.Offset(loc.Line, loc.Column) }
+    def endOffset(loc : Location) { lines.Offset(loc.EndLine, loc.EndColumn) }
+    def inForeign(pos : int) { foreign.Exists(fun(a, b) { pos >= a && pos < b }) }
+    // tokens
+    try
+    {
+      def lexer = LexerFile(manager, fileIndex, text, true);
+      lexer.Keywords = if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex).Keywords else manager.CoreEnv.Keywords;
+      mutable token = lexer.GetToken();
+      mutable guard = 0;
+      while (!(token is Token.EndOfFile) && guard < 1000000)
+      {
+        ++guard;
+        def kind = match (token)
+        {
+          | Token.Keyword => Legend.Keyword
+          | Token.Operator => Legend.Operator
+          | Token.StringLiteral | Token.CharLiteral => Legend.String
+          | Token.IntegerLiteral | Token.FloatLiteral | Token.DoubleLiteral | Token.DecimalLiteral => Legend.Number
+          | Token.Comment => Legend.Comment
+          | _ => -1
+        };
+        when (kind >= 0)
+        {
+          def s = offset(token.Location); def e = endOffset(token.Location);
+          when (e > s && !inForeign(s)) result.Tokens.Add((s, e - s, kind));
+        }
+        token = lexer.GetToken();
+      }
+      foreach (c in lexer.GetComments())
+        unless (inForeign(c.Position))
+        {
+          result.Tokens.Add((c.Position, c.Length, Legend.Comment));
+          when (c.IsMultiline) result.AddFold(c.Position, c.Position + c.Length);
+        }
+    }
+    catch { | e is Exception => messages.Add((Location.Default, e.Message, Severity.Error)) }
+    // declarations
+    try
+    {
+      def lexer = LexerFile(manager, fileIndex, text, false);
+      def decls = MainParser.Parse(lexer);
+      foreach (d in decls) Declaration(result, lines, d, result.Symbols);
+    }
+    catch { | e is Exception => messages.Add((Location.Default, e.Message, Severity.Error)) }
+    foreach ((loc, msg, severity) in messages)
+    {
+      def s = if (loc.FileIndex == fileIndex) offset(loc) else 0;
+      def e = if (loc.FileIndex == fileIndex) endOffset(loc) else 0;
+      result.Diagnostics.Add(Diagnostic(s, if (e > s) e else s + 1, severity, msg, "nemerle"));
+    }
+  }
+
+  Declaration(result : AnalysisResult, lines : LineMap, d : TopDeclaration, into : SCG.List[SymbolInfo]) : void
+  {
+    def kind = match (d)
+    {
+      | TopDeclaration.Class => 5 | TopDeclaration.Interface => 11 | TopDeclaration.Variant => 10
+      | TopDeclaration.VariantOption => 22 | TopDeclaration.Enum => 10 | TopDeclaration.Macro => 12
+      | TopDeclaration.Delegate => 12 | _ => 5
+    };
+    def members = match (d)
+    {
+      | TopDeclaration.Class(decls = ms) | TopDeclaration.Interface(methods = ms) | TopDeclaration.Variant(decls = ms)
+      | TopDeclaration.VariantOption(decls = ms) | TopDeclaration.Enum(decls = ms) => ms
+      | _ => []
+    };
+    // A file module is a synthetic declaration located at a point: its members are the file's top level.
+    def synthetic = d.Location.Line == d.Location.EndLine && d.Location.Column == d.Location.EndColumn;
+    def symbol = if (synthetic) null else Symbol(lines, d.Name, kind, d.Location, d.NameLocation);
+    when (synthetic) foreach (m in members) Member(result, lines, m, into);
+    when (symbol != null)
+    {
+      into.Add(symbol); result.AddFold(symbol.Start, symbol.End);
+      foreach (m in members) Member(result, lines, m, symbol.Children);
+    }
+  }
+
+  Member(result : AnalysisResult, lines : LineMap, m : ClassMember, into : SCG.List[SymbolInfo]) : void
+  {
+    match (m)
+    {
+      | ClassMember.TypeDeclaration(td) => Declaration(result, lines, td, into)
+      | _ =>
+        def kind = match (m) { | ClassMember.Function => 6 | ClassMember.Property => 7 | ClassMember.Field => 8 | ClassMember.Event => 24 | ClassMember.EnumOption => 22 | _ => 13 };
+        def symbol = Symbol(lines, m.Name, kind, m.Location, m.NameLocation);
+        when (symbol != null) { into.Add(symbol); result.AddFold(symbol.Start, symbol.End); }
+    }
+  }
+
+  Symbol(lines : LineMap, name : string, kind : int, loc : Location, nameLoc : Location) : SymbolInfo
+  {
+    if (String.IsNullOrEmpty(name) || loc.Line <= 0 || name.StartsWith("_N_", StringComparison.Ordinal)) null
+    else
+    {
+      def s = lines.Offset(loc.Line, loc.Column); def e = lines.Offset(loc.EndLine, loc.EndColumn);
+      def (ns, ne) = if (nameLoc.Line > 0) (lines.Offset(nameLoc.Line, nameLoc.Column), lines.Offset(nameLoc.EndLine, nameLoc.EndColumn)) else (s, s);
+      def ns2 = if (ns >= s && ns <= e) ns else s; def ne2 = if (ne >= ns2 && ne <= e) ne else ns2;
+      SymbolInfo(name, kind, s, e, ns2, ne2)
+    }
+  }
+
+  IndexDiagnostic(error : string, text : string) : Diagnostic
+  {
+    // GReader messages look like "file@offset: message"; others carry no position.
+    def at = error.IndexOf('@'); def colon = if (at >= 0) error.IndexOf(": ", at) else -1;
+    mutable position = 0;
+    if (at >= 0 && colon > at && int.TryParse(error.Substring(at + 1, colon - at - 1), out position))
+      Diagnostic(Math.Min(position, text.Length), Math.Min(position + 1, text.Length), Severity.Error, error.Substring(colon + 2), "grammar")
+    else Diagnostic(0, 1, Severity.Error, error, "grammar")
+  }
+
+  // ---- Nitra: unmodified Nitra runtime parses grammar blocks (NitraSyntax) and space bodies (compiled grammar) ----
+
+  ProvideHost(m : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost
+  {
+    def key = String.Join("\u0000", definitions.Select(d => d.Source));
+    mutable host;
+    unless (hosts.TryGetValue(key, out host))
+    {
+      host = NitraEditorIndex.CreateNativeHost(m, definitions);
+      match (host) { | native is Nitra.Compiler.NativeSourceHost when native.GrammarAssembly != null => _ = generated.TryAdd(native.GrammarAssembly.GetName().Name, native.GrammarAssembly) | _ => () }
+      hosts[key] = host; hostOrder.Add(key);
+      when (hostOrder.Count > 4) { _ = hosts.Remove(hostOrder[0]); hostOrder.RemoveAt(0); }
+    }
+    host
+  }
+
+  Nitra(result : AnalysisResult, fileIndex : int, text : string, index : NitraEditorIndex) : void
+  {
+    foreach (g in index.Grammars)
+      when (g.File == fileIndex)
+      {
+        def open = text.IndexOf('{', g.Start);
+        when (open >= 0 && open < g.End)
+        {
+          result.AddFold(g.Start, g.End);
+          result.Symbols.Add(SymbolInfo("grammar " + g.Name, 2, g.Start, g.End, g.Start, open));
+          when (nitraSyntaxStart == null) nitraSyntaxStart = StartRule(typeof(NitraSyntaxParseTree.Start).Assembly, "NitraSyntax.Start");
+          Parse(result, text, open + 1, Math.Max(open + 1, g.End - 1), nitraSyntaxStart, "nitra");
+        }
+      }
+    def assembly = match (index.NativeHost) { | host is Nitra.Compiler.NativeSourceHost => host.GrammarAssembly | _ => null };
+    foreach (z in index.Zones)
+      when (z.File == fileIndex)
+      {
+        result.AddFold(z.Start, z.End);
+        def label = if (z.Grammars.Length > 0) "space " + String.Join(", ", z.Grammars) else "space";
+        result.Symbols.Add(SymbolInfo(label, 3, z.Start, z.End + 1, z.Start, Math.Max(z.Start, z.Body - 1)));
+        def start = if (assembly != null && z.Rule != null) StartRule(assembly, z.Rule) else null;
+        when (start != null) Parse(result, text, z.Body, z.End, start, "space");
+      }
+  }
+
+  StartRule(assembly : Assembly, rule : string) : Nitra.StartRuleDescriptor
+  {
+    def dot = rule.LastIndexOf('.');
+    if (dot <= 0) null
+    else
+    {
+      def moduleName = rule.Substring(0, dot); def name = rule.Substring(dot + 1);
+      mutable found = null;
+      foreach (g in Nitra.GrammarDescriptor.GetDescriptors(assembly))
+        when (g.FullName == moduleName)
+          foreach (r in g.Rules)
+            when (r.Name == name && r is Nitra.StartRuleDescriptor) found = r :> Nitra.StartRuleDescriptor;
+      found
+    }
+  }
+
+  Parse(result : AnalysisResult, text : string, body : int, end : int, start : Nitra.StartRuleDescriptor, source : string) : void
+  {
+    def length = Math.Max(0, end - body);
+    try
+    {
+      def session = Nitra.ParseSession(start, null, null, -1, CancellationToken.None, true, TimeSpan.Zero, null, null, null, null);
+      def parsed = session.Parse(Nitra.SourceSnapshot(text.Substring(body, length)));
+      def spans = SCG.HashSet.[Nitra.SpanInfo]();
+      parsed.GetSpans(0, length, spans);
+      foreach (s in spans)
+        when (s.Span.EndPos > s.Span.StartPos && s.SpanClass != null)
+          result.Tokens.Add((body + s.Span.StartPos, s.Span.EndPos - s.Span.StartPos, Legend.OfSpanClass(s.SpanClass.Name)));
+      def outlining = SCG.List.[Nitra.OutliningInfo]();
+      parsed.GetOutlining(outlining);
+      foreach (o in outlining) result.AddFold(body + o.Span.StartPos, body + o.Span.EndPos);
+      match (parsed.CompilerMessages)
+      {
+        | list is Nitra.ProjectSystem.CompilerMessageList =>
+          foreach (m in list.GetMessages())
+          {
+            def severity = if (m.Type == Nitra.CompilerMessageType.Warning) Severity.Warning
+                           else if (m.Type == Nitra.CompilerMessageType.Hint) Severity.Hint
+                           else Severity.Error;
+            def s = body + Math.Max(0, Math.Min(m.Location.StartPos, length));
+            def e = body + Math.Max(0, Math.Min(m.Location.EndPos, length));
+            result.Diagnostics.Add(Diagnostic(s, if (e > s) e else s + 1, severity, m.Text, source));
+          }
+        | _ => ()
+      }
+    }
+    catch
+    {
+      | _ is OperationCanceledException => ()
+      | e is Exception => result.Diagnostics.Add(Diagnostic(body, body + 1, Severity.Error, e.Message, source))
+    }
+  }
+}

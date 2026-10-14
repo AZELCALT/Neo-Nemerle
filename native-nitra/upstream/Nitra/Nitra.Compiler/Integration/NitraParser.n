@@ -2,7 +2,10 @@
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.Parser;
+using Nemerle.Compiler.Source;
 using Nemerle.Compiler.Parsetree;
 
 using System;
@@ -20,20 +23,20 @@ namespace Nitra.Compiler.Integration
 
     private static _compilerInvokeTag : object = object();
 
-    public Parse(source : ISource) : Nemerle.Compiler.ParseResult
+    public Parse(source : ISource) : Nemerle.Compiler.Parser.ParseResult
     {
       unless (manager.UserData.Contains(_compilerInvokeTag))
       {
         manager.UserData.Add(_compilerInvokeTag, _compilerInvokeTag);
 
         def fakeLoc = Location(source.FileIndex, 1, 1);
-        def attr    = UtilMacros.locate(fakeLoc, <[ Nitra.InvokeNitraCompiler ]>);
+        def attr    = Nemerle.Compiler.UtilMacros.locate(fakeLoc, <[ Nitra.InvokeNitraCompiler ]>);
         manager.Hierarchy.AddAssemblyAttribute(manager.CoreEnv, attr);
       }
 
       def project = CompilingNitraProject.Instance(manager);
       _ = project.CreateNemerleFile(source);
-      Nemerle.Compiler.ParseResult([])
+      Nemerle.Compiler.Parser.ParseResult([])
     }
   }
 }

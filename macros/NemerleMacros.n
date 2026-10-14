@@ -26,7 +26,12 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -45,7 +50,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using Nemerle.Compiler.NemerleModifiers;
+using Nemerle.Compiler.AST.NemerleModifiers;
 using NemerleMacros;
 
 // ---- core.n (Nemerle) ----
@@ -55,7 +60,7 @@ macro NotImplemented (t : TypeBuilder, m : ParsedMethod)
 {
   def ignores = m.header.Parameters.Map((x : PT.PParameter) => <[ _ = $(x.ReferencingExpr) ]>);
   def message = $"Method `$(m.name.GetName().Id)' in type `$(t.FullName)' is not implemented yet.";
-  def newBody = UtilMacros.locate(m.Body.Location, <[
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[
       { ..$ignores };
       throw System.NotImplementedException ($(message : string))
     ]>);
@@ -106,7 +111,7 @@ macro ForwardThis (t : TypeBuilder, m : ParsedMethod, this_expr)
 
   def parms = m.header.ParametersReferences;
 
-  def newBody = UtilMacros.locate(m.Body.Location, <[
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[
     $this_expr . $(meth : name) (.. $parms)
   ]>);
 
@@ -396,8 +401,8 @@ macro Memoize (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr
     <[ Nemerle.ExtensionsMacros.EqualsIgnore ]>,
     <[ Nemerle.CoreMacros.RecordIgnore ]>
   ]);
-  def body           = UtilMacros.locate(meth.Body.Location, <[ $("_N_return" : global): { $(meth.Body) } ]>);
-  def newBody        = UtilMacros.locate(meth.Body.Location, match (parms)
+  def body           = Nemerle.Compiler.UtilMacros.locate(meth.Body.Location, <[ $("_N_return" : global): { $(meth.Body) } ]>);
+  def newBody        = Nemerle.Compiler.UtilMacros.locate(meth.Body.Location, match (parms)
   {
     | [] | null =>
       def cached_value = Macros.NewSymbol ("cached_value");
@@ -507,7 +512,7 @@ macro Memoize (tb : TypeBuilder, meth : MethodBuilder, params opts : list [PExpr
 macro Lazy (_ : TypeBuilder, meth : ParsedMethod, parm : ParsedParameter)
 {
   def unique = parm.PName.NewName (Util.tmpname (parm.Name));
-  def newBody = UtilMacros.locate(meth.Body.Location, 
+  def newBody = Nemerle.Compiler.UtilMacros.locate(meth.Body.Location, 
     <[
       InternalMacros.RedirectName ($(parm.PName : name),
       $(unique : name).Value,

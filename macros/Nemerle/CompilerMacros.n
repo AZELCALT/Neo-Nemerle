@@ -29,13 +29,20 @@
 /* Macros used only inside the compiler.  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.TypeVar;
+using Nemerle.Compiler.Utility;
 using Nemerle.Imperative;
 using System.Diagnostics;
 using Nemerle.Collections;
 using Nemerle.Utility;
 using SCG = System.Collections.Generic;
-using Attr = Nemerle.Compiler.NemerleModifiers;
+using Attr = Nemerle.Compiler.AST.NemerleModifiers;
 using Member = Nemerle.Compiler.Parsetree.ClassMember;
 using NemerleMacros;
 
@@ -47,21 +54,21 @@ macro ManagerAccess (tb : TypeBuilder, params options : list [PExpr])
   match (options)
   {
     | [] => {}
-      tb.Define (<[ decl: public Manager : ManagerClass; ]>);
+      tb.Define (<[ decl: public Manager : Nemerle.Compiler.ManagerClass.ManagerClass; ]>);
     | [expr] =>
       tb.Define (<[ decl: 
-        public Manager : ManagerClass { get { $expr } } ]>);
+        public Manager : Nemerle.Compiler.ManagerClass.ManagerClass { get { $expr } } ]>);
     | _ => Message.Error ("invalid option to ManagerAccess")
   }
 
   tb.Define (<[ decl: 
-    public InternalType : InternalTypeClass
+    public InternalType : Nemerle.Compiler.InternalTypes.InternalTypeClass
     {
       get { Manager.InternalType }
     }
   ]>);
   tb.Define (<[ decl: 
-    public SystemTypeCache : SystemTypeClass
+    public SystemTypeCache : Nemerle.Compiler.InternalTypes.SystemTypeClass
     {
       get { Manager.SystemTypeCache }
     }
@@ -105,7 +112,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
   {
     ////wl($"$(tb.Name) tb.IsDelegate= $(tb.IsDelegate)");
     //System.Diagnostics.Trace.Assert(tb.Name != "InitDelegate");
-    tb.AddImplementedInterface (<[ Nemerle.Compiler.ISupportRelocation ]>);
+    tb.AddImplementedInterface (<[ Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation ]>);
   }
   //wl("^^^^^^^ SupportRelocation (BeforeInheritance).");
 }
@@ -133,24 +140,24 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
   def nsRoot            = nameTree.NamespaceTree;
 
   /// TypeInfo variables:
-  def tyVarTyInfo        = manager.Lookup ("Nemerle.Compiler.TypeVar") :> TypeBuilder;
-  def locationTyInfo     = manager.Lookup ("Nemerle.Compiler.Location");
-  def iMacroTyInfo       = manager.Lookup ("Nemerle.Compiler.IMacro");
+  def tyVarTyInfo        = manager.Lookup ("Nemerle.Compiler.TypeVar.TypeVar") :> TypeBuilder;
+  def locationTyInfo     = manager.Lookup ("Nemerle.Compiler.AST.Location");
+  def iMacroTyInfo       = manager.Lookup ("Nemerle.Compiler.MacroClassGen.IMacro");
   def scgListTyInfo        = manager.Lookup ("System.Collections.Generic.List");
   //def stackTyInfo        = manager.Lookup ("Nemerle.Collections.Vector");
-  def nodeTyInfo         = manager.Lookup ("Nemerle.Compiler.NamespaceTree.Node");
-  def managerClassTyInfo = manager.Lookup ("Nemerle.Compiler.ManagerClass");
-  def globalEnvTyInfo    = manager.Lookup ("Nemerle.Compiler.GlobalEnv");
+  def nodeTyInfo         = manager.Lookup ("Nemerle.Compiler.NamespaceTree.NamespaceTree.Node");
+  def managerClassTyInfo = manager.Lookup ("Nemerle.Compiler.ManagerClass.ManagerClass");
+  def globalEnvTyInfo    = manager.Lookup ("Nemerle.Compiler.GlobalEnv.GlobalEnv");
   def optinTyInfo        = manager.InternalType.Nemerle_option_tc;
   def listTyInfo         = manager.InternalType.Nemerle_list_tc;
   /// The ignore list of some types.
   def ignoreTypeList     = 
-    //  manager.Lookup ("Nemerle.Compiler.TypeBuilder")
+    //  manager.Lookup ("Nemerle.Compiler.TypeBuilder.TypeBuilder")
     //:: 
-       manager.Lookup ("Nemerle.Compiler.TypeInfo")
+       manager.Lookup ("Nemerle.Compiler.TypeInfo.TypeInfo")
     :: tyVarTyInfo :: nodeTyInfo
     :: managerClassTyInfo :: globalEnvTyInfo
-    :: manager.Lookup ("Nemerle.Compiler.TypesManager")
+    :: manager.Lookup ("Nemerle.Compiler.TypesManager.TypesManager")
     :: tyVarTyInfo.GetAllSubTypes().Map(_ : TypeInfo);
 
   //wl("ignoreTypeList:");
@@ -179,7 +186,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
 
   // Key   - type
   // Value - code of relocation and recusion walk into fields.
-  def relocationCode = Hashtable() : Hashtable[TypeBuilder, list [Parsetree.PExpr]];
+  def relocationCode = Hashtable() : Hashtable[TypeBuilder, list [Nemerle.Compiler.Parsetree.PExpr]];
   def isTypedInstanceField (field : Member.Field) { !(field.ty is <[ _ ]> || field.modifiers.mods %&& Attr.Static) }
   def isAccepted           (field : Member.Field)
   {
@@ -195,7 +202,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
   {
     def fields = tb.GetParsedMembers (true);
     // The constructing expression.
-    mutable exprs = [] : list[Parsetree.PExpr];
+    mutable exprs = [] : list[Nemerle.Compiler.Parsetree.PExpr];
     
     // For each instance field which type explicit assign...
     foreach (field is Member.Field when isAccepted(field) in fields)
@@ -223,14 +230,14 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
               exprs ::= <[ 
                 def x = this.$(n : name);
                 when (x != null)
-                  this.$(n : name) = x.Map(Completion.Relocate(_, _info)) ]>;
+                  this.$(n : name) = x.Map(Nemerle.Compiler.CodeCompletionEngine.Completion.Relocate(_, _info)) ]>;
             else 
             {
               if(tc.Equals(scgListTyInfo))
               exprs ::= <[ 
                 def x = this.$(n : name);
                 when (x != null)
-                  this.$(n : name) = System.Collections.Generic.List(x.MapLazy(Completion.Relocate(_, _info))) ]>;
+                  this.$(n : name) = System.Collections.Generic.List(x.MapLazy(Nemerle.Compiler.CodeCompletionEngine.Completion.Relocate(_, _info))) ]>;
             else
               error (field.Location, $"The 'unknown type'[Location] ($tc[$ti]) not suported! scgListTyInfo is: $scgListTyInfo");
             }
@@ -240,7 +247,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
         // Process 'Location' fields (make relocation code for it).
         | Class (tc, []) when tc.Equals(locationTyInfo) => 
           if (isMutable (field))
-            exprs ::= <[ this.$(n : name) = Completion.Relocate(this.$(n : name), _info); ]>;
+            exprs ::= <[ this.$(n : name) = Nemerle.Compiler.CodeCompletionEngine.Completion.Relocate(this.$(n : name), _info); ]>;
           else
             errorLocationFieldCanNotBeImmutable (field);
         
@@ -252,7 +259,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
             <[
               match (this.$(n : name))
               {
-                | Some(x is ISupportRelocation) => 
+                | Some(x is Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation) => 
                   //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
                   x.RelocateImpl (_info/*, ident*/);
                 | _ => ()
@@ -264,7 +271,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
               {
                 | Some(x) => 
                   //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
-                  (x : ISupportRelocation).RelocateImpl (_info/*, ident*/);
+                  (x : Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation).RelocateImpl (_info/*, ident*/);
                 | _ => ()
               }
             ]>;
@@ -277,7 +284,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
               when (x != null)
               {
                 //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
-                foreach (elem :> ISupportRelocation in x)
+                foreach (elem :> Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation in x)
                   elem.RelocateImpl (_info/*, ident*/);
               }
             ]>
@@ -286,7 +293,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
               def x = this.$(n : name);
               when (x != null)
                 foreach (elem in x)
-                  (elem : ISupportRelocation).RelocateImpl (_info/*, ident*/);
+                  (elem : Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation).RelocateImpl (_info/*, ident*/);
             ]>;
 
         // 3. Is field of reference type defined in this project (represent as TypeBuilder).
@@ -297,7 +304,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
               when (x != null)
               {
                 //System.Diagnostics.Trace.WriteLine(ident + $(s : string));
-                (x :> ISupportRelocation).RelocateImpl (_info/*, ident*/);
+                (x :> Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation).RelocateImpl (_info/*, ident*/);
               }
             ]>;
           else
@@ -342,7 +349,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
           _ = tb.DefineWithSource (
             <[ decl: 
               [System.Runtime.CompilerServices.CompilerGenerated]
-              internal override RelocateImplInternal (_info : RelocationInfo/*, ident : string*/) : void
+              internal override RelocateImplInternal (_info : Nemerle.Compiler.CodeCompletionEngine.RelocationInfo/*, ident : string*/) : void
               {
                 //_info.NodeCount++;
                 when (_info.VisitedObjects.ContainsKey (this))
@@ -380,7 +387,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
 
       _ = tb.DefineWithSource (
         <[ decl:
-          ..$attrs RelocateImplInternal (_info : RelocationInfo) : void implements ISupportRelocation.RelocateImpl
+          ..$attrs RelocateImplInternal (_info : Nemerle.Compiler.CodeCompletionEngine.RelocationInfo) : void implements Nemerle.Compiler.CodeCompletionEngine.ISupportRelocation.RelocateImpl
           {
             ..$code2
           }
@@ -390,7 +397,7 @@ macro SupportRelocation (typeBuilder : TypeBuilder)
 
   _ = typeBuilder.DefineWithSource(
     <[ decl:
-    public Relocate(_info : RelocationInfo) : void
+    public Relocate(_info : Nemerle.Compiler.CodeCompletionEngine.RelocationInfo) : void
     {
       //def timer =  System.Diagnostics.Stopwatch.StartNew();
       // The RelocateImpl() is autogenerated by SupportRelocation macro.

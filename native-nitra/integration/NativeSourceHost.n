@@ -4,7 +4,18 @@ using System.Reflection;
 using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.CompilationOptions;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.NitraDialectServices;
+using Nemerle.Compiler.NitraRecognition;
+using Nemerle.Compiler.NitraSourceCompilation;
+using Nemerle.Compiler.NitraStructures;
+using Nemerle.Compiler.NitraSyntax;
+using Nemerle.Compiler.NitraSyntaxModel;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nitra.Runtime;
@@ -16,7 +27,7 @@ namespace Nitra.Compiler
     sealed class Provider : ISourceSnapshotProvider
     {
       source : SourceSnapshot;
-      public this(text : string, location : Nemerle.Compiler.Location)
+      public this(text : string, location : Nemerle.Compiler.AST.Location)
       {
         def prefix=string('\n',Math.Max(0,location.Line-1))+string(' ',Math.Max(0,location.Column-1));
         source=SourceSnapshot(prefix+text,location.File).WithTextSubstring(prefix.Length,text.Length);
@@ -64,7 +75,7 @@ namespace Nitra.Compiler
       if(cache.ContainsKey(identity)) cache[identity]
       else { def tree=factories[key].Invoke(provider,sequence,Func(Create)); cache.Add(identity,tree); tree }
     }
-    public Output(name : string, selected : NitraStructure, location : Nemerle.Compiler.Location, context : NitraDialectContext) : PExpr
+    public Output(name : string, selected : NitraStructure, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext) : PExpr
     {
       def source=Provider(selected.Source,location);
       def tree=Create(name,source,selected);
@@ -112,7 +123,7 @@ namespace Nitra.Compiler
         options.SharedAssemblies=SCG.List(shared).ToArray();
         options.ReferencedLibraries=refs.NToList();
         options.MacrosToLoad=[typeof(NativeSourceHost).Assembly.Location];
-        options.Sources=[StringSource(Nemerle.Compiler.Location.GetFileIndex(options.OutputFileName+".n"),"[assembly: Nitra.InvokeNitraCompiler]") : ISource];
+        options.Sources=[StringSource(Nemerle.Compiler.AST.Location.GetFileIndex(options.OutputFileName+".n"),"[assembly: Nitra.InvokeNitraCompiler]") : ISource];
         def compiler=ManagerClass(options); def messages=StringWriter(); compiler.InitOutput(messages);
         mutable errors=0; compiler.ErrorOccured += (_,_) => ++errors;
         // InitCompiler clears UserData; populate only after that reset.
@@ -155,7 +166,7 @@ namespace Nitra.Compiler
             def text=String.Join("\n",source.Value.ToArray());
             def selected=NitraSyntax.Structure(grammar,"NitraSyntax.Start",text,null);
             unless(selected.Success) throw ArgumentException(String.Join("\n",selected.Diagnostics.ToArray()));
-            _=project.AddRecognizedFile(Nemerle.Compiler.Location.GetFileIndex(source.Key),text,
+            _=project.AddRecognizedFile(Nemerle.Compiler.AST.Location.GetFileIndex(source.Key),text,
               Func(provider => registry.Create("NitraSyntax.Start",provider,selected.Root) :> NitraSyntaxParseTree.Start));
           }
         | _ =>
@@ -172,7 +183,7 @@ namespace Nitra.Compiler
         when(syntaxModule.Name.StartsWith(owner+".",StringComparison.Ordinal)) names.Add(syntaxModule.Name);
       names.ToArray()
     }
-    public Expand(rule : string, selected : NitraStructure, _ : Typer, location : Nemerle.Compiler.Location, context : NitraDialectContext) : PExpr
+    public Expand(rule : string, selected : NitraStructure, _ : Typer, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext) : PExpr
     {
       try { registry.Output(rule,selected,location,context) }
       catch

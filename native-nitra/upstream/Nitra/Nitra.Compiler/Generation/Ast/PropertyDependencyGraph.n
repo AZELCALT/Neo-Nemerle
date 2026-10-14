@@ -1,7 +1,6 @@
 ﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
-using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -49,7 +48,7 @@ namespace Nitra.Compiler
         {
           | Compiled(methodName)         => methodName
           | Source(tb, returnType, expr) =>
-            UtilMacros.locate(code.Location,
+            Nemerle.Compiler.UtilMacros.locate(code.Location,
             {
               def methodName = node.CreateMethodName();
               tb.Define(<[ decl:

@@ -26,7 +26,9 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.PrettyPrint;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -43,9 +45,9 @@ using NemerleMacros;
                      Inherited = true, AllowMultiple = false)]
 macro Hygienic(_ : TypeBuilder, m : ParsedMethod)
 {
-  def newBody = UtilMacros.locate(m.Body.Location,
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location,
     <[
-      def colors = ManagerClass.Instance.MacroColors;
+      def colors = Nemerle.Compiler.ManagerClass.ManagerClass.Instance.MacroColors;
       colors.PushNewColor(colors.UseColor, colors.UseContext);
       def result = $(m.Body);
       colors.PopColor();
@@ -78,27 +80,27 @@ macro GetTyper()
 
 macro Manager()
 {
-  <[ Nemerle.Compiler.ManagerClass.Instance ]>
+  <[ Nemerle.Compiler.ManagerClass.ManagerClass.Instance ]>
 }
 
 /** creates new symbol with given id and current global context */
 macro Symbol (id)
 {
-  def env = Macros.ImplicitCTX().Env;
+  def env = Nemerle.Macros.ImplicitCTX().Env;
   def nr = env.GetMacroContext ();
   <[ PT.Name.NameInCurrentColor ($id, $("_N_MacroContexts" : dyn).Get ($(nr : int), Manager ())) ]>
 }
 
 macro pretty_print_expr (exp, expand : bool)
 {
-  def ctx = if (expand) Some (Macros.ImplicitCTX()) else None ();
+  def ctx = if (expand) Some (Nemerle.Macros.ImplicitCTX()) else None ();
   PrettyPrint.PrintExpr (ctx, exp);
   <[ () ]>
 }
 
 macro ExprToString (exp, expandMacros : bool)
 {
-  def ctx = if (expandMacros) Some (Macros.ImplicitCTX()) else None ();
+  def ctx = if (expandMacros) Some (Nemerle.Macros.ImplicitCTX()) else None ();
   def str = PrettyPrint.SprintExpr (ctx, exp);
   <[ $(str : string) ]>
 }

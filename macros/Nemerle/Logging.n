@@ -28,7 +28,10 @@
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Logging.Helper;
 
@@ -48,7 +51,7 @@ internal module Helper
     | PExpr.Ref (name) =>
       name.Id
     | _ =>
-      MessageMacros.FatalError ($ "expected a plain identifier, got $expr");
+      Nemerle.Compiler.MessageMacros.FatalError ($ "expected a plain identifier, got $expr");
   }
 
   Init () : void

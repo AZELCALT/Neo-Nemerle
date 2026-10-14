@@ -33,9 +33,20 @@ using StringTemplate;
 #endif
 
 using Nemerle.Collections;
-using Nemerle.Compiler.NemerleModifiers;
+using Nemerle.Compiler.AST.NemerleModifiers;
 using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.CodeCompletionEngine;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.Lexer;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.MainParser;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Imperative;
 using Nemerle.Utility;
 using Nemerle; 
@@ -60,7 +71,7 @@ public enum StringType { | Error | C | Monkey | Recursive }
 macro @s(str)
 syntax ("s", str)
 {
-  Helper.SprintImpl(str, true, expr => expr, Macros.ImplicitCTX().Env)
+  Helper.SprintImpl(str, true, expr => expr, Nemerle.Macros.ImplicitCTX().Env)
 }
 
 [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = true)]
@@ -96,7 +107,7 @@ macro StringTemplateGroup(tb : TypeBuilder)
 internal module Helper2
 {
   StSuffix = "__StImpl";
-  mutable _inherMap : Set[NC.TypeInfo] = Set();
+  mutable _inherMap : Set[Nemerle.Compiler.TypeInfo.TypeInfo] = Set();
   _sync : object = object();
 
   internal StringTemplateGroupBeforeInheritance(tb : TypeBuilder, _ctx : Typer) : void
@@ -233,7 +244,7 @@ internal module Helper2
               match (stMethods)
               {
                 | [m is MethodBuilder] => m
-                | _ => UtilMacros.ice($"Found to many correspond 'string template' methods: ..$stMethods");
+                | _ => Nemerle.Compiler.UtilMacros.ice($"Found to many correspond 'string template' methods: ..$stMethods");
               }
             }
             
@@ -267,7 +278,7 @@ internal module Helper2
     def (template, loc, offset) = Helper.SquareString(template1, loc1);
     def makeEllipsisSplaceExpr(env : GlobalEnv, expr : string, isComplexExpr : bool, startLoc : Location) : PT.PExpr
     {
-      UtilMacros.locate(startLoc,
+      Nemerle.Compiler.UtilMacros.locate(startLoc,
         if (isComplexExpr || env.Manager.IsCompletionInProgress)
         {
           def pExpr = MainParser.ParseExpr(env, expr, startLoc);
@@ -330,7 +341,7 @@ internal module Helper2
               _ = _builder.Append(ToString($pExpr));
         ]>
       }
-      UtilMacros.locate(startLoc,
+      Nemerle.Compiler.UtilMacros.locate(startLoc,
         if (isComplexExpr || env.Manager.IsCompletionInProgress)
         {
           env.Manager.MacroColors.PushUseSiteColor ();
@@ -485,10 +496,10 @@ public module Helper
   
   public ExtractStringBody(literal : PExpr.Literal) : string * Location * StringType
   {
-    assert(literal.val is Nemerle.Compiler.Literal.String);
+    assert(literal.val is Nemerle.Compiler.AST.Literal.String);
     // TODO: VladD2: Add filing of RawString in string literal embeded in quasi-quotation extressins.
     if (literal.val.RawString == null)
-      ((literal.val :> Nemerle.Compiler.Literal.String).val, literal.Location, StringType.Monkey)
+      ((literal.val :> Nemerle.Compiler.AST.Literal.String).val, literal.Location, StringType.Monkey)
     else
       ExtractStringBody(literal.val.RawString, literal.Location)
   }
@@ -588,7 +599,7 @@ public module Helper
       // _ -> string doesn't use the right type but uses always object.
       def convertToString = <[ x => System.Convert.ToString(x) ]>;
     
-      UtilMacros.locate(startLoc,
+      Nemerle.Compiler.UtilMacros.locate(startLoc,
         if (isComplexExpr || env.Manager.IsCompletionInProgress)
         {
           env.Manager.MacroColors.PushUseSiteColor ();
@@ -618,7 +629,7 @@ public module Helper
     
     def makeSplaceExpr(env : GlobalEnv, expr : string, isComplexExpr : bool, startLoc : Location) : PT.PExpr
     {
-      UtilMacros.locate(startLoc, {
+      Nemerle.Compiler.UtilMacros.locate(startLoc, {
         def pExpr = if (isComplexExpr || env.Manager.IsCompletionInProgress)
         {
           env.Manager.MacroColors.PushUseSiteColor();

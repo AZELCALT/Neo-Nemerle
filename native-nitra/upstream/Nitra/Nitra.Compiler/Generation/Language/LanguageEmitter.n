@@ -2,7 +2,10 @@
 using Nitra.Typing;
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 using Nemerle.Text;
@@ -32,7 +35,7 @@ namespace Nitra.Compiler
     public DefineTypes() : void
     {
       assert(_tb : object == null);
-      UtilMacros.locate(Symbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(),
       {
         def baseLanguage =
           if (Symbol.Parent is SymbolRef.Some(parent))
@@ -61,7 +64,7 @@ namespace Nitra.Compiler
 
       foreach (style in Symbol.Styles)
       {
-        UtilMacros.locate(style.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(style.FirstLocation.NLocation(),
         {
           def backingFieldName = Util.tmpname(style.Name);
           _tb.Define(<[ decl:
@@ -90,7 +93,7 @@ namespace Nitra.Compiler
 
       foreach (spanClass in Symbol.SpanClasses)
       {
-        UtilMacros.locate(spanClass.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(spanClass.FirstLocation.NLocation(),
         {
           def backingFieldName = Util.tmpname(spanClass.Name);
           _tb.Define(<[ decl:
@@ -110,7 +113,7 @@ namespace Nitra.Compiler
 
       def nameToExpr(n : string) : PExpr { <[ $(n : usesite) ]> }
 
-      UtilMacros.locate(Symbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(),
       {
         def parentExpr =
           if (Symbol.Parent is SymbolRef.Some(parent))

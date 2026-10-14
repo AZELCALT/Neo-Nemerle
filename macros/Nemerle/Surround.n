@@ -27,7 +27,7 @@
  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 

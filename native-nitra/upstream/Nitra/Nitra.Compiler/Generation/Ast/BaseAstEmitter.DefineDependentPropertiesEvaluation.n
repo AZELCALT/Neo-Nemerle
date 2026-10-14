@@ -4,7 +4,16 @@ using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.ExprWalker;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.LocalValue;
+using Nemerle.Compiler.MacroClassGen;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -26,7 +35,7 @@ namespace Nitra.Compiler
 
     protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol) : void
     {
-      UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+      Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
         def evalMethod = CompileStatements(tb, symbol, <[ decl:
           public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
@@ -43,7 +52,7 @@ namespace Nitra.Compiler
 
     protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[PropertySymbol, FixedType]) : void
     {
-      UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+      Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
         def evalMethod = CompileStatements(tb, symbol, <[ decl:
           ..$(GetDependentEvaluationModifiers()) EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
@@ -95,7 +104,7 @@ namespace Nitra.Compiler
 
       foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
       {
-        UtilMacros.locate(statement.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(statement.NLocation(),
         {
           match (statement)
           {
@@ -171,17 +180,17 @@ namespace Nitra.Compiler
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
     {
-      MessageMacros.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
+      Nemerle.Compiler.MessageMacros.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
     }
 
-    private static ErrorAssignOfDependentPropertyExpected(loc : Nemerle.Compiler.Location) : void
+    private static ErrorAssignOfDependentPropertyExpected(loc : Nemerle.Compiler.AST.Location) : void
     {
-      MessageMacros.FatalError(loc, "Only assign of a dependent property is allowed.")
+      Nemerle.Compiler.MessageMacros.FatalError(loc, "Only assign of a dependent property is allowed.")
     }
 
     private static ErrorDelayedTypingDetected(expr : TExpr.Delayed) : void
     {
-      MessageMacros.FatalError(expr.Location, "Delayed typing detected: " + expr)
+      Nemerle.Compiler.MessageMacros.FatalError(expr.Location, "Delayed typing detected: " + expr)
     }
 
     private static ValidateEvalFieldsCode(expr : TExpr) : TExpr
@@ -399,7 +408,7 @@ namespace Nitra.Compiler
         }
         walker.Walk(expr, walk);
       }
-      def addKey(assignLoc : Nemerle.Compiler.Location, target : TExpr, source : TExpr, rawSourceExpr : PExpr) : void
+      def addKey(assignLoc : Nemerle.Compiler.AST.Location, target : TExpr, source : TExpr, rawSourceExpr : PExpr) : void
       {
         match (target)
         {
@@ -411,7 +420,7 @@ namespace Nitra.Compiler
               if (nodesMap.TryGetValue(path, out existingNode))
               {
                 Message.Warning(existingNode.Location, "Related message: First assingment of dependent property.");
-                MessageMacros.FatalError(e.Location, "Multiple assign of dependent property.");
+                Nemerle.Compiler.MessageMacros.FatalError(e.Location, "Multiple assign of dependent property.");
               }
               else
               {
@@ -550,7 +559,7 @@ namespace Nitra.Compiler
       {
         match(code)
         {
-          | Compiled(methodName) => UtilMacros.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this, context) ]>)
+          | Compiled(methodName) => Nemerle.Compiler.UtilMacros.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this, context) ]>)
           | Source(_, _, expr)   => expr
         }
       }
@@ -651,7 +660,7 @@ namespace Nitra.Compiler
         | Assign(code) =>
           def (predicate, checkedPaths)         = makeIsEvaluatedCheck(node.Path, dependentProperties);
           def (properties, collectorProperties) = collectDependendOn(node, checkedPaths);
-          def expr1 = UtilMacros.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)); context.CalculatedCountInc(); ]>);
+          def expr1 = Nemerle.Compiler.UtilMacros.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)); context.CalculatedCountInc(); ]>);
           def expr2 = makeCondition(properties, collectorProperties, expr1, <[ context.DeferredCountInc() ]>);
           def expr3 = TryAddStageCheck(node.Path, expr2);
           def expr4 = <[ when ($predicate) $expr3; ]>;

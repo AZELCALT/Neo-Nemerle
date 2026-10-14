@@ -27,7 +27,10 @@
  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Macros;
 using Nemerle.Collections;
 using System.Text.RegularExpressions;
@@ -44,7 +47,7 @@ macro ConfigureConnection (connClass : string, con_str : string, name : string =
 {
   def mng = Manager ();
   if (Helper.connections.Contains (name))
-    MessageMacros.FatalError ("Connection with name `" + name + "' is already defined")
+    Nemerle.Compiler.MessageMacros.FatalError ("Connection with name `" + name + "' is already defined")
   else
   {
     try
@@ -56,7 +59,7 @@ macro ConfigureConnection (connClass : string, con_str : string, name : string =
     catch
     {
       | e is Recovery => throw e;
-      | e => MessageMacros.FatalError ($"connecting to database failed: $e")
+      | e => Nemerle.Compiler.MessageMacros.FatalError ($"connecting to database failed: $e")
     }
   }
 }
@@ -75,13 +78,13 @@ macro ExecuteNonQuery (query : string, conn, con_name : string = "")
 
   try
   { 
-    tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+    tpars.Iter (fun (name, tvar : Nemerle.Compiler.Typedtree.TExpr) {
       Helper.InitParameter (mycmd, name, tvar.ty.Fix ());
     });
     // try to execute query chcecking its syntax and typecorrectness
     _ = mycmd.ExecuteNonQuery ()
   }
-  catch { | e  => MessageMacros.FatalError ("sql query error: " + e.Message) }
+  catch { | e  => Nemerle.Compiler.MessageMacros.FatalError ("sql query error: " + e.Message) }
   finally
   {
     mytran.Rollback ();
@@ -108,7 +111,7 @@ macro ExecuteScalar (query : string, conn, con_name : string = "")
   mutable col_type = null;
   try
   {
-    tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+    tpars.Iter (fun (name, tvar : Nemerle.Compiler.Typedtree.TExpr) {
       Helper.InitParameter (mycmd, name, tvar.ty.Fix ());
     });
 
@@ -116,12 +119,12 @@ macro ExecuteScalar (query : string, conn, con_name : string = "")
     def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
     def table = myreader.GetSchemaTable ();
     if (table.Rows.Count < 1)
-      MessageMacros.FatalError ("this query doesn't return any value")
+      Nemerle.Compiler.MessageMacros.FatalError ("this query doesn't return any value")
     else 
-      col_type = Parsetree.PExpr.FromQualifiedIdentifier (Manager (), table.Rows[0]["DataType"].ToString ());
+      col_type = Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (Manager (), table.Rows[0]["DataType"].ToString ());
     myreader.Close ();
   }
-  catch { | e  => MessageMacros.FatalError ("sql query error: " + e.Message) }
+  catch { | e  => Nemerle.Compiler.MessageMacros.FatalError ("sql query error: " + e.Message) }
   finally
   {
     mytran.Rollback ();
@@ -147,13 +150,13 @@ macro ExecuteReader (query : string, conn, con_name : string = "")
   def (mycmd, mytran) = Helper.CreateCommand (query, con_name);
   try
   {
-    tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+    tpars.Iter (fun (name, tvar : Nemerle.Compiler.Typedtree.TExpr) {
       Helper.InitParameter (mycmd, name, tvar.ty.Fix ());
     });
     // try to execute query chcecking its syntax
     _ = mycmd.ExecuteNonQuery ();
   }
-  catch { | e  => MessageMacros.FatalError ("sql query error: " + e.Message) }
+  catch { | e  => Nemerle.Compiler.MessageMacros.FatalError ("sql query error: " + e.Message) }
   finally
   {
     mytran.Rollback ();
@@ -182,7 +185,7 @@ macro ExecuteReaderLoop (query : string, conn, body, con_name : string = "")
   def (mycmd, mytran) = Helper.CreateCommand (query, con_name);
   try
   {
-    tpars.Iter (fun (name, tvar : Typedtree.TExpr) {
+    tpars.Iter (fun (name, tvar : Nemerle.Compiler.Typedtree.TExpr) {
       Helper.InitParameter (mycmd, name, tvar.ty.Fix ())
     });
 
@@ -205,7 +208,7 @@ macro ExecuteReaderLoop (query : string, conn, body, con_name : string = "")
 
     myreader.Close ();
   }
-  catch { | e  => MessageMacros.FatalError ("sql query error: " + e.Message) }
+  catch { | e  => Nemerle.Compiler.MessageMacros.FatalError ("sql query error: " + e.Message) }
   finally
   {
     mytran.Rollback ();
@@ -230,7 +233,7 @@ internal module Helper {
   {
     def idbTy = match (mng.NameTree.LookupExactType ("System.Data.IDbConnection")) {
       | Some (t) => t
-      | None => MessageMacros.FatalError ("You need to have `System.Data.dll' among reference assemblies to use sql macros - could not find `System.Data.IDbConnection' interface");
+      | None => Nemerle.Compiler.MessageMacros.FatalError ("You need to have `System.Data.dll' among reference assemblies to use sql macros - could not find `System.Data.IDbConnection' interface");
     }
       
     match (mng.NameTree.LookupExactType (tyName)) {
@@ -238,9 +241,9 @@ internal module Helper {
         if (ty.IsDerivedFrom(idbTy))
           System.Activator.CreateInstance (ty.SystemType, connStr) :> IDbConnection;
         else
-          MessageMacros.FatalError ($"Specified type `$tyName' does not implement `System.Data.IDbConnection' interface for providing sql connection");
+          Nemerle.Compiler.MessageMacros.FatalError ($"Specified type `$tyName' does not implement `System.Data.IDbConnection' interface for providing sql connection");
       | None =>
-        MessageMacros.FatalError ($"Could not instantiate type `$tyName' providing sql connection - not found in referenced assemblies");
+        Nemerle.Compiler.MessageMacros.FatalError ($"Could not instantiate type `$tyName' providing sql connection - not found in referenced assemblies");
     }
     
   }
@@ -268,21 +271,21 @@ internal module Helper {
      _ = cmd.Parameters.Add (p);
   }
   
-  public ConnectionExpr (mgr : ManagerClass, con_name : string) : Parsetree.PExpr {
-    def connClass = Nemerle.Compiler.ClrNames.TypeFullName (connections [con_name].GetType ());
-    Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass)
+  public ConnectionExpr (mgr : ManagerClass, con_name : string) : Nemerle.Compiler.Parsetree.PExpr {
+    def connClass = Nemerle.Compiler.ClrNames.ClrNames.TypeFullName (connections [con_name].GetType ());
+    Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass)
   }
   
-  public CommandExpr (mgr : ManagerClass, con_name : string, query : string, conn : Parsetree.PExpr) : Parsetree.PExpr {
-    def connClass = Nemerle.Compiler.ClrNames.TypeFullName (connections [con_name].GetType ());
-    def cmdExpr = Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass.Replace ("Connection", "Command"));
-    def connExpr = Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass);
+  public CommandExpr (mgr : ManagerClass, con_name : string, query : string, conn : Nemerle.Compiler.Parsetree.PExpr) : Nemerle.Compiler.Parsetree.PExpr {
+    def connClass = Nemerle.Compiler.ClrNames.ClrNames.TypeFullName (connections [con_name].GetType ());
+    def cmdExpr = Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass.Replace ("Connection", "Command"));
+    def connExpr = Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass);
     
     <[ $cmdExpr ($(query : string), ($conn : IDbConnection) :> $connExpr) ]> 
   }
   
   public ParameterChar (conName : string) : char {
-    def connClass = Nemerle.Compiler.ClrNames.TypeFullName (connections [conName].GetType ());
+    def connClass = Nemerle.Compiler.ClrNames.ClrNames.TypeFullName (connections [conName].GetType ());
     if (connClass.EndsWith (".SqlConnection"))
       '@' 
     else if (connClass.EndsWith (".NpgsqlConnection"))
@@ -297,9 +300,9 @@ internal module Helper {
       | Some (c) => c
       | None =>
         if (name == "")
-          MessageMacros.FatalError ("default connection was not found")
+          Nemerle.Compiler.MessageMacros.FatalError ("default connection was not found")
         else
-          MessageMacros.FatalError ("connection `" + name + "' was not found")
+          Nemerle.Compiler.MessageMacros.FatalError ("connection `" + name + "' was not found")
     }
   }
 
@@ -322,10 +325,10 @@ internal module Helper {
           | "System.UInt64" | "Nemerle.Core.ulong" => 34ul
           | "System.SByte" | "Nemerle.Core.sbyte" => 34b
           | "System.Single" | "Nemerle.Core.float" => 34.4f
-          | x => MessageMacros.FatalError (x + " type not supported")
+          | x => Nemerle.Compiler.MessageMacros.FatalError (x + " type not supported")
         }
       | _ =>
-        MessageMacros.FatalError ("only basic types supported in sql query")
+        Nemerle.Compiler.MessageMacros.FatalError ("only basic types supported in sql query")
     }
   }
   
@@ -340,7 +343,7 @@ internal module Helper {
         above variables
   */
   public ExtractParameters (ctx : Typer, query : string, param_prefix : char)
-  : string * Hashtable [string, Typedtree.TExpr] * list [Parsetree.PExpr]
+  : string * Hashtable [string, Nemerle.Compiler.Typedtree.TExpr] * list [Nemerle.Compiler.Parsetree.PExpr]
   {
     // take names after $
     def namesreg = Regex (@"(([^\$]*)\$(\w+))|(.+)", RegexOptions.Singleline);
@@ -378,7 +381,7 @@ internal module Helper {
     (fquery.ToString (), tpars, pars_init)
   }
 
-  public GenerateFetchExpr (mng : ManagerClass, typeName : string, colIdx : int, allow_null: bool) : Parsetree.PExpr {
+  public GenerateFetchExpr (mng : ManagerClass, typeName : string, colIdx : int, allow_null: bool) : Nemerle.Compiler.Parsetree.PExpr {
     def type_suff = 
       if (typeName.StartsWith ("System."))
         typeName.Substring (7)
@@ -387,10 +390,10 @@ internal module Helper {
     def retTy = 
       match (mng.NameTree.LookupExactType (typeName)) {
         | Some (t) => 
-          def rawTy = <[ $(Parsetree.PExpr.FromQualifiedIdentifier (mng, typeName)) ]>;
+          def rawTy = <[ $(Nemerle.Compiler.Parsetree.PExpr.FromQualifiedIdentifier (mng, typeName)) ]>;
           if (!allow_null || t.GetMemType ().CanBeNull) rawTy
           else <[ $rawTy ? ]>
-        | None => MessageMacros.FatalError ("DB provider returned unknown type name: " + typeName);
+        | None => Nemerle.Compiler.MessageMacros.FatalError ("DB provider returned unknown type name: " + typeName);
       }
     
     def real_fetch = <[ reader.$("Get" + type_suff : usesite) ($(colIdx : int)) : $retTy ]>;

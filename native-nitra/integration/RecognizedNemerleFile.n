@@ -1,5 +1,4 @@
 using System;
-using Nemerle.Compiler;
 using Nitra.Declarations;
 using Nitra.ProjectSystem;
 using Nitra.Runtime;

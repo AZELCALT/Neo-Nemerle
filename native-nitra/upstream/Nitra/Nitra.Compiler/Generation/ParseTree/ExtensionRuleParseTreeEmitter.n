@@ -4,7 +4,8 @@ using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 
 using System;
@@ -53,7 +54,7 @@ namespace Nitra.Compiler
     {
       assert(!IsTypesDefined);
 
-      UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
       {
         _nodeTb = defineType(<[decl:
           public new abstract partial class $(this.RuleSymbol.Name : usesite) : $(Environment.GetParseTreeType((this.RuleSymbol :> ExtensionRuleSymbol).BaseRule.GetValue(Environment.Project)) : typed)
@@ -80,7 +81,7 @@ namespace Nitra.Compiler
     {
       assert(IsTypesDefined);
 
-      UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
       {
         def fields = GetFields();
         DefineParseTreeCtorAndFields(fields, _nodeTb);

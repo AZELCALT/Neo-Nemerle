@@ -1,0 +1,875 @@
+{
+ "Accessibility": [
+  "TypeInfo"
+ ],
+ "AttributeCompilerClass": [
+  "CustomAttribute"
+ ],
+ "AttributesAndModifiers": [
+  "AST"
+ ],
+ "BailOutException": [
+  "Utility"
+ ],
+ "BindingFlags": [
+  "TypeInfo"
+ ],
+ "BuiltinMethod": [
+  "BuiltinMethod"
+ ],
+ "BuiltinMethodKind": [
+  "TypeInfo"
+ ],
+ "BuiltinWrapMethod": [
+  "BuiltinMethod"
+ ],
+ "CFG": [
+  "CFG"
+ ],
+ "CacheDesc": [
+  "Typedtree"
+ ],
+ "ClassMember": [
+  "Parsetree"
+ ],
+ "ClrNames": [
+  "ClrNames"
+ ],
+ "Comment": [
+  "Lexer"
+ ],
+ "CompilationAbortedException": [
+  "ManagerClass"
+ ],
+ "CompilationOptions": [
+  "CompilationOptions"
+ ],
+ "CompilerComponentsFactory": [
+  "ComponentsFactory"
+ ],
+ "CompilerEventHandler": [
+  "ManagerClass"
+ ],
+ "Completion": [
+  "CodeCompletionEngine"
+ ],
+ "CompletionResult": [
+  "Typer"
+ ],
+ "ConstantFolder": [
+  "ConstantFolder"
+ ],
+ "Constraint": [
+  "Parsetree"
+ ],
+ "ConversionKind": [
+  "Typedtree"
+ ],
+ "CopyTypedTyparms": [
+  "Parsetree"
+ ],
+ "CustomTyperHandler": [
+  "Typer"
+ ],
+ "DecisionTreeBuilder": [
+  "DecisionTreeBuilder"
+ ],
+ "DecisionTreeCompiler": [
+  "DecisionTreeCompiler"
+ ],
+ "DeclarationBase": [
+  "Parsetree"
+ ],
+ "Decorator": [
+  "Decorator"
+ ],
+ "DefaultParseResult": [
+  "Parser"
+ ],
+ "DefaultParser": [
+  "Parser"
+ ],
+ "Delegates": [
+  "DelegateClassGen"
+ ],
+ "Directive": [
+  "Lexer"
+ ],
+ "DispatchingFileParser": [
+  "Parser"
+ ],
+ "Elem": [
+  "Typer"
+ ],
+ "ErrorMessage": [
+  "ErrorMessage"
+ ],
+ "EventBuilder": [
+  "ClassMembers"
+ ],
+ "ExperimentalGrammarArchive": [
+  "GrammarArchive"
+ ],
+ "ExperimentalGrammarBlock": [
+  "GrammarArchive"
+ ],
+ "ExprWalkHandler": [
+  "ExprWalker"
+ ],
+ "ExprWalkInfo": [
+  "ExprWalker"
+ ],
+ "ExprWalker": [
+  "ExprWalker"
+ ],
+ "ExtensionPattern": [
+  "ExtensionPattern"
+ ],
+ "ExternalType": [
+  "ExternalType"
+ ],
+ "FieldBuilder": [
+  "ClassMembers"
+ ],
+ "FileModuleRegistry": [
+  "FileModuleRegistry"
+ ],
+ "FileSource": [
+  "Source"
+ ],
+ "FixedType": [
+  "FixedType"
+ ],
+ "FunBody": [
+  "AST"
+ ],
+ "FunctionType": [
+  "InternalTypes"
+ ],
+ "FunctionUsage": [
+  "Typedtree"
+ ],
+ "Function_decl": [
+  "Parsetree"
+ ],
+ "GAlternative": [
+  "GrammarModel"
+ ],
+ "GDeclarations": [
+  "GrammarDeclarations"
+ ],
+ "GDefinition": [
+  "GrammarModel"
+ ],
+ "GEngine": [
+  "GrammarEngine"
+ ],
+ "GExpr": [
+  "GrammarModel"
+ ],
+ "GFile": [
+  "GrammarModel"
+ ],
+ "GLexeme": [
+  "NitraShared"
+ ],
+ "GReader": [
+  "NitraShared"
+ ],
+ "GRegistry": [
+  "GrammarParsing"
+ ],
+ "GRule": [
+  "GrammarModel"
+ ],
+ "GState": [
+  "GrammarEngine"
+ ],
+ "GZone": [
+  "GrammarModel"
+ ],
+ "GlobalEnv": [
+  "GlobalEnv"
+ ],
+ "GrammarAction": [
+  "GrammarModel"
+ ],
+ "GrammarArchives": [
+  "GrammarArchive"
+ ],
+ "GrammarDiagnostic": [
+  "NitraShared"
+ ],
+ "GrammarElement": [
+  "SyntaxDefinition"
+ ],
+ "GrammarJson": [
+  "NitraShared"
+ ],
+ "GrammarMatch": [
+  "GrammarModel"
+ ],
+ "GrammarParseResult": [
+  "GrammarModel"
+ ],
+ "GrammarParsing": [
+  "GrammarParsing"
+ ],
+ "ICE": [
+  "Utility"
+ ],
+ "IEngine": [
+  "CodeCompletionEngine"
+ ],
+ "IEvent": [
+  "TypeInfo"
+ ],
+ "IExprWalkerCallback": [
+  "ExprWalker"
+ ],
+ "IField": [
+  "TypeInfo"
+ ],
+ "ILEmitter": [
+  "ILEmitter"
+ ],
+ "IMacro": [
+  "MacroClassGen"
+ ],
+ "IMember": [
+  "TypeInfo"
+ ],
+ "IMethod": [
+  "TypeInfo"
+ ],
+ "INitraDialectResolver": [
+  "NitraDialectServices"
+ ],
+ "INitraNativeSourceHost": [
+  "NitraSourceCompilation"
+ ],
+ "IParametersProvider": [
+  "Parsetree"
+ ],
+ "IParser": [
+  "Parser"
+ ],
+ "IProperty": [
+  "TypeInfo"
+ ],
+ "ISource": [
+  "Source"
+ ],
+ "ISupportRelocation": [
+  "CodeCompletionEngine"
+ ],
+ "IfaceMethod": [
+  "TypeBuilder"
+ ],
+ "IfaceMethods": [
+  "TypeBuilder"
+ ],
+ "InternalTypeClass": [
+  "InternalTypes"
+ ],
+ "LexerBase": [
+  "Lexer"
+ ],
+ "LexerCompletion": [
+  "Lexer"
+ ],
+ "LexerFile": [
+  "Lexer"
+ ],
+ "LexerString": [
+  "Lexer"
+ ],
+ "LexerStringBase": [
+  "Lexer"
+ ],
+ "LibraryReference": [
+  "LibraryReference"
+ ],
+ "LibraryReferenceManager": [
+  "LibraryReferenceManager"
+ ],
+ "Literal": [
+  "AST"
+ ],
+ "LocalContext": [
+  "LocalContext"
+ ],
+ "LocalValue": [
+  "LocalValue"
+ ],
+ "LocatableTextWriter": [
+  "PrettyPrint"
+ ],
+ "Located": [
+  "AST"
+ ],
+ "LocatingTextWriter": [
+  "PrettyPrint"
+ ],
+ "Location": [
+  "AST"
+ ],
+ "LocationStack": [
+  "Utility"
+ ],
+ "MacroClasses": [
+  "MacroClassGen"
+ ],
+ "MacroColorizator": [
+  "MacroColorizer"
+ ],
+ "MacroParm": [
+  "MacroClassGen"
+ ],
+ "MacroRegistry": [
+  "MacroRegistry"
+ ],
+ "Macros": [
+  "Macros"
+ ],
+ "MainParser": [
+  "MainParser"
+ ],
+ "ManagerClass": [
+  "ManagerClass"
+ ],
+ "MatchCase": [
+  "Parsetree"
+ ],
+ "MatchCompilerOptions": [
+  "CompilationOptions"
+ ],
+ "Match_case": [
+  "Typedtree"
+ ],
+ "MemberBase": [
+  "Parsetree"
+ ],
+ "MemberBuilder": [
+  "ClassMembers"
+ ],
+ "MemberInfo": [
+  "TypeInfo"
+ ],
+ "MemberKinds": [
+  "TypeInfo"
+ ],
+ "Message": [
+  "Utility"
+ ],
+ "Messenger": [
+  "Messenger"
+ ],
+ "MethodBuilder": [
+  "ClassMembers"
+ ],
+ "Modifiers": [
+  "AST"
+ ],
+ "Name": [
+  "Parsetree"
+ ],
+ "NameToMethodsMap": [
+  "TypeBuilder"
+ ],
+ "Namespace": [
+  "Parsetree"
+ ],
+ "NamespaceTree": [
+  "NamespaceTree"
+ ],
+ "NamespaceTreeUtils": [
+  "TopDeclPrint"
+ ],
+ "NemerleAttributes": [
+  "AST"
+ ],
+ "NemerleCodeCompiler": [
+  "NemerleCodeCompiler"
+ ],
+ "NemerleCodeGenerator": [
+  "NemerleCodeGenerator"
+ ],
+ "NemerleCodeProvider": [
+  "NemerleCodeProvider"
+ ],
+ "NemerleMemberAttributeConverter": [
+  "NemerleMemberAttributeConverter"
+ ],
+ "NemerleModifiers": [
+  "AST"
+ ],
+ "NitraAlternative": [
+  "NitraSyntaxModel"
+ ],
+ "NitraAskFrame": [
+  "NitraSelection"
+ ],
+ "NitraBootstrap": [
+  "NitraBootstrap"
+ ],
+ "NitraBoundary": [
+  "NitraSourceBoundaries"
+ ],
+ "NitraBoundaryEdit": [
+  "NitraSourceBoundaries"
+ ],
+ "NitraBoundaryMacro": [
+  "NitraSourceBoundaries"
+ ],
+ "NitraBuildItem": [
+  "NitraSelection"
+ ],
+ "NitraCompilation": [
+  "NitraCompilation"
+ ],
+ "NitraCompilationContext": [
+  "NitraCompilation"
+ ],
+ "NitraCompilationResult": [
+  "NitraCompilation"
+ ],
+ "NitraDeclaration": [
+  "NitraSyntaxModel"
+ ],
+ "NitraDeclarationReader": [
+  "NitraDeclarations"
+ ],
+ "NitraDialectContext": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectReference": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectRegistry": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectRequest": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectResolution": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectSignature": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectSpace": [
+  "NitraDialectServices"
+ ],
+ "NitraDialectType": [
+  "NitraDialectServices"
+ ],
+ "NitraDocument": [
+  "NitraSyntaxModel"
+ ],
+ "NitraEditorGrammar": [
+  "NitraEditor"
+ ],
+ "NitraEditorIndex": [
+  "NitraEditor"
+ ],
+ "NitraEditorZone": [
+  "NitraEditor"
+ ],
+ "NitraEnds": [
+  "NitraRegions"
+ ],
+ "NitraEvidence": [
+  "NitraStructures"
+ ],
+ "NitraExpression": [
+  "NitraSyntaxModel"
+ ],
+ "NitraFastBail": [
+  "NitraFast"
+ ],
+ "NitraFastParser": [
+  "NitraFast"
+ ],
+ "NitraInactiveConstruct": [
+  "NitraInactiveSyntax"
+ ],
+ "NitraInactiveSyntax": [
+  "NitraInactiveSyntax"
+ ],
+ "NitraLex": [
+  "NitraSyntaxModel"
+ ],
+ "NitraLongMap": [
+  "NitraRegions"
+ ],
+ "NitraModule": [
+  "NitraSyntaxModel"
+ ],
+ "NitraOperation": [
+  "NitraRecognition"
+ ],
+ "NitraPairMap": [
+  "NitraSelection"
+ ],
+ "NitraPairSet": [
+  "NitraRegions"
+ ],
+ "NitraPreparation": [
+  "NitraRecognition"
+ ],
+ "NitraPreparedGrammar": [
+  "NitraRecognition"
+ ],
+ "NitraRecognitionResult": [
+  "NitraRecognition"
+ ],
+ "NitraRecognizer": [
+  "NitraRegions"
+ ],
+ "NitraRegion": [
+  "NitraRecognition"
+ ],
+ "NitraRepPlan": [
+  "NitraSelection"
+ ],
+ "NitraRule": [
+  "NitraSyntaxModel"
+ ],
+ "NitraScopeBinding": [
+  "NitraDialectServices"
+ ],
+ "NitraSemanticProperty": [
+  "NitraCompilation"
+ ],
+ "NitraSemanticScope": [
+  "NitraCompilation"
+ ],
+ "NitraSemanticSymbol": [
+  "NitraCompilation"
+ ],
+ "NitraSemanticType": [
+  "NitraTypes"
+ ],
+ "NitraSeqPlan": [
+  "NitraSelection"
+ ],
+ "NitraSharedScope": [
+  "NitraDialectServices"
+ ],
+ "NitraSourceConfiguration": [
+  "NitraSourceCompilation"
+ ],
+ "NitraSourceScan": [
+  "NitraShared"
+ ],
+ "NitraSourceSession": [
+  "NitraSourceCompilation"
+ ],
+ "NitraSourceZone": [
+  "NitraSourceCompilation"
+ ],
+ "NitraSpaceMacro": [
+  "NitraSourceCompilation"
+ ],
+ "NitraStructuralChoice": [
+  "NitraStructures"
+ ],
+ "NitraStructuralOption": [
+  "NitraStructures"
+ ],
+ "NitraStructure": [
+  "NitraStructures"
+ ],
+ "NitraStructureBuilder": [
+  "NitraSelection"
+ ],
+ "NitraStructureResult": [
+  "NitraStructures"
+ ],
+ "NitraSyntax": [
+  "NitraSyntax"
+ ],
+ "NitraTableScope": [
+  "NitraCompilation"
+ ],
+ "NitraTypeSolver": [
+  "NitraTypes"
+ ],
+ "NitraTypeVariable": [
+  "NitraTypes"
+ ],
+ "NitraWorkItem": [
+  "NitraRegions"
+ ],
+ "NumericKind": [
+  "NumericKind"
+ ],
+ "OpContext": [
+  "MainParser"
+ ],
+ "OperatorDefinition": [
+  "SyntaxDefinition"
+ ],
+ "Optimizer": [
+  "Optimizer"
+ ],
+ "OverloadPossibility": [
+  "OverloadPossibility"
+ ],
+ "PExpr": [
+  "Parsetree"
+ ],
+ "PFunHeader": [
+  "Parsetree"
+ ],
+ "PParameter": [
+  "Parsetree"
+ ],
+ "Parm": [
+  "Typedtree"
+ ],
+ "ParmKind": [
+  "Typedtree"
+ ],
+ "ParseResult": [
+  "Parser"
+ ],
+ "ParsedBase": [
+  "AST"
+ ],
+ "Pattern": [
+  "Typedtree"
+ ],
+ "PreParser": [
+  "PreParser"
+ ],
+ "PreParserException": [
+  "PreParser"
+ ],
+ "PreParserIndent": [
+  "PreParserIndent"
+ ],
+ "Preparer": [
+  "Preparer"
+ ],
+ "PreprocessorEvaluator": [
+  "PreprocessorEvaluator"
+ ],
+ "PrettyPrint": [
+  "PrettyPrint"
+ ],
+ "Propagator": [
+  "Propagator"
+ ],
+ "PropertyBuilder": [
+  "ClassMembers"
+ ],
+ "Recovery": [
+  "Utility"
+ ],
+ "RefTo": [
+  "ClassMembers"
+ ],
+ "Region": [
+  "Lexer"
+ ],
+ "RelocationInfo": [
+  "CodeCompletionEngine"
+ ],
+ "RestartInErrorMode": [
+  "RestartInErrorMode"
+ ],
+ "RestartRunBodyTyperException": [
+  "ClassMembers"
+ ],
+ "SFamily": [
+  "StructuralProjection"
+ ],
+ "SProjection": [
+  "StructuralProjection"
+ ],
+ "STailNode": [
+  "StructuralProjection"
+ ],
+ "ScanTypeHierarchy": [
+  "ScanTypeHierarchy"
+ ],
+ "ScriptCompilationData": [
+  "ScriptCompilation"
+ ],
+ "ScriptInitializerMacro": [
+  "ScriptCompilation"
+ ],
+ "ScriptResultMacro": [
+  "ScriptCompilation"
+ ],
+ "Solver": [
+  "Solver"
+ ],
+ "Splicable": [
+  "Parsetree"
+ ],
+ "StageEventArgs": [
+  "Typer"
+ ],
+ "StaticTypeVar": [
+  "StaticTypeVar"
+ ],
+ "StaticTypeVarContainer": [
+  "StaticTypeVar"
+ ],
+ "StatsClass": [
+  "Stats"
+ ],
+ "StringSource": [
+  "Source"
+ ],
+ "StructuralForm": [
+  "StructuralProjection"
+ ],
+ "StructuralKind": [
+  "StructuralProjection"
+ ],
+ "StructuralProjection": [
+  "StructuralProjection"
+ ],
+ "StructuralProjectionPlan": [
+  "StructuralProjection"
+ ],
+ "StructuralProjectionResult": [
+  "StructuralProjection"
+ ],
+ "StructuralRegion": [
+  "StructuralProjection"
+ ],
+ "StructuralTailCompletion": [
+  "StructuralProjection"
+ ],
+ "StructuralTailRelationship": [
+  "StructuralProjection"
+ ],
+ "StructuralToken": [
+  "StructuralProjection"
+ ],
+ "Subst": [
+  "Subst"
+ ],
+ "SubstitutingTyparms": [
+  "Parsetree"
+ ],
+ "SyntaxDefinition": [
+  "SyntaxDefinition"
+ ],
+ "SyntaxElement": [
+  "Parsetree"
+ ],
+ "SystemTypeClass": [
+  "InternalTypes"
+ ],
+ "TExpr": [
+  "Typedtree"
+ ],
+ "TExprFlags": [
+  "Typedtree"
+ ],
+ "TFunHeader": [
+  "Typedtree"
+ ],
+ "TParameter": [
+  "Typedtree"
+ ],
+ "TextPoint": [
+  "AST"
+ ],
+ "Token": [
+  "Lexer"
+ ],
+ "TokenStoppers": [
+  "MainParser"
+ ],
+ "TopDeclaration": [
+  "Parsetree"
+ ],
+ "TraverseContext": [
+  "TraverseExpr2"
+ ],
+ "TraverseStateFlag": [
+  "TraverseExpr2"
+ ],
+ "TryCase": [
+  "Parsetree"
+ ],
+ "Try_case": [
+  "Typedtree"
+ ],
+ "TupleType": [
+  "InternalTypes"
+ ],
+ "TyCodec": [
+  "Codec"
+ ],
+ "Typarms": [
+  "Parsetree"
+ ],
+ "TypeBuilder": [
+  "TypeBuilder"
+ ],
+ "TypeDeclaration": [
+  "Typedtree"
+ ],
+ "TypeInfo": [
+  "TypeInfo"
+ ],
+ "TypeVar": [
+  "TypeVar"
+ ],
+ "TypeVarEnv": [
+  "TypeVarEnv"
+ ],
+ "TypedBase": [
+  "AST"
+ ],
+ "Typer": [
+  "Typer"
+ ],
+ "Typer2": [
+  "Typer2"
+ ],
+ "Typer3": [
+  "Typer3"
+ ],
+ "Typer4": [
+  "Typer4"
+ ],
+ "TyperBase": [
+  "Typer"
+ ],
+ "TypesManager": [
+  "TypesManager"
+ ],
+ "TypingStage": [
+  "Typer"
+ ],
+ "Unification": [
+  "Unification"
+ ],
+ "UseSet": [
+  "UseSet"
+ ],
+ "UseSetComparer": [
+  "UseSet"
+ ],
+ "Util": [
+  "Utility"
+ ],
+ "WarningOptions": [
+  "CompilationOptions"
+ ],
+ "WellTyped": [
+  "ExprWalker"
+ ],
+ "XmlDoc": [
+  "XmlDump"
+ ]
+}

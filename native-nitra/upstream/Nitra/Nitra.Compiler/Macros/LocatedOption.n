@@ -1,6 +1,8 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Typer;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Text;
@@ -15,14 +17,14 @@ namespace Nitra.Macros
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Property)]
   macro LocatedOption(typeBuilder : TypeBuilder, property : PropertyBuilder, optionName : string = null)
   {
-    LocatedOptionImpl.DoTransform(Macros.ImplicitCTX(), typeBuilder, property, optionName)
+    LocatedOptionImpl.DoTransform(Nemerle.Macros.ImplicitCTX(), typeBuilder, property, optionName)
   }
 
   module LocatedOptionImpl
   {
     public DoTransform(typer : Typer, typeBuilder : TypeBuilder, property : PropertyBuilder, optionName : string = null) : void
     {
-      Macros.DefineCTX(typer);
+      Nemerle.Macros.DefineCTX(typer);
 
       def msg = if (optionName == null) "The option is redefined." else $"The $optionName is redefined.";
 

@@ -1,5 +1,9 @@
 ﻿using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 using Nemerle.Imperative;

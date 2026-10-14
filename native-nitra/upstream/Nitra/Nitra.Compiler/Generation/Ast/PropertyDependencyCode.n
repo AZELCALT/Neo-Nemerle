@@ -1,5 +1,6 @@
 ﻿using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeVar;
 using Nemerle.Compiler.Parsetree;
 
 namespace Nitra.Compiler
@@ -7,7 +8,7 @@ namespace Nitra.Compiler
   [Record]
   internal variant PropertyDependencyCode
   {
-    public Location : Nemerle.Compiler.Location;
+    public Location : Nemerle.Compiler.AST.Location;
 
     | Compiled { MethodName : string }
     | Source   { TypeBuilder : TypeBuilder; ReturnType : TypeVar; Expr : PExpr; }

@@ -3,7 +3,11 @@ using Nitra.Typing;
 using Nitra.ProjectSystem;
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
@@ -172,7 +176,7 @@ namespace Nitra.Compiler
           if (SequenceParseTreeTypeInfo.TryGetValue(len, out typeInfo))
             FixedType.Class(typeInfo, types.Map(GetParseTreeType(_)))
           else
-            MessageMacros.FatalError($"Sequence of size '$len' is not supported");
+            Nemerle.Compiler.MessageMacros.FatalError($"Sequence of size '$len' is not supported");
       }
     }
 

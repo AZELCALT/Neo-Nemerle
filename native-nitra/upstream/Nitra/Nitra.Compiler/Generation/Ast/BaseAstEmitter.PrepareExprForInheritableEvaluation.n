@@ -3,7 +3,7 @@ using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -29,7 +29,7 @@ namespace Nitra.Compiler
           | null | Wildcard | Void | As | Where | Literal | Typeof | EmptyArray | Error | ToComplete | Typed | TypedPattern | TypedType => ()
           | Base | This =>
             unless (isQuotation)
-              result(UtilMacros.locate(expr.Location, <[ self ]>))
+              result(Nemerle.Compiler.UtilMacros.locate(expr.Location, <[ self ]>))
 
           | Is(pat, ty) =>
             def newPat = PrepareExprForInheritableEvaluation(symbol, pat, isQuotation, ref isChildrenModified);
@@ -47,7 +47,7 @@ namespace Nitra.Compiler
           | Ref(name) =>
             unless (isQuotation)
             when (symbol.LookupProperty(name.Id).HasValue)
-              result(UtilMacros.locate(expr.Location, <[ self.$(name : name) ]>))
+              result(Nemerle.Compiler.UtilMacros.locate(expr.Location, <[ self.$(name : name) ]>))
 
           | Member(obj, m) =>
             def newObj = PrepareExprForInheritableEvaluation(symbol, obj, isQuotation, ref isChildrenModified);

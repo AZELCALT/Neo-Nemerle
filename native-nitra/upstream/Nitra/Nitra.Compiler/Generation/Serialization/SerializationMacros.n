@@ -3,7 +3,10 @@
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Macros;
-using Nemerle.Compiler;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Text;
@@ -90,7 +93,7 @@ namespace Nitra.Serialization2
           else
             table.Add(type, compiler => UserDefinedTypeSerializationBuilder(compiler, type, writeFunc, readFunc))
 
-        | _ => MessageMacros.FatalError("Invalid macro arguments. Usage: DefineSerialization(TypeName, Write = writeCode, Read = readCode)");
+        | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid macro arguments. Usage: DefineSerialization(TypeName, Write = writeCode, Read = readCode)");
       }
     }
 

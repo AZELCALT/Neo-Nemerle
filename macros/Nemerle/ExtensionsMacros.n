@@ -26,7 +26,15 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.InternalTypes;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -222,7 +230,7 @@ macro TupleMap (f, tup)
     | <[ (.. $elms) ]> =>
       def mapped = elms.Map(e => <[ $f($e) ]>);
       <[ (.. $mapped) ]>
-    | _ => MessageMacros.FatalError ("'TupleMap' macro expects function and tuple")
+    | _ => Nemerle.Compiler.MessageMacros.FatalError ("'TupleMap' macro expects function and tuple")
   }
 }
 
@@ -244,7 +252,7 @@ macro PrintTuple (tup, size : int)
 
 macro PrintTupleTyped (tup)
 {
-  def tup1 = Macros.ImplicitCTX().TypeExpr (tup);
+  def tup1 = Nemerle.Macros.ImplicitCTX().TypeExpr (tup);
 
   match (tup1.Type.Hint)
   {
@@ -269,13 +277,13 @@ macro PrintTupleTyped (tup)
       <[ {.. $exps } ]>
 
     | _ =>
-      MessageMacros.FatalError ("expected tuple")
+      Nemerle.Compiler.MessageMacros.FatalError ("expected tuple")
   }
 }
 
 macro DefaultValue (ty)
 {
-  def tty = Macros.ImplicitCTX().BindFixedType (ty);
+  def tty = Nemerle.Macros.ImplicitCTX().BindFixedType (ty);
   <[ $(Macros.DefaultValueOfType (tty)) : $ty ]>
 }
 
@@ -302,7 +310,7 @@ macro CompilerMutable (_ : TypeBuilder, fld : ParsedField)
           | <[ [ ..$ctor_def ] ( ..$ctor_arg ) ]> => 
               AnonymousClassImpl.MakeTupleCtor(ctor_def, ctor_arg)
           | _ =>
-              MessageMacros.FatalError("Usage: 'new [a, b, c](x, y, z)' or 'new [a, b, c](t)' where 't' is tuple.")
+              Nemerle.Compiler.MessageMacros.FatalError("Usage: 'new [a, b, c](x, y, z)' or 'new [a, b, c](t)' where 't' is tuple.")
       }
       decorate(e)
   }
@@ -396,7 +404,7 @@ macro CompilerMutable (_ : TypeBuilder, fld : ParsedField)
               | (many, fields) when (many.Length == fields.Length) =>
                   <[ $(AnonymousClassNamespace : usesite).$(ty.Name : usesite) ( ..$many ) ]>
               | _ =>
-                  MessageMacros.FatalError("Invalid argument list for anonymous class constructor specified.")
+                  Nemerle.Compiler.MessageMacros.FatalError("Invalid argument list for anonymous class constructor specified.")
           }
       }
 
@@ -756,7 +764,7 @@ internal module WithMacroImpl
     }
     def createLocatedAssignment(elem)
     {
-      UtilMacros.locate(elem.Location, createAssignment(elem));
+      Nemerle.Compiler.UtilMacros.locate(elem.Location, createAssignment(elem));
     }
     elements.Map(createLocatedAssignment)
   }
@@ -770,7 +778,7 @@ internal module WithMacroImpl
     }
     def createLocatedAssignment(elem)
     {
-      UtilMacros.locate(elem.Location, createAssignment(elem));
+      Nemerle.Compiler.UtilMacros.locate(elem.Location, createAssignment(elem));
     }
     elements.Map(createLocatedAssignment)
   }
@@ -1086,7 +1094,7 @@ internal module StructuralEqualityImpl
         when (emitDebugSources)
           tb.TyManager.GenerateFakeSourceCode(tb, method.Ast);
         
-      | _ => MessageMacros.FatalError($"Can't find EqualsImpl(other : $(tb.GetMemType())) in $tb");
+      | _ => Nemerle.Compiler.MessageMacros.FatalError($"Can't find EqualsImpl(other : $(tb.GetMemType())) in $tb");
     }
 
     def implementsEquatable = AskUserData(tb, IsEquatableImplementedLabel);

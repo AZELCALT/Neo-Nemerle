@@ -4,7 +4,10 @@ using Nitra.Serialization;
 using Nemerle;
 using Nemerle.Imperative;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -37,7 +40,7 @@ namespace Nitra.Compiler
       assert(_tb : object == null);
 
       def nemerleEnv = Environment.NamespaceOfSymbol(_symbol);
-      UtilMacros.locate(_symbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.NLocation(),
       {
         def astType = Environment.GetAstType(_symbol.Declaration);
         match(_symbol)
@@ -87,7 +90,7 @@ namespace Nitra.Compiler
               when (propertySymbol.PropertyContainer == _symbol)
               {
                 def isEvaluatedName = GetIsEvaluatedPropertyName(propertySymbol);
-                UtilMacros.locate(propertySymbol.FirstLocation.NLocation(),
+                Nemerle.Compiler.UtilMacros.locate(propertySymbol.FirstLocation.NLocation(),
                 {
                   _tb.Define(<[decl: $(isEvaluatedName : usesite) : bool { get; }]>);
                   _tb.Define(<[decl: $(propertySymbol.Name : usesite) : $(TypeCompiler.Compile(propertySymbol.Type)) { get; set; }]>);
@@ -114,7 +117,7 @@ namespace Nitra.Compiler
               def backingFieldName = Util.tmpname(propertySymbol.Name);
               def propertyType = TypeCompiler.Compile(propertySymbol.Type);
               def isEvaluatedName = GetIsEvaluatedPropertyName(propertySymbol);
-              UtilMacros.locate(propertySymbol.FirstLocation.NLocation(),
+              Nemerle.Compiler.UtilMacros.locate(propertySymbol.FirstLocation.NLocation(),
               {
                 _tb.Define(<[decl: private mutable $(backingFieldName : usesite) : $propertyType ]>);
                 _tb.Define(<[decl: public $(isEvaluatedName : usesite) : bool { get { ($(backingFieldName : usesite) : object) != null } } ]>);
@@ -176,7 +179,7 @@ namespace Nitra.Compiler
         | ParsedSimpleSymbolSymbol(BuiltInMethods = methodOverrides) =>
           foreach ((identifier, expr) in methodOverrides)
           {
-            UtilMacros.locate(identifier.NLocation(),
+            Nemerle.Compiler.UtilMacros.locate(identifier.NLocation(),
             {
               def [IMethod as method] = Environment.SymbolBaseTypeInfo.LookupMember(identifier.Value);
               def parms = method.GetParameters().Map(p => <[ parameter: $(p.Name : global) : $(p.Type : typed) ]>);
@@ -189,7 +192,7 @@ namespace Nitra.Compiler
           DefineResetPropertiesMethod(_tb, null);
           DefineIsAllPropertiesEvaluatedProperty(_tb, null);
 
-          UtilMacros.locate(_symbol.FirstLocation.NLocation(),
+          Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.NLocation(),
           {
             def symbolType           = _tb.GetMemType();
             def serializationMembers = SCG.List();

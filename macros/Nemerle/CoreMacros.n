@@ -26,7 +26,13 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -130,7 +136,7 @@ using Nemerle.UtilityMacros;
 // ---- core.n (Nemerle.Core) ----
 macro default(ty)
 {
-  def tty = Macros.ImplicitCTX().BindFixedType (ty);
+  def tty = Nemerle.Macros.ImplicitCTX().BindFixedType (ty);
   <[ $(Macros.DefaultValueOfType (tty)) : $ty ]>
 }
 
@@ -193,7 +199,7 @@ public module Internal
   {
     public Impl(cond : PT.PExpr, e1 : PT.PExpr, e2 : PT.PExpr) : PT.PExpr
     {
-      def res = UtilMacros.locate(cond.Location,
+      def res = Nemerle.Compiler.UtilMacros.locate(cond.Location,
         match (cond)
         {
           | <[ $subCond is $pattern ]>             =>
@@ -339,7 +345,7 @@ macro using_catch (body, catch_block, params args : array [expr])
 syntax ("using", "(", args, ")", body, "catch", catch_block)
 {
   def (preexps, postexps) = UsingMacroGenerator.ProcessUsingArgs(args);
-  def cases = UsingMacroGenerator.ConvertMatchToCatchCases(catch_block, Macros.ImplicitCTX());
+  def cases = UsingMacroGenerator.ConvertMatchToCatchCases(catch_block, Nemerle.Macros.ImplicitCTX());
   UsingMacroGenerator.OutputExpression(preexps, postexps, body, cases);
 }
 
@@ -438,7 +444,7 @@ macro maybe_valuetype_dispose (val)
 macro @lock(lockOnExpr, body)
 syntax ("lock", "(", lockOnExpr, ")", body)
 {
-  def typer = Macros.ImplicitCTX();
+  def typer = Nemerle.Macros.ImplicitCTX();
   def lockOnTExpr = typer.TypeExpr(lockOnExpr);
 
   typer.DelayMacro(lastTry =>
@@ -501,7 +507,7 @@ internal module ForeachModule
         | _                              => (i, c, null)
       }
 
-    | e => MessageMacros.FatalError($<#the syntax is ' "foreach" "(" name "in" collection (with indexName)? ")" body ', got $e#>);
+    | e => Nemerle.Compiler.MessageMacros.FatalError($<#the syntax is ' "foreach" "(" name "in" collection (with indexName)? ")" body ', got $e#>);
   }
 }
 
@@ -517,7 +523,7 @@ syntax ("foreach", "(", inexpr, ")", body)
 
   def (iter, collection, index) = ForeachModule.ParseInExpr(inexpr);
 
-  def typer = Macros.ImplicitCTX();
+  def typer = Nemerle.Macros.ImplicitCTX();
   def tcollection = typer.TypeExpr(collection);
 
   // build the body of loop (may contain additional matching)
@@ -529,7 +535,7 @@ syntax ("foreach", "(", inexpr, ")", body)
         match (iter)
         {
           | <[ $(x : name) ]> when char.IsLower(x.Id[0]) | <[ (..$_) ]> => ()
-          | _ => MessageMacros.FatalError("only simple names available in pattern of foreach with direct matching")
+          | _ => Nemerle.Compiler.MessageMacros.FatalError("only simple names available in pattern of foreach with direct matching")
         }
 
         <[ def $iter = $val;
@@ -574,7 +580,7 @@ syntax ("foreach", "(", inexpr, ")", body)
       <[ $(tcollection : typed).GetEnumerator () ]>
     else
     {
-        Macros.DefineCTX(typer);
+        Nemerle.Macros.DefineCTX(typer);
         def iEnumerableType = <[ ttype: System.Collections.Generic.IEnumerable[_] ]>;
 
         def ty = tcollection.Type;
@@ -808,7 +814,7 @@ syntax ("foreach", "(", inexpr, ")", body)
 
       | Some (FixedType.Array (_ , rank)) => make_for_array(rank)
       | Some(ty) => // It can happen if type, for example, "type parameter" (MTypwe.StaticTypeVarRef(StaticTypeVar)).
-        Macros.DefineCTX(typer);
+        Nemerle.Macros.DefineCTX(typer);
         def iEnumerableType = <[ ttype: System.Collections.Generic.IEnumerable[_] ]>;
 
         if (ty.TryRequire(iEnumerableType))
@@ -865,7 +871,7 @@ macro ignore(params exprs : list[PExpr])
 
 macro IgnoreParams()
 {
-  foreach (p in Macros.ImplicitCTX().CurrentFunction.Parameters)
+  foreach (p in Nemerle.Macros.ImplicitCTX().CurrentFunction.Parameters)
     p.decl.EverUsed = true;
 
   <[ {} ]>
@@ -922,8 +928,8 @@ macro Record(ty : TypeBuilder, params options : list[PExpr])
 
 public module MacrosHelper
 {
-  public  InstanceFlags : Nemerle.Compiler.BindingFlags = Nemerle.Compiler.BindingFlags.Instance %| Nemerle.Compiler.BindingFlags.Public
-                         %| Nemerle.Compiler.BindingFlags.NonPublic %| Nemerle.Compiler.BindingFlags.DeclaredOnly;
+  public  InstanceFlags : Nemerle.Compiler.TypeInfo.BindingFlags = Nemerle.Compiler.TypeInfo.BindingFlags.Instance %| Nemerle.Compiler.TypeInfo.BindingFlags.Public
+                         %| Nemerle.Compiler.TypeInfo.BindingFlags.NonPublic %| Nemerle.Compiler.TypeInfo.BindingFlags.DeclaredOnly;
   private IgnoreMapKey = "RecordIgnored-MemberIgnoreMapKey";
 
   public MakeRecord (ty : TypeBuilder, options : list[PT.PExpr]) : void
@@ -1079,7 +1085,7 @@ public module MacrosHelper
       | PT.ClassMember.Property =>
         member.AddCustomAttribute(<[ Nemerle.Internal.IgnoreFieldAttribute ]>);
         
-      | _ => MessageMacros.FatalError("Invalid usage for RecordIgnore");
+      | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid usage for RecordIgnore");
     }
     
     
@@ -1332,7 +1338,7 @@ macro ExternallyVisibleOptions (t : TypeBuilder)
         }
       }
     | _ =>
-      MessageMacros.FatalError ("ExternallyVisibleOptions attribute can only be applied to variant types.")
+      Nemerle.Compiler.MessageMacros.FatalError ("ExternallyVisibleOptions attribute can only be applied to variant types.")
   }
 
 }
@@ -1607,7 +1613,7 @@ macro @=> (parmsExpr, body)
   {
     mutable tyLoc   = Location.Default;
     mutable nameLoc = x.Location;
-    def param = UtilMacros.locate(x.Location, match (x)
+    def param = Nemerle.Compiler.UtilMacros.locate(x.Location, match (x)
     {
       | <[ _ ]>                  => <[ parameter: $(Util.tmpname ("wildcard") : dyn) ]>
       | <[ $(nm : name) ]>       => nameLoc = nm.Location;
@@ -1641,7 +1647,7 @@ macro @=> (parmsExpr, body)
   def convert_to_ref (x)
   {
     | <[ parameter: $(nm : name) ]> => PT.PExpr.Ref (x.Location, nm)
-    | _ => MessageMacros.FatalError (x.Location, "illegal spliced parameter?")
+    | _ => Nemerle.Compiler.MessageMacros.FatalError (x.Location, "illegal spliced parameter?")
   }
 
   def convert_body (body, parms, loc)
@@ -1654,7 +1660,7 @@ macro @=> (parmsExpr, body)
           | [] => null
           | [<[ parameter: $(nm : name) ]> as x] => PT.PExpr.Ref (x.Location, nm)
           | _ :: _ :: _ => PT.PExpr.Tuple.Create (loc, parms.Map (convert_to_ref))
-          | x :: _ => MessageMacros.FatalError (x.Location, "illegal spliced parameter?")
+          | x :: _ => Nemerle.Compiler.MessageMacros.FatalError (x.Location, "illegal spliced parameter?")
         }
         PT.PExpr.Match (body.Location, match_val, cases)
       | _ => body
@@ -1681,7 +1687,7 @@ macro @=> (parmsExpr, body)
     });
 
   def newBody = if (decomposedPatternParams.IsEmpty) body
-                else UtilMacros.locate(body.Location, <[ { ..$(decomposedPatternParams + [body]) } ]>);
+                else Nemerle.Compiler.UtilMacros.locate(body.Location, <[ { ..$(decomposedPatternParams + [body]) } ]>);
 
   def func = <[ fun (..$generatedParms) $(convert_body (newBody, generatedParms, loc)) ]>;
   func.decl.header.Location = loc;
@@ -1690,7 +1696,7 @@ macro @=> (parmsExpr, body)
 
 macro @?? (exprA, exprB)
 {
-  def typer = Macros.ImplicitCTX ();
+  def typer = Nemerle.Macros.ImplicitCTX ();
   def toption = typer.InternalType.Nemerle_option_tc;
 
   def isOption (t)
@@ -1784,7 +1790,7 @@ macro @?. (expr1, expr2)
       | ToComplete(n)             => makeComplation(loc, n)
       | Call(ToComplete(n), _)    => makeComplation(loc, n)
       | Indexer(ToComplete(n), _) => makeMemberAccess(loc, n)
-      | _ => MessageMacros.FatalError(expr2.Location, $"The expression of this ($(expr2.GetType())) type not supported with operator '?.'");
+      | _ => Nemerle.Compiler.MessageMacros.FatalError(expr2.Location, $"The expression of this ($(expr2.GetType())) type not supported with operator '?.'");
     };
 
   <[
@@ -1801,14 +1807,14 @@ macro @?. (expr1, expr2)
 // ---- sizeof.n (Nemerle.Core) ----
 macro sizeof(type : PExpr)
 {
-  sizeofImpl.DoTransform(Macros.ImplicitCTX(), type)
+  sizeofImpl.DoTransform(Nemerle.Macros.ImplicitCTX(), type)
 }
 
 internal module sizeofImpl
 {
   public DoTransform(typer : Typer, type : PExpr) : PExpr
   {
-    Macros.DefineCTX(typer);
+    Nemerle.Macros.DefineCTX(typer);
     def builtin = typer.InternalType;
     def ty = typer.BindFixedType(type);
     
@@ -1817,6 +1823,6 @@ internal module sizeofImpl
     else if (ty.Equals(builtin.Int32) || ty.Equals(builtin.UInt32) || ty.Equals(builtin.Single))  <[ 4 ]>
     else if (ty.Equals(builtin.Int64) || ty.Equals(builtin.UInt64) || ty.Equals(builtin.Double))  <[ 8 ]>
     else if (ty.Equals(builtin.Decimal))                                                          <[ 16 ]>
-    else MessageMacros.FatalError(type.Location, "`sizeof' of `$type' unsupported yet")
+    else Nemerle.Compiler.MessageMacros.FatalError(type.Location, "`sizeof' of `$type' unsupported yet")
   }
 }

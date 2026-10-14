@@ -27,7 +27,10 @@
  */
 
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using System;
 using System.Text.RegularExpressions;
@@ -103,7 +106,7 @@ internal module RegexpImpl
             match (gs)
             {
               | <[ $_ when $_ ]> :: _ =>
-                MessageMacros.FatalError("guarded pattern not allowed in regexp macro")
+                Nemerle.Compiler.MessageMacros.FatalError("guarded pattern not allowed in regexp macro")
 
               | <[ $(str : string) ]> :: xs =>
                 // take names of named groups
@@ -190,7 +193,7 @@ internal module RegexpImpl
               | [] => acc
 
               | _ :: _ =>
-                MessageMacros.FatalError("only string patterns allowed in regexp macro")
+                Nemerle.Compiler.MessageMacros.FatalError("only string patterns allowed in regexp macro")
             }
           }
 
@@ -226,7 +229,7 @@ internal module RegexpImpl
                   matchobj.Groups[$(x : string)].Success || 
                   $(build_alts(xs)) 
                 ]>
-              | [] => MessageMacros.FatalError("empty list of guards?")
+              | [] => Nemerle.Compiler.MessageMacros.FatalError("empty list of guards?")
             }
           }
 
@@ -277,7 +280,7 @@ internal module RegexpImpl
                 }
               ]>
 
-            | [] => MessageMacros.FatalError("empty list of guards?")
+            | [] => Nemerle.Compiler.MessageMacros.FatalError("empty list of guards?")
           }
         }
 
@@ -335,7 +338,7 @@ internal module RegexpImpl
         }
 
       | _ =>
-        MessageMacros.FatalError("the `regexp' macro expects a match construct")
+        Nemerle.Compiler.MessageMacros.FatalError("the `regexp' macro expects a match construct")
     }
   }
   

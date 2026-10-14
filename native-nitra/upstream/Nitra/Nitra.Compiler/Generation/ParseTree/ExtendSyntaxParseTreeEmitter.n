@@ -1,7 +1,7 @@
 ﻿using Nitra.Typing;
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Compiler.Parsetree;
 using NemerleMacros;
 
@@ -26,7 +26,7 @@ namespace Nitra.Compiler
     {
       assert(_tb == null);
 
-      UtilMacros.locate(this.ExtendSymbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(this.ExtendSymbol.FirstLocation.NLocation(),
       {
         _tb = defineType(<[ decl: public module $(ExtendSymbol.Name : usesite) { } ]>);
       });

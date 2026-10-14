@@ -1,0 +1,278 @@
+// Experimental shared-region recognizer. No AST alternatives or source rewinds.
+
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Compiler.Lexer;
+using Nemerle.Compiler.NitraShared;
+using Nemerle.Compiler.Parsetree;
+
+public sealed class StructuralToken
+{
+  public mutable Text : string;
+  public mutable Quoted : bool;
+  public mutable Start : int;
+  public mutable End : int;
+}
+public sealed class StructuralKind
+{
+  public Name : string;
+  public AcceptToken : Func[StructuralToken,bool];
+  public this(name : string, acceptToken : Func[StructuralToken,bool])
+  { Name=name; AcceptToken=acceptToken; }
+}
+public sealed class StructuralForm
+{
+  public Name : string;
+  public Opener : string;
+  public BodyKind : string;
+  public Ending : array[string];
+  public this(name : string, opener : string, bodyKind : string, ending : array[string])
+  { Name=name; Opener=opener; BodyKind=bodyKind; Ending=ending; }
+}
+// A terminal group, not a production tree: all names share this tail boundary.
+public sealed class StructuralTailCompletion
+{
+  public mutable End : int;
+  public Forms : SCG.List[string] = SCG.List();
+}
+public sealed class StructuralTailRelationship
+{
+  public mutable Region : int;
+  public mutable Start : int;
+  public mutable ObservedEnd : int;
+  public mutable Open : bool;
+  public mutable State : string;
+  public Completions : SCG.List[StructuralTailCompletion] = SCG.List();
+  public SharedRegions : SCG.List[int] = SCG.List();
+  internal mutable Node : STailNode;
+}
+public sealed class StructuralRegion
+{
+  public mutable Id : int;
+  public mutable Parent : int = -1;
+  public mutable Kind : string;
+  public mutable Opener : string;
+  public mutable Start : int;
+  public mutable BodyStart : int;
+  public mutable StartToken : int;
+  public mutable BodyStartToken : int;
+  public mutable BodyEndToken : int = -1;
+  public mutable BodyEnd : int = -1;
+  public mutable BoundaryStart : int = -1;
+  public mutable BoundaryEnd : int = -1;
+  public mutable Boundary : string;
+  public mutable Status : string = "open";
+  public mutable HasInvalidEvidence : bool;
+  public Children : SCG.List[int] = SCG.List();
+  internal mutable Family : SFamily;
+  internal mutable KindInterface : StructuralKind;
+}
+public sealed class StructuralProjectionResult
+{
+  public mutable Source : string;
+  public mutable File : string;
+  public Tokens : SCG.List[StructuralToken] = SCG.List();
+  public Regions : SCG.List[StructuralRegion] = SCG.List();
+  public Tails : SCG.List[StructuralTailRelationship] = SCG.List();
+  public Diagnostics : SCG.List[GrammarDiagnostic] = SCG.List();
+  public mutable TokenVisits : int;
+  public mutable KindChecks : int;
+  public mutable BoundaryChecks : int;
+  public mutable TailChecks : int;
+  public mutable RegionReuse : int;
+  public mutable EliminatedBoundaryFamilies : int;
+  // No claim of whole-grammar acceptance: open regions and relationships are retained.
+  public HasErrors : bool { get { Diagnostics.Count>0 } }
+}
+internal sealed class STailNode
+{
+  public Next : SCG.Dictionary[string,STailNode] = SCG.Dictionary();
+  public Forms : SCG.List[string] = SCG.List();
+}
+internal sealed class SFamily
+{
+  public mutable Opener : string;
+  public mutable Kind : StructuralKind;
+  public Boundaries : SCG.Dictionary[string,STailNode] = SCG.Dictionary();
+}
+public sealed class StructuralProjectionPlan
+{
+  internal Families : SCG.Dictionary[string,SFamily] = SCG.Dictionary();
+  public FamilyCount : int { get { Families.Count } }
+  internal this() {}
+  public Recognize(text : string, file : string) : StructuralProjectionResult
+  { SProjection(this,text,file).Run() }
+}
+public module StructuralProjection
+{
+  [Obsolete("no longer experimental; use the overload without the flag")]
+  public Prepare(kinds : array[StructuralKind], forms : array[StructuralForm], _experimental : bool) : StructuralProjectionPlan
+  { Prepare(kinds,forms) }
+  public Prepare(kinds : array[StructuralKind], forms : array[StructuralForm]) : StructuralProjectionPlan
+  {
+    when(kinds==null || forms==null) throw ArgumentNullException("kinds/forms");
+    def plan=StructuralProjectionPlan(); def known=SCG.Dictionary.[string,StructuralKind]();
+    foreach(k in kinds)
+    {
+      when(k==null || string.IsNullOrEmpty(k.Name) || k.AcceptToken==null) throw ArgumentException("A kind requires a name and token validator.");
+      when(known.ContainsKey(k.Name)) throw ArgumentException("Duplicate structural kind: "+k.Name);
+      known.Add(k.Name,k);
+    }
+    def names=SCG.HashSet.[string]();
+    foreach(f in forms)
+    {
+      when(f==null || string.IsNullOrEmpty(f.Name) || string.IsNullOrEmpty(f.Opener)
+        || string.IsNullOrEmpty(f.BodyKind) || f.Ending==null || f.Ending.Length==0)
+          throw ArgumentException("A structural form requires name, opener, body kind, and nonempty ending.");
+      unless(names.Add(f.Name)) throw ArgumentException("Duplicate form: "+f.Name);
+      unless(known.ContainsKey(f.BodyKind)) throw ArgumentException("Unknown structural kind: "+f.BodyKind);
+      foreach(mark in f.Ending) when(string.IsNullOrEmpty(mark)) throw ArgumentException("Empty ending mark.");
+      unless(plan.Families.ContainsKey(f.Opener))
+      { def family=SFamily(); family.Opener=f.Opener; family.Kind=known[f.BodyKind]; plan.Families.Add(f.Opener,family); }
+      def family=plan.Families[f.Opener];
+      unless(family.Kind.Name==f.BodyKind) throw NotSupportedException("This experimental slice requires one shared body kind per opener.");
+      unless(family.Boundaries.ContainsKey(f.Ending[0])) family.Boundaries.Add(f.Ending[0],STailNode());
+      mutable node=family.Boundaries[f.Ending[0]];
+      for(mutable i=1;i<f.Ending.Length;++i)
+      { unless(node.Next.ContainsKey(f.Ending[i])) node.Next.Add(f.Ending[i],STailNode()); node=node.Next[f.Ending[i]]; }
+      node.Forms.Add(f.Name);
+    }
+    // Reject unsupported ownership collisions explicitly instead of losing an interpretation.
+    foreach(family in plan.Families.Values)
+      foreach(mark in family.Boundaries.Keys)
+        when(plan.Families.ContainsKey(mark) || mark=="(" || mark=="[" || mark=="{")
+          throw NotSupportedException("Boundary/opener collision needs a later structural ownership interface: "+mark);
+    foreach(f in forms)
+      for(mutable i=1;i<f.Ending.Length;++i)
+      {
+        def mark=f.Ending[i];
+        when(mark=="(" || mark==")" || mark=="[" || mark=="]" || mark=="{" || mark=="}")
+          throw NotSupportedException("Tail/delimiter ownership requires a later structural interface.");
+        foreach(family in plan.Families.Values)
+          when(family.Boundaries.ContainsKey(mark))
+            throw NotSupportedException("Tail/enclosing-boundary ownership requires a later structural interface.");
+      }
+    plan
+  }
+}
+internal sealed class SProjection
+{
+  plan : StructuralProjectionPlan;
+  text : string;
+  file : string;
+  result : StructuralProjectionResult = StructuralProjectionResult();
+  stack : SCG.Stack[StructuralRegion] = SCG.Stack();
+  pending : SCG.List[StructuralTailRelationship] = SCG.List();
+  observed : SCG.List[StructuralTailRelationship] = SCG.List();
+  // A bracket context also forms a reusable child region, not an AST node.
+  public this(plan : StructuralProjectionPlan, text : string, file : string)
+  { this.plan=plan; this.text=text; this.file=file; }
+  private Terminal(tail : StructuralTailRelationship) : void
+  {
+    when(tail.Node.Forms.Count>0)
+    {
+      def group=StructuralTailCompletion(); group.End=tail.ObservedEnd;
+      group.Forms.AddRange(tail.Node.Forms); tail.Completions.Add(group);
+    }
+    tail.Open=tail.Node.Next.Count>0;
+    tail.State=if(tail.Completions.Count>1) "ownership-unresolved" else if(tail.Open) "open" else "complete";
+  }
+  private AdvanceTails(t : StructuralToken) : bool
+  {
+    observed.Clear();
+    for(mutable i=pending.Count-1;i>=0;--i)
+    {
+      def tail=pending[i]; ++result.TailChecks;
+      if(!t.Quoted && tail.Node.Next.ContainsKey(t.Text))
+      { tail.Node=tail.Node.Next[t.Text]; tail.ObservedEnd=t.End; Terminal(tail); observed.Add(tail); }
+      else
+      {
+        tail.Open=false;
+        tail.State=if(tail.Completions.Count==0) "invalid"
+          else if(tail.ObservedEnd>tail.Completions[tail.Completions.Count-1].End) "unresolved-suffix" else "complete";
+        when(tail.Completions.Count==0) result.Diagnostics.Add(GrammarDiagnostic(file,t.Start,"incompatible structural tail"));
+      }
+      unless(tail.Open) pending.RemoveAt(i);
+    }
+    observed.Count>0
+  }
+  private Open(t : StructuralToken, kind : string, family : SFamily) : void
+  {
+    def region=StructuralRegion(); region.Id=result.Regions.Count; region.Kind=kind; region.Opener=t.Text;
+    region.Start=t.Start; region.BodyStart=t.End; region.Family=family;
+    region.StartToken=result.Tokens.Count-1; region.BodyStartToken=result.Tokens.Count;
+    region.KindInterface=if(family!=null) family.Kind else stack.Peek().KindInterface;
+    when(stack.Count>0)
+    { region.Parent=stack.Peek().Id; stack.Peek().Children.Add(region.Id); }
+    result.Regions.Add(region); stack.Push(region);
+    foreach(tail in observed) tail.SharedRegions.Add(region.Id);
+  }
+  private Close(t : StructuralToken) : void
+  {
+    def region=stack.Pop(); region.BodyEndToken=result.Tokens.Count-1; region.BodyEnd=t.Start; region.BoundaryStart=t.Start;
+    region.BoundaryEnd=t.End; region.Boundary=t.Text; region.Status=if(region.HasInvalidEvidence) "invalid-closed" else "boundary-closed";
+    when(region.Parent>=0) ++result.RegionReuse;
+    when(region.Family!=null)
+    {
+      result.EliminatedBoundaryFamilies+=region.Family.Boundaries.Count-1;
+      def tail=StructuralTailRelationship(); tail.Region=region.Id; tail.Start=t.Start;
+      tail.ObservedEnd=t.End; tail.Node=region.Family.Boundaries[t.Text]; Terminal(tail); result.Tails.Add(tail); when(tail.Open) pending.Add(tail);
+    }
+  }
+  public Run() : StructuralProjectionResult
+  {
+    when(text==null) throw ArgumentNullException("text");
+    result.Source=text; result.File=file;
+    def reader=GReader(text,file,0,text.Length);
+    try
+    {
+      while(!reader.Is("<eof>"))
+      {
+        def raw=reader.Take(); ++result.TokenVisits;
+        def t=StructuralToken(); t.Text=raw.Text; t.Quoted=raw.Quoted; t.Start=raw.Start; t.End=raw.End; result.Tokens.Add(t);
+        def tailObserved=AdvanceTails(t);
+        if(stack.Count>0)
+        {
+          def owner=stack.Peek(); ++result.BoundaryChecks;
+          if(!t.Quoted && owner.Family!=null && owner.Family.Boundaries.ContainsKey(t.Text)) Close(t);
+          else if(!t.Quoted && owner.Family==null && t.Text==Closing(owner.Opener)) Close(t);
+          else Observe(t,tailObserved);
+        }
+        else unless(tailObserved && (t.Quoted || !plan.Families.ContainsKey(t.Text))) Observe(t,tailObserved);
+      }
+    }
+    catch { | e is ArgumentException => result.Diagnostics.Add(GrammarDiagnostic(file,reader.Pos,e.Message)); }
+    result
+  }
+  private Closing(opener : string) : string
+  { if(opener=="(") ")" else if(opener=="[") "]" else "}" }
+  private Observe(t : StructuralToken, tailObserved : bool) : void
+  {
+    if(!t.Quoted && plan.Families.ContainsKey(t.Text))
+    {
+      def family=plan.Families[t.Text];
+      if(stack.Count==0 || stack.Peek().Kind==family.Kind.Name) Open(t,family.Kind.Name,family);
+      else result.Diagnostics.Add(GrammarDiagnostic(file,t.Start,"nested kind requires an explicit containment interface"));
+    }
+    else if(stack.Count>0)
+    {
+      def owner=stack.Peek();
+      if(!t.Quoted && (t.Text=="(" || t.Text=="[" || t.Text=="{")) Open(t,owner.Kind,null);
+      else if(!t.Quoted && (t.Text==")" || t.Text=="]" || t.Text=="}"))
+      { owner.HasInvalidEvidence=true; result.Diagnostics.Add(GrammarDiagnostic(file,t.Start,"mismatched structural delimiter")); }
+      else
+      {
+        ++result.KindChecks;
+        // A tail-owned token need not satisfy the possible parent's token role.
+        // Keep the ownership relationship; do not reject an otherwise valid tail.
+        def accepted=owner.KindInterface.AcceptToken.Invoke(t);
+        if(tailObserved) foreach(tail in observed) tail.SharedRegions.Add(owner.Id);
+        else unless(accepted)
+        { owner.HasInvalidEvidence=true; result.Diagnostics.Add(GrammarDiagnostic(file,t.Start,"token rejected by structural kind: "+owner.Kind)); }
+      }
+    }
+    else result.Diagnostics.Add(GrammarDiagnostic(file,t.Start,"expected a registered structural opener"));
+  }
+}

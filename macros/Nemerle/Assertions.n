@@ -27,7 +27,12 @@
  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 
@@ -119,7 +124,7 @@ syntax ("requires", assertion, Optional ("otherwise", other))
       <[ assert($assertion, "The ``Requires'' contract of parameter `" +
                  $(p.Name : string) + "' has been violated.") ]>;
   
-  def newBody = UtilMacros.locate(loc, <[
+  def newBody = Nemerle.Compiler.UtilMacros.locate(loc, <[
     def $("value" : usesite) = $(p.PName : name);
     $check;
     $(m.Body)
@@ -157,7 +162,7 @@ syntax ("requires", assertion, Optional ("otherwise", other))
       <[ assert($assertion, "The ``Requires'' contract of method `" +
                  $(m.Name : string) + "' has been violated.") ]>;
       
-  def newBody = UtilMacros.locate(m.Body.Location, <[
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[
     $check;
     $(m.Body)
   ]>);
@@ -194,7 +199,7 @@ syntax ("ensures", assertion, Optional ("otherwise", other))
       <[ assert($assertion, "The ``Ensures'' contract of method `" +
                  $(m.Name : string) + "' has been violated.") ]>;
   
-  def newBody = UtilMacros.locate(m.Body.Location, 
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, 
     if (m.ReturnType.Equals (FixedType.Void ()))
       <[
         $(m.Body);
@@ -242,7 +247,7 @@ syntax ("invariant", body)
                                    BindingFlags.DeclaredOnly);
       foreach (m :> MethodBuilder in methods)
       {
-        def newBody = UtilMacros.locate(m.Body.Location,
+        def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location,
           <[ InvariantExpose (this, $(m.Body)) ]>);
         m.Body = newBody;
       }
@@ -257,7 +262,7 @@ syntax ("invariant", body)
       ]> );
     | Some (m) =>
       def m = m :> MethodBuilder;
-      def newBody = UtilMacros.locate(m.Body.Location, <[
+      def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[
         $(m.Body);
         assert($body, "The class invariant has been violated.");
       ]>);

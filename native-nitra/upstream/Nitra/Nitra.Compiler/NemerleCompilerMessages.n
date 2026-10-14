@@ -1,7 +1,8 @@
 ﻿using Nitra.ProjectSystem;
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.Utility;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -20,7 +21,7 @@ namespace Nitra.Compiler
       {
         | FatalError =>
           ErrorCount++;
-          MessageMacros.FatalError(loc.NLocation(), msg)
+          Nemerle.Compiler.MessageMacros.FatalError(loc.NLocation(), msg)
 
         | Error =>
           ErrorCount++;

@@ -1,5 +1,7 @@
 ﻿using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.TypeVar;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Collections;
@@ -59,7 +61,7 @@ namespace Nitra.Serialization
           else
             parseDeclaration(ti)
 
-        | _ => MessageMacros.FatalError(type.Location, $"Type '$type' is not suppported in serialization compiler.")
+        | _ => Nemerle.Compiler.MessageMacros.FatalError(type.Location, $"Type '$type' is not suppported in serialization compiler.")
       }
     }
 

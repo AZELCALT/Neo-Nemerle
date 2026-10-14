@@ -2,7 +2,8 @@
 using Nitra.Typing;
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 using Nemerle.Text;

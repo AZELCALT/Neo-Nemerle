@@ -3,7 +3,9 @@ using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 
@@ -24,7 +26,7 @@ namespace Nitra.Compiler
     {
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        UtilMacros.locate(method.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.AbstractSymbol(Signature = signature, IsCached = isCached) =>
@@ -49,7 +51,7 @@ namespace Nitra.Compiler
     {
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        UtilMacros.locate(method.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.DefSymbol       (Signature = signature, IsCached = isCached, Body = body) =>
@@ -69,7 +71,7 @@ namespace Nitra.Compiler
     {
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        UtilMacros.locate(method.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.DefSymbol(Signature = signature, IsCached = isCached, Body = body) =>
@@ -105,7 +107,7 @@ namespace Nitra.Compiler
 
       foreach (method in this.RuleSymbol.RuleMethods)
       {
-        UtilMacros.locate(method.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
           match (method)
           {
             | RuleMethod.AbstractSymbol  (Signature = signature, AstType = astType, IsCached = isCached)
@@ -162,7 +164,7 @@ namespace Nitra.Compiler
       def result = SCG.List();
       foreach (p in signature.Params)
       {
-        UtilMacros.locate(p.Location.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(p.Location.NLocation(),
         {
           result.Add(<[ parameter: $(p.Name.Value : usesite) : $(TypeCompiler.Compile(p.Type)) ]>);
         });

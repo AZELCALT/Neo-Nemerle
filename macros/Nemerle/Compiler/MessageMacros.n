@@ -29,7 +29,6 @@
 /* Macros used only inside the compiler.  */
 
 using Nemerle;
-using Nemerle.Compiler;
 using Nemerle.Imperative;
 using System.Diagnostics;
 
@@ -40,13 +39,13 @@ macro FatalError (a, b = null)
   {
     | (m, null) =>
       <[ {
-            Message.Error (Location.Default, $m);
-            throw Recovery ()
+            Nemerle.Compiler.Utility.Message.Error (Nemerle.Compiler.AST.Location.Default, $m);
+            throw Nemerle.Compiler.Utility.Recovery ()
       } ]>
     | (loc, m) =>
       <[ {
-            Message.Error ($loc, $m);
-            throw Recovery ()
+            Nemerle.Compiler.Utility.Message.Error ($loc, $m);
+            throw Nemerle.Compiler.Utility.Recovery ()
       } ]>
   }
 }

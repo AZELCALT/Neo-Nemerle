@@ -27,7 +27,12 @@
  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 
 // ---- DesignPatterns.n (Nemerle.DesignPatterns) ----
@@ -41,7 +46,7 @@ macro ProxyPublicMembers (t : TypeBuilder, f : FieldBuilder, params options : li
   
   def classty = match (ftype) {
     | Class (typeinfo, _) => typeinfo
-    | _ => MessageMacros.FatalError ("expected simple class type")
+    | _ => Nemerle.Compiler.MessageMacros.FatalError ("expected simple class type")
   }
   foreach (mem in classty.GetMembers (BindingFlags.Instance |
                                       BindingFlags.DeclaredOnly | BindingFlags.Public))
@@ -107,7 +112,7 @@ macro AbstractFactory (tb : TypeBuilder, params classes : list [PExpr])
       | <[ $e ]> =>
         match (Util.QidOfExpr (e)) {  
           | Some ((li, _)) => (li.Last, nm : object == e) // nm == e iff we didn't have Override specified
-          | _ => MessageMacros.FatalError (e.Location, $"invalid overriden type specified: $e");
+          | _ => Nemerle.Compiler.MessageMacros.FatalError (e.Location, $"invalid overriden type specified: $e");
         }
     }
   }

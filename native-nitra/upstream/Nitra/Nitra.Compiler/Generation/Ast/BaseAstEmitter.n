@@ -3,7 +3,11 @@ using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -46,7 +50,7 @@ namespace Nitra.Compiler
     {
       def propertyType     = TypeCompiler.CompileDependentPropertyType(symbol);
       def backingFieldName = Util.tmpname(symbol.Name);
-      UtilMacros.locate(symbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.NLocation(),
       {
         tb.Define(<[ decl:
           [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)

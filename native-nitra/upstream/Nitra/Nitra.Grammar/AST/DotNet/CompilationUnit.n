@@ -1,6 +1,12 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.CompilationOptions;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.NamespaceTree;
+using Nemerle.Compiler.StaticTypeVar;
+using Nemerle.Compiler.TypeInfo;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nemerle.Text;
@@ -421,7 +427,7 @@ namespace DotNet
       foreach (alias in aliases)
       {
         def decl     = alias.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
-        def a        = decl.NemerleTypeInfo.GetTydecl() :> Typedtree.TypeDeclaration.Alias;
+        def a        = decl.NemerleTypeInfo.GetTydecl() :> Nemerle.Compiler.Typedtree.TypeDeclaration.Alias;
         def typeInfo = a.ty.TypeInfo;
         def fullName = a.ty.ToString();
         alias.Replacement =
@@ -524,7 +530,7 @@ namespace DotNet
       rootNamespace.MemberTable
     }
   
-    static FixedTypeToTypeRef(ti : TypeInfo, typeMap : Hashtable[TypeInfo, TypeSymbol], loc : Nitra.Location, t : Nemerle.Compiler.TypeVar, context : DependentPropertyEvalContext, pos : int = -1) : TypeSymbol
+    static FixedTypeToTypeRef(ti : TypeInfo, typeMap : Hashtable[TypeInfo, TypeSymbol], loc : Nitra.Location, t : Nemerle.Compiler.TypeVar.TypeVar, context : DependentPropertyEvalContext, pos : int = -1) : TypeSymbol
     {
       match (t)
       {

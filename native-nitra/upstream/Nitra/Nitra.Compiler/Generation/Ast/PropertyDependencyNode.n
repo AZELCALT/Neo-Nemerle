@@ -1,7 +1,7 @@
 ﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -24,7 +24,7 @@ namespace Nitra.Compiler
   internal interface IPropertyDependencyNode
   {
     DeclaredIn  : PropertyContainerSymbol         { get; }
-    Location    : Nemerle.Compiler.Location       { get; }
+    Location    : Nemerle.Compiler.AST.Location       { get; }
     DependendOn : HashSet[PropertyDependencyNode] { get; }
     Path        : DependencyPath                  { get; }
     IsCollector : bool                            { get; }
@@ -36,11 +36,11 @@ namespace Nitra.Compiler
   {
     public DeclaredIn    : PropertyContainerSymbol   { get; }
     public Path          : DependencyPath            { get; }
-    public Location      : Nemerle.Compiler.Location { get; }
+    public Location      : Nemerle.Compiler.AST.Location { get; }
     public NitraLocation : Location                  { get { (DeclaredIn.Node.Project :> NitraProject).MakeNitraLocation(Location) } }
     public IsCollector   : bool                      { get; }
 
-    public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, location : Nemerle.Compiler.Location, isCollector : bool)
+    public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, location : Nemerle.Compiler.AST.Location, isCollector : bool)
       requires !(path is DependencyPath.This)
     {
       DeclaredIn  = declaredIn;

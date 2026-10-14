@@ -26,7 +26,11 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -35,7 +39,7 @@ using Nemerle.Utility;
 using PT = Nemerle.Compiler.Parsetree;
 using TT = Nemerle.Compiler.Typedtree;
 using SCG = System.Collections.Generic;
-using Nemerle.Compiler.BindingFlags;
+using Nemerle.Compiler.TypeInfo.BindingFlags;
 using Nemerle.Compiler.Parsetree;
 
 // ---- core.n (Nemerle.Imperative) ----
@@ -59,7 +63,7 @@ macro Continue ()  syntax ("continue")
 
 macro ResetMutableFields()
 {
-  def tb     = Macros.ImplicitCTX().CurrentTypeBuilder; assert(tb != null);
+  def tb     = Nemerle.Macros.ImplicitCTX().CurrentTypeBuilder; assert(tb != null);
   def fields = tb.GetFields (Public %| NonPublic %| Instance %| Static %| DeclaredOnly);
 
   def exprs = fields.MapFiltered(
@@ -75,13 +79,13 @@ public mask GoTo
   macro GoToMacro(@label : PExpr)
   syntax ("goto", @label)
   {
-    Implementation.DoTransformGoTo(Macros.ImplicitCTX(), @label)
+    Implementation.DoTransformGoTo(Nemerle.Macros.ImplicitCTX(), @label)
   }
 
   macro LabelMacro(@label : PExpr)
   syntax ("label", @label)
   {
-    Implementation.DoTransformLabel(Macros.ImplicitCTX(), @label)
+    Implementation.DoTransformLabel(Nemerle.Macros.ImplicitCTX(), @label)
   }
 
   internal module Implementation
@@ -111,7 +115,7 @@ public mask GoTo
   
     public DoTransformGoTo(typer : Typer, @label : PExpr) : PExpr
     {
-      Macros.DefineCTX(typer);
+      Nemerle.Macros.DefineCTX(typer);
     
       match (@label)
       {
@@ -122,7 +126,7 @@ public mask GoTo
 
     public DoTransformLabel(typer : Typer, @label : PExpr) : PExpr
     {
-      Macros.DefineCTX(typer);
+      Nemerle.Macros.DefineCTX(typer);
     
       match (@label)
       {

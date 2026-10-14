@@ -28,7 +28,11 @@
 
 using StringTemplate;
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ConstantFolder;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.Utility;
 using Nemerle.Collections;
 using Nemerle.Utility;
 using Nemerle.Compiler.Parsetree;
@@ -47,7 +51,7 @@ using Nemerle.IO; // the runtime module these macros generate calls into
 // ---- io.n (Nemerle.IO) ----
 macro printf (format, params parms : array [expr]) 
 {
-  PrintfHelper(format, Macros.ImplicitCTX().Env, fun (strFormat) {
+  PrintfHelper(format, Nemerle.Macros.ImplicitCTX().Env, fun (strFormat) {
     def (evals, refs) = make_evaluation_exprs (parse_format (strFormat), parms);
     def seq = evals + refs.Map(x => <[ Console.Write ($x) ]>);
     <[ { .. $seq } ]>
@@ -59,7 +63,7 @@ macro sprintf (format, params parms : array [expr])
   when (parms.Length == 0)
     Message.Warning ("sprintf with no parameters");
 
-  PrintfHelper(format, Macros.ImplicitCTX().Env, fun (strFormat) {
+  PrintfHelper(format, Nemerle.Macros.ImplicitCTX().Env, fun (strFormat) {
     def format = parse_format (strFormat);
     def (evals, refs) = make_evaluation_exprs (format, parms);
     def exprs = match (refs)
@@ -79,7 +83,7 @@ macro sprintf (format, params parms : array [expr])
 /** Writes output to given System.IO.TextWriter */
 macro fprintf (writer, format, params parms : array [expr])
 {
-  PrintfHelper(format, Macros.ImplicitCTX().Env, fun (strFormat) {
+  PrintfHelper(format, Nemerle.Macros.ImplicitCTX().Env, fun (strFormat) {
     def (evals, refs) = make_evaluation_exprs (parse_format (strFormat), parms);
     def seq = evals + refs.Map(x => <[ writer_v.Write ($x) ]>);
     <[ 
@@ -118,7 +122,7 @@ macro sscanf (str, format : string, params parms : array [expr])
 
 macro sprint(str)
 {
-  StringTemplate.Helper.SprintImpl(str, true, expr => expr, Macros.ImplicitCTX().Env)
+  StringTemplate.Helper.SprintImpl(str, true, expr => expr, Nemerle.Macros.ImplicitCTX().Env)
 }
 
 // use writer.Write($"...") instade
@@ -136,7 +140,7 @@ macro print (value)
   match (value)
   {
     | <[ $(_ : string) ]> => StringTemplate.Helper.SprintImpl(
-                                 value, false, expr => <[ Console.Write($expr) ]>, Macros.ImplicitCTX().Env)
+                                 value, false, expr => <[ Console.Write($expr) ]>, Nemerle.Macros.ImplicitCTX().Env)
     | _                     => <[ Console.Write ($value) ]>
   }
 }
@@ -327,7 +331,7 @@ internal module Helper
           def acc_read = acc_read.Rev ();
           ([], <[ { ..$acc_read }; Convert.ToChar ($stream.Read ()) ]> :: res)
         | NumberFloat => 
-          MessageMacros.FatalError ("scaning floats not supported")
+          Nemerle.Compiler.MessageMacros.FatalError ("scaning floats not supported")
       }
     });
     (res.Rev (), <[ {..$(read.Rev ())} ]>)

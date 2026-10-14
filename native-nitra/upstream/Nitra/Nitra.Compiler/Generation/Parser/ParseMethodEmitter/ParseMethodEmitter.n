@@ -12,7 +12,7 @@ using System.Linq;
 
 using Nitra.Model;
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
 
 namespace Nitra.Compiler
 {

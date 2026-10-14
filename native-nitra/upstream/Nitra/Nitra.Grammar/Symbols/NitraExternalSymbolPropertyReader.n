@@ -8,7 +8,10 @@ using Nemerle.Extensions;
 using Nemerle.ExtensionsMacros;
 using Nemerle.Imperative;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.TypeVar;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -103,7 +106,7 @@ namespace Nitra.Typing
 
     private RuleMethod_Signature(project : NitraProject, symbol : RuleMethodSymbol) : object
     {
-      def reflectParameter(p : Typedtree.TParameter) : RuleMethodParameter
+      def reflectParameter(p : Nemerle.Compiler.Typedtree.TParameter) : RuleMethodParameter
       {
         def loc  = project.MakeFakeNitraLocation(p.NameLocation);
         def name = Identifier(loc, p.Name);

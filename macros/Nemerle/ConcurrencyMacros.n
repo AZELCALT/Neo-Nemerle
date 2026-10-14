@@ -33,7 +33,13 @@ using System.Threading;
 using Nemerle.Collections;
 using Nemerle.Macros;
 using Nemerle.Utility;
-using Nemerle.Compiler;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using PT = Nemerle.Compiler.Parsetree;
 using TT = Nemerle.Compiler.Typedtree;
 using NemerleMacros;
@@ -44,7 +50,7 @@ using Nemerle.Concurrency; // the runtime module these macros generate calls int
 internal module Helper {
   public MakeAsyncVoid (expr : PT.PExpr) : PT.PExpr
   {
-    UtilMacros.locate (expr.Location, 
+    Nemerle.Compiler.UtilMacros.locate (expr.Location, 
       <[
         def threadBody () { $expr } 
         def thread = Thread (ThreadStart (threadBody));
@@ -62,7 +68,7 @@ internal module Helper {
         | Some(FixedType.Void()) => Some (MakeAsyncVoid (expr))
         | Some =>
           Some (
-            UtilMacros.locate (expr.Location, 
+            Nemerle.Compiler.UtilMacros.locate (expr.Location, 
             <[ DelayedValue( fun() $expr) ]>))
         | _ =>
           when(lastChance)
@@ -85,7 +91,7 @@ internal module Helper {
         |Some(_) => 
           func.Body = <[ DelayedValue( () => $(func.Body)) ]>;
           func.header.ReturnType =
-            UtilMacros.locate
+            Nemerle.Compiler.UtilMacros.locate
               (func.header.ReturnType.Location, <[ DelayedValue[$(tret:typed)] ]>);
           
         | _  => Message.Error($"Can't determine type of $(func.header.ReturnType)");
@@ -115,7 +121,7 @@ internal module Helper {
       {
           def ctor = ctor :> MethodBuilder;
           def bd = ctor.Body;
-          def newBody = UtilMacros.locate (ctor.Body.Location, 
+          def newBody = Nemerle.Compiler.UtilMacros.locate (ctor.Body.Location, 
               if (after) <[ $bd; $init ]>
               else match (bd) {
                   | <[ {.. $(e :: rest) } ]> =>
@@ -173,7 +179,7 @@ internal module Helper {
       match (tb.LookupMember ("__Chord_Scan")) {
           | [m] =>
             def m = (m :> MethodBuilder);
-            def newBody = UtilMacros.locate (m.Body.Location, <[
+            def newBody = Nemerle.Compiler.UtilMacros.locate (m.Body.Location, <[
                 if (this.__Chord_Mask.Match ($(chordMask : name)))
                 {
                     this.$(queue : name).Wakeup ()
@@ -228,7 +234,7 @@ internal module Helper {
                   def n = "__Chord_MaskMethodValue_" + name.Id;
                   <[ $(acc) | $(n : usesite) ]>
                   
-                | _ => MessageMacros.FatalError ("wrong chord member");
+                | _ => Nemerle.Compiler.MessageMacros.FatalError ("wrong chord member");
             }
         });
       def partialname = "__Chord_MaskPartialValue_" + body_index;
@@ -300,7 +306,7 @@ internal module Helper {
 
       def chords = match (chords) {
         | <[ match ($_) { ..$cases } ]> => cases
-        | _ => MessageMacros.FatalError (chords.Location, "wrong chord syntax")
+        | _ => Nemerle.Compiler.MessageMacros.FatalError (chords.Location, "wrong chord syntax")
       }
       
       def iterChords (chords : list [PT.MatchCase], acc)
@@ -335,7 +341,7 @@ internal module Helper {
                     def member = match (tb.LookupMember (name.Id))
                       {
                         | [m] => (m :> MethodBuilder)
-                        | _ => MessageMacros.FatalError ("wrong chord member " + name.Id);
+                        | _ => Nemerle.Compiler.MessageMacros.FatalError ("wrong chord member " + name.Id);
                       };
                     def cmmvn = "__Chord_MaskMethodValue_" + name.Id;
                     def acc = <[
@@ -362,7 +368,7 @@ internal module Helper {
                             $acc
                         ]>
                     }                  
-                  | _ => MessageMacros.FatalError (i.Location, "wrong chord member");
+                  | _ => Nemerle.Compiler.MessageMacros.FatalError (i.Location, "wrong chord member");
                 }
               });
 
@@ -385,7 +391,7 @@ internal module Helper {
           later ()
       ]>);
 
-      def newBody = UtilMacros.locate (m.Body.Location, <[
+      def newBody = Nemerle.Compiler.UtilMacros.locate (m.Body.Location, <[
           def later () 
           {
               this.$(qsymb : name).Yield (this.__Chord_Lock);
@@ -443,7 +449,7 @@ macro ChordMember (_ : TypeBuilder, m : ParsedMethod)
 {
   // we temporarily set body of method, so methods with abstract like
   // body could be allowed
-  def newBody = UtilMacros.locate(m.Body.Location, <[ () ]>);
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[ () ]>);
   m.Body = newBody;
 }
 
@@ -480,7 +486,7 @@ macro ChordMember (tb : TypeBuilder, m : MethodBuilder)
           ]>
     }
 
-    def newBody = UtilMacros.locate(loc, <[
+    def newBody = Nemerle.Compiler.UtilMacros.locate(loc, <[
         lock (this.__Chord_Lock)
         {
             $(m.Body);

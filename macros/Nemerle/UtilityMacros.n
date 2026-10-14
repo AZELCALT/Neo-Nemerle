@@ -30,7 +30,13 @@ using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ExtensionPattern;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
 using Nemerle.Imperative;
 using Nemerle.Macros;
 using Nemerle.Text;
@@ -82,7 +88,7 @@ macro Accessor (current_type : TypeBuilder, storage_field : ParsedField, params 
       | <[ $("Virtual"   : dyn) ]>  => NemerleModifiers.Virtual
       | <[ None ]>                  => NemerleModifiers.Extern // will be removed
       | <[ $e1 | $e2 ]> => (parse_opts(e1, allow_deprec) | parse_opts(e2, allow_deprec))
-      | e => MessageMacros.FatalError($"bad accessor option, $e")
+      | e => Nemerle.Compiler.MessageMacros.FatalError($"bad accessor option, $e")
     }
   }
 
@@ -99,7 +105,7 @@ macro Accessor (current_type : TypeBuilder, storage_field : ParsedField, params 
     | <[ set ($opts) ]>           => setterMods |= parse_opts (opts, false)
     | <[ get ($opts) ]>           => getterMods |= parse_opts (opts, false)
     | <[ attributes (..$attrs) ]> => attributes += attrs
-    | _ => MessageMacros.FatalError (usage);
+    | _ => Nemerle.Compiler.MessageMacros.FatalError (usage);
   }
 
   // __some_foo__bar ==> SomeFooBar
@@ -178,7 +184,7 @@ macro Accessor (current_type : TypeBuilder, storage_field : ParsedField, params 
           ..$setterAttrs set { $fieldref = value }
         }
       ]>;
-    else MessageMacros.FatalError ("no accessor will be visible with specified modifiers");
+    else Nemerle.Compiler.MessageMacros.FatalError ("no accessor will be visible with specified modifiers");
 
   prop.SetEnv(storage_field.Env);
 
@@ -209,7 +215,7 @@ macro AssemblyVersionFromSVN (val : string, fallbackToDate : bool = true)
   def svnidx = val.IndexOf ("SVN", System.StringComparison.InvariantCultureIgnoreCase);
   def val =
     if (svnidx != -1) {
-      def myLoc = Nemerle.Compiler.LocationStack.Top();
+      def myLoc = Nemerle.Compiler.Utility.LocationStack.Top();
       def path = if (myLoc.IsSourceFileAvailable)
                    Path.GetDirectoryName (Path.GetFullPath (myLoc.File))
                  else
@@ -224,7 +230,7 @@ macro AssemblyVersionFromSVN (val : string, fallbackToDate : bool = true)
           ((DateTime.Now.Year % 100).ToString () + DateTime.Now.DayOfYear.ToString ("000"))
           + val.Substring (svnidx + 3)
         else
-          MessageMacros.FatalError (myLoc, $"could not obtain revision from SVN metadata (error code $(-svnrev))");
+          Nemerle.Compiler.MessageMacros.FatalError (myLoc, $"could not obtain revision from SVN metadata (error code $(-svnrev))");
       else
         val.Substring (0, svnidx) + svnrev.ToString () + val.Substring (svnidx + 3)
     }
@@ -348,7 +354,7 @@ internal module ExpandEnvHelper
     def str = match (strExpr)
     {
       | Literal(Literal.String(s)) => s
-      | _ => MessageMacros.FatalError(strExpr.Location, "Expected string literal.")
+      | _ => Nemerle.Compiler.MessageMacros.FatalError(strExpr.Location, "Expected string literal.")
     }
 
 
@@ -386,7 +392,7 @@ internal module ExpandEnvHelper
             ()
         }
       | _ =>
-        MessageMacros.FatalError(defaults.Location, "Defaults expression must have Defaults(x = \"y\", x1 = \"y1\",...)' format.");
+        Nemerle.Compiler.MessageMacros.FatalError(defaults.Location, "Defaults expression must have Defaults(x = \"y\", x1 = \"y1\",...)' format.");
     }
 
     // LazyValue directly rather than `lazy`: macros are built by the previous compiler, whose `lazy` may
@@ -583,7 +589,7 @@ macro ExtensionPattern (par : TypeBuilder, e)
       par.AddExtensionPattern (ext)
 
     | _ =>
-      MessageMacros.FatalError ("ExtensionPattern syntax is ``name (id_1, "
+      Nemerle.Compiler.MessageMacros.FatalError ("ExtensionPattern syntax is ``name (id_1, "
                           "..., id_n) = pattern''")
   }
 }
@@ -591,14 +597,14 @@ macro ExtensionPattern (par : TypeBuilder, e)
 [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Assembly)]
 macro ExtensionPattern(typeName : PExpr, defenition : PExpr)
 {
-  ExtensionPatternImpl.DoTransform(Macros.ImplicitCTX(), typeName, defenition)
+  ExtensionPatternImpl.DoTransform(Nemerle.Macros.ImplicitCTX(), typeName, defenition)
 }
 
 internal module ExtensionPatternImpl
 {
   public DoTransform(typer : Typer, typeName : PExpr, defenition : PExpr) : void
   {
-    Macros.DefineCTX(typer);
+    Nemerle.Macros.DefineCTX(typer);
     def ty = typer.BindFixedType(typeName);
     
     when (ty.Equals(typer.InternalType.Object))
@@ -625,7 +631,7 @@ internal module ExtensionPatternImpl
         def ext = ExtensionPattern(typeInfo, name, identifiers, pattern, temporary = true);
         typeInfo.AddExtensionPattern(ext)
 
-      | _ => MessageMacros.FatalError("ExtensionPattern syntax is ``name (id_1, ..., id_n) = pattern''")
+      | _ => Nemerle.Compiler.MessageMacros.FatalError("ExtensionPattern syntax is ``name (id_1, ..., id_n) = pattern''")
     }
   }
 }
@@ -647,11 +653,11 @@ macro FlagAccessor (current_type : TypeBuilder, storage_field : ParsedField, par
       {
         | <[ $("flags" : dyn) = $o ]> =>
           if (opts.IsNone) opts = Some(o);
-          else             MessageMacros.FatalError(usage);
+          else             Nemerle.Compiler.MessageMacros.FatalError(usage);
           false
 
         | <[ $(_ : name) ]> => true
-        | _                 => MessageMacros.FatalError (usage)
+        | _                 => Nemerle.Compiler.MessageMacros.FatalError (usage)
       });
 
   mutable want_setter     = false;
@@ -665,7 +671,7 @@ macro FlagAccessor (current_type : TypeBuilder, storage_field : ParsedField, par
     | <[ $("Internal"   : dyn) ]> => want_internal  = true;
     | <[ $("Protected"  : dyn) ]> => want_protected = true;
     | <[ $e1 | $e2 ]>             => parse_opts(e1); parse_opts(e2);
-    | e => MessageMacros.FatalError($"bad accessor option, $e");
+    | e => Nemerle.Compiler.MessageMacros.FatalError($"bad accessor option, $e");
   }
 
   when (opts is Some(e))

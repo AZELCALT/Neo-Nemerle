@@ -31,7 +31,11 @@
 
 
 using Nemerle.IO
-using Nemerle.Compiler
+using Nemerle.Compiler.AST
+using Nemerle.Compiler.GlobalEnv
+using Nemerle.Compiler.Macros
+using Nemerle.Compiler.NamespaceTree
+using Nemerle.Compiler.Utility
 using Nemerle.Compiler.Parsetree
 using BF = System.Reflection.BindingFlags
 using PM = System.Reflection.ParameterModifier
@@ -84,7 +88,7 @@ public class LateMacro
   /// returns expression that does a single late invoke
   /// expr_name is used to hold expr
   public static invoke(expr_name : Name, expr : PExpr, loc : Location, info : CallInfo, flags : BF, ignore_result = false) : PExpr
-    UtilMacros.locate(loc, invoke_located(expr_name, expr, info, flags, ignore_result))
+    Nemerle.Compiler.UtilMacros.locate(loc, invoke_located(expr_name, expr, info, flags, ignore_result))
 
   /// returns expression that does a single late invoke
   /// expr_name is used to hold expr
@@ -95,9 +99,9 @@ public class LateMacro
         match(args)
           | [] => r.Rev()
           | arg :: args => match(exclude)
-            | true :: exclude => def e = UtilMacros.locate(arg.Location, <[ null : object ]>); transform(args, exclude, e :: r)
+            | true :: exclude => def e = Nemerle.Compiler.UtilMacros.locate(arg.Location, <[ null : object ]>); transform(args, exclude, e :: r)
             | _ :: exclude \
-            | exclude => def e = UtilMacros.locate(arg.Location, <[ $arg : $ty ]>); transform(args, exclude, e :: r)
+            | exclude => def e = Nemerle.Compiler.UtilMacros.locate(arg.Location, <[ $arg : $ty ]>); transform(args, exclude, e :: r)
       if(args.Length != 0)
         <[ array[..$(transform(args, exclude))] ]>
       else
@@ -206,14 +210,14 @@ public class LateMacro
         | <[ $rest . [.. $args] = $value ]> when !special(rest) with(id = Name("")) \
         | <[ $rest [.. $args] = $value ]> when !special(rest) with(id = Name("")) =>
           when(id.Id == "" && args.Length == 0)
-            MessageMacros.FatalError(expr.Location, "default indexer must have parameters")
+            Nemerle.Compiler.MessageMacros.FatalError(expr.Location, "default indexer must have parameters")
           loop(rest, LateCall.SetProperty(expr.Location, CallInfo(id.Id, args, [value])) :: r)
         | <[ $rest . $(id : name) [.. $args] ]> when !special(rest) \
         | <[ $rest . $(id : name) ]> when !special(rest) with(args = []) \
         | <[ $rest . [.. $args] ]> when !special(rest) with(id = Name("")) \
         | <[ $rest [.. $args] ]> when !special(rest) with(id = Name("")) =>
           when(id.Id == "" && args.Length == 0)
-            MessageMacros.FatalError(expr.Location, "default indexer must have parameters")
+            Nemerle.Compiler.MessageMacros.FatalError(expr.Location, "default indexer must have parameters")
           loop(rest, LateCall.GetProperty(expr.Location, CallInfo(id.Id, args)) :: r)
         | <[ $rest . $(id : name) (.. $args) ]> when !special(rest) =>
           loop(rest, LateCall.Method(expr.Location, CallInfo(id.Id, args)) :: r)

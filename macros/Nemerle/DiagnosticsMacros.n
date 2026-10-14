@@ -26,7 +26,11 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.PrettyPrint;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
 using Nemerle.Compiler.Typedtree;
 using Nemerle;
 using System.Text.RegularExpressions;
@@ -91,7 +95,7 @@ macro Trace (_ : TypeBuilder, m : MethodBuilder,
     }
   }
   def bod = Macros.TraverseExpr (None (), m.Body, false, add);
-  def newBody = UtilMacros.locate(m.Body.Location, <[
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[
     def $("_file" : usesite) = $(m.Body.Location.File : string);
     def $("_method" : usesite) = $(m.Name : string);
     $bod;

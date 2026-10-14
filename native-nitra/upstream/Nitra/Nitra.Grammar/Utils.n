@@ -75,39 +75,39 @@ namespace Nitra
     //}
 
     [DebuggerStepThroughAttribute]
-    public NLocation(this loc : Nitra.Location) : Compiler.Location
+    public NLocation(this loc : Nitra.Location) : Nemerle.Compiler.AST.Location
     {
       def (startLine, startCol) = loc.StartLineColumn;
       def (endLine, endCol) = loc.EndLineColumn;
       def file = loc.Source.File;
       if (file is NemerleFile(Index = index))
-        Compiler.Location(index, startLine, startCol, endLine, endCol)
+        Nemerle.Compiler.AST.Location(index, startLine, startCol, endLine, endCol)
       else
-        Compiler.Location.Default
+        Nemerle.Compiler.AST.Location.Default
     }
 
     [DebuggerStepThroughAttribute]
-    public NLocation(this located : Nitra.Located) : Compiler.Location
+    public NLocation(this located : Nitra.Located) : Nemerle.Compiler.AST.Location
     {
       assert2(located != null);
       NLocation(located.Location)
     }
 
     [DebuggerStepThroughAttribute]
-    public NLocation(located : Nitra.Located, tok : NSpan) : Compiler.Location
+    public NLocation(located : Nitra.Located, tok : NSpan) : Nemerle.Compiler.AST.Location
     {
       def loc = located.Location;
       def source = loc.Source;
       def (startLine, startCol) = source.PositionToLineColumn(tok.StartPos);
       def (endLine,   endCol)   = source.PositionToLineColumn(tok.EndPos);
       if (source.File is NemerleFile(Index = index))
-        Compiler.Location(index, startLine, startCol, endLine, endCol)
+        Nemerle.Compiler.AST.Location(index, startLine, startCol, endLine, endCol)
       else
-        Compiler.Location.Default
+        Nemerle.Compiler.AST.Location.Default
     }
 
     [DebuggerStepThroughAttribute]
-    public NLocation(this symbol : Nitra.Declarations.DeclarationSymbol) : Compiler.Location
+    public NLocation(this symbol : Nitra.Declarations.DeclarationSymbol) : Nemerle.Compiler.AST.Location
     {
       symbol.FirstDeclarationOrDefault.Location.NLocation()
     }
@@ -677,7 +677,7 @@ namespace Nitra
       NType.Predefined(loc, NPredefinedType.Ast)
     }
 
-    public MakeNTypeQualified(loc : Location, qid : list[string], env : Nemerle.Compiler.GlobalEnv = null) : NType
+    public MakeNTypeQualified(loc : Location, qid : list[string], env : Nemerle.Compiler.GlobalEnv.GlobalEnv = null) : NType
     {
       NType.Qualified(loc, qid.Map(id => TypeNamePart(Location.Default, id, [], env)))
     }

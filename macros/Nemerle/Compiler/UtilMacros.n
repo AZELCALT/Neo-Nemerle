@@ -29,7 +29,6 @@
 /* Macros used only inside the compiler.  */
 
 using Nemerle;
-using Nemerle.Compiler;
 using Nemerle.Imperative;
 using System.Diagnostics;
 
@@ -42,13 +41,13 @@ macro @locate(location, body)
     def hasLocation = loc.FileIndex != 0;
     
     when (hasLocation)
-      LocationStack.Push(loc);
+      Nemerle.Compiler.Utility.LocationStack.Push(loc);
 
     try { $body } 
     finally
     {
       when (hasLocation)
-        LocationStack.RemoveTop();
+        Nemerle.Compiler.Utility.LocationStack.RemoveTop();
     }
   ]>
 }
@@ -56,11 +55,11 @@ macro @locate(location, body)
 macro ice (msg = <[ "(see backtrace)" ]>)
 {
   <[
-    unless (Message.SeenError)
+    unless (Nemerle.Compiler.Utility.Message.SeenError)
     {
       def msg = $msg.ToString();
       System.Diagnostics.Debug.Assert(true, "ICE! (Internal Compiler Error)", msg);
-      Message.Debug ($"Internal compiler error '$msg', please report a bug to bugs.nemerle.org. "
+      Nemerle.Compiler.Utility.Message.Debug ($"Internal compiler error '$msg', please report a bug to bugs.nemerle.org. "
                      "You can try modifying program near this location.");
     }
     assert(false, $msg);
@@ -70,8 +69,8 @@ macro ice (msg = <[ "(see backtrace)" ]>)
 macro cassert (cond, message = <[ "" ]>)
 {
   <[ unless ($cond) {
-       unless (Message.SeenError)
-         Message.Debug ("Internal compiler error, please report a bug to bugs.nemerle.org. "
+       unless (Nemerle.Compiler.Utility.Message.SeenError)
+         Nemerle.Compiler.Utility.Message.Debug ("Internal compiler error, please report a bug to bugs.nemerle.org. "
                         "You can try modifying program near this location.");
        throw AssertionException ($(cond.Location.File : string), 
                                  $(cond.Location.Line : int),

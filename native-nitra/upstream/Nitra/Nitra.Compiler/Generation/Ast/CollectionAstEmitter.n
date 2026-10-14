@@ -3,7 +3,9 @@ using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -38,7 +40,7 @@ namespace Nitra.Compiler
 
     public DefineTypes(ownerTb : TypeBuilder) : void
     {
-      UtilMacros.locate(Symbol.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(),
       {
         def itemType = Environment.GetAstType(Symbol);
 
@@ -87,7 +89,7 @@ namespace Nitra.Compiler
         ]>);
       }
 
-      UtilMacros.locate(Symbol.FirstLocation.NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
+      Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
     }
 
     protected static LinkProperties(source : DependencyPath, target : DependencyPath, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], resultBuilder : PExpr -> PExpr = null) : PExpr

@@ -29,7 +29,7 @@
 /* Macros used only inside the compiler.  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Imperative;
 using System.Diagnostics;
 
@@ -66,11 +66,11 @@ macro ReportFatal (messenger, msg)
     if ($messenger.NeedMessage) {
       $messenger.Error ($msg);
       when (IsTopLevel)
-        throw Recovery ();
+        throw Nemerle.Compiler.Utility.Recovery ();
     } else
       $messenger.MarkError ();
 
-    Typedtree.TExpr.Error ()
+    Nemerle.Compiler.Typedtree.TExpr.Error ()
   ]>
 }
 
@@ -87,7 +87,7 @@ macro SaveError (messenger, msg)
 [MacroUsage (MacroPhase.BeforeInheritance, MacroTargets.Method)]
 macro PossiblyLooping (_ : TypeBuilder, m : ParsedMethod, solver)
 {
-  def newBody = UtilMacros.locate(m.Body.Location, <[
+  def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location, <[
     if ($solver.CanEnterPossiblyLooping ())
     {
       try

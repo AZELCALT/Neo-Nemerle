@@ -1,0 +1,63 @@
+using System;
+using System.IO;
+using SCG = System.Collections.Generic;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.MacroClassGen;
+using Nemerle.Compiler.NitraSourceCompilation;
+using Nemerle.Compiler.SyntaxDefinition;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
+
+internal sealed class NitraBoundary
+{
+  public mutable Kind : string;
+  public mutable Dialect : string;
+  public mutable Owner : string;
+  public mutable Member : string;
+  public mutable IsCall : bool;
+  public mutable Location : Location;
+}
+internal sealed class NitraBoundaryEdit
+{
+  public Start : int; public End : int; public Text : string;
+  public this(start : int, end : int, text : string) { Start=start; End=end; Text=text; }
+}
+
+internal sealed class NitraBoundaryMacro : IMacro
+{
+  session : NitraSourceSession;
+  public this(session : NitraSourceSession) { this.session=session; }
+  public GetName() : string { "__b" }
+  public GetNamespace() : string { "Nemerle.Core" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null,null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    mutable location=Location.Default;
+    try
+    {
+      match(args)
+      {
+        | SyntaxElement.Expression(PExpr.Literal(Literal.Integer(id,false,_))) :: rest when(id<int.MaxValue :> ulong) =>
+          location=session.BoundaryLocation(id :> int);
+          session.Boundary(ctx,id :> int,rest.Map(a => match(a) { | SyntaxElement.Expression(e) => e | _ => throw ArgumentException("invalid boundary argument") }))
+        | _ => throw ArgumentException("invalid internal boundary invocation");
+      }
+    }
+    catch
+    {
+      | exception =>
+        mutable error=exception;
+        while(error is System.Reflection.TargetInvocationException && error.InnerException!=null) error=error.InnerException;
+        Message.Error(location,error.Message); PExpr.Error(location)
+    }
+  }
+}

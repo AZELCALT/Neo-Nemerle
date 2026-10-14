@@ -110,7 +110,7 @@ public static class ScriptFingerprint
         foreach (reference in definition.RuntimeReferences) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
         foreach (reference in definition.NativeReferences) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
         foreach (shared in definition.SharedAssemblies) writer.Write(shared.ManifestModule.ModuleVersionId.ToString());
-        foreach (type in array[typeof(Nemerle.Compiler.ManagerClass), typeof(ClrScriptSupport), typeof(ScriptHost), typeof(object)]) assembly(type);
+        foreach (type in array[typeof(Nemerle.Compiler.ManagerClass.ManagerClass), typeof(ClrScriptSupport), typeof(ScriptHost), typeof(object)]) assembly(type);
         when (definition.TargetReferenceDirectory != null)
         {
           def paths = Directory.GetFiles(definition.TargetReferenceDirectory, "*.dll"); Array.Sort(paths);

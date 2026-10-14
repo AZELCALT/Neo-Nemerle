@@ -1,6 +1,9 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.Utility;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -63,7 +66,7 @@ namespace Nitra.Compiler
     private _allFiles    : SCG.Dictionary[int, NemerleFile] = SCG.Dictionary();
     private _sourceFiles : SCG.List[NemerleFile]            = SCG.List();
 
-    public override MakeFakeNitraLocation(location : Nemerle.Compiler.Location) : Nitra.Location
+    public override MakeFakeNitraLocation(location : Nemerle.Compiler.AST.Location) : Nitra.Location
     {
       mutable file;
       unless (_allFiles.TryGetValue(location.FileIndex, out file))
@@ -74,7 +77,7 @@ namespace Nitra.Compiler
       Nitra.Location(file, 0)
     }
 
-    public override MakeNitraLocation(location : Nemerle.Compiler.Location) : Nitra.Location
+    public override MakeNitraLocation(location : Nemerle.Compiler.AST.Location) : Nitra.Location
     {
       mutable file;
       if (_allFiles.TryGetValue(location.FileIndex, out file))
@@ -103,7 +106,7 @@ namespace Nitra.Compiler
           file.SourceChanged(source);
         catch
         {
-          | e => Message.Error(Nemerle.Compiler.Location(file.Index, 1, 1), e.ToString());
+          | e => Message.Error(Nemerle.Compiler.AST.Location(file.Index, 1, 1), e.ToString());
         }
 
         when (processingCount > 1 && Manager.IsIntelliSenseMode)

@@ -2,7 +2,9 @@
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 
@@ -29,7 +31,7 @@ namespace Nitra.Compiler
       foreach (syntaxMapping in this.RuleSymbol.SyntaxMappings)
       {
         def returnType = Environment.GetAstType(syntaxMapping.ReturnType);
-        def parms      = syntaxMapping.Parameters.Map(p => UtilMacros.locate(p.FirstLocation.NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
+        def parms      = syntaxMapping.Parameters.Map(p => Nemerle.Compiler.UtilMacros.locate(p.FirstLocation.NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
         _baseTb.Define(<[ decl: public abstract $(syntaxMapping.Name : usesite)(..$parms) : $returnType ]>);
         when (parms.IsEmpty())
           DefineGetAstUntypedMethod(_baseTb, syntaxMapping);
@@ -67,9 +69,9 @@ namespace Nitra.Compiler
         def loc = path.Location.NLocation();
         match (path)
         {
-          | This                       => compile(UtilMacros.locate(loc, <[ this ]>))
+          | This                       => compile(Nemerle.Compiler.UtilMacros.locate(loc, <[ this ]>))
           | Variable(name, _)          =>
-            def varAccess = UtilMacros.locate(loc, <[ $(name.Value : usesite) ]>);
+            def varAccess = Nemerle.Compiler.UtilMacros.locate(loc, <[ $(name.Value : usesite) ]>);
             if (needsParseTreeCheck)
               checkParseTree(path.Type, varAccess, compile)
             else
@@ -77,9 +79,9 @@ namespace Nitra.Compiler
 
           | Member(qualifier, name, _) =>
             if (needsParseTreeCheck)
-              compileAccess(qualifier, true, expr => checkParseTree(path.Type, UtilMacros.locate(loc, <[ $expr.$(name.Value : usesite) ]>), compile))
+              compileAccess(qualifier, true, expr => checkParseTree(path.Type, Nemerle.Compiler.UtilMacros.locate(loc, <[ $expr.$(name.Value : usesite) ]>), compile))
             else
-              compileAccess(qualifier, true, expr => compile(UtilMacros.locate(loc, <[ $expr.$(name.Value : usesite) ]>)))
+              compileAccess(qualifier, true, expr => compile(Nemerle.Compiler.UtilMacros.locate(loc, <[ $expr.$(name.Value : usesite) ]>)))
         }
       }
 
@@ -312,7 +314,7 @@ namespace Nitra.Compiler
     {
       assert(expr != null);
 
-      UtilMacros.locate(expr.Location.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(expr.Location.NLocation(),
       {
         match (expr)
         {
@@ -435,7 +437,7 @@ namespace Nitra.Compiler
     {
       def returnType = Environment.GetAstType(syntaxMapping.ReturnType);
       def mods       = AttributesAndModifiers(modifiers, []);
-      def parms      = syntaxMapping.Parameters.Map(p => UtilMacros.locate(p.FirstLocation.NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
+      def parms      = syntaxMapping.Parameters.Map(p => Nemerle.Compiler.UtilMacros.locate(p.FirstLocation.NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
       def isOverride = modifiers %&& NemerleModifiers.Override;
       when (parms.IsEmpty && !isOverride)
         DefineGetAstUntypedMethod(tb, syntaxMapping);

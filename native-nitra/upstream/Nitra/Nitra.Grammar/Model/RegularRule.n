@@ -3,7 +3,7 @@ using Nitra.Typing;
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
 using Nemerle.Text;
 using Nemerle.Extensions;
 using Nemerle.Utility;

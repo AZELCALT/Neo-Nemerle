@@ -1,0 +1,244 @@
+// Previous grammar/space design, parked: compiled only with -define:OLD_GRAMMAR_DESIGN.
+
+#if OLD_GRAMMAR_DESIGN
+using System;
+using System.IO;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.GrammarDeclarations;
+using Nemerle.Compiler.GrammarEngine;
+using Nemerle.Compiler.GrammarModel;
+using Nemerle.Compiler.MainParser;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.NitraShared;
+using Nemerle.Compiler.Source;
+
+
+/// Source-only prototype. Recognition is independent of CLR emission.
+public module GrammarParsing
+{
+  public ParseSources(manager : ManagerClass, sources : list[ISource], sourceRoot : string) : GrammarParseResult
+  {
+    when(manager==null) throw ArgumentNullException("manager", "Use ManagerClass.ParseGrammarSources to initialize compiler scope");
+    def previous=ManagerClass.Instance;
+    try { ManagerClass.Instance=manager; GRegistry(manager,sourceRoot).Parse(sources) }
+    finally { ManagerClass.Instance=previous; }
+  }
+}
+internal sealed class GRegistry
+{
+  public Result : GrammarParseResult = GrammarParseResult();
+  manager : ManagerClass;
+  root : string;
+  files : SCG.List[GFile] = SCG.List();
+  definitions : SCG.List[GDefinition] = SCG.List();
+  private mutable zoneDepth : int;
+  public this(manager : ManagerClass, root : string)
+  { this.manager=manager; this.root=Path.GetFullPath(root ?? Environment.CurrentDirectory); }
+  public Parse(sources : list[ISource]) : GrammarParseResult
+  {
+    foreach(source in sources)
+    {
+      def f=GFile(); f.Source=source; f.Path=Location.GetFileName(source.FileIndex); f.Text=source.GetText();
+      def path=Path.GetFullPath(f.Path); def prefix=root.TrimEnd(array[Path.DirectorySeparatorChar])+Path.DirectorySeparatorChar;
+      f.Owner=Path.ChangeExtension(if(path.StartsWith(prefix,StringComparison.Ordinal)) path.Substring(prefix.Length) else Path.GetFileName(path),null).Replace(Path.DirectorySeparatorChar,'.');
+      files.Add(f);
+      try { Index(f); }
+      catch { | e is ArgumentException => Result.Diagnostics.Add(GrammarDiagnostic(f.Path,0,e.Message)); }
+    }
+    when(Result.Success)
+    {
+      foreach(g in definitions)
+      {
+        foreach(other in definitions)
+          when(g!=other && g.FullName==other.FullName) Result.Diagnostics.Add(GrammarDiagnostic(g.File.Path,0,"duplicate grammar: "+g.FullName));
+        foreach(r in g.Rules) { r.Id=NextId(); }
+      }
+    }
+    when(Result.Success)
+    {
+      // Validate every grammar, including definitions without a space use.
+      foreach(g in definitions)
+        try
+        {
+          def selected=SCG.List.[GDefinition](); selected.Add(g);
+          def engine=GEngine(this,g.File,Closure(selected));
+          engine.Validate();
+        }
+        catch { | e is ArgumentException => Result.Diagnostics.Add(GrammarDiagnostic(g.File.Path,0,e.Message)); }
+    }
+    when(Result.Success)
+      foreach(f in files) foreach(z in f.Zones)
+        try
+        {
+          def recognized=ParseZone(z);
+          if(recognized.Count==1) Result.Matches.Add(recognized[0]);
+          else Result.Diagnostics.Add(GrammarDiagnostic(f.Path,z.Start,if(recognized.Count==0) "space did not match" else "ambiguous complete space match"));
+        }
+        catch { | e is ArgumentException => Result.Diagnostics.Add(GrammarDiagnostic(f.Path,z.Start,e.Message)); }
+    when(Result.Success && manager!=null)
+      foreach(action in Result.Actions)
+        try
+        {
+          action.Scope=GlobalEnv(manager.CoreEnv,["mask"]);
+          foreach(f in files) when(f.Path==action.File)
+          {
+            when(manager.Options.FileModules) action.Scope=manager.FileModuleRegistry.Environment(f.Source.FileIndex);
+            foreach(pair in f.Usings)
+            {
+              def path=NString.Split(pair.Value,'.');
+              action.Scope=if(pair.Key==pair.Value) action.Scope.AddOpenNamespace(path,At(f,action.Start))
+                else action.Scope.AddNamespaceAlias(pair.Key,path,At(f,action.Start));
+            }
+            def loc=At(f,action.Start);
+            def errors=manager.Message_ErrorCount;
+            action.Ast=MainParser.ParseExpr(action.Scope,action.Text,loc);
+            when(manager.Message_ErrorCount>errors) Result.Diagnostics.Add(GrammarDiagnostic(action.File,action.Start,"invalid Nemerle action body"));
+          }
+        }
+        catch { | e => Result.Diagnostics.Add(GrammarDiagnostic(action.File,action.Start,"invalid Nemerle action: "+e.Message)); }
+    Result
+  }
+  private mutable id : int;
+  private NextId() : int { ++id; id }
+  public At(f : GFile, offset : int) : Location
+  {
+    mutable line=1; mutable col=1;
+    for(mutable i=0;i<offset && i<f.Text.Length;++i)
+      if(f.Text[i]=='\n') { ++line; col=1; } else ++col;
+    Location(f.Source.FileIndex,line,col)
+  }
+  private Index(f : GFile) : void
+  {
+    def r=GReader(f.Text,f.Path,0,f.Text.Length); mutable depth=0;
+    while(!r.Is("<eof>"))
+    {
+      def t=r.Take();
+      if(t.Text=="grammar" && !t.Quoted && depth==0)
+      {
+        def g=GDefinition(); g.Name=r.Name(); g.FullName=f.Owner+"."+g.Name; g.File=f;
+        def block=r.Block(); def reader=GReader(f.Text,f.Path,block.Start+1,block.End-1);
+        GDeclarations(reader,g,Result).Parse(); f.Definitions.Add(g); definitions.Add(g);
+      }
+      else if(t.Text=="space" && !t.Quoted && (r.Is("{") || r.Is("(") || IsIdentifier(r.Peek())))
+      {
+        // Rewind the header only. The body is never tokenized as Nemerle.
+        def header=GReader(f.Text,f.Path,t.Start,f.Text.Length);
+        def z=ReadZoneHeader(header,f); f.Zones.Add(z);
+        // An envelope scan enables the declaration-index pass to continue.
+        // Actual acceptance/end selection is done by ParseZone's grammar.
+        def scan=GReader(f.Text,f.Path,header.Pos-1,f.Text.Length);
+        scan.SqlComments=true; def block=scan.Block(); z.End=block.End-1; r.Pos=block.End; r.Reset();
+      }
+      else if(t.Text=="using" && depth==0)
+      {
+        def name=r.Name(); def value=if(r.Eat("=")) r.Name() else name;
+        when(r.Eat(";")) f.Usings[name]=value;
+      }
+      else unless(t.Quoted)
+      { when(t.Text=="{") ++depth; when(t.Text=="}") --depth; }
+    }
+  }
+  private IsIdentifier(t : GLexeme) : bool
+  { !t.Quoted && t.Text.Length>0 && (char.IsLetter(t.Text[0]) || t.Text[0]=='_') }
+  public ReadZoneHeader(r : GReader, f : GFile) : GZone
+  {
+    def z=GZone(); z.File=f; z.Start=r.Peek().Start; r.Need("space");
+    if(r.Eat("("))
+    { z.Names.Add(r.Name()); while(r.Eat(",")) z.Names.Add(r.Name()); r.Need(")"); }
+    else unless(r.Is("{")) z.Names.Add(r.Name());
+    def open=r.Take(); unless(open.Text=="{") r.Fail("expected space body"); z.Body=open.End; z
+  }
+  private Visible(f : GFile) : SCG.List[GDefinition]
+  {
+    def list=SCG.List.[GDefinition]();
+    foreach(g in definitions)
+    {
+      mutable visible=g.File==f;
+      foreach(pair in f.Usings)
+        when(pair.Value==g.File.Owner || pair.Value==g.FullName) visible=true;
+      when(visible) list.Add(g);
+    }
+    list
+  }
+  public Closure(selected : SCG.List[GDefinition]) : SCG.List[GDefinition]
+  {
+    def list=SCG.List.[GDefinition](); list.AddRange(selected); mutable index=0;
+    while(index<list.Count)
+    {
+      def g=list[index]; ++index;
+      foreach(imported in g.Imports)
+      {
+        def target=imported.Value;
+        unless(target=="Nitra.Core" || target=="Core")
+        {
+          mutable found=false;
+          foreach(r in g.Rules) when(r.Module==target) found=true;
+          foreach(other in Visible(g.File))
+            when(target==other.FullName || target==other.Name || target.StartsWith(other.FullName+".",StringComparison.Ordinal)
+              || target.StartsWith(other.Name+".",StringComparison.Ordinal))
+            { found=true; unless(list.Contains(other)) list.Add(other); }
+          unless(found) throw ArgumentException("unknown syntax module import: "+target);
+        }
+      }
+    }
+    list
+  }
+  public ParseZone(z : GZone) : SCG.List[GrammarMatch]
+  {
+    when(zoneDepth>=64) throw ArgumentException("nested space limit exceeded (64)");
+    ++zoneDepth;
+    try
+    {
+      when(z.End==0)
+      {
+        def scan=GReader(z.File.Text,z.File.Path,z.Body-1,z.File.Text.Length);
+        scan.SqlComments=true; z.End=scan.Block().End-1;
+      }
+      def visible=Visible(z.File); def selected=SCG.List.[GDefinition]();
+      if(z.Names.Count==0) selected.AddRange(visible);
+      else foreach(request in z.Names)
+      {
+        mutable name=request;
+        foreach(pair in z.File.Usings)
+          when(name==pair.Key || name.StartsWith(pair.Key+".",StringComparison.Ordinal)) name=pair.Value+name.Substring(pair.Key.Length);
+        mutable found=0;
+        foreach(g in visible)
+          when(g.Name==name || g.FullName==name)
+          { unless(selected.Contains(g)) selected.Add(g); ++found; }
+        when(found==0) throw ArgumentException("unknown or invisible grammar: "+request);
+        when(found>1) throw ArgumentException("ambiguous grammar name: "+request);
+      }
+      when(selected.Count==0) throw ArgumentException("space has no visible grammars");
+      def engine=GEngine(this,z.File,Closure(selected)); engine.Roots=selected; engine.Limit=z.End;
+      def complete=SCG.List.[GrammarMatch](); def queue=SCG.Queue.[GState](); queue.Enqueue(GState(z.Body));
+      while(queue.Count>0)
+      {
+        def state=queue.Dequeue(); def p=engine.Skip(state.End);
+        if(p==z.End && z.File.Text[p]=='}')
+        {
+          def n=GrammarMatch("space",String.Join(",",z.Names.ToArray()),z.Start,p+1); n.File=z.File.Path; n.Children.AddRange(state.Nodes); complete.Add(n);
+        }
+        else
+        {
+          foreach(next in engine.Forms(p))
+          {
+            when(next.End<=p) throw ArgumentException("non-progressing statement form");
+            def s=GState(next.End); s.Nodes.AddRange(state.Nodes); s.Nodes.AddRange(next.Nodes); queue.Enqueue(s);
+          }
+        }
+        when(queue.Count+complete.Count>4096) throw ArgumentException("too many competing space recognized (4096)");
+      }
+      when(complete.Count==0) throw ArgumentException("expected "+(engine.Expected ?? "statement or closing brace")+" at offset "+engine.Furthest.ToString());
+      when(complete.Count>1) throw ArgumentException("ambiguous complete space match");
+      complete
+    }
+    finally { --zoneDepth; }
+  }
+}
+#endif

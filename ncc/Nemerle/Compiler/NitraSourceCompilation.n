@@ -1,0 +1,476 @@
+using System.IO;
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.MacroClassGen;
+using Nemerle.Compiler.ManagerClass;
+using Nemerle.Compiler.NitraCompilation;
+using Nemerle.Compiler.NitraDialectServices;
+using Nemerle.Compiler.NitraInactiveSyntax;
+using Nemerle.Compiler.NitraRecognition;
+using Nemerle.Compiler.NitraShared;
+using Nemerle.Compiler.NitraSourceBoundaries;
+using Nemerle.Compiler.NitraStructures;
+using Nemerle.Compiler.NitraSyntax;
+using Nemerle.Compiler.NitraSyntaxModel;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.SyntaxDefinition;
+using Nemerle.Compiler.Typer;
+using Nemerle.Compiler.Utility;
+
+/// Optional legacy callbacks; the default path uses native declared mappings.
+public sealed class NitraSourceConfiguration
+{
+  mutable configureDialects : object;
+  public ConfigureDialects : Action[NitraDialectRegistry]
+  { get { configureDialects :> Action[NitraDialectRegistry] } set { configureDialects=value; } }
+  public mutable Dialects : NitraDialectRegistry;
+  public CreateContext : Func[Typer,string,NitraCompilationContext];
+  public mutable ResolveStructure : Func[NitraStructuralChoice,int];
+  public InactiveConstructs : SCG.List[NitraInactiveConstruct] = SCG.List();
+  /// Optional: supplies the native semantic host for a set of grammar definitions (an editor caches hosts by grammar
+  /// text this way). Null: the host is loaded and initialized for every compilation (NitraSourceSession.CreateNativeHost).
+  public mutable ProvideHost : Func[ManagerClass,SCG.List[NitraDocument],INitraNativeSourceHost];
+  public this() { CreateContext=null; }
+  public this(createContext : Func[Typer,string,NitraCompilationContext])
+  {
+    when(createContext==null) throw ArgumentNullException("createContext"); CreateContext=createContext;
+  }
+  [Obsolete("grammar/space compilation is no longer experimental; use the constructor without the flag")]
+  public this(_experimental : bool) { this() }
+  [Obsolete("grammar/space compilation is no longer experimental; use the constructor without the flag")]
+  public this(createContext : Func[Typer,string,NitraCompilationContext], _experimental : bool) { this(createContext) }
+}
+// The native semantic compiler (Integrated.Nitra.Compiler.dll next to Nemerle.Compiler.dll) implements this bridge.
+// It is loaded only when a source contains a grammar or space block.
+public interface INitraNativeSourceHost
+{
+  Initialize(manager : ManagerClass, definitions : SCG.IEnumerable[NitraDocument]) : void;
+  Modules(owner : string) : array[string];
+  Prepare(modules : SCG.IEnumerable[string]) : NitraPreparedGrammar;
+  Expand(rule : string, selected : NitraStructure, typer : Typer, location : Location, context : NitraDialectContext) : PExpr;
+}
+internal sealed class NitraSourceZone
+{
+  public mutable Id : int;
+  public mutable File : int;
+  public mutable Start : int;
+  public mutable End : int;
+  public mutable Body : int;
+  public mutable Source : string;
+  public Names : SCG.List[string] = SCG.List();
+  public mutable Grammar : NitraPreparedGrammar;
+  public mutable Rule : string;
+  public mutable Owner : string;
+  public mutable FileOwner : string;
+  public mutable Alias : string;
+  public Scopes : SCG.List[string] = SCG.List();
+  public mutable Dialect : string;
+}
+internal sealed class NitraSourceSession
+{
+  manager : ManagerClass;
+  configuration : NitraSourceConfiguration;
+  definitions : SCG.Dictionary[string,NitraDocument] = SCG.Dictionary();
+  owners : SCG.Dictionary[string,int] = SCG.Dictionary();
+  files : SCG.Dictionary[int,string] = SCG.Dictionary();
+  zones : SCG.List[NitraSourceZone] = SCG.List();
+  mutable nativeHost : INitraNativeSourceHost;
+  // grammar name, file index, block start (keyword), block end
+  internal GrammarBlocks : SCG.List[string * int * int * int] = SCG.List();
+  // Editors index repeatedly with one manager: no expansion macros are registered then.
+  internal mutable IndexOnly : bool;
+  internal Zones : SCG.List[NitraSourceZone] { get { zones } }
+  internal Definitions : SCG.Dictionary[string,NitraDocument] { get { definitions } }
+  internal NativeHost : INitraNativeSourceHost { get { nativeHost } }
+  internal Configuration : NitraSourceConfiguration { get { configuration } }
+  internal Text(file : int) : string { if(files.ContainsKey(file)) files[file] else null }
+  public this(manager : ManagerClass)
+  { this.manager=manager; configuration=manager.Options.NitraSources; }
+  private IsBlockHeader(text : string, file : string, start : int, keyword : string) : bool
+  {
+    try
+    {
+      def reader=GReader(text,file,start,text.Length); reader.Need(keyword);
+      if(reader.Eat("("))
+      { _=reader.Name(); while(reader.Eat(",")) _=reader.Name(); reader.Need(")"); }
+      else unless(reader.Is("{") || reader.Is("[")) _=reader.Name();
+      when(reader.Eat("as")) _=reader.Name();
+      when(reader.Eat("[")) { _=reader.Name(); while(reader.Eat(",")) _=reader.Name(); reader.Need("]"); }
+      reader.Is("{")
+    }
+    catch { | _ is ArgumentException => false }
+  }
+  private Blank(chars : array[char], start : int, end : int) : void
+  { for(mutable i=start;i<end;++i) unless(chars[i]=='\n' || chars[i]=='\r') chars[i]=' '; }
+  private Insert(chars : array[char], start : int, end : int, tokens : array[string]) : void
+  {
+    mutable p=start;
+    foreach(token in tokens)
+    {
+      mutable placed=false;
+      while(p+token.Length<=end && !placed)
+      {
+        mutable fits=true; for(mutable i=0;i<token.Length;++i) when(chars[p+i]=='\n' || chars[p+i]=='\r') fits=false;
+        if(fits) { token.CopyTo(0,chars,p,token.Length); p=p+token.Length; placed=true; } else ++p;
+      }
+      unless(placed) throw ArgumentException("space envelope is too short for internal expansion");
+    }
+  }
+  public Index() : void
+  {
+    configuration.InactiveConstructs.Clear();
+    configuration.Dialects=NitraDialectRegistry();
+    foreach(source in manager.Options.Sources)
+    {
+      def text=source.GetText(); def chars=text.ToCharArray(); def file=Location.GetFileName(source.FileIndex);
+      def r=GReader(text,file,0,text.Length); mutable depth=0; mutable previous="";
+      while(!r.Is("<eof>"))
+      {
+        def t=r.Take();
+        if(!t.Quoted && previous!="." && t.Text=="grammar" && depth==0 && !r.Is("("))
+        {
+          def name=r.Name();
+          when(definitions.ContainsKey(name)) throw ArgumentException("duplicate source grammar: "+name);
+          def block=r.Block();
+          def nativeSource="namespace "+name+" {"+text.Substring(block.Start+1,block.End-block.Start-2)+"}";
+          def document=if(configuration.CreateContext!=null) NitraSyntax.ReadSourceGrammar(nativeSource,file)
+                       else
+                       {
+                         // Automatic hosting obtains modules and rules from
+                         // native semantics. Do not recognize definitions once
+                         // for inspection and again to construct their fields.
+                         def d=NitraDocument(); d.Source=nativeSource; d.File=file;
+                         _=NitraInactiveSyntax.Filter(nativeSource,file,d.InactiveConstructs); d
+                       };
+          unless(document.Success) throw ArgumentException(document.ToJson());
+          foreach(c in document.InactiveConstructs)
+          {
+            def record=NitraInactiveConstruct(); record.Kind=c.Kind; record.File=file; record.Text=c.Text;
+            record.Start=block.Start+1+c.Start-("namespace "+name+" {").Length;
+            record.End=record.Start+c.End-c.Start; configuration.InactiveConstructs.Add(record);
+          }
+          definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
+        }
+        else if(!t.Quoted && previous!="." &&
+                (t.Text=="runtime" || t.Text=="compile" || t.Text=="grammar" && depth==0 && r.Is("(")) &&
+                IsBlockHeader(text,file,t.Start,t.Text))
+        {
+          // Custom runtime/compiler blocks remain recognized placeholders.
+          // Do not invoke their preserved handlers while Nitra is integrated.
+          if(r.Eat("(")) { _=r.Name(); while(r.Eat(",")) _=r.Name(); r.Need(")"); }
+          else unless(r.Is("{")) _=r.Name();
+          def block=r.Block(); def c=NitraInactiveConstruct(); c.Kind=if(t.Text=="grammar") "grammar interaction" else t.Text; c.File=file;
+          c.Start=t.Start; c.End=block.End; c.Text=text.Substring(t.Start,block.End-t.Start);
+          configuration.InactiveConstructs.Add(c); Blank(chars,t.Start,block.End);
+        }
+        else if(!t.Quoted && previous!="." && t.Text=="space" && IsBlockHeader(text,file,t.Start,"space"))
+        {
+          def z=NitraSourceZone(); z.Id=zones.Count; z.File=source.FileIndex; z.Start=t.Start; z.Source=text;
+          if(r.Eat("(")) { z.Names.Add(r.Name()); while(r.Eat(",")) z.Names.Add(r.Name()); r.Need(")"); }
+          else unless(r.Is("{") || r.Is("[")) z.Names.Add(r.Name());
+          when(r.Eat("as")) z.Alias=r.Name();
+          when(r.Eat("[")) { z.Scopes.Add(r.Name()); while(r.Eat(",")) z.Scopes.Add(r.Name()); r.Need("]"); }
+          z.FileOwner=FileOwner(source.FileIndex);
+          def block=r.Block(); z.Body=block.Start+1; z.End=block.End-1; zones.Add(z);
+          Blank(chars,t.Start,block.End); Insert(chars,t.Start,block.End,array["__g","(",z.Id.ToString(),")"]);
+        }
+        else if(!t.Quoted && previous!="." && t.Text=="scope" && depth==0 && !r.Is("."))
+        {
+          def name=r.Name(); _=configuration.Dialects.RegisterScope(name);
+          def end=if(r.Eat(";")) r.Pos else { def block=r.Block(); when(block.End-block.Start>2 && !String.IsNullOrWhiteSpace(text.Substring(block.Start+1,block.End-block.Start-2))) r.Fail("scope declarations must be empty; use scope.name.registery to add bindings"); block.End };
+          Blank(chars,t.Start,end);
+        }
+        else unless(t.Quoted) { when(t.Text=="{") ++depth; when(t.Text=="}") --depth; }
+        previous=t.Text;
+      }
+      files.Add(source.FileIndex,string(chars));
+    }
+    when(configuration.CreateContext==null && (definitions.Count>0 || zones.Count>0))
+    {
+      def inputs=SCG.List(definitions.Values);
+      nativeHost=if(configuration.ProvideHost!=null) configuration.ProvideHost.Invoke(manager,inputs) else CreateNativeHost(manager,inputs);
+    }
+    foreach(z in zones)
+    {
+      def selected=SCG.List.[string]();
+      if(z.Names.Count==0) foreach(pair in owners) when(pair.Value==z.File) selected.Add(pair.Key);
+      else selected.AddRange(z.Names);
+      when(selected.Count==0) throw ArgumentException("space has no selected source grammars");
+      def documents=SCG.List(NitraSyntax.BaselineDefinitions()); foreach(d in definitions.Values) documents.Add(d);
+      def modules=SCG.List.[string]();
+      foreach(name in selected)
+      {
+        unless(definitions.ContainsKey(name)) throw ArgumentException("unknown source grammar: "+name);
+        // Cross-file grammar visibility must be explicitly selected.
+        if(nativeHost!=null) modules.AddRange(nativeHost.Modules(name));
+        else foreach(m in definitions[name].Modules) modules.Add(m.Name);
+      }
+      z.Grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules);
+      z.Owner=String.Join(",",selected.ToArray()); z.Dialect=selected[0];
+      foreach(dialect in selected)
+      {
+        def space=NitraDialectSpace(dialect,z.FileOwner,At(z.File,z.Start),z.Scopes.ToArray(),z.Id);
+        configuration.Dialects.AddSpace(space);
+        when(z.Alias!=null) configuration.Dialects.AddAlias(dialect,z.FileOwner+"."+z.Alias,space);
+      }
+      def starts=SCG.List.[string]();
+      foreach(rule in z.Grammar.StartRules) foreach(mod in modules)
+        when(rule.StartsWith(mod+".",StringComparison.Ordinal) && !starts.Contains(rule)) starts.Add(rule);
+      unless(starts.Count==1) throw ArgumentException("source space requires exactly one selected StartRule");
+      z.Rule=starts[0];
+    }
+    when(configuration.ConfigureDialects!=null) configuration.ConfigureDialects.Invoke(configuration.Dialects);
+    foreach(source in manager.Options.Sources) files[source.FileIndex]=RewriteBoundaries(files[source.FileIndex],source.FileIndex);
+    unless(IndexOnly)
+    {
+      manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
+      manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
+    }
+  }
+  /// Loads the native semantic compiler next to Nemerle.Compiler.dll and compiles the grammar definitions with it.
+  public static CreateNativeHost(manager : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost
+  {
+    def directory=System.IO.Path.GetDirectoryName(typeof(ManagerClass).Assembly.Location);
+    def hostPath=System.IO.Path.Combine(directory,"Integrated.Nitra.Compiler.dll");
+    unless(System.IO.File.Exists(hostPath))
+      throw ArgumentException("grammar and space blocks need the Nitra runtime (Integrated.Nitra.Compiler.dll and its Integrated.* dependencies) next to Nemerle.Compiler.dll in "+directory);
+    def assembly=System.Reflection.Assembly.LoadFrom(hostPath);
+    def type=assembly.GetType("Nitra.Compiler.NativeSourceHost",true);
+    def host=Activator.CreateInstance(type) :> INitraNativeSourceHost;
+    host.Initialize(manager,definitions); host
+  }
+  public Rewrite(source : ISource) : string
+  { unless(files.ContainsKey(source.FileIndex)) throw ArgumentException("source was not indexed in native grammar compilation"); files[source.FileIndex] }
+  public SpaceLocation(id : int) : Location
+  { if(id>=0 && id<zones.Count) At(zones[id].File,zones[id].Start) else Location.Default }
+  public Expand(typer : Typer, id : int) : PExpr
+  {
+    when(id<0 || id>=zones.Count) throw ArgumentException("invalid internal space identity");
+    def z=zones[id];
+    mutable line=1; mutable column=1;
+    for(mutable i=0;i<z.Body;++i) if(z.Source[i]=='\n') { ++line; column=1; } else ++column;
+    def location=Location(z.File,line,column);
+    when(nativeHost!=null)
+    {
+      def selected=NitraSyntax.StructureCompact(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),configuration.ResolveStructure);
+      unless(selected.Success)
+      { foreach(message in selected.Diagnostics) Message.Error(location,message); return PExpr.Error(location); }
+      def context=NitraDialectContext(configuration.Dialects,configuration.Dialects.Space(z.Dialect,z.FileOwner),typer,location);
+      foreach(name in z.Scopes) _=context.Scope(name);
+      def previous=NitraDialectContext.Active;
+      try { NitraDialectContext.Active=context; return nativeHost.Expand(z.Rule,selected.Root,typer,location,context); }
+      finally { NitraDialectContext.Active=previous; }
+    }
+    def context=configuration.CreateContext.Invoke(typer,z.Owner);
+    when(context==null || context.Typer : object != typer : object) throw ArgumentException("source context must use the current typer");
+    context.Location=location;
+    def compiled=NitraCompilation.Compile(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),context,configuration.ResolveStructure);
+    unless(compiled.Success) { foreach(message in compiled.Diagnostics) Message.Error(context.Location,message); return PExpr.Error(context.Location); }
+    compiled.Expression
+  }
+
+  // ---- merged from parsing/NitraSourceBoundaries.n ----
+  boundaries : SCG.List[NitraBoundary] = SCG.List();
+  preparing : SCG.HashSet[int] = SCG.HashSet();
+  private At(file : int, offset : int) : Location
+  {
+    mutable text=""; foreach(source in manager.Options.Sources) when(source.FileIndex==file) text=source.GetText();
+    mutable line=1; mutable column=1;
+    for(mutable i=0;i<offset;++i) if(text[i]=='\n') { ++line; column=1; } else ++column;
+    Location(file,line,column)
+  }
+  private FileOwner(file : int) : string
+  {
+    def path=Path.GetFullPath(Location.GetFileName(file));
+    if(manager.Options.FileModules && manager.Options.FileNameNamespaces) Path.GetFileNameWithoutExtension(path)
+    else if(manager.Options.FileModules)
+    {
+      def root=manager.FileModuleRegistry.Root;
+      def prefix=root.TrimEnd(array[Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar])+Path.DirectorySeparatorChar;
+      unless(path.StartsWith(prefix,StringComparison.Ordinal)) throw ArgumentException("dialect source is outside the source root: "+path);
+      def relative=path.Substring(prefix.Length);
+      Path.ChangeExtension(relative,null).Replace(Path.DirectorySeparatorChar,'.').Replace(Path.AltDirectorySeparatorChar,'.')
+    }
+    else Path.GetFileNameWithoutExtension(path)
+  }
+  private EndOfValue(text : string, file : string, start : int) : int
+  {
+    def r=GReader(text,file,start,text.Length); mutable depth=0;
+    while(!r.Is("<eof>"))
+    {
+      def t=r.Peek();
+      when(!t.Quoted && depth==0 && (t.Text==";" || t.Text=="," || t.Text=="}" || t.Text==")" || t.Text=="]")) return t.Start;
+      _=r.Take(); unless(t.Quoted)
+      { when(t.Text=="(" || t.Text=="[" || t.Text=="{") ++depth; when(t.Text==")" || t.Text=="]" || t.Text=="}") --depth; }
+    }
+    text.Length
+  }
+  private RewriteBoundaries(text : string, file : int) : string
+  {
+    def edits=SCG.List.[NitraBoundaryEdit](); def r=GReader(text,Location.GetFileName(file),0,text.Length);
+    mutable previous="";
+    while(!r.Is("<eof>"))
+    {
+      def t=r.Take();
+      when(!t.Quoted && previous!="." && t.Text.Length>0 && (char.IsLetter(t.Text[0]) || t.Text[0]=='_'))
+      {
+        mutable boundary : NitraBoundary=null;
+        if(t.Text=="scope" && r.Eat("."))
+        {
+          def scope=r.Take(); r.Need("."); def member=r.Take();
+          boundary=NitraBoundary(); boundary.Owner=scope.Text; boundary.Member=member.Text;
+          boundary.Kind=if(member.Text=="registery") "register" else "scope";
+          when(r.Eat("=")) boundary.Kind="set";
+        }
+        else
+        {
+          // Only the reserved :.<owner>:: form is a dialect reference.
+          def probe=GReader(text,r.File,t.Start,text.Length); def dialect=probe.Name();
+          when(probe.Eat(":") && probe.Eat("."))
+          {
+            boundary=NitraBoundary(); boundary.Kind="dialect"; boundary.Dialect=dialect;
+            boundary.Owner=probe.Name(); probe.Need(":"); probe.Need(":"); boundary.Member=probe.Take().Text;
+            r.Pos=probe.Pos; r.Reset();
+          }
+        }
+        when(boundary!=null)
+        {
+          boundary.Location=At(file,t.Start); def id=boundaries.Count; boundaries.Add(boundary);
+          if(boundary.Kind=="set")
+          {
+            def end=EndOfValue(text,r.File,r.Pos);
+            edits.Add(NitraBoundaryEdit(t.Start,r.Pos,"__b("+id.ToString()+","));
+            edits.Add(NitraBoundaryEdit(end,end,")"));
+          }
+          else
+          {
+            boundary.IsCall=r.Eat("(");
+            def end=if(boundary.IsCall) r.Pos else r.Peek().Start;
+            def prefix=if(boundary.IsCall) "__b("+id.ToString()+(if(r.Is(")")) "" else ",") else "__b("+id.ToString()+")";
+            edits.Add(NitraBoundaryEdit(t.Start,end,prefix));
+          }
+        }
+      }
+      previous=t.Text;
+    }
+    // Keep every original newline, including multiline qualified prefixes.
+    edits.Sort((a,b) => b.Start.CompareTo(a.Start)); mutable result=text;
+    foreach(edit in edits)
+    {
+      def original=text.Substring(edit.Start,edit.End-edit.Start);
+      mutable replacement=edit.Text;
+      foreach(c in original) when(c=='\n' || c=='\r') replacement=replacement+c.ToString();
+      when(replacement.Length<original.Length) replacement=replacement+string(' ',original.Length-replacement.Length);
+      result=result.Substring(0,edit.Start)+replacement+result.Substring(edit.End);
+    }
+    result
+  }
+  private Context(space : NitraDialectSpace, typer : Typer, location : Location) : NitraDialectContext
+  {
+    when(space.Resolver==null)
+    {
+      unless(preparing.Add(space.Zone)) throw ArgumentException("recursive dialect resolver initialization: "+space.Dialect+":"+space.Owner);
+      try { _=Expand(typer,space.Zone); } finally { _=preparing.Remove(space.Zone); }
+    }
+    NitraDialectContext(configuration.Dialects,space,typer,location)
+  }
+  private ResolveBoundary(boundary : NitraBoundary, typer : Typer, args : array[PExpr]) : NitraDialectResolution
+  {
+    def space=configuration.Dialects.Space(boundary.Dialect,boundary.Owner);
+    def context=Context(space,typer,boundary.Location); def previous=NitraDialectContext.Active;
+    try { NitraDialectContext.Active=context; context.Resolve(boundary.Member,args,boundary.IsCall) }
+    finally { NitraDialectContext.Active=previous; }
+  }
+  public BoundaryLocation(id : int) : Location
+  { if(id>=0 && id<boundaries.Count) boundaries[id].Location else Location.Default }
+  public Boundary(typer : Typer, id : int, args : list[PExpr]) : PExpr
+  {
+    when(id<0 || id>=boundaries.Count) throw ArgumentException("invalid internal boundary identity");
+    def b=boundaries[id];
+    if(b.Kind=="dialect")
+    {
+      def space=configuration.Dialects.Space(b.Dialect,b.Owner); def context=Context(space,typer,b.Location);
+      def previous=NitraDialectContext.Active;
+      try
+      {
+        NitraDialectContext.Active=context;
+        def request=NitraDialectRequest(context,b.Member,args.ToArray(),b.IsCall);
+        def answer=context.Resolve(b.Member,request.Arguments,b.IsCall);
+        when(answer.Lower==null) throw ArgumentException("dialect member has no lowering: "+b.Member);
+        def output=answer.Lower.Invoke(request); when(output==null) throw ArgumentException("dialect lowering returned no expression: "+b.Member); output
+      }
+      finally { NitraDialectContext.Active=previous; }
+    }
+    else if(b.Kind=="register")
+    {
+      match(args)
+      {
+        | [PExpr.Literal(Literal.String(name)), PExpr.Call(PExpr.Ref(typeName), [PExpr.Literal(Literal.String(type))])] when(typeName.ToString()=="type") =>
+          _=configuration.Dialects.RegisterScope(b.Owner).Register(name,NitraDialectType(type),b.Location); <[ () ]>
+        | [PExpr.Literal(Literal.String(name)), PExpr.Call(PExpr.Ref(macroName), [PExpr.Literal(Literal.Integer(value,false,_))])] when(macroName.ToString()=="__b" && value<int.MaxValue :> ulong) =>
+          def reference=boundaries[value :> int];
+          unless(reference.Kind=="dialect" && !reference.IsCall) throw ArgumentException("scope registration requires a dialect member reference");
+          def resolved=ResolveBoundary(reference,typer,array[]);
+          _=configuration.Dialects.RegisterScope(b.Owner).Register(name,NitraDialectReference(reference.Dialect,reference.Owner,reference.Member,resolved),b.Location); <[ () ]>
+        | _ => throw ArgumentException("expected scope.A.registery(\"name\", type(\"type\")) or a dialect member reference");
+      }
+    }
+    else if(b.Kind=="set")
+    {
+      match(args)
+      { | [value] => configuration.Dialects.Scope(b.Owner).Set(b.Member,value); <[ () ]>
+        | _ => throw ArgumentException("scope assignment requires one value"); }
+    }
+    else
+    {
+      def binding=configuration.Dialects.Scope(b.Owner).Get(b.Member);
+      match(binding.Value)
+      {
+        | reference is NitraDialectReference =>
+          def call=NitraBoundary(); call.Kind="dialect"; call.Dialect=reference.Dialect; call.Owner=reference.Owner;
+          call.Member=reference.Name; call.IsCall=b.IsCall; call.Location=b.Location;
+          def slot=boundaries.Count; boundaries.Add(call); Boundary(typer,slot,args)
+        | expression is PExpr => if(b.IsCall) PExpr.Call(expression,args) else expression
+        | _ => throw ArgumentException("scope binding has no expression value: scope."+b.Owner+"."+b.Member);
+      }
+    }
+  }
+}
+internal sealed class NitraSpaceMacro : IMacro
+{
+  session : NitraSourceSession;
+  public this(session : NitraSourceSession) { this.session=session; }
+  public GetName() : string { "__g" }
+  public GetNamespace() : string { "Nemerle.Core" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null,null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    mutable location=Location.Default;
+    try
+    {
+      match(args)
+      {
+        | [SyntaxElement.Expression(PExpr.Literal(Literal.Integer(value,false,_)))] when(value<=int.MaxValue :> ulong) =>
+          location=session.SpaceLocation(value :> int); session.Expand(ctx,value :> int)
+        | _ => throw ArgumentException("invalid internal native space invocation");
+      }
+    }
+    catch
+    {
+      | exception =>
+        mutable error=exception;
+        while(error is System.Reflection.TargetInvocationException && error.InnerException!=null) error=error.InnerException;
+        Message.Error(location,error.Message); PExpr.Error(location)
+    }
+  }
+}

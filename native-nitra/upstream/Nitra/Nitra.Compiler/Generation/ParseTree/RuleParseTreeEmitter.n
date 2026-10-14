@@ -3,7 +3,7 @@ using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 
@@ -40,7 +40,7 @@ namespace Nitra.Compiler
 
       // Fix #NTR-32 by adding excess module "Nested"
       when (nestedTb == null)
-        UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(), nestedTb = nodeTb.DefineNestedType(<[ decl: public module Nested { } ]>));
+        Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(), nestedTb = nodeTb.DefineNestedType(<[ decl: public module Nested { } ]>));
 
       nestedTb.DefineNestedType(td)
     }

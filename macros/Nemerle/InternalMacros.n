@@ -27,7 +27,15 @@
  */
 
 using Nemerle;
-using Nemerle.Compiler;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.ConstantFolder;
+using Nemerle.Compiler.FixedType;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.PrettyPrint;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.TypeInfo;
+using Nemerle.Compiler.Utility;
 using PT = Nemerle.Compiler.Parsetree;
 
 // ---- Internals.n (Nemerle.InternalMacros) ----
@@ -72,7 +80,7 @@ macro StaticInitializer (t : TypeBuilder, f : ParsedField, val)
     def fakeMethod = <[ decl: ..$attrs $(n : usesite) () : $(f.ty) $val ]>;
     fakeMethod.BodyOpenTokenLocation  = val.Location.FromStart();
     fakeMethod.BodyCloseTokenLocation = val.Location.FromEnd();
-    UtilMacros.locate(val.Location, t.Define(fakeMethod));
+    Nemerle.Compiler.UtilMacros.locate(val.Location, t.Define(fakeMethod));
   }
 }
 
@@ -156,7 +164,7 @@ macro StaticInitializer (t : TypeBuilder, f : FieldBuilder, val)
     {
       def ctor = ctor :> MethodBuilder;
       def bd = ctor.Body;
-      def nbody = UtilMacros.locate(ctor.Body.Location, 
+      def nbody = Nemerle.Compiler.UtilMacros.locate(ctor.Body.Location, 
         match (bd) {
           | <[ {.. $(elems) } ]> =>
             // initializer macro is a syntactic placeholder for our initialization
@@ -193,8 +201,8 @@ macro StaticInitializer (t : TypeBuilder, f : FieldBuilder, val)
     match (mems) {
       | [] => 
         def loc = t.Location;
-        def loc1 = Nemerle.Compiler.Location(loc.FileIndex, loc.Line, loc.Column);
-        UtilMacros.locate(loc1, 
+        def loc1 = Nemerle.Compiler.AST.Location(loc.FileIndex, loc.Line, loc.Column);
+        Nemerle.Compiler.UtilMacros.locate(loc1, 
           when (is_static) 
             t.Define (<[ decl: static this () { Nemerle.InternalMacros.initializer ($init); } ]>)
           );
@@ -219,7 +227,7 @@ macro PropertyEmbeddedField (t : TypeBuilder, p : ParsedProperty, field_box)
       def redirect (f)
       {
         | Some(PT.ClassMember.Function(_, _, FunBody.Parsed(bodyExpr)) as func) =>
-          def newBody = UtilMacros.locate(bodyExpr.Location, 
+          def newBody = Nemerle.Compiler.UtilMacros.locate(bodyExpr.Location, 
             <[
               InternalMacros.RedirectName ($(fld_name : name),
               $(unique : name),
@@ -242,7 +250,7 @@ macro PropertyEmbeddedField (t : TypeBuilder, p : ParsedProperty, field_box)
       t.Define (newdecl)
 
     | _ =>
-      MessageMacros.FatalError (field_box.Location, "malformed PropertyEmbeddedField (ICE?)")
+      Nemerle.Compiler.MessageMacros.FatalError (field_box.Location, "malformed PropertyEmbeddedField (ICE?)")
   }
 }
 
@@ -261,7 +269,7 @@ macro EventEmbeddedField (t : TypeBuilder, p : EventBuilder, field_box)
 
       when (set != null)
       {
-        def newBody = UtilMacros.locate(set.Body.Location,
+        def newBody = Nemerle.Compiler.UtilMacros.locate(set.Body.Location,
           <[
             InternalMacros.RedirectName ($(fld_name : name),
             $(unique : name),
@@ -275,7 +283,7 @@ macro EventEmbeddedField (t : TypeBuilder, p : EventBuilder, field_box)
       
       when (get != null)
       {
-        def newBody = UtilMacros.locate(get.Body.Location,
+        def newBody = Nemerle.Compiler.UtilMacros.locate(get.Body.Location,
           <[
             InternalMacros.RedirectName ($(fld_name : name),
             $(unique : name),
@@ -293,7 +301,7 @@ macro EventEmbeddedField (t : TypeBuilder, p : EventBuilder, field_box)
       t.Define (newdecl)
 
     | _ =>
-      MessageMacros.FatalError (field_box.Location, "malformed EventEmbeddedField (ICE?)")
+      Nemerle.Compiler.MessageMacros.FatalError (field_box.Location, "malformed EventEmbeddedField (ICE?)")
   }
 }
 
@@ -305,6 +313,6 @@ macro RedirectName (name, newname, oldbody)
       Nemerle.Macros.ImplicitCTX().AddRedirection(n, newname);
       oldbody
 
-    | _ => MessageMacros.FatalError ("invalid name supplied to RedirectName")
+    | _ => Nemerle.Compiler.MessageMacros.FatalError ("invalid name supplied to RedirectName")
   }
 }

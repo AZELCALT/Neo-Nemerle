@@ -2,7 +2,7 @@ using System;
 using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeBuilder;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nitra.Model;
@@ -18,7 +18,7 @@ namespace Nitra.Compiler
     {
       def adds=children.Map(c => <[ e.Children.Add($c) ]>);
       def textExpr=if(text==null) <[ null ]> else <[ $(text : string) ]>;
-      <[ def e=Nemerle.Compiler.NitraExpression($(kind : string),$textExpr); ..$adds; e ]>
+      <[ def e=Nemerle.Compiler.NitraSyntaxModel.NitraExpression($(kind : string),$textExpr); ..$adds; e ]>
     }
     Repeat(kind : string, min : int, max : option[int], children : list[PExpr], trailing : bool) : PExpr
     {
@@ -89,7 +89,7 @@ namespace Nitra.Compiler
           | _ => "0"
         };
         when(body!=null)
-          variants.Add(<[ def a=Nemerle.Compiler.NitraAlternative(); a.Scope = $(symbol.Node.FullName : string); a.Expression = $body; a.ExplicitSpaces=true; a.Precedence = $(precedence : string); a.NativePostfix = $(symbol is ExtensionRuleSymbol(ExtensionType=ExtensionRuleSymbol.ExtensionRuleType.Postfix) : bool); a.NativeStrong = $(symbol is ExtensionRuleSymbol(ExtensionType=ExtensionRuleSymbol.ExtensionRuleType.Postfix(BindingPower=BindingPowerInfo(IsStrong=true))) : bool); r.Alternatives.Add(a) ]>);
+          variants.Add(<[ def a=Nemerle.Compiler.NitraSyntaxModel.NitraAlternative(); a.Scope = $(symbol.Node.FullName : string); a.Expression = $body; a.ExplicitSpaces=true; a.Precedence = $(precedence : string); a.NativePostfix = $(symbol is ExtensionRuleSymbol(ExtensionType=ExtensionRuleSymbol.ExtensionRuleType.Postfix) : bool); a.NativeStrong = $(symbol is ExtensionRuleSymbol(ExtensionType=ExtensionRuleSymbol.ExtensionRuleType.Postfix(BindingPower=BindingPowerInfo(IsStrong=true))) : bool); r.Alternatives.Add(a) ]>);
         def baseName=match(symbol) { | ExtensionRuleSymbol(BaseRule=SymbolRef.Some(s)) => s.Node.FullName | _ => null };
         def baseExpr=if(baseName==null) <[ null ]> else <[ $(baseName : string) ]>;
         def orders=SCG.List.[PExpr]();
@@ -98,16 +98,16 @@ namespace Nitra.Compiler
         foreach(p in syntaxModule.PrecedenceRelations)
           orders.Add(<[ r.Orders.Add($(p.Symbol.Node.FullName+"."+p.Low+"<"+p.Symbol.Node.FullName+"."+p.Hi : string)) ]>);
         statements.Add(<[
-          def r=Nemerle.Compiler.NitraRule(); r.Name = $(name : string); r.Scope = $(scope : string);
+          def r=Nemerle.Compiler.NitraSyntaxModel.NitraRule(); r.Name = $(name : string); r.Scope = $(scope : string);
           r.Kind = $(kind : string); r.Base = $baseExpr; r.Module=m;
-          r.Declaration=Nemerle.Compiler.NitraDeclaration(); r.ExplicitSpaces=true; r.NativeBindings=true;
+          r.Declaration=Nemerle.Compiler.NitraSyntaxModel.NitraDeclaration(); r.ExplicitSpaces=true; r.NativeBindings=true;
           r.StartRule = $(symbol.Options.IsStart : bool); ..$variants; ..$orders; m.Rules.Add(r);
         ]>);
       }
       tb.DefineConditional(<[ decl:
-        public static GetRecognitionGrammar() : Nemerle.Compiler.NitraDocument
+        public static GetRecognitionGrammar() : Nemerle.Compiler.NitraSyntaxModel.NitraDocument
         {
-          def d=Nemerle.Compiler.NitraDocument(); def m=Nemerle.Compiler.NitraModule();
+          def d=Nemerle.Compiler.NitraSyntaxModel.NitraDocument(); def m=Nemerle.Compiler.NitraSyntaxModel.NitraModule();
           m.Name = $(syntaxModule.Node.FullName : string); m.ExplicitSpaces=true;
           ..$statements; d.Modules.Add(m); d
         }
@@ -140,15 +140,15 @@ namespace Nitra.Compiler
               def type=Environment.GetParseTreeType(body.Type);
               match(rule.Type)
               {
-                | Option => <[ Nitra.SelectedFields.Optional(provider,$node,System.Func.[Nemerle.Compiler.NitraStructure,$(type : typed)](item => $value)) ]>
-                | List => <[ Nitra.SelectedFields.List(provider,$node,System.Func.[Nemerle.Compiler.NitraStructure,$(type : typed)](item => $value),false,false) ]>
+                | Option => <[ Nitra.SelectedFields.Optional(provider,$node,System.Func.[Nemerle.Compiler.NitraStructures.NitraStructure,$(type : typed)](item => $value)) ]>
+                | List => <[ Nitra.SelectedFields.List(provider,$node,System.Func.[Nemerle.Compiler.NitraStructures.NitraStructure,$(type : typed)](item => $value),false,false) ]>
                 | _ => throw InvalidOperationException("unsupported native selected repetition type")
               }
             | RepeatWithSeparator(_,_,body,separator,_) =>
               def makeList(r : Rule, separators : bool) : PExpr
               {
                 def value=SelectedValue(r,<[ item ]>); def type=Environment.GetParseTreeType(r.Type);
-                <[ Nitra.SelectedFields.List(provider,$node,System.Func.[Nemerle.Compiler.NitraStructure,$(type : typed)](item => $value),true,$(separators : bool)) ]>
+                <[ Nitra.SelectedFields.List(provider,$node,System.Func.[Nemerle.Compiler.NitraStructures.NitraStructure,$(type : typed)](item => $value),true,$(separators : bool)) ]>
               }
               if(body.Type is RuleType.Void) makeList(separator,true)
               else if(separator.Type is RuleType.Void) makeList(body,false)
@@ -167,8 +167,8 @@ namespace Nitra.Compiler
         public static GetRecognitionRuleName() : string { $(RuleSymbol.Node.FullName : string) }
       ]>);
       nodeTb.DefineConditional(<[ decl:
-        public static CreateSelected(provider : Nitra.Runtime.ISourceSnapshotProvider, selected : Nemerle.Compiler.NitraStructure,
-          create : System.Func[string,Nitra.Runtime.ISourceSnapshotProvider,Nemerle.Compiler.NitraStructure,object]) : object
+        public static CreateSelected(provider : Nitra.Runtime.ISourceSnapshotProvider, selected : Nemerle.Compiler.NitraStructures.NitraStructure,
+          create : System.Func[string,Nitra.Runtime.ISourceSnapshotProvider,Nemerle.Compiler.NitraStructures.NitraStructure,object]) : object
         {
           def node=Nitra.SelectedFields.Unwrap(selected,"seq");
           unchecked($(chemicalTb.GetMemType() : typed)(..$args))

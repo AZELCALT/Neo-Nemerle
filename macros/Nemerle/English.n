@@ -26,7 +26,6 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-using Nemerle.Compiler;
 
 // ---- English.n (Nemerle.English) ----
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.English", "and", false, 160, 161)]

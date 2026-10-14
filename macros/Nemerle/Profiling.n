@@ -28,7 +28,11 @@
 
 using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.GlobalEnv;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Profiling.Helper;
 
@@ -177,14 +181,14 @@ macro ProfDump (_current_type : TypeBuilder, method : MethodBuilder)
 {
   when (dumper == null)
     FinishUp (_current_type.GlobalEnv);
-  def newBody = UtilMacros.locate(method.Body.Location, dumper);
+  def newBody = Nemerle.Compiler.UtilMacros.locate(method.Body.Location, dumper);
   method.Body = newBody;
 }
 
 [MacroUsage (MacroPhase.BeforeInheritance, MacroTargets.Method, Inherited = false, AllowMultiple = false)]
 macro Profile (current_type : TypeBuilder, method : ParsedMethod)
 {
-  def newBody = UtilMacros.locate(method.Body.Location, 
+  def newBody = Nemerle.Compiler.UtilMacros.locate(method.Body.Location, 
     Wrap (current_type.FullName + "." + method.Name, method.Body));
 
   method.Body = newBody;
@@ -201,7 +205,7 @@ macro @profile (id, body)
         "foobar"
     }
 
-  def typer = Macros.ImplicitCTX ();
+  def typer = Nemerle.Macros.ImplicitCTX ();
 
   Wrap (typer.CurrentTypeBuilder.FullName + "." + 
         typer.CurrentMethodBuilder.Name + ":::" + id, body)

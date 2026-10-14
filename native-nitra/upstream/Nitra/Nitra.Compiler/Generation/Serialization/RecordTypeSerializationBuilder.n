@@ -1,6 +1,6 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
+using Nemerle.Compiler.TypeInfo;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Text;
@@ -71,7 +71,7 @@ namespace Nitra.Serialization
       foreach (member in _members)
       {
         def varName = getVarName(member);
-        match (if (member.Member is Nemerle.Compiler.PropertyBuilder as member) member.Ast.initializer else None())
+        match (if (member.Member is Nemerle.Compiler.ClassMembers.PropertyBuilder as member) member.Ast.initializer else None())
         {
           | Some(init) => body.Add(<[ mutable $(varName : usesite) : $(member.Builder.Type : typed) = $init]>);
           | None       => body.Add(<[ mutable $(varName : usesite) : $(member.Builder.Type : typed) ]>);

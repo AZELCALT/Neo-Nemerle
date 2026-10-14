@@ -29,7 +29,9 @@
 using Nemerle;
 using System.Xml;
 using System.Xml.Serialization;
-using Nemerle.Compiler;
+using Nemerle.Compiler.Macros;
+using Nemerle.Compiler.TypeBuilder;
+using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Collections;
 using Nemerle.Utility;
@@ -43,7 +45,7 @@ macro XmlMultidimensionalArray (t : TypeBuilder, f : ParsedField)
   f.modifiers.custom_attrs = <[ XmlIgnore ]> :: f.modifiers.custom_attrs;
   def (rank, elementType) = match (f.ty) {
     | <[ array [ $(rank : int), $t] ]> => (rank, t)
-    | _ => MessageMacros.FatalError ("type of field `" + f.Name +
+    | _ => Nemerle.Compiler.MessageMacros.FatalError ("type of field `" + f.Name +
                                 "' is not multidimensional array")
   }
   def fname = Macros.UseSiteSymbol (f.Name);

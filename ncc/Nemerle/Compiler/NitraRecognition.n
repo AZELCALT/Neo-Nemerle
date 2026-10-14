@@ -1,0 +1,602 @@
+// Experimental static recognition. Operations/positions share source observations;
+// endpoint constraints do not enumerate AST candidates or invoke user code.
+
+using System;
+using System.Globalization;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Compiler.NitraRegions;
+using Nemerle.Compiler.NitraShared;
+using Nemerle.Compiler.NitraStructures;
+using Nemerle.Compiler.NitraSyntaxModel;
+
+internal sealed class NitraOperation
+{
+  public mutable Id : int;
+  public mutable Interface : NitraOperation;
+  public mutable SharedPrefix : bool;
+  public mutable FirstGuard : NitraOperation;
+  // Dispatch codes computed once in Prepare: 0 empty, 1 literal, 2 class, 3 seq, 4 alternatives (rule/alt/variant/capture/call),
+  // 5 longest, 6 repeat, 7 separated, 8 and, 9 not, 10 subtract, 11 deferred, 12 other.
+  public mutable Code : int = -1;
+  // Candidate ends are held back until the region closes (longest, bounded repeat, subtract).
+  public mutable Holds : bool;
+  // Pure lexical operation: ends come straight from the scanner, no region is opened.
+  public mutable Scanned : bool;
+  // The operation always has a zero-width result at any position (never depends on lookahead or input).
+  public mutable Sure : bool;
+  // Selection: first operation down a chain of pure pass-through wrappers (feasibility is identical).
+  public mutable Pass : NitraOperation;
+  // Hybrid: stage counts of this sequence after which a shared-prefix region of its interface ends (null when none).
+  public mutable PrefixEnds : array[bool];
+  public mutable PrefixKnown : bool;
+  // Recomputed when preparation finishes (Fast is final only then).
+  public Classify() : void
+  {
+    Code=match(Kind)
+    {
+      | "empty" => 0 | "literal" => 1 | "class" => 2 | "seq" => 3
+      | "rule" | "alt" | "variant" | "capture" | "call" => 4
+      | "longest" => 5 | "repeat" => 6 | "separated" => 7 | "and" => 8 | "not" => 9 | "subtract" => 10 | "deferred" => 11
+      | _ => 12
+    };
+    Holds=Code==5 || (Code==6 || Code==7) && !AllEnds || Code==10;
+    Scanned=Fast || Code==0 || Code==1 || Code==2;
+  }
+  public mutable Kind : string;
+  public mutable Text : string;
+  public mutable Label : string;
+  public mutable RuleKind : string;
+  public mutable Min : int;
+  public mutable Max : int = -1;
+  public mutable FastCandidate : bool;
+  public mutable Fast : bool;
+  public mutable Nullable : bool;
+  public mutable AllEnds : bool;
+  public mutable OpaqueValue : bool;
+  public mutable GreedyCall : bool;
+  public Parents : SCG.List[NitraOperation] = SCG.List();
+  public Children : SCG.List[NitraOperation] = SCG.List();
+}
+/// Shared recognition interface at a source position. Ends remain alternatives
+/// of a structural constraint, never separate candidate trees.
+public sealed class NitraRegion
+{
+  public mutable Id : int;
+  public mutable Operation : int;
+  public mutable Sample : int;
+  public mutable Kind : string;
+  public mutable Label : string;
+  public mutable Start : int;
+  public Ends : SCG.List[int] = SCG.List();
+  public Children : SCG.List[int] = SCG.List();
+}
+public sealed class NitraRecognitionResult
+{
+  internal mutable Evidence : NitraEvidence;
+  public mutable Source : string;
+  public mutable Rule : string;
+  public mutable Root : int;
+  public mutable Accepted : bool;
+  public mutable Complete : bool;
+  public mutable Furthest : int;
+  public mutable Evaluations : int;
+  public mutable Observations : int;
+  public mutable SampleCreations : int;
+  public mutable SampleReuse : int;
+  public mutable PrefixSamples : int;
+  public mutable PrefixReuse : int;
+  public mutable FamilyEliminations : int;
+  public mutable ContinuationAdvances : int;
+  public mutable DuplicateTransitionsAvoided : int;
+  public mutable PrefixReplays : int;
+  public mutable DispatchBuilds : int;
+  public mutable RecognizeMicroseconds : int;
+  public mutable ExportMicroseconds : int;
+  public MatchedProductions : SCG.List[string] = SCG.List();
+  public Regions : SCG.List[NitraRegion] = SCG.List();
+  public Diagnostics : SCG.List[string] = SCG.List();
+  public ToJson() : string
+  {
+    def b=StringBuilder("{\"accepted\":"+(if(Accepted) "true" else "false")+",\"complete\":"+(if(Complete) "true" else "false")+",\"root\":"+Root.ToString()+",\"furthest\":"+Furthest.ToString()+",\"regions\":[");
+    mutable first=true;
+    foreach(r in Regions)
+    {
+      unless(first) _=b.Append(','); first=false;
+      _=b.Append("{\"id\":"+r.Id.ToString()+",\"operation\":"+r.Operation.ToString()+",\"kind\":"+GrammarJson.Quote(r.Kind)+",\"label\":"+GrammarJson.Quote(r.Label)+",\"start\":"+r.Start.ToString()+",\"ends\":[");
+      mutable ef=true; foreach(e in r.Ends) { unless(ef) _=b.Append(','); ef=false; _=b.Append(e); }
+      _=b.Append("],\"children\":["); ef=true; foreach(c in r.Children) { unless(ef) _=b.Append(','); ef=false; _=b.Append(c); } _=b.Append("]}");
+    }
+    _=b.Append("],\"samples\":"+SampleCreations.ToString()+",\"sampleReuse\":"+SampleReuse.ToString()+",\"prefixSamples\":"+PrefixSamples.ToString()+",\"prefixReuse\":"+PrefixReuse.ToString()+",\"familyEliminations\":"+FamilyEliminations.ToString()+",\"continuationAdvances\":"+ContinuationAdvances.ToString()+",\"duplicateTransitionsAvoided\":"+DuplicateTransitionsAvoided.ToString()+",\"prefixReplays\":"+PrefixReplays.ToString()+",\"diagnostics\":["); first=true; foreach(d in Diagnostics) { unless(first) _=b.Append(','); first=false; _=b.Append(GrammarJson.Quote(d)); }
+    _=b.Append("]}"); b.ToString()
+  }
+}
+public sealed class NitraPreparedGrammar
+{
+  internal Entries : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+  internal mutable Ready : bool;
+  // Some call is greedy (native-compatible rules): selection must honour native choices.
+  internal mutable Native : bool;
+  internal FirstAscii : array[array[bool]] = array(128);
+  internal Operations : SCG.List[NitraOperation] = SCG.List();
+  public Modules : SCG.List[string] = SCG.List();
+  public StartRules : SCG.List[string] = SCG.List();
+  internal this() {}
+  public Recognize(rule : string, source : string) : NitraRecognitionResult
+  { Recognize(rule,source,false) }
+  internal Recognize(rule : string, source : string, retain : bool) : NitraRecognitionResult
+  { Recognize(rule,source,retain,true) }
+  internal Recognize(rule : string, source : string, retain : bool, detailed : bool) : NitraRecognitionResult
+  {
+    when(source==null) throw ArgumentNullException("source");
+    unless(Entries.ContainsKey(rule)) throw ArgumentException("unknown prepared rule: "+rule);
+    def before=if(NitraRecognizer.PhasesOn) GC.GetAllocatedBytesForCurrentThread() else 0L;
+    def recognizer=NitraRecognizer(this,source);
+    when(NitraRecognizer.PhasesOn) NitraRecognizer.NoteCount("al_ctor_kb",((GC.GetAllocatedBytesForCurrentThread()-before)/1024L) :> int);
+    recognizer.Run(Entries[rule],rule,retain,detailed)
+  }
+}
+internal sealed class NitraPreparation
+{
+  result : NitraPreparedGrammar = NitraPreparedGrammar();
+  available : SCG.Dictionary[string,NitraModule] = SCG.Dictionary();
+  modules : SCG.Dictionary[string,NitraModule] = SCG.Dictionary();
+  rules : SCG.Dictionary[string,NitraRule] = SCG.Dictionary();
+  orders : SCG.Dictionary[string,SCG.List[string]] = SCG.Dictionary();
+  alternatives : SCG.Dictionary[string,SCG.List[NitraAlternative]] = SCG.Dictionary();
+  entries : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+  ranks : SCG.Dictionary[string,int] = SCG.Dictionary();
+  primitives : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+  shared : SCG.Dictionary[string,NitraOperation] = SCG.Dictionary();
+  private mutable aliasesActive : SCG.HashSet[string] = SCG.HashSet();
+  keywordCache : SCG.Dictionary[string,string] = SCG.Dictionary();
+  public this(documents : SCG.IEnumerable[NitraDocument], selected : SCG.IEnumerable[string])
+  {
+    foreach(d in documents)
+    {
+      unless(d.Success) throw ArgumentException("cannot prepare invalid declaration document: "+d.File);
+      foreach(m in d.Modules)
+      { when(available.ContainsKey(m.Name)) throw ArgumentException("duplicate syntax module: "+m.Name); available.Add(m.Name,m); }
+    }
+    def include(name : string) : void
+    {
+      unless(available.ContainsKey(name)) throw ArgumentException("unknown selected syntax module: "+name);
+      unless(modules.ContainsKey(name))
+      {
+        def m=available[name]; modules.Add(name,m); result.Modules.Add(name);
+        foreach(i in m.Imports.Values) { def imported=ModuleName(i,m); when(imported!=null) include(imported); }
+      }
+    }
+    foreach(name in selected) include(name);
+    when(modules.Count==0) throw ArgumentException("select at least one syntax module");
+    foreach(m in modules.Values) foreach(r in m.Rules) when(r.Base==null)
+    {
+      when(rules.ContainsKey(r.Key)) throw ArgumentException("duplicate rule: "+r.Key);
+      rules.Add(r.Key,r); alternatives[r.Key]=SCG.List(r.Alternatives); orders[r.Key]=SCG.List(r.Orders);
+    }
+    foreach(m in modules.Values) foreach(r in m.Rules) when(r.Base!=null)
+    {
+      def target=Resolve(r.Base,r.Scope,m);
+      when(target==null) throw ArgumentException("unknown extension target: "+r.Base);
+      unless(target.Kind==r.Kind) throw ArgumentException("extension kind mismatch: "+r.Base);
+      alternatives[target.Key].AddRange(r.Alternatives); orders[target.Key].AddRange(r.Orders);
+    }
+    foreach(r in rules.Values) Rank(r);
+  }
+  private Op(kind : string, text : string) : NitraOperation
+  {
+    def key=kind+":"+text;
+    def primitive=kind=="literal" || kind=="range" || kind=="category" || kind=="empty";
+    when(primitive && primitives.ContainsKey(key)) return primitives[key];
+    def o=NitraOperation(); o.Id=result.Operations.Count; o.Kind=kind; o.Text=text; o.Label=text; result.Operations.Add(o);
+    when(primitive) primitives.Add(key,o); o
+  }
+  private Join(left : NitraOperation, right : NitraOperation) : NitraOperation
+  { if(right==null) left else { def o=Op("seq",null); o.Children.Add(left); o.Children.Add(right); Intern(o) } }
+  private Intern(o : NitraOperation) : NitraOperation
+  {
+    // Production identity stays on variants; equivalent structural requirements
+    // share one operation even when contributed by different productions.
+    when(o.Kind=="rule" || o.Kind=="longest" || o.Kind=="variant" || o.Kind=="deferred") return o;
+    def key=StringBuilder();
+    foreach(value in array[o.Kind,o.Text,o.RuleKind])
+    { _=key.Append(if(value==null) -1 else value.Length); _=key.Append(':'); _=key.Append(value); }
+    _=key.Append(":"+o.Min.ToString()+":"+o.Max.ToString()+":"+o.AllEnds.ToString()+":"+o.OpaqueValue.ToString()+":"+o.GreedyCall.ToString());
+    foreach(c in o.Children) _=key.Append(":"+c.Id.ToString());
+    def name=key.ToString();
+    if(shared.ContainsKey(name)) shared[name] else { shared.Add(name,o); o }
+  }
+  private ModuleName(name : string, mod : NitraModule) : string
+  {
+    mutable ns=mod.Name;
+    while(ns.Length>0)
+    {
+      def dot=ns.LastIndexOf('.'); ns=if(dot<0) "" else ns.Substring(0,dot);
+      def key=if(ns=="") name else ns+"."+name;
+      when(available.ContainsKey(key)) return key;
+    }
+    null
+  }
+  private Resolve(name : string, scope : string, mod : NitraModule) : NitraRule
+  {
+    mutable position=int.MaxValue; mutable scopeLength=0;
+    foreach(r in rules.Values) when(r.Kind!="alias" && scope.StartsWith(r.Key+".",StringComparison.Ordinal) && r.Key.Length>scopeLength)
+    { position=r.Declaration.Start; scopeLength=r.Key.Length; }
+    mutable current=scope;
+    while(current.Length>0)
+    {
+      mutable alias : NitraRule=null;
+      foreach(r in rules.Values) when(r.Kind=="alias" && r.Scope==current && r.Name==name && r.Declaration.Start<=position && (alias==null || alias.Declaration.Start<r.Declaration.Start)) alias=r;
+      when(alias!=null) return alias;
+      def key=current+"."+name; when(rules.ContainsKey(key)) return rules[key];
+      def dot=current.LastIndexOf('.'); current=if(dot<0) "" else current.Substring(0,dot);
+    }
+    when(rules.ContainsKey(name)) return rules[name];
+    def candidates=SCG.HashSet.[NitraRule]();
+    foreach(i in mod.Imports)
+    {
+      def target=ModuleName(i.Value,mod) ?? i.Value;
+      def lookup=if(i.Key!=target && name.StartsWith(i.Key+".",StringComparison.Ordinal)) target+name.Substring(i.Key.Length) else target+"."+name;
+      when(rules.ContainsKey(lookup)) _=candidates.Add(rules[lookup]);
+    }
+    when(candidates.Count>1) throw ArgumentException("ambiguous rule: "+name+" in "+scope);
+    foreach(c in candidates) return c;
+    null
+  }
+  private Rank(r : NitraRule) : void
+  {
+    def groups=SCG.List.[string](); def edges=SCG.List.[string](); mutable previous : string=null; mutable previousScope : string=null;
+    foreach(a in alternatives[r.Key])
+    {
+      def dot=a.Scope.LastIndexOf('.'); def parent=a.Scope.Substring(0,dot);
+      when(previousScope!=parent) previous=null; previousScope=parent;
+      def p=a.Precedence;
+      if(p=="0") previous=null;
+      else unless(groups.Contains(p)) { groups.Add(p); when(previous!=null && !r.NativeBindings) edges.Add(previous+"<"+p); previous=p; }
+    }
+    edges.AddRange(orders[r.Key]);
+    foreach(e in edges) foreach(p in e.Split(array['<'])) unless(groups.Contains(p)) groups.Add(p);
+    mutable level=1;
+    while(groups.Count>0)
+    {
+      mutable chosen : string=null;
+      foreach(p in groups)
+      {
+        mutable ready=true;
+        foreach(e in edges) { def s=e.Split(array['<']); when(s[1]==p && groups.Contains(s[0])) ready=false; }
+        when(ready && chosen==null) chosen=p;
+      }
+      when(chosen==null) throw ArgumentException("cyclic precedence: "+r.Key);
+      mutable rank=level;
+      when(r.NativeBindings)
+      {
+        rank=if(chosen=="0") 0 else 1;
+        foreach(e in edges)
+        {
+          def s=e.Split(array['<']);
+          when(s[1]==chosen) rank=Math.Max(rank,ranks[r.Key+":"+s[0]]+1);
+        }
+      }
+      ranks[r.Key+":"+chosen]=rank; ++level; _=groups.Remove(chosen);
+    }
+    ranks[r.Key+":0"]=0;
+  }
+  private RankOf(r : NitraRule, name : string) : int
+  { def k=r.Key+":"+name; unless(ranks.ContainsKey(k)) throw ArgumentException("unknown precedence "+name+" on "+r.Key); ranks[k] }
+  public Prepare() : NitraPreparedGrammar
+  {
+    foreach(r in rules.Values)
+    {
+      result.Entries[r.Key]=Entry(r,0);
+      when(r.StartRule) result.StartRules.Add(r.Key);
+    }
+    def known=SCG.Dictionary.[int,bool](); def active=SCG.HashSet.[int]();
+    def regular(o : NitraOperation) : bool
+    {
+      when(known.ContainsKey(o.Id)) return known[o.Id];
+      when(active.Contains(o.Id)) return false;
+      when(o.Kind=="deferred" || (o.Kind=="rule" || o.Kind=="longest") && !o.FastCandidate) return false;
+      _=active.Add(o.Id); mutable yes=true; foreach(c in o.Children) unless(regular(c)) yes=false;
+      _=active.Remove(o.Id); known[o.Id]=yes; yes
+    }
+    def visible(o : NitraOperation) : bool
+    {
+      when(o.Kind=="rule" || o.Kind=="longest" || o.Kind=="deferred") return false;
+      when(o.Kind=="capture" || o.Kind=="call") return true;
+      mutable found=false; foreach(c in o.Children) when(visible(c)) found=true; found
+    }
+    foreach(o in result.Operations) o.Fast=regular(o) && !visible(o);
+    mutable changed=true;
+    while(changed)
+    {
+      changed=false;
+      foreach(o in result.Operations) unless(o.Nullable)
+      {
+        mutable yes=false;
+        match(o.Kind)
+        {
+          | "empty" | "not" | "and" | "deferred" => yes=true;
+          | "literal" => yes=o.Text.Length==0;
+          | "repeat" | "separated" => yes=o.Min==0 || o.Children[0].Nullable;
+          | "seq" => yes=true; foreach(c in o.Children) unless(c.Nullable) yes=false;
+          | "subtract" => yes=o.Children[0].Nullable;
+          | _ => foreach(c in o.Children) when(c.Nullable) yes=true;
+        }
+        when(yes) { o.Nullable=true; changed=true; }
+      }
+    }
+    // Sure: a zero-width result exists at every position regardless of input.
+    {
+      mutable moved=true;
+      while(moved)
+      {
+        moved=false;
+        foreach(o in result.Operations) unless(o.Sure)
+        {
+          mutable yes=false;
+          match(o.Kind)
+          {
+            | "empty" => yes=true;
+            | "literal" => yes=o.Text.Length==0;
+            | "repeat" | "separated" => yes=o.Min==0 && (!o.Children[0].Nullable || o.AllEnds);
+            | "seq" => yes=true; foreach(c in o.Children) unless(c.Sure) yes=false;
+            | "rule" | "alt" | "variant" | "capture" | "call" | "longest" => foreach(c in o.Children) when(c.Sure) yes=true;
+            | _ => ();
+          }
+          when(yes) { o.Sure=true; moved=true; }
+        }
+      }
+    }
+    // Sequence prefixes become recognition interfaces only where several sequences
+    // share them (branching or shared endings). A prefix with one continuation is
+    // folded into that continuation: one sequence region, not a chain of nested ones.
+    // Original sequence children stay intact for captures and native field consumers.
+    // Keys retain child operation identities: unlike structural samples, a
+    // prefix cannot erase different capture views supplied by its consumers.
+    def originalOperations=SCG.List(result.Operations);
+    def sequences=SCG.List.[NitraOperation]();
+    foreach(o in originalOperations) when(o.Kind=="seq" && o.Children.Count>2) sequences.Add(o);
+    def pathKey(o : NitraOperation, length : int) : string
+    {
+      def b=StringBuilder();
+      for(mutable i=0;i<length;++i) { when(i>0) _=b.Append(':'); _=b.Append(o.Children[i].Id); }
+      b.ToString()
+    }
+    def passCount=SCG.Dictionary.[string,int](); def continuations=SCG.Dictionary.[string,SCG.HashSet[int]]();
+    def terminal=SCG.HashSet.[string]();
+    foreach(o in sequences)
+      for(mutable length=2;length<=o.Children.Count;++length)
+      {
+        def key=pathKey(o,length);
+        passCount[key]=(if(passCount.ContainsKey(key)) passCount[key] else 0)+1;
+        if(length==o.Children.Count) _=terminal.Add(key)
+        else
+        {
+          unless(continuations.ContainsKey(key)) continuations[key]=SCG.HashSet();
+          _=continuations[key].Add(o.Children[length].Id);
+        }
+      }
+    def kept(key : string) : bool
+    { passCount[key] >=2 && (terminal.Contains(key) || continuations.ContainsKey(key) && continuations[key].Count>=2) }
+    def make(children : SCG.List[NitraOperation], shared : bool) : NitraOperation
+    {
+      def joined=Op("seq",null); joined.SharedPrefix=shared; mutable nullable=true;
+      foreach(c in children) { joined.Children.Add(c); unless(c.Nullable) nullable=false; }
+      joined.Nullable=nullable;
+      joined.Fast=regular(joined) && !visible(joined); joined.Interface=joined; joined
+    }
+    def keptOps=SCG.Dictionary.[string,NitraOperation]();
+    def keptOp(o : NitraOperation, length : int) : NitraOperation
+    {
+      def key=pathKey(o,length);
+      if(keptOps.ContainsKey(key)) keptOps[key]
+      else
+      {
+        mutable ancestor=0;
+        for(mutable l=length-1;l>=2 && ancestor==0;--l) when(kept(pathKey(o,l))) ancestor=l;
+        def children=SCG.List.[NitraOperation](); mutable from=0;
+        when(ancestor>0) { children.Add(keptOp(o,ancestor)); from=ancestor; }
+        for(mutable i=from;i<length;++i) children.Add(o.Children[i]);
+        def op=make(children,true); keptOps[key]=op; op
+      }
+    }
+    foreach(o in sequences)
+    {
+      mutable best=0;
+      for(mutable l=o.Children.Count;l>=2 && best==0;--l) when(kept(pathKey(o,l))) best=l;
+      if(best==0) ()
+      else if(best==o.Children.Count) o.Interface=keptOp(o,best)
+      else
+      {
+        def children=SCG.List.[NitraOperation](); children.Add(keptOp(o,best));
+        for(mutable i=best;i<o.Children.Count;++i) children.Add(o.Children[i]);
+        o.Interface=make(children,false);
+      }
+    }
+    foreach(o in result.Operations) foreach(c in o.Children) c.Parents.Add(o);
+    // Identity wrappers retain production/capture views, not separate discovery
+    // histories. Binding/lexical differences remain in the compiled children.
+    def resolving=SCG.HashSet.[int]();
+    def structural(o : NitraOperation) : NitraOperation
+    {
+      when(o.Interface!=null) return o.Interface;
+      unless(resolving.Add(o.Id)) return o;
+      o.Interface=if(o.Children.Count==1 && (o.Kind=="rule" || o.Kind=="variant" || o.Kind=="capture" || o.Kind=="call")) structural(o.Children[0]) else o;
+      _=resolving.Remove(o.Id); o.Interface
+    }
+    foreach(o in result.Operations) _=structural(o);
+    // A known leading lexical interface can eliminate a family before its
+    // sample opens. Only test necessity; never choose an uncertain endpoint.
+    def guarded=SCG.HashSet.[int](); def guarding=SCG.HashSet.[int]();
+    def guard(original : NitraOperation) : NitraOperation
+    {
+      def o=original.Interface;
+      when(guarded.Contains(o.Id)) return o.FirstGuard;
+      unless(guarding.Add(o.Id)) return null;
+      o.FirstGuard=if(o.Fast || o.Kind=="literal" || o.Kind=="class" || o.Kind=="empty") o
+                   else if(o.Kind=="seq" && o.Children.Count>0) guard(o.Children[0]) else null;
+      _=guarding.Remove(o.Id); _=guarded.Add(o.Id); o.FirstGuard
+    }
+    foreach(o in result.Operations) _=guard(o);
+    foreach(o in result.Operations) { o.Classify(); when(o.GreedyCall) result.Native=true; }
+    {
+      def resolving=SCG.HashSet.[int]();
+      def pass(o : NitraOperation) : NitraOperation
+      {
+        when(o.Pass!=null) return o.Pass;
+        def wrapper=(!o.GreedyCall) && (!o.OpaqueValue) && ((o.Code==4 || o.Code==5) && o.Children.Count==1 || o.Code==10);
+        if(!wrapper || !resolving.Add(o.Id)) o
+        else
+        {
+          def target=pass(o.Children[0]);
+          _=resolving.Remove(o.Id); o.Pass=target; target
+        }
+      }
+      foreach(o in result.Operations) when(o.Pass==null) o.Pass=pass(o);
+    }
+    result.Ready=true;
+    result
+  }
+  private Entry(r : NitraRule, minimum : int) : NitraOperation { Entry(r,minimum,false) }
+  private Entry(r : NitraRule, minimum : int, raw : bool) : NitraOperation
+  {
+    def key=r.Key+":"+minimum.ToString()+(if(raw) ":language" else ""); when(entries.ContainsKey(key)) return entries[key];
+    def previous=aliasesActive; aliasesActive=SCG.HashSet();
+    try { BuildEntry(r,minimum,raw,key) }
+    finally { aliasesActive=previous; }
+  }
+  private BuildEntry(r : NitraRule, minimum : int, raw : bool, key : string) : NitraOperation
+  {
+    def o=Op(if(raw) "alt" else if(r.Kind=="regex" || r.Kind=="token" || r.Kind=="void") "longest" else "rule",r.Key); o.RuleKind=r.Kind; o.FastCandidate=r.Kind!="syntax"; entries.Add(key,o);
+    foreach(a in alternatives[r.Key])
+    {
+      def rank=RankOf(r,a.Precedence);
+      def allowed=if(r.NativeBindings) !a.NativePostfix || rank*2+(if(a.NativeStrong) 1 else 0)>minimum
+                  else rank==0 || rank>=minimum;
+      when(allowed)
+      {
+        def origin=if(a.Declaration==null) r.Module else ModuleAt(a.Scope,r.Module);
+        def body=Compile(a.Expression,a.Scope,origin,!a.ExplicitSpaces,r,rank,a.Right,false);
+        def wrapped=Op("variant",a.Name); wrapped.RuleKind=r.Kind; wrapped.Label=a.Scope; wrapped.Children.Add(body); o.Children.Add(wrapped);
+      }
+    }
+    when(r.Declaration.Attributes.Contains("DynamicSyntaxExtender") || r.Declaration.Attributes.Contains("DynamicSyntaxExtentionPoint"))
+    { o.Kind="deferred"; o.Text="dynamic grammar execution required: "+r.Key; }
+    when(r.StartRule && !r.ExplicitSpaces)
+    {
+      def space=Resolve("s",r.Scope,r.Module);
+      when(space!=null) { def prefix=Join(Entry(space,0),o); entries[key]=prefix; return prefix; }
+    }
+    o
+  }
+  private ModuleAt(scope : string, fallback : NitraModule) : NitraModule
+  {
+    mutable best=fallback; mutable length=0;
+    foreach(m in modules.Values) when(scope.StartsWith(m.Name+".",StringComparison.Ordinal) && m.Name.Length>length) { best=m; length=m.Name.Length; }
+    best
+  }
+  private Space(mod : NitraModule, scope : string, keyword : string) : NitraOperation
+  {
+    def r=Resolve(keyword ?? "s",scope,mod); if(r==null) null else Entry(r,0)
+  }
+  private Keyword(mod : NitraModule, scope : string, text : string) : string
+  {
+    def key=mod.Name+":"+text; when(keywordCache.ContainsKey(key)) return keywordCache[key];
+    mutable follower : string=null;
+    for(mutable i=0;i<mod.KeywordPatterns.Count;++i)
+    {
+      def pattern=Compile(mod.KeywordPatterns[i],scope,mod,false,null,0,false,false);
+      def check=NitraRecognizer(result,text).Run(pattern,"<keyword>");
+      when(check.Diagnostics.Count>0) throw ArgumentException(check.Diagnostics[0]);
+      when(check.Accepted) follower=mod.KeywordFollowers[i];
+    }
+    keywordCache[key]=follower; follower
+  }
+  private RegexKeyword(rule : NitraRule, mod : NitraModule, scope : string) : string
+  {
+    def key=mod.Name+":@regex:"+rule.Key; when(keywordCache.ContainsKey(key)) return keywordCache[key];
+    keywordCache[key]=null;
+    def find(e : NitraExpression, context : string) : string
+    {
+      match(e.Kind)
+      {
+        | "literal" => Keyword(mod,scope,e.Text)
+        | "call" => def target=Resolve(e.Text,context,rule.Module); if(target==null || target.Kind!="regex") null else RegexKeyword(target,mod,scope)
+        | "seq" when(e.Children.Count==1) => find(e.Children[0],context)
+        | "alt" =>
+          mutable name : string=null; mutable first=true; mutable same=true;
+          foreach(c in e.Children) { def next=find(c,context); if(first) { name=next; first=false; } else when(next!=name) same=false; }
+          if(same) name else null
+        | _ => null
+      }
+    }
+    mutable name : string=null; mutable first=true; mutable same=true;
+    foreach(a in alternatives[rule.Key]) { def next=find(a.Expression,a.Scope); if(first) { name=next; first=false; } else when(next!=name) same=false; }
+    def value=if(same) name else null; keywordCache[key]=value; value
+  }
+  private LeadingSelf(e : NitraExpression, scope : string, mod : NitraModule, owner : NitraRule, seen : SCG.HashSet[string]) : bool
+  {
+    if((e.Kind=="capture" || e.Kind=="seq") && e.Children.Count>0) LeadingSelf(e.Children[0],scope,mod,owner,seen)
+    else if(e.Kind=="call")
+    {
+      def target=Resolve(e.Text,scope,mod);
+      if(target==owner) true
+      else if(target!=null && target.Kind=="alias" && seen.Add(target.Key))
+      { def a=target.Alternatives[0]; LeadingSelf(a.Expression,a.Scope,target.Module,owner,seen) }
+      else false
+    }
+    else false
+  }
+  private Compile(e : NitraExpression, scope : string, mod : NitraModule, spaces : bool,
+                  owner : NitraRule, rank : int, right : bool, strong : bool) : NitraOperation
+  {
+    when(e==null) throw ArgumentException("missing rule expression in "+scope);
+    if(e.Kind=="call")
+    {
+      def target=Resolve(e.Text,scope,mod); when(target==null) throw ArgumentException("unknown rule "+e.Text+" in "+scope);
+      when(target.Kind=="alias")
+      {
+        unless(aliasesActive.Add(target.Key)) throw ArgumentException("cyclic rule alias: "+target.Key);
+        try
+        {
+          def a=target.Alternatives[0]; def alias=Op("call",target.Key);
+          alias.Children.Add(Compile(a.Expression,a.Scope,target.Module,spaces,owner,rank,right,strong)); return Intern(alias);
+        }
+        finally { _=aliasesActive.Remove(target.Key); }
+      }
+      def self=target==owner;
+      def minimum=if(target.NativeBindings && e.NativePrefix)
+                    RankOf(target,e.Binding)*2+(if(e.Strong) 1 else -1)
+                  else if(target.NativeBindings && e.Binding!=null) RankOf(target,e.Binding)*2+(if(e.Strong) 1 else 0)
+                  else if(e.Binding!=null) RankOf(target,e.Binding)+(if(e.Strong) 1 else 0)
+                  else if(self && rank>0) rank+(if(strong) 1 else 0) else 0;
+      def call=Op("call",target.Key); call.RuleKind=target.Kind;
+      // Native regex fields are spans and void rules have no fields. Their
+      // internal regex alternatives do not create native tree ambiguity.
+      call.OpaqueValue=target.NativeBindings && (target.Kind=="regex" || target.Kind=="void");
+      call.GreedyCall=target.NativeBindings && !e.NativePrefix;
+      call.Children.Add(Entry(target,minimum,target.Kind=="regex" && (owner==null || owner.Kind=="regex")));
+      if(spaces && !target.SuppressTrailingSpaces && target.Kind!="marker" && (target.ExplicitSpaces || target.Kind=="regex"))
+        Join(Intern(call),Space(mod,scope,if(target.Kind=="regex") RegexKeyword(target,mod,scope) else null))
+      else Intern(call)
+    }
+    else
+    {
+      def o=Op(e.Kind,e.Text); o.Min=e.Min; o.Max=e.Max; o.AllEnds=owner==null || owner.Kind=="regex";
+      if(e.Kind=="literal" && spaces) Join(o,Space(mod,scope,Keyword(mod,scope,e.Text)))
+      else
+      {
+        for(mutable i=0;i<e.Children.Count;++i)
+        {
+          // Default associativity only changes recursive operands. Explicit ^
+          // bindings retain their own weak/strong setting.
+          def nextStrong=if(e.Kind=="seq" && owner!=null && e.Children.Count>0 && LeadingSelf(e.Children[0],scope,mod,owner,SCG.HashSet())) (if(right) i==0 else i>0) else strong;
+          o.Children.Add(Compile(e.Children[i],scope,mod,spaces,owner,rank,right,nextStrong));
+        }
+        Intern(o)
+      }
+    }
+  }
+}

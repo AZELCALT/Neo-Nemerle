@@ -18,7 +18,7 @@ namespace Nitra.Compiler
   {
                    public Id            : int                             { get; }
                    public DeclaredIn    : PropertyContainerSymbol         { get; }
-                   public Location      : Nemerle.Compiler.Location       { get; }
+                   public Location      : Nemerle.Compiler.AST.Location       { get; }
                    public NitraLocation : Location                        { get { (DeclaredIn.Node.Project :> NitraProject).MakeNitraLocation(Location) } }
     [RecordIgnore] public DependendOn   : HashSet[PropertyDependencyNode] { get; default HashSet(); }
                    public Path          : DependencyPath                  { get; }
