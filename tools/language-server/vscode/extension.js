@@ -10,6 +10,9 @@ function activate(context) {
   const args = [];
   if (config.get('references')) args.push('--references', config.get('references'));
   if (config.get('log')) args.push('--log', config.get('log'));
+  if (config.get('sourceRoot')) args.push('--source-root', config.get('sourceRoot'));
+  if (config.get('fileNameNamespaces')) args.push('--file-name-namespaces');
+  if (config.get('legacyNamespaces')) args.push('--legacy-namespaces');
   const server = { command, args, transport: 0 /* stdio */ };
   client = new LanguageClient('nemerle', 'Nemerle', { run: server, debug: server },
     { documentSelector: [{ scheme: 'file', language: 'nemerle' }, { scheme: 'untitled', language: 'nemerle' }] });

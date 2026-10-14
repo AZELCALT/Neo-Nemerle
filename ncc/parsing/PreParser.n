@@ -79,7 +79,7 @@ namespace Nemerle.Compiler
     mutable doc_comments : Map [Location, string];
 
     public this (lex : LexerBase) {
-      this (lex, if (lex.Manager.Options.FileModules)
+      this (lex, if (lex.Manager.FileModuleRegistry.IsModule(lex.Location.FileIndex))
                    lex.Manager.FileModuleRegistry.Environment(lex.Location.FileIndex)
                  else if (lex.Manager.Options.Script != null) GlobalEnv(lex.Manager.CoreEnv.EnterIntoNamespace([lex.Manager.Options.Script.TypeName]), ["mask"])
                  else lex.Manager.CoreEnv);
@@ -576,7 +576,7 @@ namespace Nemerle.Compiler
 
           | Token.Keyword ("namespace") =>
             when (lexer.Manager.Options.FileModules)
-              Message.Error(tok.Location, "namespace declarations are not allowed in file-module mode; use mask");
+              Message.Error(tok.Location, "namespace declarations are not allowed: a source file is its own namespace (group members with mask; -legacy-namespaces is only for code not migrated yet)");
             finish_current (current_begin);
 
             def prevNsEnv = currentNsEnv;

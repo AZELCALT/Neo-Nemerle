@@ -121,6 +121,7 @@ namespace Nemerle.Compiler
       }
 
       def cOptions = CompilationOptions ();
+      cOptions.FileModules = false; // LEGACY (temporary): the CodeDOM generator still emits namespace declarations
       def man = ManagerClass (cOptions);
 
       man.ErrorOccured += fun (loc : Location, msg) {

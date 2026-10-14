@@ -40,7 +40,12 @@ namespace Nemerle.Compiler
     public mutable OutputPath : string;
     public mutable ProjectPath : string;
     public mutable RootNamespace : string;
-    public mutable FileModules : bool;
+    mutable fileModules : bool;
+    /// A source file is its namespace (root-relative path) and `namespace` blocks are rejected. On by default;
+    /// -legacy-namespaces turns it off for code that is not migrated yet. Script compilation has its own scope.
+    public FileModules : bool { get { fileModules && Script == null } set { fileModules = value } }
+    /// -file-name-namespaces: a file's namespace is its file name only (no directory path); file names must be unique.
+    public mutable FileNameNamespaces : bool;
     public mutable Script : ScriptCompilationData;
     public mutable NitraSources : NitraSourceConfiguration;
     public mutable SharedAssemblies : array[System.Reflection.Assembly];
@@ -136,7 +141,8 @@ namespace Nemerle.Compiler
       XmlDocOutputFileName = null;
       DumpTypedTree = false;
       PrintExpressionsType = false;
-      FileModules = false;
+      FileModules = true;
+      FileNameNamespaces = false;
       Script = null;
       NitraSources = null;
       SharedAssemblies = null;
@@ -410,8 +416,18 @@ namespace Nemerle.Compiler
 
         Getopt.CliOption.Flag (name = "-file-modules",
                        aliases = [],
-                       help = "Use independent file modules and mask groups",
+                       help = "Accepted for compatibility; every source file is a file module by default",
                        handler = fun () { this.FileModules = true; }),
+
+        Getopt.CliOption.Flag (name = "-legacy-namespaces",
+                       aliases = [],
+                       help = "TEMPORARY: classic namespace declarations for sources not yet migrated to file modules",
+                       handler = fun () { this.FileModules = false; }),
+
+        Getopt.CliOption.Flag (name = "-file-name-namespaces",
+                       aliases = [],
+                       help = "A file's namespace is its file name only (no directory path); file names must be unique",
+                       handler = fun () { this.FileNameNamespaces = true; }),
 
         Getopt.CliOption.String (name = "-target-references",
                        help = "directory containing target CLR reference assemblies",

@@ -18,20 +18,40 @@ namespace Nemerle.Compiler
 
     public this(manager : ManagerClass) { this.manager = manager; }
 
+    /// Source root: -source-root, else the project path (its directory when it names a project file), else the
+    /// current directory.
+    public Root : string
+    {
+      get
+      {
+        def options = manager.Options;
+        def project = options.ProjectPath;
+        def root = if (options.SourceRoot != null) options.SourceRoot
+                   else if (project != null && File.Exists(project)) Path.GetDirectoryName(Path.GetFullPath(project))
+                   else project ?? System.Environment.CurrentDirectory;
+        Path.GetFullPath(root)
+      }
+    }
+
     public IndexSources() : void
     {
-      def root = Path.GetFullPath(manager.Options.SourceRoot ?? manager.Options.ProjectPath ?? System.Environment.CurrentDirectory);
+      paths.Clear(); owners.Clear();
+      def root = Root;
       def prefix = root.TrimEnd(array[Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) + Path.DirectorySeparatorChar;
+      def shortNames = manager.Options.FileNameNamespaces;
+      def files = Hashtable.[string, string]();
       foreach (source in manager.Options.Sources)
       {
         def file = Path.GetFullPath(Location.GetFileName(source.FileIndex));
+        // Only Nemerle sources are file modules; other parsers (e.g. .nitra) keep their own rules.
+        unless (String.Equals(Path.GetExtension(file), ".n", StringComparison.OrdinalIgnoreCase)) continue;
         def loc = Location(source.FileIndex, 1, 1);
-        unless (file.StartsWith(prefix, StringComparison.Ordinal))
+        unless (shortNames || file.StartsWith(prefix, StringComparison.Ordinal))
         {
-          Message.Error(loc, "file module source is outside the source root: " + file);
+          Message.Error(loc, "file module source is outside the source root: " + file + " (root " + root + "; use -source-root)");
           continue;
         }
-        def relative = Path.ChangeExtension(file.Substring(prefix.Length), null);
+        def relative = if (shortNames) Path.GetFileNameWithoutExtension(file) else Path.ChangeExtension(file.Substring(prefix.Length), null);
         def parts = NString.Split(relative.Replace(Path.DirectorySeparatorChar, '.'), '.');
         // Splitting dots would silently change a dotted filename into a directory.
         def components = NString.Split(relative, Path.DirectorySeparatorChar);
@@ -43,27 +63,31 @@ namespace Nemerle.Compiler
         def name = parts.ToString(".");
         when (owners.Contains(name))
         {
-          Message.Error(loc, "duplicate file module identity: " + name);
+          Message.Error(loc, "duplicate file module identity: " + name
+            + (if (files.Contains(name)) " (" + files[name] + " and " + file + ")" else ""));
           continue;
         }
-        foreach (existing in owners.Keys)
-          when (name.StartsWith(existing + ".", StringComparison.Ordinal)
-             || existing.StartsWith(name + ".", StringComparison.Ordinal))
-            Message.Error(loc, "file module conflicts with a directory module path: " + name + " and " + existing);
+        // A file may sit beside a directory of the same name (Nemerle/Core.n and Nemerle/Core/list.n):
+        // module Nemerle.Core and its child modules Nemerle.Core.list.
         owners.Add(name, source.FileIndex);
+        files.Add(name, file);
         paths.Add(source.FileIndex, parts);
       }
     }
 
+    /// True when the source was indexed as a file module (generated or synthetic sources are not).
+    public IsModule(fileIndex : int) : bool { manager.Options.FileModules && paths.Contains(fileIndex) }
+
     public ModulePrefix(name : list[string]) : string
     {
       mutable prefix = "";
+      mutable found = null;
       foreach (part in name)
       {
         prefix = if (prefix == "") part else prefix + "." + part;
-        when (owners.Contains(prefix)) return prefix;
+        when (owners.Contains(prefix)) found = prefix;
       }
-      null
+      found
     }
 
     public IsDirectory(name : list[string]) : bool

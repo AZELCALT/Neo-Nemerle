@@ -369,7 +369,7 @@ namespace Nemerle.Compiler
       when (lex.Manager.Options.Script != null)
         return ParseScript(lex, topstream);
 
-      when (lex.Manager.Options.FileModules)
+      when (lex.Manager.FileModuleRegistry.IsModule(lex.Location.FileIndex))
       {
         def fileEnv = lex.Manager.FileModuleRegistry.Environment(lex.Location.FileIndex);
         def fileParser = MainParser(fileEnv);

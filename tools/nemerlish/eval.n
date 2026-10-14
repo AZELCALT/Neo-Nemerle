@@ -61,6 +61,7 @@ namespace Nemerle.Evaluation
         Options.LibraryPaths ::= path;
       }
       Options.ColorMessages = false;
+      Options.FileModules = false; // LEGACY (temporary): the evaluated stub is not a file under a source root
       Options.CompileToMemory = true;
       Options.IgnoreConfusion = true;
       Options.ProgressBar = false;

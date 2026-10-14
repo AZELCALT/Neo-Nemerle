@@ -116,9 +116,12 @@ namespace Nemerle.LanguageServer
       };
     }
 
-    public this(references : string)
+    root : string;
+    public this(references : string, root : string, legacyNamespaces : bool, fileNameNamespaces : bool)
     {
+      this.root = root;
       def options = CompilationOptions();
+      options.FileModules = !legacyNamespaces; options.FileNameNamespaces = fileNameNamespaces;
       options.CompileToMemory = true; options.TargetIsLibrary = true; options.TargetIsSet = true;
       options.ProgressBar = false; options.ColorMessages = false; options.IgnoreConfusion = true;
       options.DisableExternalParsers = true; options.TargetReferenceDirectory = references;
@@ -140,6 +143,14 @@ namespace Nemerle.LanguageServer
       {
         ManagerClass.Instance = manager; messages.Clear();
         manager.Options.Sources = [StringSource(fileIndex, text) : ISource];
+        when (manager.Options.FileModules)
+        {
+          // The workspace folder is the source root; a file outside it is its own root's only module.
+          def full = Path.GetFullPath(path);
+          def inside = root != null && full.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+          manager.Options.SourceRoot = if (inside) root else Path.GetDirectoryName(full);
+          manager.FileModuleRegistry.IndexSources();
+        }
         def index = NitraEditorIndex.Scan(manager, Func(ProvideHost));
         def nemerleText = index.Text(fileIndex) ?? text;
 
@@ -179,7 +190,7 @@ namespace Nemerle.LanguageServer
       try
       {
         def lexer = LexerFile(manager, fileIndex, text, true);
-        lexer.Keywords = manager.CoreEnv.Keywords;
+        lexer.Keywords = if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex).Keywords else manager.CoreEnv.Keywords;
         mutable token = lexer.GetToken();
         mutable guard = 0;
         while (!(token is Token.EndOfFile) && guard < 1000000)
@@ -239,7 +250,10 @@ namespace Nemerle.LanguageServer
         | TopDeclaration.VariantOption(decls = ms) | TopDeclaration.Enum(decls = ms) => ms
         | _ => []
       };
-      def symbol = Symbol(lines, d.Name, kind, d.Location, d.NameLocation);
+      // A file module is a synthetic declaration located at a point: its members are the file's top level.
+      def synthetic = d.Location.Line == d.Location.EndLine && d.Location.Column == d.Location.EndColumn;
+      def symbol = if (synthetic) null else Symbol(lines, d.Name, kind, d.Location, d.NameLocation);
+      when (synthetic) foreach (m in members) Member(result, lines, m, into);
       when (symbol != null)
       {
         into.Add(symbol); result.AddFold(symbol.Start, symbol.End);

@@ -96,6 +96,7 @@ namespace Nitra.Compiler
         options.TargetReferenceDirectory=manager.Options.TargetReferenceDirectory;
         options.OutputFileName="NativeGrammar_"+Guid.NewGuid().ToString("N")+".dll";
         options.DisableExternalParsers=true;
+        options.FileModules=false; // LEGACY (temporary): Nitra-generated code and the synthetic .dll.n stub use classic namespaces
         def refs=SCG.HashSet.[string](StringComparer.OrdinalIgnoreCase);
         def shared=SCG.HashSet.[Assembly]();
         foreach(reference in manager.ReferencedAssemblies)

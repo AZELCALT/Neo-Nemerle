@@ -35,9 +35,10 @@ namespace Nemerle.Compiler
     private FileOwner(file : int) : string
     {
       def path=Path.GetFullPath(Location.GetFileName(file));
-      if(manager.Options.FileModules)
+      if(manager.Options.FileModules && manager.Options.FileNameNamespaces) Path.GetFileNameWithoutExtension(path)
+      else if(manager.Options.FileModules)
       {
-        def root=Path.GetFullPath(manager.Options.SourceRoot ?? manager.Options.ProjectPath ?? System.Environment.CurrentDirectory);
+        def root=manager.FileModuleRegistry.Root;
         def prefix=root.TrimEnd(array[Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar])+Path.DirectorySeparatorChar;
         unless(path.StartsWith(prefix,StringComparison.Ordinal)) throw ArgumentException("dialect source is outside the source root: "+path);
         def relative=path.Substring(prefix.Length);
