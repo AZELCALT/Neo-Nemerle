@@ -26,6 +26,15 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+using System.Reflection;
+using System.IO;
+using System.Diagnostics.SymbolStore;
+using System.Security;
+using NC = Nemerle.Compiler;
+using Nemerle.Compiler;
+using Nemerle.Compiler.SolverMacros;
+using PT = Nemerle.Compiler.Parsetree;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 using System;
 using System.Diagnostics;
 using Nemerle.Assertions;
@@ -501,7 +510,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
   }
 }
 
-public partial class FieldBuilder : MemberBuilder, IField
+public class FieldBuilder : MemberBuilder, IField
 {
   mutable field_builder : SRE.FieldBuilder;
   mutable scriptInferring : bool = false;
@@ -728,9 +737,90 @@ public partial class FieldBuilder : MemberBuilder, IField
   {
     get { [PT.SyntaxElement.TypeBuilder (declaring_type), PT.SyntaxElement.FieldBuilder (this)] }
   }
-}
 
-public partial class PropertyBuilder : MemberBuilder, IProperty
+    // ---- merged from generation/HierarchyEmitter.n ----
+    /**
+     * Adds a field builder
+     */
+    internal override CreateEmitBuilder (tb : Emit.TypeBuilder) : void
+    {
+      // Converts Nemerle modifiers to the CLI field attributes.
+      def make_field_attributes (attrs)
+      {
+        mutable result = FieldAttributes.PrivateScope;
+
+        when (attrs %&& NemerleModifiers.Public) result |= FieldAttributes.Public;
+        when (attrs %&& NemerleModifiers.Private) result |= FieldAttributes.Private;
+
+        if (attrs %&& NemerleModifiers.Internal)
+          if (attrs %&& NemerleModifiers.Protected)
+            result |= FieldAttributes.FamORAssem;
+          else
+            result |= FieldAttributes.Assembly
+        else
+          when (attrs %&& NemerleModifiers.Protected)
+            result |= FieldAttributes.Family;
+
+        when (attrs %&& NemerleModifiers.Static) result |= FieldAttributes.Static;
+        when (attrs %&& NemerleModifiers.SpecialName) result |= FieldAttributes.SpecialName %|
+            FieldAttributes.RTSpecialName;
+
+        unless (attrs %&& (NemerleModifiers.Mutable | NemerleModifiers.CompilerMutable))
+          result |= FieldAttributes.InitOnly;
+
+        result
+      }
+
+      mutable attrs = make_field_attributes (Attributes);
+
+      when (IsLiteral) {
+        attrs |= FieldAttributes.Literal;
+        attrs &= ~FieldAttributes.InitOnly;
+      }
+
+      // prevent verification failure
+      when (Name != "value__")
+        attrs &= ~FieldAttributes.RTSpecialName;
+
+      field_builder = Nemerle.Platform.ClrEmission.DefineField (tb,
+        Name,
+        GetMemType ().GetSystemType (),
+        required_modifiers.ToArray (),
+        optional_modifiers.ToArray (),
+        attrs);
+
+      when (IsLiteral)
+        field_builder.SetConstant (const_value.AsObject (InternalType));
+    }
+
+    internal override Compile () : void
+    {
+      base.Compile ();
+      unless (modifiers.IsEmpty) {
+        modifiers.SaveCustomAttributes (declaring_type, fun (target, a, shouldEmit) {
+          if (target %&& System.AttributeTargets.Field) {
+            when(shouldEmit)
+              declaring_type.TyManager.ClrEmitter.SetAttribute(field_builder, a);
+            null
+          }
+          else "field " + ToString ()
+        });
+      }
+
+      when (IsVolatile) {
+        def volatile_attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.VolatileModifier);
+        field_builder.SetCustomAttribute (volatile_attr)
+      }
+
+      when (!IsMutable && !IsLiteral && attributes %&& NemerleModifiers.CompilerMutable)
+      {
+        def imm_attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.ImmutableAttribute);
+        field_builder.SetCustomAttribute (imm_attr)
+      }
+    }
+  }
+
+public class PropertyBuilder : MemberBuilder, IProperty
 {
   is_mutable : bool;
   getter : MethodBuilder;
@@ -898,9 +988,58 @@ public partial class PropertyBuilder : MemberBuilder, IProperty
   {
     get { [PT.SyntaxElement.TypeBuilder (declaring_type), PT.SyntaxElement.PropertyBuilder (this)] }
   }
-}
 
-public partial class MethodBuilder : MemberBuilder, IMethod
+    // ---- merged from generation/HierarchyEmitter.n ----
+    /**
+     * Adds a property builder
+     */
+    internal override CreateEmitBuilder (tb : Emit.TypeBuilder) : void
+    {
+      // Converts Nemerle modifiers to the CLI property attributes.
+      def make_property_attributes (attrs)
+      {
+        mutable result = PropertyAttributes.None;
+
+        when (attrs %&& NemerleModifiers.SpecialName)
+          result |= PropertyAttributes.SpecialName %| PropertyAttributes.RTSpecialName;
+
+        result
+      }
+
+      def attrs = make_property_attributes (Attributes);
+      def ty = if (IsIndexer) (GetMemType () :> FixedType.Fun).to.GetSystemType () else GetMemType ().GetSystemType ();
+      def parms = parms.MapToArray (_.GetSystemType ());
+
+      property_builder = tb.DefineProperty(Name, attrs, ty, parms);
+    }
+
+    internal override Compile () : void
+    {
+      base.Compile ();
+      unless (modifiers.IsEmpty) {
+        modifiers.SaveCustomAttributes (declaring_type, fun (target, a, shouldEmit) {
+          if (target %&& System.AttributeTargets.Property) {
+            when(shouldEmit)
+              declaring_type.TyManager.ClrEmitter.SetAttribute(property_builder, a);
+            null
+          }
+          else "property " + ToString ()
+        })
+      }
+
+      def declaring = DeclaringType : object;
+
+      // emit getter only if it was defined in this type, not derived
+      when (getter != null && getter.DeclaringType == declaring)
+        property_builder.SetGetMethod (getter.GetMethodInfo ());
+
+      // emit setter only if it was defined in this type, not derived
+      when (setter != null && setter.DeclaringType == declaring)
+        property_builder.SetSetMethod (setter.GetMethodInfo ());
+    }
+  }
+
+public class MethodBuilder : MemberBuilder, IMethod
 {
   [Accessor (Header)]
   protected mutable fun_header : TFunHeader;
@@ -1567,9 +1706,649 @@ public partial class MethodBuilder : MemberBuilder, IMethod
     else
       overridden_method.GetConditions()
   }
-}
 
-public partial class EventBuilder : MemberBuilder, IEvent
+    // ---- merged from generation/HierarchyEmitter.n ----
+    internal override CreateEmitBuilder (tb : Emit.TypeBuilder) : void
+    {
+      when (SkipEmiting)
+        return;
+
+      if (MemberKind == MemberKinds.Constructor)
+        CreateConstructorBuilder (tb)
+      else
+        CreateMethodBuilder (tb)
+    }
+
+    /**
+     * Emits a method's body
+     */
+    internal CompileAfterTyping () : void
+    {
+      when (SkipEmiting)
+        return;
+
+      def setup_method (emitter) {
+        // make sure type is not finalized
+        def type_builder = declaring_type.GetTypeBuilder ();
+        assert(type_builder != null);
+
+        def mb = GetMethodInfo ();
+        UtilMacros.cassert (mb != null, $"method builder is null for $this");
+
+        /* update the entry point settings, if necessary */
+        when (emitter._need_entry_point && Name == "Main"
+          && (Manager.Options.MainClass == null
+           || declaring_type.FullName == Manager.Options.MainClass
+           || Manager.Options.IsMainClassAutogenerated))
+        {
+          def has_correct_signature ()
+          {
+            mb.IsStatic &&
+            (ReturnType.Equals (InternalType.Int32) ||
+             ReturnType.Equals (InternalType.Void)) &&
+            match (fun_header.Parameters)
+            {
+              // workaround bug in MS PEVerify
+              | [fp] =>
+                fp.ty.Fix ().Equals (FixedType.Array (InternalType.String, 1))
+              | [] => true
+              | _ => false
+            }
+          }
+
+          if (has_correct_signature ()) {
+            if (declaring_type.TyparmsCount > 0 || !Header.TypeParameters.IsEmpty)
+              Message.Warning (402, this.ToString () + ": an entry point cannot be generic or in a generic type");
+            else
+              match (emitter._entry_point) {
+                | Some (exist) =>
+                  Message.Error ($ "more than one entry point (Main function) "
+                                 "found, e.g. types $(exist.DeclaringType) and $(mb.DeclaringType)");
+                  Message.Hint ("you can use -main TypeName switch to disambiguate selection");
+                | None =>
+                  when (DeclaringType.TyManager._debug_emit != null)
+                    DeclaringType.TyManager._debug_emit.SetUserEntryPoint (SymbolToken (1));
+                  emitter._entry_point = Some (mb : MethodInfo)
+              }
+          }
+          else
+            Message.Warning (28, $"$this has the wrong signature to be an entry point");
+        }
+
+        // update the overriding relationships
+        foreach ((overriddenType, overridden) in ImplementedMethods)
+        {
+          // Message.Debug("override " + method_info.Name + " " + overridden_info.Name + " in " + type_builder.FullName);
+          when (!mb.IsPublic || Name != overridden.Name)
+          {
+            // VladD2: Возможно вместо declaring_type.GetMemType() надо использовать
+            def overridden_info = ILEmitter.GetMethodInfo(overriddenType, overridden);
+            emitter.ClrEmitter.DefineMethodOverride(type_builder, mb,
+              overriddenType.GetSystemType(), overridden.GetMethodInfo(), overridden_info)
+          }
+        }
+      }
+
+  //    Message.Debug (this.ToString ());
+      match (fun_header.body)
+      {
+        | FunBody.ILed => {}
+        | _ =>
+          // maybe create additional method for implementing interface method
+          // (in case of co/contravariant methods)
+          CreateImplementsWrapper();
+
+          // Message.Debug (Location, $ "compile: $this");
+
+          UtilMacros.locate(Location,
+          {
+            match (fun_header.body)
+            {
+              | FunBody.ILed | FunBody.Parsed => UtilMacros.ice (fun_header.body.GetType().ToString ())
+
+              | FunBody.Typed when Message.SeenError =>
+                // just skip it
+                fun_header.body = FunBody.ILed ()
+
+              | FunBody.Typed =>
+                assign_parameter_indexes(GetMethodBase().IsStatic);
+                emit_parameter_attributes();
+                unless (declaring_type.IsDelegate)
+                {
+                  unless (MemberKind == MemberKinds.Constructor)
+                    setup_method(declaring_type.TyManager);
+
+                  declaring_type.DoBeforeFinalization2 (
+                    fun()
+                    {
+                      // Message.Debug ($"making il generator for $meth");
+                      def gen = ILEmitter (this);
+
+                      when (Manager.Options.EmitDebug)
+                        gen.SetDocument(Location);
+
+                      gen.Run ();
+                    });
+                }
+
+              | FunBody.Abstract => emit_parameter_attributes();
+            }
+          });
+
+          when (Manager.Options.EarlyExit)
+            Message.MaybeBailout ();
+      }
+    }
+
+    static parameter_attributes (fp : TParameter) : ParameterAttributes
+    {
+      (match (fp.kind)
+       {
+        | ParmKind.Out => ParameterAttributes.Out
+        | ParmKind.Ref
+        | ParmKind.Normal => ParameterAttributes.None
+       }
+      )
+      |
+      (if (fp.default_value.IsSome)
+         ParameterAttributes.HasDefault | ParameterAttributes.Optional
+       else
+         ParameterAttributes.None)
+    }
+
+
+    emit_parameter_attributes() : void
+    {
+      foreach (parm in fun_header.Parameters)
+      {
+        parm.modifiers.SaveCustomAttributes (declaring_type,
+          fun(target, attr, shouldEmit)
+          {
+            if (target %&& System.AttributeTargets.Parameter)
+            {
+              when(shouldEmit)
+                declaring_type.TyManager.ClrEmitter.SetParameterAttribute(method_base, parm.builder, attr);
+              null
+            }
+            else
+              "parameter " + parm.name
+          })
+      }
+    }
+
+
+    /**
+     * Assigns an ordinal index to each of a method's parameter
+     */
+    assign_parameter_indexes (is_static : bool) : void
+    {
+      mutable index = if (is_static) 0 else 1;
+
+      foreach (parm in fun_header.Parameters)
+      {
+        parm.decl.SetParmIndex(index, is_by_ref = parm.kind != ParmKind.Normal);
+        index++;
+      }
+    }
+
+
+    /* build the parameter types array */
+    param_types () : array [System.Type]
+    {
+      GetParameters ().MapToArray (fun (parm) { parm.GetSystemType() });
+    }
+
+
+    /**
+     * Converts Nemerle modifiers to the CLI method attributes.
+     */
+    static make_method_attributes (attrs : NemerleModifiers) : MethodAttributes
+    {
+      mutable result = MethodAttributes.HideBySig;
+
+      when (attrs %&& NemerleModifiers.Public)
+        result |= MethodAttributes.Public;
+
+      when (attrs %&& NemerleModifiers.Private)
+        result |= MethodAttributes.Private;
+
+      if (attrs %&& NemerleModifiers.Protected)
+        if (attrs %&& NemerleModifiers.Internal)
+          result |= MethodAttributes.FamORAssem;
+        else
+          result |= MethodAttributes.Family;
+      else when (attrs %&& NemerleModifiers.Internal)
+        result |= MethodAttributes.Assembly;
+
+      when (attrs %&& NemerleModifiers.Static)
+        result |= MethodAttributes.Static;
+
+      when (attrs %&& NemerleModifiers.Override)
+        result |= MethodAttributes.Virtual %| MethodAttributes.ReuseSlot;
+
+      // when method is static, then new is only for compile-time information
+      when (!(attrs %&& NemerleModifiers.Static) && attrs %&& NemerleModifiers.New && attrs %&& NemerleModifiers.Virtual)
+        result |= MethodAttributes.NewSlot | MethodAttributes.Virtual;
+
+      when (attrs %&& NemerleModifiers.Abstract)
+        result |= MethodAttributes.Virtual %| MethodAttributes.Abstract;
+
+      when (attrs %&& NemerleModifiers.Virtual)
+        result |= MethodAttributes.Virtual;
+
+      when (attrs %&& NemerleModifiers.Sealed)
+        result |= MethodAttributes.Final %| MethodAttributes.Virtual;
+
+      when (attrs %&& NemerleModifiers.SpecialName)
+        result |= MethodAttributes.SpecialName;
+
+      result
+    }
+
+    /**
+     * Adds a method builder to a type builder
+     */
+    CreateMethodBuilder (tb : Emit.TypeBuilder) : void
+    {
+      when (SkipEmiting)
+        return;
+
+      // Message.Debug ($"-- AddMethodBuilder: $meth $(Attributes) ");
+
+      /* update the modifiers list */
+      unless (ImplementedMethods.IsEmpty)
+        Attributes |= NemerleModifiers.Virtual;
+
+      def attrs = make_method_attributes (Attributes);
+      def attrs =
+        if (Name == ".cctor")
+          attrs | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
+        else
+          attrs;
+
+      /* add the method to the type builder */
+      mutable pinvoke = false;
+
+      try
+      {
+        if (fun_header.TypeParameters.IsEmpty) {
+          def parm_types_array = param_types ();
+
+          method_base = Manager.AttributeCompiler.CheckPInvoking (this, tb, attrs, parm_types_array);
+
+          if (method_base == null)
+            method_base = declaring_type.TyManager.ClrEmitter.DefineMethod(tb, Name, attrs);
+          else
+            pinvoke = true;
+        }
+        else {
+          method_base = declaring_type.TyManager.ClrEmitter.DefineMethod(tb, Name, attrs);
+
+          def names = fun_header.TypeParameters.MapToArray(_.Name);
+
+          def generic_parms = GetMethodInfo().DefineGenericParameters (names);
+          fun_header.TypeParameters.IterI(0, (idx, x) => x.SetGenericBuilder(generic_parms[idx]));
+          foreach (gp in fun_header.TypeParameters)
+            gp.UpdateConstraints ();
+        }
+      }
+      catch
+      {
+        | e => throw System.ApplicationException (
+          $"Can't define method '$Name' (attrs: $attrs) in type '$tb'.\nError: $(e.Message)", e);
+      }
+
+      Nemerle.Platform.ClrEmission.SetMethodSignature(GetMethodInfo(),
+        fun_header.ReturnType.GetSystemType(),
+        fun_header.GetRetTypeRequiredModifiers(),
+        fun_header.GetRetTypeOptionalModifiers(),
+        param_types(),
+        fun_header.GetParamTypeRequiredModifiers(),
+        fun_header.GetParamTypeOptionalModifiers());
+        
+#if !MODERN_CLR
+      Nemerle.Platform.ClrAssemblySession.RunLegacySecurity(fun () {
+        Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
+          .Iter((method_base :> SRE.MethodBuilder).AddDeclarativeSecurity);
+      });
+#endif
+
+      /* add the runtime modifiers for delegate methods */
+      when (DeclaringType.IsDelegate) {
+        assert(!pinvoke);
+        GetMethodInfo ().SetImplementationFlags (
+          MethodImplAttributes.Runtime | MethodImplAttributes.Managed
+        )
+      }
+
+      when (!pinvoke && (Attributes & NemerleModifiers.Extern != 0))
+        Message.Error (Location, "method is marked `extern' but do not have DllImport attribute");
+
+      // CompileTypedMethod.compile_parms (hd);
+
+      def name_parms (pos, parms)
+      {
+        match (parms) {
+          | [] => ()
+          | (p : TParameter) :: ps =>
+            p.builder = GetMethodInfo ().DefineParameter (pos, parameter_attributes (p), p.name);
+
+            match (p.default_value)
+            {
+              | Some(TExpr.Literal(lit)) => 
+                def defaultValue = lit.AsObject(InternalType);
+                def type = p.Type.Fix();
+                when (defaultValue != null || !type.IsValueType)
+                  p.builder.SetConstant(defaultValue);
+                
+              | Some(e) => UtilMacros.ice($"complex expr $e");
+              | None => {}
+            }
+            name_parms (pos + 1, ps)
+        }
+      }
+      name_parms (1, GetParameters ());
+    }
+
+    /**
+     * Adds a constructor builder to a type builder
+     */
+    CreateConstructorBuilder (tb : Emit.TypeBuilder) : void
+    {
+      when (SkipEmiting)
+        return;
+
+      // Message.Debug ($"-- AddConstructorBuilder: $this");
+
+      /* create the constructor builder */
+      method_base =
+        tb.DefineConstructor (
+          make_method_attributes (Attributes) |
+          MethodAttributes.RTSpecialName |
+          MethodAttributes.SpecialName,
+          CallingConventions.Standard,
+          param_types (),
+          fun_header.GetParamTypeRequiredModifiers (),
+          fun_header.GetParamTypeOptionalModifiers ());
+
+#if !MODERN_CLR
+      Nemerle.Platform.ClrAssemblySession.RunLegacySecurity(fun () {
+        Manager.AttributeCompiler.GetPermissionSets(Manager.CoreEnv, modifiers.custom_attrs)
+          .Iter((method_base :> SRE.ConstructorBuilder).AddDeclarativeSecurity);
+      });
+#endif
+
+      /* add the runtime modifiers for delegate constructors */
+      when (DeclaringType.IsDelegate) {
+        GetConstructorInfo ().SetImplementationFlags (
+          MethodImplAttributes.Runtime | MethodImplAttributes.Managed
+        )
+      }
+
+      def name_parms (pos, parms)
+      {
+        match (parms) {
+          | [] => ()
+          | (p : TParameter) :: ps =>
+            p.builder = GetConstructorInfo ().DefineParameter (pos, parameter_attributes (p), p.name);
+
+            match (p.default_value)
+            {
+              | Some(TExpr.Literal(lit)) => 
+                def defaultValue = lit.AsObject(InternalType);
+                def type = p.Type.Fix();
+                when (defaultValue != null || !type.IsValueType)
+                  p.builder.SetConstant(defaultValue);
+                
+              | Some(e) => UtilMacros.ice($"complex expr $e");
+              | None => ()
+            }
+            name_parms (pos + 1, ps)
+        }
+      }
+      name_parms (1, GetParameters ());
+    }
+
+    internal override Compile () : void
+    {
+      try
+      {
+        base.Compile ();
+        RunBodyTyper ();
+
+        when (SkipEmiting)
+          return;
+
+        when(_isConditional)
+          Manager.AttributeCompiler.CheckConditional(this);
+
+        unless (modifiers.IsEmpty)
+        {
+          def adder =
+            if (MemberKind == MemberKinds.Constructor)
+              fun (target, attribute, shouldEmit)
+              {
+                if (target %&& System.AttributeTargets.Constructor)
+                {
+                  when(shouldEmit)
+                    declaring_type.TyManager.ClrEmitter.SetAttribute(GetConstructorInfo(), attribute);
+                  null
+                }
+                else if (attribute != null)
+                  "constructor " + ToString ()
+                else
+                  null
+              }
+            else
+              fun (target, attribute, shouldEmit)
+              {
+                if (target %&& System.AttributeTargets.Method)
+                {
+                  when(shouldEmit)
+                    declaring_type.TyManager.ClrEmitter.SetAttribute(GetMethodInfo(), attribute);
+                  null
+                }
+                else if (attribute != null)
+                  "method " + ToString ()
+                else
+                  null
+              };
+
+          modifiers.SaveCustomAttributes (declaring_type, adder);
+        }
+
+        unless(return_value_modifiers.IsEmpty)
+        {
+          return_value_modifiers.SaveCustomAttributes(declaring_type,
+            fun (target, attribute, shouldEmit)
+            {
+              if (target %&& System.AttributeTargets.ReturnValue)
+              {
+                when(shouldEmit)
+                {
+                  def ret = GetMethodInfo ().DefineParameter (0, ParameterAttributes.None, null);
+                  declaring_type.TyManager.ClrEmitter.SetParameterAttribute(method_base, ret, attribute);
+                }
+                null
+              }
+              else if (attribute != null)
+                "method " + ToString ()
+              else
+                null
+            });
+        }
+
+        CompileAfterTyping()
+      }
+      catch { | _ is Typer.IllegalYieldReturnType => () }
+    }
+  
+    // ---- merged from generation/ImplementsWrapperMaker.n ----
+    internal CreateImplementsWrapper() : void
+    {
+      //Message.Debug($"check for impl wrap $this");
+      // now we will create special wrappers implementing interface methods
+      // when our methods are co/contra-variant (and .NET doesn't allow it automatically)
+      def is_correct_impl(ifaceType : FixedType.Class, impl_meth : IMethod)
+      {
+        //Message.Debug($"compare: $(declaring_type.GetMemType().TypeOfMember(impl_meth))     ======     $(this.GetFreshType())");
+        def sameTyParLen = impl_meth.GetHeader().TypeParameters.Length == fun_header.TypeParameters.Length;
+        
+        if (sameTyParLen && ifaceType.TypeOfMember(impl_meth).TryUnify(this.GetFreshType()[0]))
+            true
+        else
+        {
+          //Message.Debug("fail");
+          UtilMacros.locate(Location, MakeImplWrapper(ifaceType, impl_meth));
+          false
+        }
+      }
+      // we filter out interface methods, which we have implemented by means of
+      // wrappers, the rest are ok to implement them directly
+      this.ImplementedMethods = ImplementedMethods.Filter(is_correct_impl);
+      // Message.Debug($"impl: $impl_list --> $thesame");
+    }
+
+    MakeImplWrapper(ifaceType : FixedType.Class, impl_meth : IMethod) : void
+    {
+      assert(declaring_type.IsDerivedFrom(ifaceType));
+      // Message.Debug($"make impl wrap $this IMPL $impl_meth");
+      def hd = impl_meth.GetHeader();
+      def parms = hd.Parameters;
+      mutable new_typarms = [];
+
+      UtilMacros.cassert(Name.IndexOf('.') == -1, $"impl loop, $this IMPL $impl_meth, $(this.GetMemType()) != $(declaring_type.GetMemType().TypeOfMember(impl_meth))");
+
+      def subst = impl_meth.DeclaringType.MakeSubst(ifaceType.args);
+      //def subst = declaring_type.SubtypingSubst(impl_meth.DeclaringType);
+      def orig_typarms = hd.TypeParameters;
+      //this.GetHeader().typarms;
+      unless (orig_typarms.IsEmpty)
+      {
+        def (s2, newtp) = StaticTypeVar.CopyList(orig_typarms);
+        //Message.Debug($"newtp: $orig_typarms -> $newtp");
+        new_typarms = newtp;
+        //Message.Debug($"subst before: $subst");
+        subst.AddSubst(s2);
+        NList.Iter2(fun_header.TypeParameters, newtp, 
+                    (tv, repl) => subst.Add(tv, FixedType.StaticTypeVarRef(repl)));
+        //Message.Debug($"subst after: $subst");
+      }
+
+      def parm_types_names = parms.Map(parm => (subst.Apply(parm.ty.Fix()), Macros.NewSymbol("sp_parm")));
+      def formal_parms     = parm_types_names.Map((ty, name) => <[ parameter: $(name : name) : $(ty : typed) ]>);
+      def name             = impl_meth.DeclaringType.FullName + "." + impl_meth.Name;
+
+      declaring_type.forced_typarms = new_typarms;
+      def meth =
+        declaring_type.bind_and_add_member(<[ decl:
+          private $(name : dyn)(.. $formal_parms) : $(subst.Apply(hd.ReturnType.Fix()) : typed)
+          {
+          }
+        ]>) :> MethodBuilder;
+      //Message.Debug($"added $meth");
+      meth.ImplementedMethods = [(ifaceType, impl_meth)];
+      meth.Attributes |= NemerleModifiers.SpecialName | NemerleModifiers.Sealed;
+
+      unless (impl_meth.DeclaringType.IsInterface)
+        meth.Attributes = NemerleModifiers.Public | NemerleModifiers.Override;
+
+      Manager.MarkAsUsed(meth);
+
+      def current_fun = meth.GetHeader();
+      def refs = current_fun.Parameters.Map(
+        fun (parm : TParameter)
+        {
+          def val =
+            LocalValue(current_fun, parm.name, parm.ty,
+                        LocalValue.Kind.FunParm(ParmKind.Normal),
+                        is_mutable = false);
+          val.Register();
+          val.UseFrom(current_fun);
+          parm.decl = val;
+          TExpr.LocalRef(val.Type, val)
+        });
+
+      def casted_refs = refs.Map(Parm);
+      // def ty = subst.Apply(impl_meth.GetMemType());
+      // def vars = new_typarms.Map(fun(x) { FixedType.StaticTypeVarRef(x) });
+      def (the_method_type, vars) = ifaceType.TypeOfMethodWithTyparms(this); //!!!!
+      NList.Iter2(new_typarms, vars, (x, tv) => tv.ForceUnify(FixedType.StaticTypeVarRef(x)));
+      def (_, ret_type) = the_method_type.Fix().FunReturnTypeAndParms(this);
+      //Message.Debug($"ty=$ty");
+
+      def methref = TExpr.MethodRef(the_method_type, TExpr.This(declaring_type.GetMemType()),
+                                    this, vars, !impl_meth.DeclaringType.IsInterface);
+
+      // call the wrapped method, 
+      def body = TExpr.Call(ret_type, methref, casted_refs, false);
+      //Message.Debug($"ty=$((this.ReturnType.Fix()))  $(subst.Apply(this.ReturnType.Fix()))");
+      
+      def header = meth.GetHeader();
+      header.body = FunBody.Typed(body);
+      header.TypeParameters = new_typarms;
+
+      def t4 = Typer4(meth);
+      t4.Run();
+
+      DeclaringType.TyManager.MaybeCompile(declaring_type, meth);
+    }
+  
+    // ---- merged from generation/Typer3.n ----
+    internal PrepareForEmission (fn : TFunHeader, subst : Subst) : void
+    {
+      def new_header = fun_header;
+      fun_header = fn;
+
+      def clo_count = Typer3.ClosureParmCount (fn);
+      def new_parms = new_header.Parameters.ChopFirstN (clo_count);
+
+      foreach (parm in new_header.Parameters.FirstN (clo_count)) {
+        parm.decl = LocalValue (fn, parm.name, parm.ty,
+                                LocalValue.Kind.Plain (),
+                                is_mutable = false);
+        parm.decl.Register ();
+        parm.decl.UseFrom (fn);
+      }
+
+      if (new_parms.Length > 1 && fn.Parameters.Length == 1) {
+        match (fn.body) {
+          | FunBody.Typed (body) =>
+            def vals = new_parms.Map (fun (parm : TParameter) {
+              def local = LocalValue (fn, parm.name, parm.ty,
+                                      LocalValue.Kind.Plain (), is_mutable = false);
+              local.Register ();
+              local.UseFrom (fn);
+              parm.decl = local;
+              local
+            });
+            def parm = fn.Parameters.Head;
+            def expr =
+              TExpr.DefValIn (body.Type,
+                              parm.decl,
+                              TExpr.Tuple (parm.ty, vals.Map (Typer3.PlainRef)),
+                              body);
+            fn.body = FunBody.Typed (expr);
+            fn.Parameters = new_header.Parameters;
+          | _ => assert(false)
+        }
+      }
+      else
+      {
+        NList.Iter2 (fn.Parameters, new_parms, fun (orig, copy : TParameter) {
+          copy.decl = orig.decl;
+          // FIXME: is it still needed?
+          copy.ty = Typer3.FixType (copy.ty, subst);
+          copy.decl.SetType (Typer3.FixType (copy.decl.Type, subst));
+        });
+        fn.Parameters = new_header.Parameters;
+      }
+
+      fn.ReturnType = new_header.ReturnType;
+    }
+  }
+
+public class EventBuilder : MemberBuilder, IEvent
 {
   adder : MethodBuilder;
   remover : MethodBuilder;
@@ -1688,5 +2467,33 @@ public partial class EventBuilder : MemberBuilder, IEvent
   {
     get { [PT.SyntaxElement.TypeBuilder (declaring_type), PT.SyntaxElement.EventBuilder (this)] }
   }
-}
+
+    // ---- merged from generation/HierarchyEmitter.n ----
+    /**
+     * Adds an event builder
+     */
+    internal override CreateEmitBuilder (tb : Emit.TypeBuilder) : void
+    {
+      def ty = GetMemType ().GetSystemType ();
+      event_builder = tb.DefineEvent (Name, EventAttributes.None, ty);
+    }
+
+    internal override Compile () : void
+    {
+      base.Compile ();
+      unless (modifiers.IsEmpty) {
+        modifiers.SaveCustomAttributes (declaring_type, fun (target, a, shouldEmit) {
+          if (target %&& System.AttributeTargets.Event) {
+            when(shouldEmit)
+              declaring_type.TyManager.ClrEmitter.SetEventAttribute(declaring_type.GetTypeBuilder(), Name, event_builder, a);
+            null
+          }
+          else "event " + ToString ()
+        });
+      }
+
+      event_builder.SetAddOnMethod (adder.GetMethodInfo ());
+      event_builder.SetRemoveOnMethod (remover.GetMethodInfo ());
+    }
+  }
 }

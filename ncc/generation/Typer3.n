@@ -2562,58 +2562,5 @@ namespace Nemerle.Compiler
 
   }
 
-  public partial class MethodBuilder
-  {
-    internal PrepareForEmission (fn : TFunHeader, subst : Subst) : void
-    {
-      def new_header = fun_header;
-      fun_header = fn;
 
-      def clo_count = Typer3.ClosureParmCount (fn);
-      def new_parms = new_header.Parameters.ChopFirstN (clo_count);
-
-      foreach (parm in new_header.Parameters.FirstN (clo_count)) {
-        parm.decl = LocalValue (fn, parm.name, parm.ty,
-                                LocalValue.Kind.Plain (),
-                                is_mutable = false);
-        parm.decl.Register ();
-        parm.decl.UseFrom (fn);
-      }
-
-      if (new_parms.Length > 1 && fn.Parameters.Length == 1) {
-        match (fn.body) {
-          | FunBody.Typed (body) =>
-            def vals = new_parms.Map (fun (parm : TParameter) {
-              def local = LocalValue (fn, parm.name, parm.ty,
-                                      LocalValue.Kind.Plain (), is_mutable = false);
-              local.Register ();
-              local.UseFrom (fn);
-              parm.decl = local;
-              local
-            });
-            def parm = fn.Parameters.Head;
-            def expr =
-              TExpr.DefValIn (body.Type,
-                              parm.decl,
-                              TExpr.Tuple (parm.ty, vals.Map (Typer3.PlainRef)),
-                              body);
-            fn.body = FunBody.Typed (expr);
-            fn.Parameters = new_header.Parameters;
-          | _ => assert(false)
-        }
-      }
-      else
-      {
-        NList.Iter2 (fn.Parameters, new_parms, fun (orig, copy : TParameter) {
-          copy.decl = orig.decl;
-          // FIXME: is it still needed?
-          copy.ty = Typer3.FixType (copy.ty, subst);
-          copy.decl.SetType (Typer3.FixType (copy.decl.Type, subst));
-        });
-        fn.Parameters = new_header.Parameters;
-      }
-
-      fn.ReturnType = new_header.ReturnType;
-    }
-  }
 }

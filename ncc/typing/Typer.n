@@ -26,6 +26,9 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+using PT = Nemerle.Compiler.Parsetree;
+using Nemerle.Diagnostics;
+using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler.SolverMacros;
@@ -116,7 +119,7 @@ namespace Nemerle.Compiler
   }
 
   /** A class responsible for typing a single (global or local) function.  */
-  public partial class Typer : TyperBase
+  public class Typer : TyperBase
   {
     is_instance_ctor : bool;
     mutable field_inits_typed : bool = false;
@@ -4949,6 +4952,3029 @@ namespace Nemerle.Compiler
       {
         | FixedType.Fun(FixedType.Tuple([t1, t2]), _) => t1.IsNullable && t2.IsNullable
         | _ => false
+      }
+    }
+  
+    // ---- merged from typing/Typer-CallTyper.n ----
+    [ManagerAccess (typer.Manager)]
+    class CallTyper
+    {
+      [Accessor] function_called : TExpr;
+      mutable call_parms : list [Parm];
+      mutable reordered_parms : list [Parm];
+      orig_parms : list [Parm];
+      imethod : IMethod;
+      mutable header : TFunHeader;
+      expected_type : TypeVar;
+      typer : Typer;
+      messenger : Messenger;
+      solver : Solver;
+
+      mutable result_type : TypeVar;
+      mutable formals_types : list [TypeVar];
+      mutable is_delegate_constructor : bool;
+      mutable argument_number : int;
+
+      public mutable used_default_parms : bool;
+      public mutable used_var_args : bool;
+      public mutable is_var_args : bool;
+      public mutable is_final : bool;
+      public mutable result : TExpr;
+      public mutable overload_possibility : OverloadPossibility;
+      public IsAllNestedDelayedTypingResolved : bool { get; private set; }
+      public IsTupleConvertionMade : bool { get; private set; }
+
+    public this (typer : Typer, fnc : TExpr, parms : list [Parm], expected : TypeVar)
+    {
+      IsAllNestedDelayedTypingResolved = true;
+      this.typer = typer;
+      solver = typer.solver;
+      messenger = typer.messenger;
+
+      function_called = match (fnc) { | DebugInfo (fnc, _) => fnc | _ => fnc }
+      call_parms = parms;
+      orig_parms = parms;
+      reordered_parms = parms;
+      expected_type = expected;
+      
+      imethod =
+        match (function_called) {
+          | TExpr.StaticRef (_, meth is IMethod, _)
+          | TExpr.MethodRef (_, meth, _, _)
+          | TExpr.Base (meth) => meth
+          | _ => null
+        };
+
+      header =
+        if (imethod == null)
+          match (fnc) {
+            | TExpr.LocalFunRef (decl, _) =>
+              match (decl.ValKind) {
+                | LocalValue.Kind.Function (hd, _) => hd
+                | _ => null
+              }
+            | _ => null
+          }
+        else
+          imethod.GetHeader ();
+    }
+
+
+      DeduceFunctionType () : void
+      {
+        // check if we are dealing with a delegate constructor
+        is_delegate_constructor =
+          imethod != null && 
+          imethod.DeclaringType.IsDelegate &&
+          imethod.MemberKind == MemberKinds.Constructor;
+
+        def fun_ty = typer.TypeOf (function_called);
+
+        assert(!messenger.LocalError);
+        
+        match (fun_ty.Hint) {
+          | Some (FixedType.Fun (from, res)) =>
+            result_type = res;
+            formals_types =
+              match (from.Hint) 
+              {
+                | Some (FixedType.Tuple (lst)) => lst
+                | Some (FixedType.Void) => []
+                | _ when NList.Length (call_parms) > 1 =>
+                  def formals_types =
+                    NList.RevMap (call_parms, fun (_) { typer.FreshTypeVar () });
+                  def fun_ty = ConstructFunctionType (formals_types, result_type);
+
+                  def err = !function_called.Type.TryRequire (fun_ty);
+                  
+                  if (err) {
+                    [from]
+                  } else {
+                    // Message.Debug ($ "fun_ty: $fun_ty REQ $(function_called.Type)");
+                    function_called.Type.ForceRequire (fun_ty);
+                    // Message.Debug ($ "fun_ty-->: $fun_ty");
+                    formals_types
+                  }
+
+                | _ => [from]
+              }
+            //Message.Debug ($"formals_types: $formals_types");
+          
+          | _ when Option.IsSome (fun_ty.Hint) =>
+            when (messenger.NeedMessage)
+              match (function_called) {
+                | TExpr.PropertyMember
+                | TExpr.StaticPropertyRef =>
+                  Message.Hint ("attempting to call a property, please use assignment to set it");
+                | _ => {}
+              }
+            ReportError (messenger, $"the value called ($function_called) has non-functional type $fun_ty")          
+          
+          | _ =>
+            formals_types =
+              NList.RevMap (call_parms, fun (_) { typer.FreshTypeVar () });
+            result_type = typer.FreshTypeVar ();
+            def fun_ty = ConstructFunctionType (formals_types, result_type);
+            def real_fun_ty = typer.TypeOf (function_called);
+            unless (real_fun_ty.Require (fun_ty))
+              ReportError (messenger, $"functional value ($function_called) was required to have type $fun_ty while it has $real_fun_ty");
+        }
+
+        when (is_delegate_constructor) {
+          // get the arguments for delegate constructor from the Invoke method
+          def from_type = (function_called :> TExpr.StaticRef).from;
+          match (imethod.DeclaringType.LookupMember ("Invoke")) {
+            | [invoke is IMethod] =>
+              formals_types = [from_type.TypeOfMember (invoke)];
+            | _ => assert(false)
+          }
+
+          when (overload_possibility != null)
+            overload_possibility.FormalTypes = formals_types.ToArray ();
+        }
+      }
+
+
+      RequireType(fparm : TParameter, ftype : TypeVar, parm : Parm) : void
+      {
+        //Message.Debug ($ "$(parm.expr.Type) <<< $ftype");
+
+        when (is_final)
+        {
+          if (parm.required_type == null)
+            parm.required_type = ftype;
+          else
+            _ = parm.required_type.Provide (ftype);
+        }
+
+        def msg = if (messenger.NeedMessage) $"needed a $ftype, got $(parm.expr.Type)" else null;
+
+        def is_ok =
+          if (fparm != null && fparm.kind != ParmKind.Normal)
+            parm.expr.Type.Unify(ftype)
+          else
+          {
+            mutable isAllNestedDelayedTypingResolved;
+            def expr = typer.TryAddCastTo(parm.expr, ftype, out isAllNestedDelayedTypingResolved, !is_final);
+            IsAllNestedDelayedTypingResolved &= isAllNestedDelayedTypingResolved;
+
+            if (expr == null) 
+            {
+              when (messenger.NeedMessage) // make sure a proper error message is stored
+                _ = parm.expr.Type.Require (ftype);
+              false
+            } 
+            else 
+            {
+              when (is_final)
+                parm.expr = expr;
+              true
+            }
+          };
+           
+        unless (is_ok) 
+        {
+          if (messenger.NeedMessage)
+          {
+            def name = if (fparm == null) "" else $" ($(fparm.name))";
+            ReportError (messenger, $"in argument #$argument_number$name, $msg"); //TODO: Add related msg which point on member def
+          }
+          else
+            messenger.MarkError();              
+        }
+      }
+      
+
+      TypeParmsArray (arrayty : TypeVar, aparms : list [Parm]) : void
+      {
+        used_var_args = true;
+
+        def regular_parms = call_parms.FirstN(argument_number - 1);
+
+        def tv = 
+          match (arrayty.Hint)
+          {
+            | Some (FixedType.Array(tv, 1)) => tv
+            | _ => assert(false)
+          };
+
+        mutable expr_list = [];
+              
+        foreach (aparm in aparms)
+        {
+          when (!messenger.LocalError)
+          {
+            when (aparm.kind != ParmKind.Normal)
+              ReportError(messenger, "ref/out parameters are not allowed with `parms'");
+            when (aparm.name != "")
+              ReportError(messenger, "named parameters are not allowed with `parms'");
+           
+            RequireType(null, tv, aparm);
+            expr_list = aparm.expr :: expr_list;
+            ++argument_number;
+          }
+        }
+
+        unless (messenger.LocalError)
+        {
+          def dimensions	= [TExpr.Literal(InternalType.Int32, Literal.FromInt(expr_list.Length))];
+          def mkarray			= TExpr.Array(function_called.Location, arrayty, NList.Rev(expr_list), dimensions);
+          call_parms			= regular_parms + [Parm(mkarray)];
+        }
+      }
+
+      
+      LoopWithHeader () : void
+      {
+        def loop (fparms, ftypes, aparms) {
+          | ([_], [arrayty], aparms) when is_var_args =>
+            TypeParmsArray (arrayty, aparms)
+
+          | ([], [], []) when !is_var_args => {}
+
+          | ((fparm : TParameter) :: fparms, ftype :: ftypes, (aparm : Parm) :: aparms) =>
+            log (TYPING, $"loop with header: $ftype $(aparm.expr.Type)");
+            UtilMacros.locate (aparm.expr?.Location,//)
+            {
+              if (fparm.kind == aparm.kind) 
+              {
+                def ftypeNoRef = StripRefOut(ftype);
+
+                RequireType(fparm, ftypeNoRef, aparm);
+
+                when (!messenger.LocalError && fparm != null)
+                  match (fparm.ty, ftypeNoRef.Hint)
+                  {
+                    | (FixedType.StaticTypeVarRef(tyvar), Some(mType)) => 
+                      unless (tyvar.TryCheckConstraints(mType, imethod, messenger.NeedMessage))
+                        ReportError (messenger, $"parameter '$fparm' has constraint violation");
+
+                    | _ => ()
+                  }
+              
+                ++argument_number;
+                unless (messenger.LocalError)
+                  loop (fparms, ftypes, aparms);
+              }
+              else
+              {
+                ReportError(messenger, $"in argument #$argument_number ($(fparm.name)), needed a $(fparm.kind) parameter, got $(aparm.kind) (argument expression: $(aparm.expr))");
+                ReportLocatedError(fparm.Location, messenger, "Related message: argument defenition.")
+              }
+            })
+
+          | x =>
+            unless (Manager.IsCompletionInProgress)
+              UtilMacros.ice(x.ToString())
+        }
+
+        loop (header.Parameters, formals_types, call_parms)
+      }
+
+
+      LoopWithoutHeader() : void
+      {
+        def loop(ftypes, aparms)
+        {
+          | ([], []) => {}
+
+          | (ftype :: ftypes, aparm :: aparms) =>
+            if (aparm.kind == ParmKind.Normal)
+            {
+              log(TYPING, $"loop without header: $ftype $(aparm.expr.Type)");
+              RequireType(null, ftype, aparm);
+              ++argument_number;
+
+              unless (messenger.LocalError)
+                loop(ftypes, aparms);
+            }
+            else 
+              ReportError(messenger, $"in argument #$argument_number, ref/out parameters are not supported here")
+            
+          | _ => 
+            unless (Manager.IsIntelliSenseMode)
+              assert(false);
+        }
+
+        assert(!is_var_args);
+        loop(formals_types, call_parms)
+      }
+
+
+      LoopOverArgs () : void
+      {
+        when (header != null &&
+              NList.Length (header.Parameters) != NList.Length (formals_types))
+          header = null;
+
+        argument_number = 1;
+        
+        log (TYPING, $"start parm loop $imethod");
+
+        if (header == null)
+          LoopWithoutHeader ()
+        else
+          LoopWithHeader ();
+
+        log (TYPING, $"end parm loop $imethod, res=$result_type localerr=$(messenger.LocalError)");
+
+        unless (messenger.LocalError)
+        {
+          _ = typer.Expect (expected_type, result_type, "call result");
+          unless (messenger.LocalError)
+          {
+            if (is_final)
+            {
+              ////Debug.WriteLine("#NO Speculative typing");
+              result = TExpr.Call (result_type, function_called, call_parms, false);
+            }
+            else
+            {
+              ////Debug.WriteLine("#begin Speculative typing");
+              ////Debug.Indent();
+              // Try to resolve nested delayed typing (TExpr.Delayed). It can fail and this call 
+              // typing action will be also failed.
+              //def ok = call_parms.IsEmpty 
+              //      || typer.TryResolveNestedDelayedTyping(call_parms.Map(_.expr), speculative = !is_final);
+
+              ////Debug.Unindent();
+              ////Debug.WriteLine($"#end Speculative typing (OK:$ok)");
+
+              //when (ok)
+              result = TExpr.Call (result_type, function_called, call_parms, false);
+            }
+          }
+        }
+      }
+
+      public Run () : void
+      {
+        when (Nemerle.Compiler.Typer.DebugOut)
+        {
+          System.Diagnostics.Debug.WriteLine($">>>> CallTyper.Ran(): '$function_called' expected=$expected_type");
+          foreach (p in call_parms)
+            System.Diagnostics.Debug.WriteLine($"  param: $(RemoveNL(p))");
+          System.Diagnostics.Debug.Indent();
+        }
+
+        IsAllNestedDelayedTypingResolved = true;
+        messenger.CleanLocalError ();
+
+        when (is_var_args)
+          assert(imethod != null && imethod.IsVarArgs);
+
+        def has_named = call_parms.Exists(parm => parm.name != "");
+        def need_default = 
+          !is_var_args 
+          && header != null
+          && header.Parameters.Length > call_parms.Length 
+          && header.Parameters.Exists(_.HasDefaultValue);
+        def need_complete_parameter_name = Manager.IsCompletionInProgress && call_parms.Exists(p => p.NameToComplete != null);
+
+        when (has_named || need_default || need_complete_parameter_name)
+          if (header == null)
+            ReportError(messenger, "named parameters given but formals' names cannot be inferred");
+          else
+            ReorderNamedParms(header.Parameters);
+
+        unless (messenger.LocalError)
+        {
+          DeduceFunctionType ();
+          unless (messenger.LocalError)
+          {
+            def formal_count = formals_types.Length;
+            def actual_count = call_parms.Length;
+
+            if (is_var_args)
+            {
+              if (formal_count > actual_count + 1)
+                ReportError (messenger, "not enough parameters")
+              else
+                LoopOverArgs ();
+            }
+            else if (formal_count == actual_count)
+              LoopOverArgs ();
+            else if (formal_count > 1 && actual_count == 1)
+            {
+              formals_types = [FixedType.Tuple (formals_types) : TypeVar];
+              IsTupleConvertionMade = true;
+              LoopOverArgs ();
+            }
+            else if (header == null && formal_count == 1 && actual_count == 0
+                  && formals_types.Head.TryUnify(InternalType.Void))
+            {
+              formals_types.Head.ForceUnify (InternalType.Void);
+              formals_types = [];
+              LoopOverArgs ();
+            }
+            else if (Manager.IsCompletionInProgress)
+              LoopOverArgs ();
+            else
+            {
+              // the case formal_count == 1 && actual_count > 1 has been handled already in DeduceFunctionType
+              ReportError (messenger, $"wrong number of parameters in call, needed $formal_count, got $actual_count");
+            }
+          }
+        }
+
+        when (overload_possibility != null)
+          overload_possibility.IsAllNestedDelayedTypingResolved = IsAllNestedDelayedTypingResolved;
+
+
+        when (Nemerle.Compiler.Typer.DebugOut)
+        {
+          System.Diagnostics.Debug.Unindent();
+          System.Diagnostics.Debug.WriteLine("<<<< CallTyper.Ran()");
+        }
+      }
+
+
+      /** [formal_types[n]] is type used for parameter [perm[n]]. */
+      public GetPermutationArray () : array [int]
+      {
+        UtilMacros.cassert (reordered_parms != null);
+        def perm = array (reordered_parms.Length);
+
+        if (reordered_parms : object == orig_parms) {
+          for (mutable i = 0; i < perm.Length; ++i)
+            perm [i] = i;
+            
+        } else {
+          def find (pos, lst, elem) {
+            match (lst) {
+              | x :: xs =>
+                if (x : object == elem) pos
+                else find (pos + 1, xs, elem)
+              | [] => -1
+            }
+          }
+
+          mutable pos = 0;
+          foreach (p in reordered_parms) {
+            perm [pos] = find (0, orig_parms, p);
+            pos++;
+          }
+        }
+
+        perm
+      }
+
+
+      // TODO: merge this into the other overload 
+      ReorderNamedParms (top_names : list [TParameter]) : void
+      {
+        call_parms = ReorderNamedParms (top_names, orig_parms);
+        reordered_parms = call_parms;
+      }
+      
+
+      /** Given list of formal parms names and actual parms names, reorder
+          actuals to match formals.
+          
+          The named parameters can be preceded by a series of unnamed
+          parameters:
+       
+            [bar (e_0, e_1, x_2 = e_2, x_3 = e_3, ..., x_k = e_k)]
+       
+          where x_i are the named parameter references and e_i are some
+          expressions.  */
+      ReorderNamedParms (top_names : list [TParameter],
+                         top_parms : list [Parm]) : list [Parm]
+      {
+        // lookup tables for names, named and unnamed parameters
+        def valid_names = Hashtable (16);
+        def seen_named_parms = Hashtable (16);
+        def seen_unnamed_parms = Hashtable (16);
+        def use_defaults_for = Hashtable (16);
+
+        // we will need a way to lookup the valid parameter names
+        foreach (fp in top_names) {
+          assert(fp != null && fp.name != null);
+          assert(!valid_names.ContainsKey (fp.name));
+          valid_names.Add (fp.name, fp)
+        }
+
+        // failure handler
+        def fail (msg)
+        {
+          ReportError (messenger, msg);
+          false
+        }
+
+        // the correctness verifier
+        def check_names_and_parms(names : list[TParameter], parms : list[Parm]) : bool
+        {
+          | ([], []) =>
+            true
+
+          | (_, []) =>
+            def unresolved_names =
+              NList.RevFilter (top_names, 
+                fun (fp)
+                {
+                  def seen =
+                    seen_named_parms.Contains (fp.name) 
+                    || seen_unnamed_parms.Contains (fp.name);
+
+                  if (seen) false
+                  else if (fp.HasDefaultValue)
+                  {
+                    used_default_parms = true;
+                    use_defaults_for [fp.name] = fp;
+                    false
+                  }
+                  else true
+                });
+
+            unresolved_names.IsEmpty || fail($<#parameters: ..$(unresolved_names; ", "; p => "`" + p.name + "'") must be specified#>)
+
+          | (fp :: rest_of_names, parm :: rest_of_parms) when parm.name == "" =>
+            // the case for an unnamed parameter
+
+            when (parm.NameToComplete != null)
+            { // try to complete named parameters
+              def pattern       = parm.NameToComplete;
+              def matchedParams = names.Filter(p => Completion.MatchName(p.Name, pattern));
+              def manager       = Manager;
+
+              foreach (p in matchedParams)
+                manager._completionParameterNames ::= p.Name;
+            }
+
+            if (seen_named_parms.Count > 0)
+            {
+              // seen a named parameter before, error...
+              fail("unnamed parameter found after a named parameter")
+            }
+            else
+            {
+              // otherwise, this is an element of the leading unnamed parameters
+              seen_unnamed_parms.Add (fp.name, parm);
+              check_names_and_parms (rest_of_names, rest_of_parms)
+            }
+
+          | (_ :: rest_of_names, parm :: rest_of_parms) =>
+            // a named parameter, check if no unnamed parameter has covered it before
+            if (seen_unnamed_parms.ContainsKey (parm.name)) {
+              // this parameter name was covered by an unnamed parameter
+              fail ("keyword parameter `" + parm.name + "' already specified as an unnamed parameter")
+            }
+            else if (seen_named_parms.ContainsKey (parm.name)) {
+              // the case for repeating parameters
+              fail ("keyword parameter `" + parm.name + "' already specified")
+            }
+            else if (!valid_names.ContainsKey (parm.name)) {
+              // whoops, no such parameter for this method :]
+              fail ("no such keyword parameter `" + parm.name + "' among valid parameter names")
+            }
+            else {
+              // OK, this has to be right...
+              seen_named_parms.Add (parm.name, parm);
+              check_names_and_parms (rest_of_names, rest_of_parms)
+            }
+
+          | ([], parm :: _) =>
+            fail ($ "too much parameters specified, first one causing "
+                    "the problem is `$(parm.name)'")
+        }
+
+        // reordering is a matter of simple names list walk now:
+        def reorder_parms (names : list [TParameter], acc : list [Parm]) : list [Parm]
+        {
+          | (fp :: rest_of_names, _) =>
+            def name = fp.name;
+            if (seen_unnamed_parms.Contains (name))
+              reorder_parms (rest_of_names,
+                             Option.UnSome (seen_unnamed_parms.Get (name)) :: acc)
+            else if (seen_named_parms.Contains (name))
+              reorder_parms (rest_of_names,
+                             Option.UnSome (seen_named_parms.Get (name)) :: acc)
+            else if (use_defaults_for.Contains (name)) {
+              def expr = fp.DefaultValueAsTExpr(solver);
+              reorder_parms (rest_of_names, Parm(expr, true) :: acc)
+            } else
+              UtilMacros.ice ("reorder_named_parms: reorder")
+
+          | ([], _) =>
+            NList.Rev (acc)
+        }
+
+        if (check_names_and_parms (top_names, top_parms))
+          reorder_parms (top_names, [])
+        else
+          null
+      }
+    }
+  
+    // ---- merged from typing/Typer-DelayedTyping.n ----
+    public abstract class DelayedAction
+    {
+      public abstract Resolve (fail_loudly : bool) : option [TExpr];
+
+      public override ToString () : string
+      {
+        "delayed macro"
+      }
+    }
+
+    public class DelayedLambdaAction : DelayedAction
+    {
+      desc : string;
+      fn : bool -> option [TExpr];
+
+      public override ToString () : string
+      { 
+        desc
+      }
+
+      public override Resolve (fail_loudly : bool) : option [TExpr]
+      {
+        fn (fail_loudly)
+      }
+
+      public this (fn : bool -> option [TExpr], desc = "delayed typing action")
+      {
+        this.fn = fn;
+        this.desc = desc;
+      }
+    }
+
+    
+    // TODO: object model seems to fit better here, upgrade most kinds to use DelayedAction
+    [ManagerAccess (typer.Manager)]
+    public class DelayedTyping : TypedBase, System.IComparable [DelayedTyping]
+    {
+      id : int;
+      typer : Typer;
+      local_context : LocalContext;
+      expected : TypeVar;
+      mutable pexpr : PT.PExpr;
+      mutable generic_specifier : list [TypeVar];
+
+      [Record]
+      public variant Kind
+      {
+        | MemberAccess { expr : TExpr; name : PT.Name; }
+        | Overloaded   { overloads : list[OverloadPossibility]; }
+        | OverloadedOperator
+          {
+            overloads : list[OverloadPossibility]; 
+            t1        : TypeVar;
+            t2        : TypeVar;
+            name      : string;
+            env       : GlobalEnv;
+            seen      : list[OverloadPossibility];
+          }
+
+        | Operator { t1 : TypeVar; t2 : TypeVar; name : string; env : GlobalEnv; }
+        | Resolved
+          {
+            expr : TExpr;
+            [RecordIgnore] parms : list[Parm]; // "parms" may contains new parameters for TExpr.Call if it is a extention method call
+
+            public this(expr : TExpr, parms : list[Parm])
+            {
+              this.expr  = expr;
+              this.parms = parms;
+            }
+          }
+
+        | Macro { action : DelayedAction }
+        | Error
+
+        public mutable filtering_expression : TExpr.Call;
+        public mutable need_ref : bool;
+        public mutable need_write : bool;
+
+        public this () {}
+
+        public override ToString () : string
+        {
+          match (this) 
+          {
+            | Resolved (a) => "resolved expression " + a.ToString ()
+            | Error => "an error"
+            | Overloaded (overloads) =>
+              "ambiguity between overloads:\n  " + overloads.ToString ("\n  ")
+            | MemberAccess (expr, name) =>
+              $ "accessing member: ($expr : $(expr.Type)).$name"
+            | Operator (t1, t2, name, _) =>
+              "operator: "
+              + if (t2 == null) $"$t1 $name\n"
+                else            $"$t1 $name $t2\n"
+
+            | OverloadedOperator (lst, t1, t2, name, _, _) => 
+              "overloaded operator: "
+              + if (t2 == null) $"$t1 $name\n"
+                else            $"$t1 $name $t2\n"
+              + $<# [..$(lst; "\n")]#>
+
+            | Macro (action) => action.ToString ()
+          }
+        }
+      }
+
+
+      public CompareTo (o : DelayedTyping) : int
+      {
+        id - o.id
+      }
+
+
+      public DtKind : Kind
+      {
+        get {
+          typer.solver.dt_store.Get (this)
+        }
+      }
+
+
+      public ApplyGenericSpecifier (tyvars : list [TypeVar]) : void
+      {
+        assert(generic_specifier == null);
+        generic_specifier = tyvars;
+        // apply it (possibly)
+        SetKind (DtKind);
+      }
+
+
+      SetKind (k : Kind) : void
+      {
+        match (k) 
+        {
+          | Kind.Resolved (expr) => _ = typer.Expect (expected, expr.Type, "resolved overload");
+          | _ => {}
+        }
+
+        def k =
+          match (k) 
+          {
+            | Kind.Resolved ((TExpr.StaticRef (_, meth is IMethod, _)) as expr) as resolvedKind =>
+              match (meth.BuiltinKind)
+              {
+                | BuiltinMethodKind.OpCode (ch, unch) =>
+                  assert(resolvedKind.parms == null);
+                  def opcode = if (local_context.IsChecked) ch else unch;
+                  Kind.Resolved (TExpr.OpCode (expr.Location, expr.ty, opcode))
+
+                | _ => k
+              }
+
+            | Kind.Overloaded (lst) =>
+              when (expected.Hint.IsNone && NList.ForAll (lst, x => x.Type is FixedType.Fun))
+                _ = expected.Unify (FixedType.Fun (typer.FreshTypeVar (), typer.FreshTypeVar ()));
+              Kind.Overloaded (OverloadPossibility.Unique (lst))
+
+            | Kind.OverloadedOperator (lst, t1, t2, n, e, s) =>
+              Kind.OverloadedOperator (OverloadPossibility.Unique (lst), t1, t2, n, e, s)
+
+            | _ => k
+          }
+
+        when (generic_specifier != null)
+          match (k) 
+          {
+            | Kind.OverloadedOperator (lst, _, _, _, _, _) 
+            | Kind.Overloaded (lst) =>
+              foreach (o in lst)
+                o.SetGenericSpecifier (generic_specifier);
+              generic_specifier = null;
+              
+            | Kind.Resolved (expr) =>
+              typer.ApplyGenericSpecifier (expr, generic_specifier);
+              generic_specifier = null;
+              
+            | _ => {}
+          }
+          
+        def solver = typer.solver;
+
+        assert(solver.dt_store != null); // maybe you try resolv DelayedTyping which been taken in speculative typing (i.e. befor you call solver.PopState())?
+
+        match (solver.dt_store.Find (this)) 
+        {
+          | Some (k1) =>
+            when (k.filtering_expression == null)
+              k.filtering_expression = k1.filtering_expression;
+            k.need_ref   = k1.need_ref;
+            k.need_write = k1.need_write;
+
+          | None => {}
+        }
+
+        solver.dt_store = solver.dt_store.Replace (this, k);
+
+        match (k) 
+        {
+          | Kind.Resolved (expr) =>
+            when (this.PExpr != null)
+            match (this.PExpr)
+            {
+              | null => ()
+              | PT.PExpr.Sequence(body) => 
+                foreach (elem in body)
+                  match (elem.TypedObject)
+                  {
+                    | TExpr.Delayed when elem.TypedObject : object == PExpr.TypedObject => 
+                      expr.SetParsedObject(elem); // elem.TypedObject = expr;
+
+                    | TExpr.Delayed(susp) as dt =>
+                      _ = dt; _ = susp;
+
+                    | _ => ()
+                  }
+
+                //PExpr.TypedObject = expr;
+
+              | _ => expr.SetParsedObject(this.PExpr); //PExpr.TypedObject = expr;
+            }
+
+            when (k.need_write)
+              typer.CheckLValue (expr, k.need_ref, 
+                 if (k.need_ref) "ref/out parameter"
+                 else "assignment target");
+
+          | _ => {}
+        }
+      }
+
+
+      public this (expr : PT.PExpr, t : Typer, k : Kind, e : TypeVar)
+      {
+        this.PExpr = expr;
+        typer = t;
+        local_context = t.local_context;
+        Manager.Typer_DT_Id++;
+        id = Manager.Typer_DT_Id;
+        expected = e;
+        SetKind (k)
+      }
+
+
+      public IsMutableIndexer : bool
+      { 
+        get {
+          match (DtKind) {
+            | Kind.OverloadedOperator (lst, _, _, _, _, _) 
+            | Kind.Overloaded (lst) =>
+              NList.ForAll (lst, fun (op : OverloadPossibility) {
+                match (op.Member) {
+                  | p is IProperty => p.IsMutable && p.IsIndexer
+                  | _ => false
+                }
+              })
+
+            | Kind.Resolved (TExpr.PropertyMember (_, p))
+            | Kind.Resolved (TExpr.StaticPropertyRef (_, p)) =>
+              p.IsIndexer && p.IsMutable
+
+            | _ => false
+          }
+        }
+      }
+
+      public IsFunctional : bool
+      {
+        get {
+          match (DtKind) {
+            | Kind.OverloadedOperator (lst, _, _, _, _, _) 
+            | Kind.Overloaded (lst) =>
+              lst.ForAll (fun (op) { op.Member is IMethod })
+
+            | Kind.Resolved (TExpr.StaticRef (_, _ is IMethod, _)) => true
+
+            | _ => false
+          }
+        }
+      }
+
+      public ExpectLValue(need_ref : bool) : bool
+      {
+        def kind = DtKind;
+        kind.need_write = true;
+
+        when (need_ref)
+          kind.need_ref = true;
+
+        def isMutable(o : OverloadPossibility)
+        {
+          match (o.Member)
+          {
+            | p is IProperty => p.IsMutable && !need_ref
+            | f is IField    => f.IsMutable || typer.is_instance_ctor && f.DeclaringType.Equals(typer.current_type)
+            | _ is IEvent    => true
+            | _              => false
+          }
+        }
+
+        match (kind)
+        {
+          | Kind.Overloaded(lst) =>
+            !need_ref 
+            &&
+              match (NList.RevFilter(lst, isMutable))
+              {
+                | [] => false
+                | newlst =>
+                  SetKind (Kind.Overloaded(newlst));
+                  true
+              }
+ 
+          | Kind.Resolved (r) => typer.IsLValue (r, need_ref)
+
+          | Kind.MemberAccess
+          | Kind.Macro
+          | Kind.Error => true
+
+          | Kind.OverloadedOperator 
+          | Kind.Operator => false
+        }
+      }
+
+      public HasExtentionMethods(type : FixedType, name : PT.Name) : bool
+      {
+        foreach (method in Manager.LibrariesManager.GetExtensionMethods(name.Id, name.GetEnv(typer.Env)))
+          when (method.GetFreshType() is (FixedType.Fun(FixedType.Tuple(firstParamType :: _), _), _))
+            return type.TryRequire(firstParamType);
+              
+        false
+      }
+    
+      public ExpectMember (name : PT.Name) : void
+      {
+        def can_have (type : FixedType)
+        {
+          | Class (tc, _) => !(tc.LookupMember(name.Id) is []) || HasExtentionMethods(type, name)
+          | Array (_, n) => !(InternalType.GetArrayType(n).LookupMember(name.Id) is [])  // TODO add  || HasExtentionMethods(type, name)
+          | StaticTypeVarRef (tv) => tv.Constraints.Exists (can_have)
+          | Intersection (lst) => lst.Exists (can_have)
+          | Tuple | Fun | Void | Ref | Out => false
+        }
+
+        match (DtKind) {
+          | Kind.OverloadedOperator (lst, t1, t2, n, e, s) => 
+            when (InternalType.Object_tc.LookupMember(name.Id) is [])
+            {
+              // otherwise it's pointless
+              def newlst = NList.RevFilter(lst, 
+                fun (o : OverloadPossibility)
+                {
+                  match (o.Type.Hint)
+                  {
+                    | Some (mt) => can_have (mt)
+                    | None => true // we don't yet know
+                  }
+                });
+
+              if (newlst is []) {}
+              else SetKind (Kind.OverloadedOperator (newlst, t1, t2, n, e, s));
+            }
+
+          | Kind.Overloaded (lst) =>
+            when (InternalType.Object_tc.LookupMember (name.Id) is []) {
+              // otherwise it's pointless
+              def newlst = NList.RevFilter (lst, fun (o : OverloadPossibility) {
+                match (o.Type.Hint) {
+                  | Some (mt) => can_have (mt)
+                  | None => true // we don't yet know
+                }
+              });
+
+              match (newlst)
+              {
+                | [] => ()
+                | [_] =>
+                  SetKind(Kind.Overloaded(newlst));
+                  Resolve(Manager.IsSpeculativeTyping);
+                  
+                | _ => SetKind(Kind.Overloaded(newlst));
+              }
+            }
+
+          | _ => {}
+        }
+      }
+
+      public IsResolved : bool
+      {
+        get {
+          match (typer.solver.dt_store.Find (this)) { //DtKind
+            | Some (Kind.Resolved)
+            | Some (Kind.Error) => true
+            | _ => false
+          }
+        }
+      }
+
+
+      public ResolutionResult : TExpr
+      {
+        get
+        {
+          match (DtKind)
+          {
+            | Kind.Resolved(e)  => e
+            | Kind.Error        => TExpr.Error()
+            | _                 => assert(false)
+          }
+        }
+      }
+
+
+      public override ToString () : string
+      {
+        if (typer.solver.dt_store.Find(this) is Some(dtKind))
+          "DelayedTyping { DtKind=" + dtKind + " }"
+        else
+          "DelayedTyping { DtKind=<not exists in dt_store> }"
+      }
+
+      public GetDescriptionForError () : list [Location * string]
+      {
+        def loc = this.Location;
+        def used(o) { o.UsedLastTime }
+        def makeOverloads(overloads, msg)
+        {
+          def overloads1 = if (overloads.Exists(used)) overloads.Filter(used) 
+                           else                        overloads;
+          mutable overloads2 = [];
+
+          foreach (o in overloads1)
+          {
+            overloads2 ::= (loc, $"  Posible overload: $o");
+
+            when (Typer.IsMemberLocationCorrect(o))
+              overloads2 ::= (o.Member.Location.FromStart(), "overload definition");
+          }
+
+          (loc, msg) :: overloads2.Rev()
+        }
+        
+        match (DtKind) 
+        {
+          | OverloadedOperator ([], t1, t2, name, _env, _seen) =>
+            def msg = $"finding the operator $name($t1" + (if (t2 != null) $", $t2" else "") + ")";
+            (loc, msg) :: []
+
+          | OverloadedOperator (overloads, t1, t2, name, _env, _seen) =>
+            def msg = $"ambiguity between operator $name($t1" 
+                       + (if (t2 != null) $", $t2" else "") + ")" + " overloads:";
+            makeOverloads(overloads, msg)
+            
+          | Overloaded (overloads) => makeOverloads(overloads, "ambiguity between overloads:")
+          | Macro (action) =>
+            // the Resolve function should dump the error message
+            UtilMacros.locate (Location, {
+              def res = action.Resolve (true);
+              when (res.IsSome)
+                Message.Error ($ "the macro resolution function unexpectedly succeeded "
+                                 "when run for the second time, the result is "
+                                 "$(Option.UnSome (res))");
+            });
+            [(loc, ToString())]
+
+          | MemberAccess(TExpr.Error, _) => [] //VladD2: Don't generate message if object is Error! This is senselessly!
+          | MemberAccess(expr, name) => [(name.Location, $"accessing member $name in the $(expr.Type) type")]
+          | _  => [(loc, ToString())]
+        }
+      }
+
+
+      public IsOverloaded : bool
+      {
+        get { DtKind is Kind.Overloaded || DtKind is Kind.OverloadedOperator }
+      }
+
+
+      public Context : LocalContext
+      {
+        get { local_context }
+      }
+
+
+      public PExpr : PT.PExpr
+      {
+        get { pexpr }
+        set { pexpr = value }
+      }
+
+
+      public CanSetCallExpr : bool
+      {
+        get {
+          match (DtKind) {
+            | MemberAccess
+            | Overloaded
+            | OverloadedOperator
+            | Error
+            | Operator => true
+            | Resolved
+            | Macro => false
+          }
+        }
+      }
+
+
+      public SetCallExpr (e : TExpr.Call) : void
+      {
+        def kind = DtKind;
+        UtilMacros.cassert (CanSetCallExpr);
+        if (kind.filtering_expression == null)
+          kind.filtering_expression = e;
+        else
+          UtilMacros.cassert (kind.filtering_expression : object == e : object)
+      }
+
+      ResolveOverload(overloads : list[OverloadPossibility], parms : list[Parm], expected : TypeVar) : list[OverloadPossibility]
+      {
+        def loc = 
+          match (PExpr)
+          {
+            | PT.PExpr.Member(_, member) => member.Location
+            | _                          => LocationStack.Top()
+          };
+
+        def res = typer.ResolveOverload(overloads, parms, expected, Speculative, loc);
+        res
+      }
+
+      LookupOperatorIn (bound : FixedType, name : string) : list [OverloadPossibility]
+      {
+        mutable res = [];
+        
+        def loop (ti : TypeInfo) {
+          foreach (meth is IMethod in ti.LookupMember (name))
+            when (meth.IsStatic)
+              res = typer.ConstructMethodOverload (ti, meth) + res;
+          match (ti.GetTydecl ()) {
+            | TypeDeclaration.Interface =>
+              loop (InternalType.Object_tc)
+            | _ =>
+              Option.Iter (ti.SuperClass (), loop)
+          }
+        }
+
+        match (bound) {
+          | FixedType.Class (ti, _) =>
+            loop (ti);
+            res
+          | _ => assert(false)
+        }
+      }
+
+      static WrapTo(type : TypeInfo, unwrappedMethod : IMethod) : IMethod
+      {
+        def name = unwrappedMethod.Name;
+        BuiltinWrapMethod(type, unwrappedMethod, BuiltinMethodKind.OpCode(name, name))
+      }
+
+      WrapeToNullable(bound : FixedType.Class, overloads : list[OverloadPossibility]) : list[OverloadPossibility]
+      {
+        def wrapeOverloadPossibilityToNullable(overload : OverloadPossibility) : OverloadPossibility
+        {
+          def nullable = InternalType.Generic_Nullable_tc;
+          def wrapParamTypes(types : array[TypeVar]) : TypeVar
+          {
+            if (types.Length == 1)
+              FixedType.Class(nullable, [types[0]])
+            else if (types.Length == 0)
+              FixedType.Void()
+            else
+              FixedType.Tuple(types.MapToList(t => FixedType.Class(nullable, [t])))
+          }
+          def unwrappedType   = overload.Type :> FixedType.Fun;
+          def retType         = FixedType.Class(nullable, [unwrappedType.to]);
+          def methodType      = FixedType.Fun(wrapParamTypes(overload.FormalTypes), unwrappedType.argsCount, retType);
+          def unwrappedMethod = overload.Member :> IMethod;
+          def wrappedMethod   = WrapTo(nullable, unwrappedMethod);
+          OverloadPossibility(typer, methodType, null, bound, wrappedMethod, [])
+        }
+        overloads.Map(wrapeOverloadPossibilityToNullable)
+      }
+
+      LookupOperator (t : TypeVar, name : string) : option [list [OverloadPossibility]]
+      {
+        assert(name != null);
+        if (t == null)
+          None ()
+        else {
+          match (t.AnyHint) {
+            // This is kind of ugly special case, we sometimes claim, the
+            // lower bound is System.Object in cases we don't really 
+            // think this will be the final type. 
+            // Therefore, for operators, that cannot be found in System.Object,
+            // don't even try. The ugly part, is that it won't work for ==/!=
+            | Some (Class (tc, []))
+              when tc.Equals (InternalType.Object_tc) && 
+                   name != "op_Equality" && name != "op_Inequality" => 
+              None ()
+
+            | Some (FixedType.Class(_, [FixedType.Class as bound]) as nTy) when nTy.IsNullable =>
+              // Nullable support
+              def res1 = LookupOperatorIn(nTy, name);
+
+              if (res1.IsEmpty)
+              {
+                def res2 = LookupOperatorIn(bound, name);
+
+                if (res2.IsEmpty)
+                  Some([])
+                else
+                  Some(WrapeToNullable(bound, res2))
+              }
+              else
+                Some(res1)
+
+            | Some (FixedType.Class as bound) =>
+              Some (LookupOperatorIn (bound, name))
+
+            | Some (FixedType.Array) =>
+              Some (LookupOperatorIn (InternalType.Array, name))
+
+            | Some (FixedType.StaticTypeVarRef (a)) =>
+              LookupOperator (a.LowerBound, name)
+
+            | Some (FixedType.Intersection (lst)) =>
+              mutable res = [];
+              foreach (FixedType.Class as t in lst) {
+                res = LookupOperatorIn (t, name) + res
+              }
+              Some (res)
+
+            | Some (FixedType.Fun (from, to)) =>
+              // Ugly thing, class representing function depends on parameters voidness
+              match (from.AnyHint) {
+                | None when typer.BadnessAllowed > 2 with args = [FixedType.Void ()] //seem to work somehow
+                | Some (FixedType.Tuple (args))
+                | Some (FixedType.Void) with args = []
+                | Some (x) with args = [x] =>
+                  def inst = InternalType.GetFunctionType (args.Length);
+                  Some (
+                    LookupOperatorIn (
+                      match (to.AnyHint) {
+                        | Some (FixedType.Void) =>
+                          FixedType.Class (inst.VoidTyCon, args)
+                        | None when typer.BadnessAllowed > 2 //seem to work somehow
+                        | Some => 
+                          FixedType.Class (inst.TyCon, (args + [to]))
+                        | None => 
+                          InternalType.Object
+                      },
+                      name
+                    )
+                  )
+                | _ => Some (LookupOperatorIn (InternalType.Object, name))
+              }
+
+            | _ => None ()
+          }
+        }
+      }
+
+      DoResolve () : void
+      {
+        when (Nemerle.Compiler.Typer.DebugOut)
+        {
+          Debug.WriteLine($"%Begin DelayedTyping.DoResolve() DtKind=$(RemoveNL(DtKind))");
+          Debug.Indent();
+        }
+        def solver = typer.solver;
+        def messenger = solver.CurrentMessenger;
+        match (DtKind) {
+          | Kind.MemberAccess (e, name) =>
+            // We should not check "expected" in this time.
+            // Instead we should try to add implicit type conversion 
+            // in the end of delayed overload resolution process.
+            // see [End of overload resoluton process] in this file.
+            match (typer.TypeMember (e, name, typer.FreshTypeVar())) {
+              | Some ([]) =>
+                ReportError (messenger, $"there is no member named `$(name)' in $(typer.TypeOf (e)) with type $expected");
+                SetKind (Kind.Error ())
+
+              | Some (lst) =>
+                SetKind (Kind.Overloaded (lst));
+                when (DtKind.need_write && !ExpectLValue(false))
+                  ReportError (messenger, $"needed writable value, got $lst");
+
+                // restart with more information
+                Resolve ()
+
+              | None => {}
+            }
+
+          | Kind.Overloaded (overloads) =>
+            def expr = DtKind.filtering_expression;
+            def o1 =
+              if (expr == null) 
+              {
+                def res1 = OverloadPossibility.OnlyPossible (overloads, expected, typer);
+                def isAllOverloadsHaveSameArgCnt (overloads)
+                {
+                  assert(overloads.Length > 1);
+
+                  def cntArgsForEachOverload = overloads.Map(arg =>
+                    match (arg.Type.Hint)
+                    {
+                      | Some(FixedType.Fun(FixedType.Tuple(lst), _)) => lst.Length
+                      | Some(FixedType.Fun(FixedType.Void, _))       => 0
+                      | Some(FixedType.Fun)                      => 1
+                      | _ => 0
+                    });
+
+                  def argsCnt = cntArgsForEachOverload.Tail.Fold (
+                    cntArgsForEachOverload.Head, (arg, prev) => if (arg == prev) arg else -1);
+
+                  argsCnt >= 0
+                }
+
+                def tryFilterByType(o : OverloadPossibility, type : TypeVar) : bool
+                {
+                  typer.JustTry(
+                    fun()
+                    {
+                      def overloadExpr = o.Compile();
+                      def expr = typer.TryAddCastTo(overloadExpr, type, _speculative);
+                      expr != null
+                    });
+                }
+
+                def res2 = 
+                  if (res1 is [_])
+                    res1
+                  else if (expected.IsConstrained)
+                  {
+                    def res = res1.Filter(tryFilterByType(_, expected));
+                    if (res.IsEmpty) res1 else res
+                  }
+                  else if (expected.ImplicitCastHint != null)
+                  {
+                    def res = res1.Filter(tryFilterByType(_, expected.ImplicitCastHint));
+                    if (res.IsEmpty) res1 else res
+                  }
+                  else
+                    res1;
+                
+                def res3 = 
+                  if (res2.Length > 1 && isAllOverloadsHaveSameArgCnt(res2))
+                    typer.GetBestOverloads(res2);
+                  else if (res2.Length > 1)
+                    RemoveExtensionMethods(res2)
+                  else
+                    res2;
+
+                def res4 =
+                  if (Manager.DelayedTypingsSecondPass && res3.Length > 1)
+                    PreferredProperties(res3)
+                  else
+                    res3;
+
+                res4
+              }
+              else if (typer.Expect (expected, expr.func.Type, "overloaded function call"))
+                ResolveOverload(overloads, expr.parms, expr.Type)
+              else [];
+
+            when (o1.Length != overloads.Length || o1.Length == 1)
+              match (o1) 
+              {
+                | [] => SetKind (Kind.Error ())
+                | [one] => 
+                  // [End of overload resoluton process]
+                  // Add implicit cast if needed.
+                  def expr1 = one.Compile();
+                  def ext = one.ExtensionMethodObject;
+                  def expr2 = 
+                    if (ext == null || expr != null)
+                      typer.TryAddCastTo(expr1, expected, _speculative)
+                    else match (expr1.Type)
+                    {
+                      | FixedType.Fun(FixedType.Tuple([_]), _) | FixedType.Fun(FixedType.Tuple([]), _) => UtilMacros.ice("FixedType.Fun has inconsistent state!")
+                      | FixedType.Fun(FixedType.Tuple(head :: last :: []), to) with (from = last,              cnt = 1)
+                      | FixedType.Fun(FixedType.Tuple(head :: tail),       to) with (from = FixedType.Tuple(tail), cnt = tail.Length)
+                      | FixedType.Fun(head,                            to) with (from = FixedType.Void(),      cnt = 0) =>
+                        // we have using extension method as functional value - x.SomeExtensionMethod
+                        head.ForceProvide(ext.Type);
+                        def funTy = FixedType.Fun(from, cnt, to);
+                        def funTyExpr = PT.PExpr.TypedType(funTy);
+                        // generate and type partial application for it...
+                        def parms = <[ $(ext : typed) ]> :: NList.Repeat(<[ _ ]>, cnt);
+                        def tExpr = 
+                          if (cnt == 0)
+                            typer.TypeExpr(<[ (fun () { $(expr1 : typed)(..$parms) } : $funTyExpr) ]>, expected);
+                          else
+                            typer.TypeExpr(<[ ($(expr1 : typed)(..$parms) : $funTyExpr) ]>, expected);
+                        tExpr
+
+                      | _ => typer.TryAddCastTo(expr1, expected, _speculative) // was error
+                    };
+
+                  SetKind(Kind.Resolved(expr2 ?? expr1, one.ResolvedCallParameters))
+
+                | lst => SetKind (Kind.Overloaded (lst))
+              }
+
+          | Kind.OverloadedOperator (overloads, t1, t2, name, env, seen) =>
+            def not_seen (l)
+            { 
+              | None with l = []
+              | Some (l) =>
+                l.Filter ( fun (x) { !seen.Contains (x) } );
+            }
+            def calcHintCount(t1, t2)
+            {
+              (if (t1.Hint.IsSome) 1 else 0) + (if (t2 != null && t2.Hint.IsSome) 1 else 0)
+            }
+            def     args  = if (t2 == null) 1 else 2;
+            mutable hints = calcHintCount(t1, t2);
+
+            when (hints != args && DtKind.filtering_expression != null)
+            { // resolving of nested delayed typing can calc types of t1 & t2... try it...
+              mutable isAllNestedDelayedTypingResolved;
+              def ok = typer.TryResolveNestedDelayedTyping(DtKind.filtering_expression.parms.Map(_.expr), out isAllNestedDelayedTypingResolved, _speculative);
+              when (ok)
+                hints = calcHintCount(t1, t2)
+            }
+
+            def new_operators = not_seen (LookupOperator (t1, name)) + not_seen (LookupOperator (t2, name));
+            def seen = new_operators + seen;
+            def added = 
+              match (new_operators) {
+                | lst when lst != [] =>
+                  def lst = OverloadPossibility.Unique (overloads + lst);
+                  if (lst == overloads)
+                    false
+                  else
+                  {
+                    SetKind (Kind.OverloadedOperator (lst, t1, t2, name, env, seen));
+                    Resolve ();
+                    true
+                  }
+                | _ => false
+              }
+            unless (added)
+            {
+                def expr = DtKind.filtering_expression;
+
+                def (o1, isResolveOverloadCalled) =
+                  if (expr == null)
+                    (RemoveExtensionMethods(OverloadPossibility.OnlyPossible(overloads, expected, typer)), false)
+                  else if (typer.Expect (expected, expr.func.Type, "overloaded function call"))
+                      match (overloads) 
+                      {
+                        | [one] when hints == 0 && typer.BadnessAllowed < 1 => ([one], false) //don't call ResolveOverload early, as it can add wrong hints
+                        | _ => (ResolveOverload(overloads, expr.parms, expr.Type), true)
+                      }
+                  else ([], false);
+
+                when (o1.Length != overloads.Length || o1.Length == 1)
+                  match (o1)
+                  {
+                    | [one] when hints == args || hints > 0 && typer.BadnessAllowed > 0 || typer.BadnessAllowed > 1 =>
+                      when (expr != null && !isResolveOverloadCalled) //ResolveOverload maybe wasn't called, but it should be to set stuff in parameters
+                        _ = ResolveOverload(overloads, expr.parms, expr.Type);
+                      SetKind(Kind.Resolved(one.Compile(), one.ResolvedCallParameters))
+
+                    | lst => SetKind(Kind.OverloadedOperator(lst, t1, t2, name, env, seen));
+                  }
+              }
+
+          | Kind.Operator (t1, t2, name, env) =>
+            def operators =
+              {
+                def globals = env.LookupSymbolExt ([name], typer.current_type);
+                mutable res = [];
+                foreach ((ti, meth) in globals)
+                  when (meth.IsStatic)
+                    res = typer.ConstructMethodOverload (ti, meth :> IMethod) + res;
+                when (LookupOperator (t1, name) is Some (lst))
+                  res = lst + res;
+                when (LookupOperator (t2, name) is Some (lst))
+                  res = lst + res;
+                res = OverloadPossibility.Unique (res);
+                res
+              };
+            SetKind (Kind.OverloadedOperator(operators, t1, t2, name, env, operators));
+            Resolve ()
+            
+          | Kind.Resolved (expr) =>
+            unless (typer.Expect (expected, expr.Type, "already resolved overload"))
+              SetKind(Kind.Error())
+
+          | Kind.Macro (action) =>
+            UtilMacros.locate (Location,
+              match (action.Resolve(false))
+              {
+                | Some (expr) =>
+                  if (expected.Equals(expr.Type) || typer.Expect(expected, expr.Type, $ "result of $action execution"))
+                    SetKind(Kind.Resolved(expr))
+                  else
+                    SetKind(Kind.Error())
+
+                | None => {}
+              })
+
+          | Kind.Error => {}
+        }
+
+        when (Nemerle.Compiler.Typer.DebugOut)
+        {
+          Debug.Unindent();
+          Debug.WriteLine($"%End DelayedTyping.DoResolve() DtKind=$(RemoveNL(DtKind))");
+        }
+      }
+
+      static PreferredProperties(overloads : list[OverloadPossibility]) : list[OverloadPossibility]
+      {
+        def isNotCtor(o : OverloadPossibility) : bool { !o.Member.IsConstructor }
+
+        if (overloads.Exists(isNotCtor))
+          overloads.RevFilter(isNotCtor)
+        else
+          overloads;
+      }
+
+#if DEBUG1
+      static mutable _speculativeOverloadStack : list[OverloadPossibility] = [];
+#endif //DEBUG
+      [Accessor] mutable _speculative : bool;
+
+      public Resolve (speculative = false) : void
+      {
+        UtilMacros.locate (Location, 
+        {
+          def old_speculative = _speculative;
+          _speculative = _speculative || speculative;
+          Manager.IsSpeculativeTyping = _speculative;
+          def tmp = typer.local_context;
+          try 
+          {
+            typer.local_context = local_context;
+            DoResolve ();
+          } 
+          finally 
+          {
+            Manager.IsSpeculativeTyping = false;
+            typer.local_context = tmp;
+            _speculative = old_speculative;
+          }
+        })
+      }
+    }
+  
+    // ---- merged from typing/Typer-OverloadSelection.n ----
+    internal ResolveOverload(
+      overloads                 : list[OverloadPossibility], 
+      parms                     : list[Parm],
+      expected                  : TypeVar,
+      speculative               : bool,
+      exprLocation              : Location
+    )
+      : list[OverloadPossibility]
+    {
+//#define DEBUG_OVERLOADS
+#if DEBUG_OVERLOADS
+      def printOverloads(overloads : list[OverloadPossibility], msg : string) : void
+      {
+        Debug.WriteLine(msg);
+        Debug.Indent();
+        foreach (overload in overloads)
+        {
+          def str = NDebug.ToStringWitoutNs(overload);
+          Debug.WriteLine($"> $str");
+        }
+        Debug.Unindent();
+      }
+#endif
+
+      def solver = this.solver;
+      def messenger = solver.CurrentMessenger;
+
+      foreach (overload in overloads)
+        overload.UsedLastTime = false;
+
+      def has_untyped_parm = parms.Exists(p => p.expr.Type.Hint.IsNone);
+
+      def print_error_message (overload : OverloadPossibility) 
+      {
+        when (messenger.NeedMessage)
+        {
+          solver.PushState();
+          try
+          {
+            messenger.NeedMessage = true;
+            // We retry operation to output error messages.
+            _ = try_type(overload, parms, expected, final = !speculative);
+          }
+          finally solver.PopState();
+        }
+      }
+
+      match (OverloadPossibility.OnlyPossible(overloads, null, this)) 
+      {
+        | [] => []
+        | overloads =>
+          mutable ok = [];
+#if DEBUG_OVERLOADS
+          Debug.WriteLine($<#try resolve overload '$(overloads.Head.Member.Name)' (speculative=$speculative) parms: '..$parms' (..$(parms; ", "; p => p.expr.Type.ToString())) :#>);
+          Debug.WriteLine("[");
+          ////NDebug.PrintStackTrace();
+          printOverloads(overloads, $"try resolv overloads (overloads) (speculative=$speculative):");
+          Debug.Indent();
+#endif
+
+          def walker = ExprWalker();
+          mutable casts = int.MaxValue;
+          mutable scriptScope = int.MaxValue;
+
+          foreach (overload in overloads)
+          {
+            solver.PushState();
+            try
+            { 
+#if DEBUG_OVERLOADS
+              //Debug.WriteLine($"{: $overload");
+              Debug.Indent();
+              //when (overload.ToString() == "method System.Console.WriteLine(value : string) : void")
+              //  assert(true);
+#endif
+              def resExpr = try_type(overload, parms, expected, final = false);
+              def res = !IsError(resExpr);
+
+              when (res)
+              {
+                mutable newCasts = 0;
+                def walk(info)
+                {
+                  match (info.Node)
+                  {
+                    | _ is TExpr.TypeConversion => newCasts++;
+                    | _ => ()
+                  }
+                }
+                walker.Walk(resExpr, walk);
+                if (overload.ScriptScope < scriptScope || (overload.ScriptScope == scriptScope && newCasts < casts))
+                {
+                  scriptScope = overload.ScriptScope;
+                  casts = newCasts;
+                  ok = [overload];
+                }
+                else when (overload.ScriptScope == scriptScope && newCasts == casts)
+                  ok ::= overload;
+              }
+#if DEBUG_OVERLOADS
+              Debug.Unindent();
+              //Debug.WriteLine($"}: OK?=$res");
+#endif
+            }
+            finally { solver.PopState(); }
+          }
+
+#if DEBUG_OVERLOADS
+          Debug.Unindent();
+          printOverloads(ok, "resolved (ok) overloads:");
+#endif
+
+          def bastOk = if (ok.Length > 1) this.GetBestOverloads(ok, parms.Map(p => p.expr.Type)) else ok;
+
+          def bastOk2 = 
+            if (bastOk.Length > 1 && (!has_untyped_parm || this.BadnessAllowed > 0))
+              PreferLessGenericMethods(bastOk)
+            else
+              bastOk;
+            
+
+#if DEBUG_OVERLOADS
+          printOverloads(bastOk2, "bast of resolved (bastOk2) overloads:");
+          Debug.WriteLine("]");
+#endif
+
+          def strType = InternalType.String;
+
+          if (bastOk2.IsEmpty && !overloads.IsEmpty && overloads.Head.Member.Name == "op_Addition" && parms.Exists(p => p.expr.Type.Equals(strType)) && expected.TryUnify(strType))
+          {
+            unless (speculative)
+            {
+              // C# string concatination
+              foreach (p in parms)
+                p.expr =
+                  if (p.expr.Type.Equals(strType))
+                    p.expr
+                  else
+                    TypeExpr(
+                      if (p.expr.Type.Hint.IsNone)
+                        <[ System.Convert.ToString($(p.expr : typed) : object) ]>
+                      else if (p.expr.Type.CanBeNull)
+                        <[ def x = $(p.expr : typed);
+                           if (x != null) x.ToString() else "" ]>
+                      else
+                        <[ $(p.expr : typed).ToString() ]>, strType);
+
+              _ = Expect(expected, strType, "string concatenation");
+            }
+
+            overloads
+          }
+          else match (bastOk2)
+          {
+            | [] =>
+              if (messenger.NeedMessage) 
+                match (overloads) 
+                {
+                  | [o] => print_error_message(o);
+                  | _ =>
+                    UtilMacros.locate(exprLocation,
+                    {
+                      surroundwith (related_messages)
+                      {
+                        ReportError (messenger, "each overload has an error during call:");
+                        mutable cnt = 1;
+                        foreach (o in overloads) 
+                        {
+                          surroundwith (related_messages)
+                          {
+                            ReportError (messenger, $<#overload #$cnt, "$o" fail because:#>);
+                            print_error_message (o);
+                            when (IsMemberLocationCorrect(o))
+                              Message.Hint(o.Member.Location.FromStart(), "overload definition");
+                          }
+                          ++cnt;
+                        }
+                      }
+                    });
+                }
+              else
+                messenger.MarkError();
+              []
+
+            /*
+              In general we do not commit to a single, best overload when we still
+              have some parameters that have no Hint (which means they are of a totally
+              unknown type), except:
+                - when it is the only possible overload, 
+                - we're in a special second pass of delayed typings or 
+                - it is == or !=. 
+
+              The last part is a hack, it might be a good idea to
+              commit to a single overload also in some other cases
+              but the comparison operators seem to be crucial.
+
+              Bug #770.
+            */
+
+            | [one] as result when ok is [_]
+                                   || !has_untyped_parm 
+                                   || this.BadnessAllowed > 0 
+                                   || one.Member.Name == "op_Equality" 
+                                   || one.Member.Name == "op_Inequality" 
+              =>
+              // if this typing is speculative, then we should not do final typeng. It prevent change parameters of call.
+              if (speculative)
+                result
+              else if (!one.IsAllNestedDelayedTypingResolved && has_untyped_parm && one.Member is BuiltinMethod)
+              {
+                result
+              }
+              else match (try_type(one, parms, expected, final = true)) 
+              {
+                | TExpr.Call(func, tParms, _) as _tCall =>
+                  when (func is TExpr.OpCode(op) when binary_operators.Contains(op) && Typer.IsNullableBinaryOperator(func.Type))
+                    when (tParms is [p1, p2])
+                      // This is a fake typing. It only report error if we have no operator.
+                      _ = TypeExpr(<[ $(op : dyn)($(p1.expr : typed).Value, $(p2.expr : typed).Value) ]>);
+
+                  one.ResolvedCallParameters = tParms; // [TAG:SetResolvedCallParameters]
+                  one.UsedLastTime = true;
+                  _ = _tCall;
+                  result
+
+                | e => 
+                  _ = e;
+                  overloads
+              }
+
+            | lst => 
+              // This is important -- we only drop the clearly evil
+              // solutions. We leave the less general ones (dropped by 
+              // GetBestOverloads), as it is possible we will need them 
+              // later.
+              //
+              // However we still mark only the best overloads in case we want
+              // an error message later.
+              foreach (o in lst)
+                o.UsedLastTime = true;
+              ok
+          }
+      }
+    }
+
+    static PreferLessGenericMethods(overload : list[OverloadPossibility]) : list[OverloadPossibility]
+    {
+      def cmp(o1, o2)
+      {
+        match (o1.Member, o2.Member)
+        {
+          | (method1 is IMethod, method2 is IMethod) => PreferLessGenericMethods(method1, method2) > 0
+          | _ => false
+        }
+      }
+
+      GetMinimal(overload, cmp)
+    }
+
+    static PreferLessGenericMethods(m1 : IMethod, m2 : IMethod) : int
+    {
+      def params1 = m1.Header.Parameters;
+      def params2 = m2.Header.Parameters;
+    
+      def cmpTypesArgs(t1 : TypeVar, t2 : TypeVar, acc : int) : int
+      {
+        if (acc != 0)
+          acc
+        else match (t1.FixedValue, t2.FixedValue)
+        {
+          | (FixedType.StaticTypeVarRef, FixedType.StaticTypeVarRef) => 0
+          | (_, FixedType.StaticTypeVarRef)                          => 1
+          | (FixedType.StaticTypeVarRef, _)                          => -1
+          | (FixedType.Class(ti1, args1), 
+             FixedType.Class(ti2, args2)) when ti1.Equals(ti2) && args1.Length == args2.Length => 
+            def result = args1.FoldLeft2(args2, 0, cmpTypesArgs);
+            result
+          
+          | _ => 0
+        }
+      }
+    
+      def result = 
+        if (params1.Length == params2.Length)
+          params1.FoldLeft2(params2, 0, (p1, p2, acc) => cmpTypesArgs(p1.ty, p2.ty, acc))
+        else
+          0;
+        
+      result
+    }
+
+    try_type(overload : OverloadPossibility, parms : list[Parm], expected : TypeVar, final : bool) : TExpr
+    {
+      def parms2 = // Make full list of parameters
+        if (overload.ExtensionMethodObject == null)
+          parms
+        else
+          Parm(overload.ExtensionMethodObject) :: parms;
+      def ct = CallTyper(this, overload.Compile(), parms2, expected);
+
+      ct.overload_possibility = overload;
+      ct.is_final = final;
+      ct.is_var_args = overload.VarArgs;
+      overload.ResetOverloadSelectionStuff();
+      ct.Run();
+      overload.IsNeedTupleConvertion = ct.IsTupleConvertionMade;
+
+      def result = 
+        if (ct.result == null || (overload.VarArgs && !ct.used_var_args))
+          TExpr.Error()
+        else
+        {
+          unless (ct.result is TExpr.Error)
+          {
+            overload.PermutationArray = ct.GetPermutationArray();
+            overload.UsedDefaultParms = ct.used_default_parms;
+          }
+
+          ct.result
+        };
+
+      result
+    }
+
+    public static IsMemberLocationCorrect(x : OverloadPossibility) : bool
+    {
+      def memLoc  = x.Member.Location;
+      //TODO: VladD2: Maybe try to resolve reference on dll's in IDE-mode? We can forward it into generated file or into Object Browser
+      memLoc.Line != 0 && System.IO.File.Exists(memLoc.File)
+    }
+
+    // FIXME: to stdlib?
+    /** A simple O(n^2) algorithm for finding a set of minimal elements
+        of [lst] using strict partial order [less].  */
+    static internal GetMinimal[T] (lst : list [T], less : T * T -> bool) : list [T]
+    {
+      lst.FoldLeft([], (elem, minimal) =>
+        if (minimal.Exists(min => less (min, elem)))
+          minimal
+        else
+          elem :: minimal.Filter(min => !less (elem, min)))
+    }
+
+
+    IsBetterType(t1 : TypeVar, t2 : TypeVar) : bool
+    {
+      def real_check (t1, t2) 
+      {
+        mutable we_dont_care = null;
+
+        def ok = SubtypingOrImplicitConv (t1, t2, out we_dont_care);
+        
+        when (ok)
+          return true;
+          
+        unless (t1.IsFixed && t2.IsFixed)
+          return false;
+        
+        def t1_is_nulable = t1.IsNullable;
+        def t2_is_nulable = t2.IsNullable;
+        
+		    if (t1_is_nulable && t2_is_nulable)
+		      IsBetterType((t1 :> FixedType.Class).args.Head, (t2 :> FixedType.Class).args.Head)
+		    else match (t1.FixedValue) 
+        {
+          // treat all parametric types (including arrays) as covariant
+          | FixedType.Class(tc1, _ :: _ as a1) =>
+            match (t2.FixedValue) 
+            {
+              | FixedType.Class(tc2, a2) when tc1.Equals(tc2) =>
+                NList.ForAll2(a1, a2, IsBetterType)
+              | _ => false
+            }
+
+          | FixedType.Array(a1, r1) =>
+            match (t2.FixedValue) 
+            {
+              | FixedType.Array(a2, r2) when r1 == r2 =>
+                IsBetterType(a1, a2)
+              | _ => false
+            }
+
+          | _ => false
+        }
+      }
+
+
+      def both_fixed = t1.IsFixed && t2.IsFixed;
+      mutable tc1 = null;
+      mutable tc2 = null;
+
+      when (both_fixed)
+        match (t1.FixedValue) 
+        {
+          | FixedType.Class (tc, []) => 
+            tc1 = tc;
+            match (t2.FixedValue) 
+            {
+              | FixedType.Class (tc, []) =>
+                tc2 = tc;
+              | _ => {}
+            }
+          | _ => {}
+        }
+
+      def res =
+        if (tc2 == null) 
+        {
+          // cannot use cache
+          real_check (t1, t2)
+        }
+        else
+        {
+          def ids = (tc1, tc2);
+          def better_type_cache = Manager.Typer_BetterTypeCache;
+          mutable result;
+
+          unless (better_type_cache.TryGetValue(ids, out result))
+          {
+            result = 
+              if (tc1.IsNumeric && tc2.IsNumeric)
+              {
+                if (tc1.IsFloating != tc2.IsFloating)
+                  tc2.IsFloating
+                else
+                  tc1.Size < tc2.Size 
+                  || tc1.Size == tc2.Size && tc1.Unsigned != tc2.Unsigned && tc2.Unsigned
+              }
+              else
+                real_check(t1, t2);
+
+            better_type_cache.Add(ids, result);
+          }
+            
+          result
+        }
+      //Message.Debug ($"better($t1,$t2)=$res");
+      res
+    }
+    
+    
+    IsBetterOverload (o1 : OverloadPossibility, o2 : OverloadPossibility) : bool
+    {
+      def f1 = o1.FormalTypes;
+      def f2 = o2.FormalTypes;
+      // Message.Debug($"$o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");
+
+      System.Diagnostics.Debug.Assert(f1 != null && f2 != null, null, null);
+      System.Diagnostics.Debug.Assert(f1.Length == f2.Length, null, null);
+      UtilMacros.cassert (f1 != null && f2 != null);
+      UtilMacros.cassert (f1.Length == f2.Length, 
+                    $"$o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");
+                    
+      def getBetterList(f1, f2)
+      {
+        surroundwith(speculatitveTyping)
+        {
+          def tyCmps = f1.Map2ToArray(f2, (t1, t2) => IsBetterType(t1, t2));
+          tyCmps
+        }
+      }
+      
+      def tyCmpsForward  = getBetterList(f1, f2);
+      def tyCmpsBackward = getBetterList(f2, f1);
+      def tyCmpPairs = tyCmpsForward.ZipToArray(tyCmpsBackward);
+      
+      // exclude identical pairs (for example (true, true) or (false, false))
+      // The (true, true) pair cause in case (object * object)
+      // The (false, false) pair cause if type not comparable
+      def differPairs = tyCmpPairs.FilterToArray(_ != _);
+      
+      def isBetterOverload = differPairs.Exists((p1, _) => p1) && !differPairs.Exists((_, p2) => p2);
+      
+      // Message.Debug($"X $o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");
+      //Message.Debug ($"cmp:$o1,$o2 $(f1.Length) ==> $res");
+      isBetterOverload
+    }
+    
+    /// Compare two overloads fore better match type of arguments.
+    /// It prefer overload whith exect match type of arguments.
+    /// For example, if we have ? -> ? and (? * ?) -> ? overloads and argument list
+    /// [?] this function prefer first overload (? -> ?) because overload (? * ?) -> ? 
+    /// demand of convertion from ? to ? * ?.
+    static IsBetterOverload (o1 : OverloadPossibility, o2 : OverloadPossibility, argsTypes : list[TypeVar]) : bool
+    {
+      def matchType(tyParam, tyArg)
+      {
+        def tyParam = tyParam.AnyHint;
+        def tyArg   = tyArg.AnyHint;
+        match (tyParam, tyArg)
+        {
+          | (Some(FixedType.Tuple(paramTypes)), Some(FixedType.Tuple(argTypes))) =>
+            paramTypes.ForAll2(argTypes, matchType)
+            
+          | (Some(FixedType.Fun(from = pFrom, argsCount = c1)), Some(FixedType.Fun(from = argFrom, argsCount = c2))) => 
+            c1 == c2 && matchType(pFrom, argFrom)
+
+          | (Some(FixedType.Fun), _) => false
+          
+          | (Some(FixedType.Class), Some(FixedType.Fun(from = argFrom, argsCount = ac))) =>
+            def (_, _, args, _ret) = Typer.TryExtractFunType(tyParam);
+            if (args != null)
+              ac == args.Length && matchType(TypeVar.FromList(args), argFrom)
+            else false
+            
+          | (Some(t1), Some(t2)) when t1.IsEnum || t2.IsEnum => t1.IsEnum == t2.IsEnum
+          //| FixedType.StaticTypeVarRef(staticTyVar) =>
+          //| FixedType.Array(tyVar, rank) => 
+          //| FixedType.Ref(tyVar) => 
+          //| FixedType.Out(tyVar) => 
+          //| FixedType.Void =>
+          //| Intersection =>
+          | _ => true
+        }
+      }
+      def makeArgsTypes(o)
+      {
+        if (o.ExtensionMethodObject == null) argsTypes 
+        else o.ExtensionMethodObject.Type :: argsTypes
+      }
+      def formalTypes1 = o1.FormalTypes;
+      def formalTypes2 = o2.FormalTypes;
+      def matchs1 = formalTypes1.Map2ToArray(makeArgsTypes(o1), matchType);
+      def matchs2 = formalTypes2.Map2ToArray(makeArgsTypes(o2), matchType);
+      assert(matchs1.Length == matchs2.Length);
+      def differPairs = matchs1.ZipToArray(matchs2).Filter(_ != _);
+
+      if (differPairs.IsEmpty)
+      {
+        // If not the best argument, the reason for it may be implicit type conversion. Let's try to
+        // drop overload with has arguments that are better in terms of a subtype / supertype.
+
+        def extArg1 = o1.ExtensionMethodObject;
+        assert(extArg1 == null && o2.ExtensionMethodObject == null
+             || extArg1 != null && o2.ExtensionMethodObject != null);
+
+        def argTypes = (if (extArg1 == null) argsTypes else extArg1.Type :: argsTypes).NToArray();
+        mutable overload1Wins = false;
+        mutable overload2Wins = false;
+
+        foreach (t1 in formalTypes1 with i)
+        {
+          assert(i < argTypes.Length);
+          def t2      = formalTypes2[i];
+          def argType = argTypes[i];
+
+          if        (t1.TryRequire(t2) && argType.TryRequire(t1) && !t2.TryRequire(t1))
+            overload1Wins |= true;
+          else if   (t2.TryRequire(t1) && argType.TryRequire(t2) && !t1.TryRequire(t2))
+            overload2Wins |= true;
+          else if   (t1.IsFixed && argType.TryUnify(t1) && !argType.TryUnify(t2))
+            overload1Wins |= true;
+          else when (t2.IsFixed && argType.TryUnify(t2) && !argType.TryUnify(t2))
+            overload2Wins |= true;
+        }
+
+        overload1Wins && !overload2Wins
+      }
+      else
+      {
+        def isBetterOverload = differPairs.Exists((p1, _) => p1) && !differPairs.Exists((_, p2) => p2);
+        isBetterOverload
+      }
+    }
+
+    static AintExtension (o : OverloadPossibility) : bool
+    {
+      o.ExtensionMethodObject == null
+    }
+
+
+    static AintVarArgs (o : OverloadPossibility) : bool
+    {
+      !o.VarArgs
+    }
+
+
+    static DidntMamboJumbo (o : OverloadPossibility) : bool
+    {
+      ! o.DidMamboJumbo
+    }
+    
+
+    static AintGeneric (o : OverloadPossibility) : bool
+    {
+      ! o.IsGeneric
+    }
+
+    static RemoveExtensionMethods (parms : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      if (NList.Exists (parms, AintExtension))
+        NList.RevFilter (parms, AintExtension)
+      else parms
+    }
+
+    static RemoveOverloadsWithTupleConvertion(parms : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      def f = x => !x.IsNeedTupleConvertion;
+
+      if (NList.Exists(parms, f))
+        NList.RevFilter(parms, f)
+      else
+        parms
+    }
+
+    public static FilterIfExists[T](this source : list[T], predicate : T -> bool) : list[T]
+    {
+      if (source.Exists (predicate)) source.RevFilter (predicate) else source
+    }
+
+
+    GetBestOverloads(parms : list [OverloadPossibility]) : list [OverloadPossibility]
+    {
+      match (parms)
+      {
+        | [] | [_] => parms
+        | _ =>
+          def res0 = RemoveOverloadsWithTupleConvertion(parms);
+          def res1 = RemoveExtensionMethods(res0);
+          def res2 = GetMinimal(res1, IsBetterOverload);
+          def res3 = res2.FilterIfExists(AintVarArgs);
+          def res4 = res3.FilterIfExists(DidntMamboJumbo);
+          def res5 = res4.FilterIfExists(AintGeneric);
+            
+          // Message.Debug ($"gbo: $parms ---> $res5");
+
+          res5
+      }
+    }
+
+    GetBestOverloads(parms : list [OverloadPossibility], argsTypes : list[TypeVar]) : list [OverloadPossibility]
+    {
+      match (parms) 
+      {
+        | [] | [_] => parms
+        | _ =>
+          def res1 = GetBestOverloads (parms);
+          def res2 = if (res1.Length <= 1) res1
+                     else GetMinimal (res1, IsBetterOverload(_, _, argsTypes));
+          res2
+      }
+    }
+
+    #region Version using IMethod
+
+    static MinimalTypes[T] (tyvars : list [TypeVar * T]) : list [TypeVar * T]
+    {
+      def less (a, b) {
+        def (a, _) = a;
+        def (b, _) = b;
+        a.TryRequire (b) && !b.TryRequire (a)
+      }
+      GetMinimal (tyvars, less)
+    }
+
+    MinimalTypesWithImplicit[T] (tyvars : list [TypeVar * T]) : list [TypeVar * T]
+    {
+      def le (a, b) {
+        if (a.IsFixed && b.IsFixed)
+          match ((a.FixedValue, b.FixedValue)) {
+            | (FixedType.Tuple (l1), FixedType.Tuple (l2)) =>
+              l1.Length == l2.Length &&
+              NList.FoldLeft2 (l1, l2, true, fun (x, y, acc) {
+                acc &&
+                IsBetterType (x, y)
+              })
+
+            | (x, y) => IsBetterType (x, y)
+          }
+        else false
+      }
+
+      def less (a, b) {
+        def (a, _) = a;
+        def (b, _) = b;
+        le (a, b) && ! le (b, a)
+      }
+
+      GetMinimal (tyvars, less)
+    }
+
+    
+    /// it won't work with named parameters
+    GetBestOverloadsWithoutImplicitConversions(parms : list [IMethod]) : list [IMethod]
+    {
+      match (parms)
+      {
+        | [] | [_] => parms
+        | _ =>
+          def pairs =
+            parms.RevMap(
+              fun (meth : IMethod)
+              {
+                match (meth.GetFreshType()[0])
+                {
+                  | FixedType.Fun(from, _) => (from, meth)
+                  | _                      => assert(false)
+                }
+              });
+
+          def res1 = 
+            match (MinimalTypes(pairs))
+            {
+              | []       => []
+              | [(_, x)] => [x]
+              | lst      => MinimalTypesWithImplicit(lst).RevMap(Pair.Second)
+            };
+
+          // remove generic methods if a non generic exists in list
+          def res2 = res1.FilterIfExists(m => NList.IsEmpty(m.Header.TypeParameters));
+          res2
+      }
+    }
+
+    GetBestOverloadsWithoutImplicitConversions(parms : list[FixedType * IMethod]) : list[FixedType * IMethod]
+    {
+      match (parms)
+      {
+        | [] | [_] => parms
+        | _ =>
+          def pairs =
+            parms.RevMap((from, meth) =>
+              match (from.TypeOfMethodWithTyparms(meth)[0].Fix())
+              {
+                | FixedType.Fun(src, _) => (src, (from, meth))
+                | _                     => assert(false)
+              });
+
+          def res1 =
+            match (MinimalTypes(pairs))
+            {
+              | []       => []
+              | [(_, x)] => [x]
+              | lst      => MinimalTypesWithImplicit(lst).RevMap(Pair.Second)
+            };
+
+        // remove generic methods if a non generic exists in list
+        def res2 = res1.FilterIfExists((_, m) => NList.IsEmpty(m.Header.TypeParameters));
+        res2
+      }
+    }
+
+    #endregion
+  
+    // ---- merged from typing/Typer-PatternTyper.n ----
+    [ManagerAccess (typer.Manager)]
+    public class PatternTyper
+    {
+      [Accessor] typer : Typer;
+      matched_value_type : TypeVar;
+      patterns : list [PT.PExpr * option [PT.PExpr] * list [PT.Name * PT.PExpr * PT.PExpr]];
+      messenger : Messenger;
+
+      mutable common_variables : Map [PT.Name, LocalValue];
+      mutable current_pattern_variables : Map [PT.Name, LocalValue];
+
+
+      public this (typer : Typer,
+                   matched_value_type : TypeVar,
+                   patterns : list [PT.PExpr * option [PT.PExpr] * list [PT.Name * PT.PExpr * PT.PExpr]])
+      {
+        this.typer = typer;
+        this.matched_value_type = matched_value_type;
+        this.patterns = patterns;
+        messenger = typer.messenger;
+      }
+
+
+      public Run () : list [Pattern * TExpr * list [LocalValue * TExpr]]
+      {
+        mutable result = [];
+
+        foreach ((pattern, guard, assigns) in patterns)
+        {
+          current_pattern_variables = Map();
+          def typed_pattern = TypePattern(matched_value_type, pattern);
+
+          // FIXME: shouldn't this be in the library?
+          def intersect (map1 : Map[PT.Name, _], map2 : Map[PT.Name, _])
+          {
+            map1.Fold(Map(), 
+              fun (key, value, res : Map [PT.Name, _])
+              {
+                if (map2.Contains (key))
+                  res.Add (key, value)
+                else
+                  res
+              })
+          }
+
+          typer.PushLocals ();
+          current_pattern_variables.Iter(typer.AddLocal);
+
+          def expr =
+            match (guard)
+            {
+              | None => <[ true ]>
+              | Some (expr) => expr
+            };
+
+          def typed_expr = typer.TypeExpr(expr, InternalType.Boolean);
+          
+          def assigns = assigns.Map(HandleAssign);
+          typer.PopLocals ();
+
+          if (common_variables == null)
+            common_variables = current_pattern_variables;
+          else
+            common_variables = intersect (common_variables, current_pattern_variables);
+
+          result = (typed_pattern, typed_expr, assigns) :: result;
+        }
+
+        common_variables.Iter (fun (_, v : LocalValue) {
+                                v.UsedInPatternBody = true
+                               });
+        common_variables.Iter (typer.AddLocal);
+
+        NList.Rev (result)
+      }
+
+
+      DefinePatternVariable (name : PT.Name, ty : TypeVar) : LocalValue
+      {
+        if (current_pattern_variables.Contains (name))
+        {
+          UtilMacros.locate(name.Location, 
+            ReportError (messenger,  $"pattern variable `$(name)' already seen in this pattern"));
+          current_pattern_variables.Get(name)
+        }
+        else
+        {
+          def decl =
+            if (common_variables == null || !common_variables.Contains (name))
+              typer.DefineLocal (name, typer.FreshTypeVar (),
+                                 LocalValue.Kind.PatternVariable (false),
+                                 false)
+            else
+              common_variables.Get (name);
+
+          unless (decl.Type.Provide (ty))
+          {
+            ReportError (messenger,
+                         $ "$decl used to have type $(decl.Type) but now it "
+                           "has type $ty");
+            when (messenger.InErrorMode)
+              Message.Hint ("rename variable if they have no connection");
+          }
+
+          current_pattern_variables =
+            current_pattern_variables.Add (name, decl);
+
+          decl
+        }
+      }
+
+
+      HandleAssign (name : PT.Name, nameExpr : PT.PExpr, expr : PT.PExpr) : LocalValue * TExpr
+      {
+        def expr = typer.TypeExpr (expr);
+        def decl = DefinePatternVariable (name, expr.Type);
+        decl.SetParsedObject(nameExpr); //nameExpr.TypedObject = decl;
+        typer.AddLocal(name, decl);
+        (decl, expr)
+      }
+
+
+      TypeTuplePattern (matched_value_type : TypeVar, pats : list [PT.PExpr]) : Pattern
+      {
+        def is_assignment (expr) { expr is PT.PExpr.Assign }
+        def withoutIgnoreFieldAttribute(field)
+        {
+          !field.IsCustomAttributeDefined("Nemerle.Internal.IgnoreFieldAttribute")
+        }
+
+        if (pats.Exists(is_assignment)) 
+        {
+          if (pats.ForAll(is_assignment)) 
+          {
+            def is_invalid_assignment (expr) { !(expr is PT.PExpr.Assign (PT.PExpr.Ref, _)) }
+
+            match (pats.Filter(is_invalid_assignment)) 
+            {
+              | [] =>
+                match (matched_value_type.Hint) 
+                {
+                  | Some (FixedType.Class (ti, _)) when matched_value_type.IsFixed =>
+                    def is_instance_field (_ : IMember) 
+                    {
+                      | field is IField => !field.IsStatic
+                      | prop is IProperty =>
+                        !prop.IsStatic && !prop.IsIndexer && prop.GetGetter () != null
+                      | _ => false
+                    }
+                    def lookup_field (expr) 
+                    {
+                      | PT.PExpr.Assign (PT.PExpr.Ref (name), pat) =>
+                        def fields = NList.Filter (ti.LookupMember (name.Id), is_instance_field);
+                        match (fields) 
+                        {
+                          | [] =>
+                            ReportError (messenger, $"the type `$(ti)' has no field named `$(name)'");
+                            (null, Pattern.Error ())
+
+                          | [field] =>
+                            Manager.MarkAsUsed (field, expr.Location, typer.TriggerObsoleteWarning);
+
+                            unless(field.CanAccess(typer.CurrentTypeBuilder))
+                              UtilMacros.locate(name.Location, ReportError (messenger, $"`$field' is not accessible"));
+
+                            def ty = matched_value_type.FixedValue.TypeOfMember (field);
+                            (field, TypePattern (ty, pat))
+
+                          | _ =>
+                            // I don't thinks this can happen
+                            ReportError (messenger,
+                                         $"overload ambiguity during selection of `$ti.$(name)'");
+                            (null, Pattern.Error ())
+                        }
+
+                      | _ => assert(false)
+                    }
+
+                    Pattern.Record (NList.Map (pats, lookup_field))
+                    
+                    
+                  | _ =>
+                    ReportError (messenger,
+                                 "the (fieldname = ...) pattern is not allowed "
+                                 "here, try prefixing it with the class name");
+                    Pattern.Error ()
+                }
+              | bad_pats =>
+                def explain (expr) 
+                {
+                  | PT.PExpr.Assign (t, _) =>
+                    UtilMacros.locate (expr.Location, ReportError (messenger, 
+                      $"expression ``$t'' cannot be used as fieldname in (fieldname = ...) pattern"))
+
+                  | _ => assert(false)
+                }
+                bad_pats.Iter (explain);
+                Pattern.Error ()
+ 
+            }
+          } else {
+            ReportError (messenger, "not all, but some patterns in tuple are named");
+            Pattern.Error ()
+          }
+        }
+        else match (matched_value_type.Hint) 
+        {
+          // if we expect matching on a class, transform the pattern
+          // to include field names
+          | Some (FixedType.Class (ti, _)) =>
+            def flags = BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance;
+            def mems  = ti.GetFields(flags).Filter(withoutIgnoreFieldAttribute);
+            def names = mems.Map(_.Name);
+            match(pats.Length)
+            {
+              | 0 =>
+                ReportError(messenger, "pattern can't match 0 values");
+                Pattern.Error()
+
+              | n when n == names.Length =>
+                def assigns = NList.Map2(names, pats, (n, p) => PT.PExpr.Assign (PT.PExpr.Ref(PT.Name(n)), p));
+                TypeTuplePattern(matched_value_type, assigns)
+
+              | n =>
+                ReportError(messenger, $"pattern matches $n values, while the type `$ti' has $(names.Length) fields");
+                Pattern.Error()
+            }
+
+          | Some (FixedType.Tuple (types)) when types.Length != pats.Length =>
+            ReportError (messenger,
+                         $ "pattern matches $(pats.Length)-tuples, "
+                           "while the value matched is a "
+                           "$(types.Length)-tuple");
+            Pattern.Error ()
+            
+          | _ =>
+            def types = pats.Map(_ => typer.FreshTypeVar ());
+
+            if (matched_value_type.Unify (FixedType.Tuple (types))) 
+            {
+              def typed_pats = NList.Map2 (types, pats, TypePattern);
+              Pattern.Tuple (typed_pats)
+            } else {
+              ReportError (messenger, "type clash in pattern typing");
+              Pattern.Error ()
+            }
+        }
+      }
+
+
+      TypePattern (matched_value_type : TypeVar, pattern : PT.PExpr) : Pattern
+      {
+        UtilMacros.locate (pattern.Location, {
+          def typed = DoTypePattern (matched_value_type, pattern);
+          when (typed.ty == null)
+            typed.ty = matched_value_type;
+          typed
+        })
+      }
+
+      TypeRef(matched_value_type : TypeVar, pattern : PT.PExpr.Ref) : Pattern
+      {
+        def name = pattern.name;
+        def id   = name.Id;
+
+        def pat =
+          if (id.Length >= 1 && (char.IsLower(id[0]) || id[0] == '_')) // if lowercase ref value => it is variable
+          {
+            def asPat = TypePattern(matched_value_type, PT.PExpr.As(PT.PExpr.Wildcard(), PT.Splicable.Name(name))) :> Pattern.As;
+            asPat.SetParsedObject(pattern);
+            asPat
+          }
+          else
+            TypeApplication(matched_value_type, pattern, PT.PExpr.Wildcard(name.Location), false, true);
+
+        pat
+      }
+
+      TypeApplication (matched_value_type : TypeVar, 
+                       name : PT.PExpr, 
+                       pattern : PT.PExpr) : Pattern
+      {
+        TypeApplication(matched_value_type, name, pattern, is_where = false)
+      }
+
+      
+      TypeApplication(matched_value_type : TypeVar, 
+                      name : PT.PExpr, 
+                      pattern : PT.PExpr,
+                      is_where : bool, is_warns : bool = false) : Pattern
+      {
+        //name.ResetTypedObject(); //name.TypedObject = null;
+        def nameloc = name.Location;
+        def free = matched_value_type.IsFree;
+        
+        def pat = match (Util.QidOfExpr(name))
+        {
+          | Some (([id], name)) when !is_where && (id[0] == '_') && pattern is PT.PExpr.Wildcard =>
+              TypePattern(matched_value_type, PT.PExpr.As(nameloc, PT.PExpr.Wildcard(), PT.Splicable.Name (nameloc, name)))
+          | Some ((idl, name)) =>
+            
+            def env = name.GetEnv (typer.env);
+           
+            def is_proper_symbol(sym : IMember)
+            {
+              | fld is IField when !is_where => fld.CanAccess(typer.current_type) && fld.IsLiteral
+              | ti is TypeInfo               => ti.CanAccess(typer.current_type)
+              | _ => false
+            }
+
+            def symbols = match ((idl, matched_value_type.Hint)) 
+                          {
+                            | ([name], Some (FixedType.Class (tc, _))) => tc.LookupMember (name).Filter(is_proper_symbol)
+                            | _                                        => []
+                          }
+            def symbols = if (symbols.IsEmpty) env.LookupSymbol(idl, typer.current_type).Filter (is_proper_symbol) 
+                          else symbols;
+
+            def symbols = SquashDuplicates(symbols);
+          
+            def env = name.GetEnv (typer.env);
+            
+            def redundant()
+            {
+              when (messenger.NeedMessage)
+                    Message.Warning ("using the type check pattern here is redundant, type is always that");
+            }
+            
+            match (symbols) 
+            {
+              | [fld is IField] =>
+                if (pattern is PT.PExpr.Wildcard) 
+                {
+                  if (matched_value_type.Require (fld.GetMemType () : FixedType)) 
+                  {
+                    def val = ConstantFolder.FieldValueAsPureLiteral (fld, typer.TriggerObsoleteWarning);
+                    if (fld.DeclaringType.GetTydecl () is TypeDeclaration.Enum)
+                      Pattern.Enum (nameloc, fld, val)
+                    else
+                      Pattern.Literal (val)
+                  }
+                  else 
+                  {
+                    ReportError (messenger, 
+                                 $ "the matched value type "
+                                   "$matched_value_type was required "
+                                   "to have type $(fld.GetMemType ())");
+                    Pattern.Error ()
+                  }
+                }
+                else 
+                {
+                  ReportError (messenger, 
+                               "a pattern was supplied after enum field name");
+                  Pattern.Error()
+                }
+
+              | [ti is TypeInfo] =>
+              
+                def lookup (ti : TypeInfo)
+                {
+                  match (ti.GetTydecl())
+                  {
+                    | TypeDeclaration.Alias(FixedType.Class (tc, _)) =>
+                      lookup(tc)
+
+                    | _ when is_where
+                    | Interface
+                    | Variant
+                    | Class =>
+                    
+                      def option_type = ti.GetFreshType ();
+
+                      if (matched_value_type.TryProvide(option_type))
+                      {
+                        matched_value_type.ForceProvide(option_type);
+                        when (is_warns && !free && matched_value_type.TryRequire(option_type)) redundant();
+                        def inpat = TypePattern (option_type, pattern);
+                        Pattern.Application(pattern.Location, ti, inpat)
+                      }
+                      else if (matched_value_type.TryRequire(option_type))
+                      {
+                        when (is_warns) redundant();
+                        matched_value_type.ForceRequire(option_type);
+                        TypePattern(option_type, pattern)
+                      }
+                      else
+                      {
+                        ReportError (messenger, $"the matched value type $matched_value_type was expected to be compatible with $option_type");
+                        Pattern.Error ()
+                      }
+
+                    | VariantOption =>
+                    
+                    match (idl)
+                    {
+                      | [id] when (System.Char.IsLower(id[0])) =>
+                         ReportError (messenger, $ "`$(name)' cannot be variant option, since it starts with lowercase letter");
+                         Pattern.Error()
+                         
+                      | _ =>
+                      
+                      def option_type = ti.GetFreshType();
+                      
+                      if (matched_value_type.Provide(option_type))
+                      {
+                        when (is_warns && !free && matched_value_type.TryRequire(option_type)) redundant();
+                        def inpat = TypePattern(option_type, pattern);
+                        Pattern.Application(pattern.Location, ti, inpat)
+                      }
+                      else
+                      {
+                        ReportError(messenger, $"the matched value type $matched_value_type was expected to be compatible with $option_type");
+                        Pattern.Error()
+                      }
+                    }
+                    
+                    | _ =>
+                      ReportError (messenger, $ "`$(ti.FullName)' is not a variant option");
+                      Pattern.Wildcard ()
+                  }
+                }
+                lookup (ti)
+                
+              | [] =>
+                def ext_pattern =
+                  match ((idl, matched_value_type.Hint))
+                  {
+                    | ([name], Some (FixedType.Class (tc, _))) =>
+                      tc.GetExtensionPattern (name)
+                    | _ => 
+                      def (typ, field) = idl.DivideLast ();
+                      def patterns =
+                        if (typ is [])
+                          []
+                        else
+                          env.LookupSymbol (typ, typer.current_type).FoldLeft ([],
+                            fun (tc, acc)
+                            {
+                              match (tc)
+                              {
+                                | tc is TypeInfo =>
+                                  match (tc.GetExtensionPattern (field)) {
+                                    | Some (ext) => ext :: acc
+                                    | None => acc
+                                  }
+                                | _ => acc
+                              }
+                            });
+
+                      match (patterns)
+                      {
+                        | []  => None()
+                        | [e] => Some(e)
+                        | x =>
+                          ReportError (messenger, $ "overloading ambiguity $(x.ToString (\", \"))");
+                          None ()
+                      }
+                  };
+
+                match (ext_pattern)
+                {
+                  | Some(e) =>
+                    def option_type = e.Parent.GetFreshType ();
+                    if (matched_value_type.Require (option_type))
+                      TypePattern (matched_value_type, e.Transform (pattern))
+                    else
+                    {
+                      ReportError (messenger,
+                        $"the matched value type $matched_value_type was expected to be compatible with $option_type");
+                      Pattern.Error ()
+                    }
+
+                  | _ =>
+                    ReportError (messenger, $ "unbound type name $(idl.ToString (\".\"))");
+                    Pattern.Error()
+                }
+
+              | x =>
+                ReportError (messenger, $ "overloading ambiguity $(x.ToString (\", \"))");
+                Pattern.Error()
+            }
+
+          | None =>
+            ReportError (messenger, "expected qualified identifier in pattern");
+            Pattern.Error()
+        };
+
+        // VladD2: Похоже тут не нужно устанавливать ParsedObject, так как это промежуточная 
+        //         функция не имеющая доступа к реальному выражению.
+        when (pat.ParsedObject == null)
+          pat.SetParsedObject(name);
+        pat;
+      }
+
+
+      DoTypePattern (matched_value_type : TypeVar, pattern : PT.PExpr) : Pattern
+      {
+        pattern.ResetTypedObject();  //pattern.TypedObject = null;
+
+        when (Manager.IsCompletionInProgress)
+          Manager.CompletePattern (pattern, matched_value_type, this, typer.env);
+
+        def pat = match (pattern)
+        {
+          | <[ $type where $e1 = $e2 ]> => DoTypePattern (matched_value_type, <[ $type where ($e1 = $e2) ]>) // fix operator precedence issue
+          | PT.PExpr.TypeEnforcement (_, PT.PExpr.ToComplete (_))
+          | PT.PExpr.TypeEnforcement (_, PT.PExpr.Member (_, Parsetree.Splicable.HalfId (_)))
+          | PT.PExpr.Is(_, PT.PExpr.ToComplete (_))
+          | PT.PExpr.Is(_, PT.PExpr.Member (_, Parsetree.Splicable.HalfId (_))) =>
+            Manager.CompletePattern (pattern, matched_value_type, this, typer.env);
+            throw System.NotImplementedException ();
+
+          | PT.PExpr.ListLiteral (l) => TypePattern (matched_value_type, Macros.Lift (l))
+
+          // if we have simple expression left it recognize as type
+          | <[ $(n : name) as $(sname : name) ]> => 
+            def res = TypePattern(matched_value_type, <[ $(n : name)() as $(sname : name) ]>);
+            res.SetParsedObject(pattern);
+            res
+          
+          | PT.PExpr.As(pat, PT.Splicable.Name (name) as sname) =>
+            def typed_pattern = TypePattern(matched_value_type, pat);
+            def fixed_type =
+              match (typed_pattern)
+              {
+                | Pattern.Application (ti, _) =>
+                  def raw_type = ti.GetFreshType ();
+                  when (!raw_type.Require(matched_value_type))
+                    ReportError (messenger,
+                      $"the matched value type $matched_value_type was expected to be compatible with $raw_type");
+                  raw_type
+
+                | _ => matched_value_type
+              };
+
+            def decl = DefinePatternVariable (name, fixed_type);
+            decl.name_location = sname.Location;
+            Pattern.As (pattern.Location, matched_value_type, typed_pattern, decl);
+
+
+          | PT.PExpr.As(_, PT.Splicable.Expression) =>
+            ReportError(messenger, "$ operator used outside of quotation <[ ... ]> context");
+            Pattern.Error()
+
+          | PT.PExpr.TypeEnforcement (nested, needed_type) =>
+            def needed_type' = typer.BindType (needed_type).FixedValue;
+
+            if (messenger.LocalError) Pattern.Error ()
+            else if (matched_value_type.TryRequire (needed_type')) 
+            { // just a hint?
+              matched_value_type.ForceRequire (needed_type');
+              TypePattern (needed_type', nested)
+            } else {
+              when (messenger.NeedMessage)
+                Message.Warning (602, "using ``:'' as a type tests is "
+                                      "deprecated, please use ``is'' instead");
+              TypePattern (matched_value_type, 
+                           PT.PExpr.Is (pattern.Location, nested, needed_type))
+            }
+
+          | PT.PExpr.Is(nested, needed_is_type) =>
+            needed_is_type.ResetTypedObject();  //needed_is_type.TypedObject = null;
+
+            def needed_type = typer.BindType(needed_is_type);
+            def needed_type = 
+              if (needed_type.IsFixed)
+                needed_type.FixedValue
+              else
+              {
+                Message.Error (needed_is_type.Location, "type given in `is' pattern must be fully specified");
+                InternalType.Object
+              };
+            def properly_subtypes = matched_value_type.TryProvide(needed_type);
+            def res =
+              if (properly_subtypes)
+              {
+                matched_value_type.ForceProvide(needed_type);
+                null
+              }
+              else if (matched_value_type.Fix () is FixedType.StaticTypeVarRef)
+                null
+              else if (needed_type.IsInterface || Option.UnSome(matched_value_type.Hint).IsInterface)
+                null // ok, we allow interfaces here
+              else if (matched_value_type.TryRequire(needed_type))
+              {
+                matched_value_type.ForceRequire (needed_type);
+                when (messenger.NeedMessage)
+                  Message.Warning(10013, "using the ``is'' pattern here is redundant, please use ``:''");
+                TypePattern (needed_type, nested)
+              }
+              else if (needed_type is FixedType.StaticTypeVarRef(tv) when tv.LowerBound.TryProvide(matched_value_type))
+                null
+              else
+              {
+                ReportError (messenger, $"matched value has type $matched_value_type while the pattern enforces $needed_type");
+                Pattern.Error ()
+              }
+
+            match (needed_type)
+            {
+              | _ when res != null => res
+              | FixedType.Ref | FixedType.Void 
+              | FixedType.Out | FixedType.Intersection =>
+                ReportError (messenger, $ "invalid type in (x : type) pattern: $needed_type");
+                Pattern.Error ()
+                
+              | ty =>
+                def typed_pattern = Pattern.HasType (pattern.Location, matched_value_type, ty);
+                typed_pattern.SetParsedObject(needed_is_type); //needed_is_type.TypedObject = typed_pattern;
+                match (TypePattern (needed_type, nested))
+                {
+                  | Pattern.As(Pattern.Wildcard, decl) => Pattern.As(pattern.Location, matched_value_type, typed_pattern, decl)
+                  | Pattern.Wildcard => typed_pattern
+                  | _ =>
+                    ReportError (messenger, "only variable patterns are allowed (here : type)");
+                    Pattern.Error ()
+                }
+            }
+          
+
+          | PT.PExpr.Wildcard => Pattern.Wildcard ()
+
+          | PT.PExpr.Literal (lit) =>
+            if (matched_value_type.IsFixed && Typer.LiteralConversionPossible (lit, matched_value_type.FixedValue))
+              Pattern.Literal (lit)
+            else
+            {
+              _ = typer.Expect (TypeOfLiteral (Manager, lit), matched_value_type,
+                                       "matched value");
+              Pattern.Literal (lit)
+            }
+
+          | PT.PExpr.Tuple(pats) => TypeTuplePattern (matched_value_type, pats)
+          | PT.PExpr.Assign as ex => TypeTuplePattern (matched_value_type, [ex])
+          | PT.PExpr.Sequence (pats) =>
+            when (messenger.NeedMessage)
+              Message.Warning(602, "using ``{ x = foo; y = 42 }'' to match fields is deprecated, please use ``SomeClass where (x = foo, y = 42)'' instead");
+            TypeTuplePattern (matched_value_type, pats)
+
+          | PT.PExpr.Ref as r => TypeRef(matched_value_type, r)
+          | PT.PExpr.Member => TypeApplication(matched_value_type, pattern, PT.PExpr.Wildcard(pattern.Location), false, true)
+          | PT.PExpr.Call (PT.PExpr.Ref(n), _) when ConstantFolder.is_known_operator (n.Id) => 
+            def folded = ConstantFolder.FoldConstants (typer, pattern);
+            // constant folder will return the same object if it didn't do anything
+            if ((folded : object) == pattern)
+            {
+              ReportError (messenger, "couldn't fold arithmetic expression in pattern to a constant");
+              when (messenger.NeedMessage)
+                Message.Hint("you can use `| x when x == complex expression =>' to do such things");
+                
+              Pattern.Error()
+            }
+            else
+              TypePattern (matched_value_type, folded)
+
+          | PT.PExpr.Call(f, [])    => TypeApplication(matched_value_type, f, PT.PExpr.Wildcard())
+          | PT.PExpr.Call(f, args)  => TypeApplication(matched_value_type, f, PT.PExpr.Tuple(args))
+          | PT.PExpr.Where(e1, e2)  => TypeApplication(matched_value_type, e1, e2, is_where = true)
+          | PT.PExpr.TypedPattern (body) => body
+          | PT.PExpr.Quoted(parse_element) =>
+            // we use Macros functions to translate quoted element
+            Manager.Macros_in_pattern = true;
+            try
+            {
+              def lifted = 
+                match (parse_element)
+                {
+                  | PT.SyntaxElement.Expression  (e) => Macros.quoted_expr (e)
+                  | PT.SyntaxElement.MatchCase   (e) => Macros.QuotedMatchCase (e)
+                  | PT.SyntaxElement.Function    (e) => Macros.quoted_fundecl (e)
+                  | PT.SyntaxElement.Parameter   (e) => Macros.quoted_fparam (e)
+                  | PT.SyntaxElement.ClassMember (e) => Macros.quoted_member (e)
+                  | PT.SyntaxElement.TType => MessageMacros.FatalError("matching over typed types not supported")
+                  | PT.SyntaxElement.RawToken
+                  | PT.SyntaxElement.TypeBuilder
+                  | PT.SyntaxElement.MethodBuilder
+                  | PT.SyntaxElement.EventBuilder
+                  | PT.SyntaxElement.FieldBuilder
+                  | PT.SyntaxElement.PropertyBuilder
+                  | PT.SyntaxElement.ParameterBuilder => UtilMacros.ice("strange syntax element appeared in quotation")
+                };
+
+              TypePattern (matched_value_type, Macros.patternize_quotation (lifted))
+            }
+            finally { Manager.Macros_in_pattern = false; }
+
+          | PT.PExpr.Spliced    => ReportError (messenger, "$ operator may appear only within <[ ... ]> quotation"); Pattern.Error ()
+          | PT.PExpr.Ellipsis   => ReportError(messenger, ".. arguments list may appear only within <[ ... ]> quotation"); Pattern.Error()
+          | PT.PExpr.ToComplete => UtilMacros.ice("The completion tokens allowed only if Manager.IsCompletionInProgress is true.")
+          | PT.PExpr.TypeConversion =>
+            match (typer.TypeExpr(pattern))
+            {
+              | TExpr.DebugInfo (TExpr.TypeConversion(TExpr.Literal(Literal.Integer as lit), ty, _, _), _)
+              | TExpr.TypeConversion(TExpr.Literal(Literal.Integer as lit), ty, _, _) =>
+                def newPattaern = Pattern.Literal(pattern.Location, ty, lit);
+                newPattaern
+
+              | _ => ReportError(messenger, "invalid pattern"); Pattern.Error()
+            }
+
+          | _ => ReportError(messenger, "invalid pattern");
+                 Pattern.Error()
+        };
+
+        pat.SetParsedObject(pattern);
+        
+        pat
       }
     }
   }
