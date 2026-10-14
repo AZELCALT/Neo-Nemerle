@@ -2481,7 +2481,7 @@ using Nemerle.Compiler.Utility;
               | "virtual"   => add_and_loop(NemerleModifiers.Virtual)
               | "volatile"  => add_and_loop(NemerleModifiers.Volatile)
               | "partial"   =>
-                when (Manager.Options.FileModules)
+                when (Manager.Options.FileModules && quotation_depth == 0)
                   Message.Error(tok.Location, "partial declarations are not allowed in file-module mode");
                 add_and_loop(NemerleModifiers.Partial)
               | "extern"    => add_and_loop(NemerleModifiers.Extern)
@@ -3707,7 +3707,16 @@ using Nemerle.Compiler.Utility;
     }
 
 
+    // quoted code is generated code: it may declare `partial` parts (they complete a source type)
+    mutable quotation_depth : int;
+
     parse_quotation () : PExpr
+    {
+      ++quotation_depth;
+      try parse_quotation_body () finally --quotation_depth
+    }
+
+    parse_quotation_body () : PExpr
     {
       match (peek_token ())
       {

@@ -217,6 +217,23 @@ public class GlobalEnv
     GlobalEnv(o, c, n, syn_keys, keys, uops, ops, nameTree, Defines)
   }
 
+  /// The innermost source file module on the path of the current namespace and the path parts below it, or null.
+  private SourceModuleScope() : option[TypeBuilder * list[string]]
+  {
+    unless (Manager.Options.FileModules) return None();
+    mutable rest = [];
+    for (mutable node = current_namespace; node != null && node.Parent != null; node = node.Parent)
+    {
+      match (node.Value)
+      {
+        | NamespaceTree.TypeInfoCache.Cached(tb is TypeBuilder)
+            when tb.IsModule && Manager.FileModuleRegistry.ModulePrefix(node.FullName) != null => return Some((tb, rest))
+        | _ => rest ::= node.PartName
+      }
+    }
+    None()
+  }
+
   public Define (td : PT.ClassMember) : TypeBuilder
   {
     Define (td, true)
@@ -228,6 +245,27 @@ public class GlobalEnv
       | PT.ClassMember.TypeDeclaration (Delegate (header) as td) =>
         def tb = Delegates.GenerateDelegateClass (this, null, td.modifiers, td.ReturnValueModifiers, header);
         tb
+
+      | PT.ClassMember.TypeDeclaration as member when SourceModuleScope().IsSome =>
+        // A macro defining a type under a path that names a source file module (Nitra emits its generated types into
+        // `namespace Nitra.Declarations` while the hand-written Nitra.Declarations is a file) nests it in that module:
+        // a path names one thing. Path parts below the module become nested modules.
+        def (fileModule, rest) = SourceModuleScope().Value;
+        def nest(outer : TypeBuilder, parts : list[string])
+        {
+          match (parts)
+          {
+          | [] => outer
+          | part :: tail =>
+            def inner = match (outer.DeclaredNestedTypes.Find(t => t.Name == part && t.IsModule))
+            {
+              | Some(t) => t
+              | None => outer.DefineNestedType(<[ decl: public module $(part : usesite) { } ]> :> PT.ClassMember.TypeDeclaration, false)
+            };
+            nest(inner, tail)
+          }
+        }
+        nest(fileModule, rest).DefineNestedType(member, do_fixup)
 
       | PT.ClassMember.TypeDeclaration (td) =>
         def typeBuilder = Manager.NameTree.AddType(null, current_namespace, td);

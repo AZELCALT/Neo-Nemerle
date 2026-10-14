@@ -1521,7 +1521,10 @@ public class TypeBuilder : TypeInfo
 
   internal ExtendPartialClass(additional : PT.TopDeclaration) : void
   {
-    unless ((Attributes %& additional.Attributes) %&& NemerleModifiers.Partial)
+    // File modules: source text can't say `partial`, so a partial part is macro-generated (Nitra's declarations and
+    // ASTs) and completes the source type of the same path.
+    def generatedPart = Manager.Options.FileModules && (Attributes %| additional.Attributes) %&& NemerleModifiers.Partial;
+    unless (generatedPart || (Attributes %& additional.Attributes) %&& NemerleModifiers.Partial)
     {
       Message.Error (additional.Location, $"you must specify `partial' modifier on all declarations of type `$(FullName)'");
       Message.Error (this.Location, "first defined here");
