@@ -123,8 +123,9 @@ namespace Nemerle.Compiler
 
     public Environment(fileIndex : int) : GlobalEnv
     {
+      // Only the module itself is entered: its directories are not opened, so sibling files are reached by explicit path.
       def core = GlobalEnv(manager.CoreEnv, ["mask"]);
-      core.EnterIntoNamespace(paths[fileIndex])
+      core.EnterIntoNamespace(manager.NameTree.ExactPath(paths[fileIndex]))
     }
 
     public Declaration(fileIndex : int, members : list[ClassMember]) : TopDeclaration

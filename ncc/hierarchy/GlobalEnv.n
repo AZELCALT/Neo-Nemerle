@@ -346,16 +346,18 @@ namespace Nemerle.Compiler
             if (t is TypeBuilder) false
             else t.SystemType.IsNotPublic
           }
-          def check_access (x)
+          // a source module found in a directory scope (an opened directory, or the directory enclosing the current
+          // module) is not visible by its short name: sibling files are reached by explicit path
+          def check_access (pref, x)
           {
-            | Some (t) when !AllowFileCandidate(t) || non_public_external (t) => None ()
-            | Some (t) when from == null || (t : TypeInfo).CanAccess (from) => x
+            | (_, Some (t)) when !AllowFileCandidate(t, pref, name) || non_public_external (t) => None ()
+            | (_, Some (t)) when from == null || (t : TypeInfo).CanAccess (from) => x
             | _ => None ()
           }
 
           def collect (pref : NamespaceTree.Node, res)
           {
-            match ((res, check_access (pref.LookupType (name, args_count))))
+            match ((res, check_access (pref, pref.LookupType (name, args_count))))
             {
               | (x, None) | (None, x) => x
               // eliminate duplicates

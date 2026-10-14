@@ -61,7 +61,7 @@ macro @regexp (mat)
 syntax ("regexp", mat) 
 {
   def typer = Nemerle.Macros.ImplicitCTX();
-  def manager = Macros.Manager();
+  def manager = Nemerle.Macros.Manager();
   
   RegexpImpl.Impl(typer, manager, mat)
 }

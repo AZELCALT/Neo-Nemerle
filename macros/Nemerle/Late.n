@@ -354,12 +354,12 @@ public class LateMacro
 
 macro late_parens_macro(expr) \
 syntax("late", "(", expr, ")")
-  def result = LateMacro (Macros.ImplicitCTX().Env).transform(expr)
+  def result = LateMacro (Nemerle.Macros.ImplicitCTX().Env).transform(expr)
   result
 
 macro late_macro(expr) \
 syntax("late", expr)
-  def result = LateMacro (Macros.ImplicitCTX().Env).transform(expr)
+  def result = LateMacro (Nemerle.Macros.ImplicitCTX().Env).transform(expr)
   result
 
 macro nolate_parens_macro(expr) \
