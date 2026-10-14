@@ -28,85 +28,83 @@
  */
 
 using System.Threading;
- 
-namespace Nemerle.Concurrency
+
+// ---- concurrency.n (Nemerle.Concurrency) ----
+public struct BitMask
 {
-  public struct BitMask
-  {
-      mutable i : uint;
+    mutable i : uint;
 
-      public Set (m : uint) : void
-      {
-          i |= m
-      }
+    public Set (m : uint) : void
+    {
+        i |= m
+    }
 
-      public Clear (m : uint) : void
-      {
-          i &= ~m
-      }
+    public Clear (m : uint) : void
+    {
+        i &= ~m
+    }
 
-      public Match (m : uint) : bool
-      {
-          (~i & m) == 0U
-      }
-  }
+    public Match (m : uint) : bool
+    {
+        (~i & m) == 0U
+    }
+}
 
-  public class ThreadQueue 
-  {
-      mutable signaled : bool = false;
-      mutable count : int = 0;
+public class ThreadQueue 
+{
+    mutable signaled : bool = false;
+    mutable count : int = 0;
 
-      public Empty : bool 
-      { 
-          get 
-          {
-              count == 0
-          } 
-      }
+    public Empty : bool 
+    { 
+        get 
+        {
+            count == 0
+        } 
+    }
 
-      public Yield (currentLock : object) : void 
-      {
-          ++count;
-          Monitor.Exit (currentLock);
-          lock (this)
-          {
-              while (!signaled)
-              {
-                  ignore (Monitor.Wait (this))
-              }
-              signaled = false
-          }
-          Monitor.Enter (currentLock);
-          --count
-      }
+    public Yield (currentLock : object) : void 
+    {
+        ++count;
+        Monitor.Exit (currentLock);
+        lock (this)
+        {
+            while (!signaled)
+            {
+                ignore (Monitor.Wait (this))
+            }
+            signaled = false
+        }
+        Monitor.Enter (currentLock);
+        --count
+    }
 
-      public Wakeup () : void
-      {
-          lock (this)
-          {
-              unless (signaled)
-              {
-                  signaled = true;
-                  Monitor.Pulse (this)
-              }
-          }
-      }
-  }
+    public Wakeup () : void
+    {
+        lock (this)
+        {
+            unless (signaled)
+            {
+                signaled = true;
+                Monitor.Pulse (this)
+            }
+        }
+    }
+}
 
-  public class DummyQueue
-  {
-      mutable count :int = 0;
-      public Add () : void 
-      {
-          ++count;
-      }
-      public Take () : void 
-      {
-          --count;
-      }
-      public IsEmpty : bool
-      {
-        get { count == 0; }
-      }
-  }
+public class DummyQueue
+{
+    mutable count :int = 0;
+    public Add () : void 
+    {
+        ++count;
+    }
+    public Take () : void 
+    {
+        --count;
+    }
+    public IsEmpty : bool
+    {
+      get { count == 0; }
+    }
 }

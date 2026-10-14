@@ -922,7 +922,7 @@ public partial class TypeBuilder : TypeInfo
 
   public GetTypeBuilder () : System.Reflection.Emit.TypeBuilder
   {
-    assert(type_builder != null);
+    when (type_builder == null) Util.ice($"no emit type builder was created for `$FullName'");
     type_builder
   }
 

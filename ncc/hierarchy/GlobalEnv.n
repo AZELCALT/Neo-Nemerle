@@ -254,10 +254,15 @@ namespace Nemerle.Compiler
     {
       def collect (pref : NamespaceTree.Node, res)
       {
-        def candidate = if (Manager.Options.FileModules
-              && Manager.FileModuleRegistry.ModulePrefix(pref.FullName + name) != null)
-            None()
-          else pref.LookupMacro(name);
+        // A source module shadows macros of the same path, except the standard macros (Nemerle.Macros): they are
+        // part of the language, and the runtime itself defines modules with their paths (Nemerle.Core, Nemerle.IO...).
+        def candidate = match (pref.LookupMacro(name))
+        {
+          | Some(m) when Manager.Options.FileModules
+                      && m.GetType().Assembly.GetName().Name != "Nemerle.Macros"
+                      && Manager.FileModuleRegistry.ModulePrefix(pref.FullName + name) != null => None()
+          | found => found
+        };
         match ((res, candidate))
         {
           | (x, None) | (None, x) => x

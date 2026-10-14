@@ -100,12 +100,14 @@ namespace Nemerle.Utility
           Message.FatalError(defaults.Location, "Defaults expression must have Defaults(x = \"y\", x1 = \"y1\",...)' format.");
       }
 
-      def path = lazy({
-         def loc = strExpr.Location;
+      // LazyValue directly rather than `lazy`: macros are built by the previous compiler, whose `lazy` may
+      // expand to the runtime's old location of LazyValue.
+      def path = LazyValue(fun() {
+        def loc = strExpr.Location;
         if (loc.IsSourceFileAvailable)
           Path.GetDirectoryName(Path.GetFullPath(loc.File))
         else
-            Directory.GetCurrentDirectory();
+          Directory.GetCurrentDirectory()
       });
 
       def evaluateVar(var)

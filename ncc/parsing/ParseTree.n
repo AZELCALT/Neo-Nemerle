@@ -190,10 +190,17 @@ namespace Nemerle.Compiler.Parsetree
     {
       get
       {
+        // In a file module the outermost declaration is the file's class, which the namespace already names.
+        def isFileClass(td)
+        {
+          def manager = ManagerClass.Instance;
+          td.DefinedIn == null && manager != null && manager.FileModuleRegistry != null
+            && manager.FileModuleRegistry.IsModule(td.Location.FileIndex)
+        }
         def makeName(td)
         {
           if (td.DefinedIn != null)
-            makeName(td.DefinedIn) + "." + td.Name
+            if (isFileClass(td.DefinedIn)) td.Name else makeName(td.DefinedIn) + "." + td.Name
           else
             td.Name
         }

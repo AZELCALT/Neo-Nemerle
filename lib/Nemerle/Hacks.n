@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2008 The University of Wroclaw.
+ * Copyright (c) 2003-2008 The University of Wroclaw.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,43 +26,17 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma indent
+/**
+ * This namespace is always opened
+ */
 
-using System
-using System.IO
-using System.Text
 
-namespace Nemerle.IO
-  public class PipeWriter : TextWriter
-    output_writer : TextWriter
-    filter : string -> string
-    line : StringBuilder = StringBuilder ()
-    
-    /// [filter] is called for each line of the input.
-    public this (output_writer : TextWriter, filter : string -> string)
-      this.filter = filter
-      this.output_writer = output_writer
 
-    public override Encoding : Encoding
-      get 
-        output_writer.Encoding
-
-    flush_line () : void
-      def filtered = filter (line.ToString ())
-      line.Length = 0
-      output_writer.Write (filtered)
-
-    protected override Dispose (disposing : bool) : void
-      base.Dispose (disposing)
-      when (line.Length > 0)
-        flush_line ()
-      (output_writer : IDisposable).Dispose ()
-
-    public override Flush () : void
-      output_writer.Flush ()
-
-    public override Write (ch : char) : void
-      _ = line.Append (ch)
-      when (ch == '\n')
-        flush_line ()
-    
+// ---- core.n (Nemerle.Hacks) ----
+public class IComparableClass : System.IComparable [IComparableClass]
+{
+  public CompareTo (_ : IComparableClass) : int
+  {
+    0
+  }
+}

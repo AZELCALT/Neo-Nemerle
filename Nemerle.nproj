@@ -44,7 +44,8 @@
     <Folder Include="lib" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="lib\*.n" />
+    <!-- The runtime is written as file modules: pass -source-root:lib (see baseline/build-coreclr-toolchain.py). -->
+    <Compile Include="lib\Nemerle\*.n" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="mscorlib" />

@@ -103,8 +103,9 @@ namespace Nemerle.Compiler
                 | PExpr.Literal (Literal.Enum (Literal.Integer (x, false, _), ty, _))
                   when ty.FullName == "Nemerle.MacroPhase" || ty.FullName == "Nemerle.Core.MacroPhase" =>
                   x :> MacroPhase
-                | _ =>
-                  Message.FatalError ("invalid value on MacroPhase position: " + ph.ToString ())
+                | folded =>
+                  Message.FatalError ($"invalid value on MacroPhase position: $ph (folded to $folded"
+                    + (match (folded) { | PExpr.Literal(Literal.Enum(_, ty, _)) => $", enum type $(ty.FullName)" | _ => "" }) + ")")
               };
               
             target =

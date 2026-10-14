@@ -46,6 +46,8 @@ namespace Nemerle.Compiler
     public FileModules : bool { get { fileModules && Script == null } set { fileModules = value } }
     /// -file-name-namespaces: a file's namespace is its file name only (no directory path); file names must be unique.
     public mutable FileNameNamespaces : bool;
+    /// -assembly-version: the AssemblyVersion of the output (null: from the sources).
+    public mutable AssemblyVersion : string;
     public mutable Script : ScriptCompilationData;
     public mutable NitraSources : NitraSourceConfiguration;
     public mutable SharedAssemblies : array[System.Reflection.Assembly];
@@ -143,6 +145,7 @@ namespace Nemerle.Compiler
       PrintExpressionsType = false;
       FileModules = true;
       FileNameNamespaces = false;
+      AssemblyVersion = null;
       Script = null;
       NitraSources = null;
       SharedAssemblies = null;
@@ -432,6 +435,10 @@ namespace Nemerle.Compiler
         Getopt.CliOption.String (name = "-target-references",
                        help = "directory containing target CLR reference assemblies",
                        handler = fun (s) { this.TargetReferenceDirectory = s; }),
+        Getopt.CliOption.String (name = "-assembly-version",
+                       aliases = [],
+                       help = "AssemblyVersion of the output (e.g. 1.2.0.610)",
+                       handler = fun (s) { this.AssemblyVersion = s; }),
         Getopt.CliOption.String (name = "-source-root",
                        aliases = [],
                        help = "Root directory for file module identities",

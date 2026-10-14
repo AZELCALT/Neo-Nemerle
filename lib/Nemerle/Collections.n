@@ -1,0 +1,6605 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using Nemerle.Collections.NList;
+using Nemerle.Assertions;
+using System;
+using System.Diagnostics;
+using NCL = Nemerle.Collections.NList;
+using SCG = System.Collections.Generic;
+using Nemerle.Imperative;
+using Array = System.Array;
+using System.Runtime.Serialization;
+using SC = System.Collections;
+using Nemerle;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System.Collections.Generic;
+
+// ---- list.n (Nemerle.Collections) ----
+[DebuggerNonUserCode]
+public module NList
+{
+  /// Tests equality of two lists.  Uses Equal method of
+  /// objects to test wether they are the same.
+  public Equals[T] (x : list [T], y : list [T]) : bool
+  {
+    x == y
+  }
+
+
+  /// Compare two lists lexicographically over the order defined on
+  /// their elements with function [cmp].  Returns [-1] if [l1] is smaller,
+  /// [1] if [l2] is smaller, and [0] if they equal.
+  public static Compare [T] (l1 : list [T], l2 : list [T], cmp : T * T -> int) : int
+  {
+    match ((l1, l2))
+    {
+      | ([], []) => 0
+      | ([], _) => -1
+      | (_, []) => 1
+      | (x :: xs, y :: ys) =>
+        def ret = cmp (x, y);
+
+        if (ret == 0) Compare (xs, ys, cmp)
+        else          ret
+      | _ =>  throw System.ArgumentException ("NList.Compare called for null list");
+    }
+  }
+
+
+  /**
+   * Compare two lists lexicographically over the order defined on
+   * their elements.  Returns [-1] if [l1] is smaller, [1] if [l2]
+   * is smaller, and [0] if they equal.
+   */
+  public static Compare [T] (l1 : list [T], l2 : list [T]) : int
+    where T : System.IComparable [T]
+  {
+    def cmp (x, y){
+      x.CompareTo (y)
+    }
+
+    Compare (l1, l2, cmp)
+  }
+
+
+  /**
+   * Returns [l] with duplicates removed with respect to Equals method
+   * It is assumed that equal elements of [l] are next to each other,
+   * or that the list is sorted.
+   *
+   * Example:
+   *
+   * def result = RemoveDuplicates ([1, 2, 2, 3, 4, 4]);
+   *     // result = [1, 2, 3, 4]
+   */
+  public static RemoveDuplicates [T] ([NotNull] lst : list [T]) : list [T]
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop (lst, acc)
+    {
+      match (lst)
+      {
+        | [] => acc.Reverse ();
+        | [x] => (x :: acc).Reverse ();
+        | x :: ((y :: _) as xs) =>
+          if (comparer.Equals(x, y)) loop (xs, acc)
+          else                     loop (xs, x :: acc)
+      }
+    }
+
+    loop (lst, [])
+  }
+
+
+  /* -- CONVERSION OPERATIONS -------------------------------------------- */
+
+  /**
+   * Converts an array into a list.
+   */
+  public FromArray [T] ([NotNull] source : array [T]) : list [T] {
+    def loop(index, acc) : list[T]
+    {
+      if (index >= 0)
+        loop(index - 1, source[index] :: acc)
+      else
+        acc
+    }
+
+    loop(source.Length - 1, [])
+  }
+
+  public ToListRev[T] ([NotNull] this seq : SCG.IEnumerable [T]) : list [T]
+  {
+    mutable lst = [];
+
+    foreach (elem in seq)
+      lst ::= elem;
+
+    lst;
+  }
+
+  public ToListRev [T] ([NotNull] this seq : SCG.IEnumerable [T], filter : T -> bool) : list [T]
+  {
+    mutable lst = [];
+
+    foreach (elem in seq)
+      when (filter (elem))
+        lst ::= elem;
+
+    lst;
+  }
+
+  public ToList [T] ([NotNull] seq : SCG.IEnumerable [T]) : list [T]
+  {
+    ToListRev(seq).Rev()
+  }
+
+  public AsList [T] ([NotNull] this source : SCG.IList [T]) : list [T]
+  {
+    mutable lst = [];
+
+    for (mutable i = source.Count - 1; i >= 0; i--)
+      lst ::= source[i];
+
+    lst;
+  }
+
+  public ToList[T]([NotNull] source : SCG.IList[T], filter : T -> bool) : list [T]
+  {
+    mutable lst = [];
+
+    for (mutable i = source.Count - 1; i >= 0; i--)
+    {
+      def elem = source[i];
+      when (filter (elem))
+        lst ::= elem;
+    }
+
+    lst;
+  }
+
+  public ToList[T]([NotNull] seq : Seq[T], filter : T -> bool) : list [T]
+  {
+    ToListRev(seq, filter).Rev()
+  }
+
+  /* -- BASIC LIST OPERATIONS -------------------------------------------- */
+
+  /// Returns true if the given list is empty of null.
+  public IsEmpty[T](lst : list [T]) : bool
+  {
+    | [] | null => true
+    | _         => false
+  }
+
+  /**
+   * Returns length of given list. Time O(n), Mem O(1).
+   */
+  public Length [T] (x : list [T]) : int {
+    def loop (acc : int, x : list [T]) : int {
+      match (x) {
+        | _ :: xs => loop (acc + 1, xs)
+        | _ => acc
+      }
+    }
+    loop (0, x)
+  }
+
+
+  /**
+   * Returns head (first element) of list.
+   * Given empty list throws System.ArgumentException.
+   */
+  public Head [T] ([NotNull] l : list [T]) : T { l.Head }
+
+  /// Alias for l.Head.
+  public Hd [T] ([NotNull] l : list [T]) : T { l.Head }
+
+  /**
+   * Returns tail (all elements except first one) of list.
+   */
+  public Tail[T] ([NotNull] l : list [T]) : list [T] {
+    l.Tail
+  }
+
+  /**
+   * Alias for Tail(l).
+   */
+  public Tl[T] ([NotNull] l : list [T]) : list [T] {
+    l.Tail
+  }
+
+  /**
+   * Returns n-th element of list, where 0-th is head.
+   * Throws InvalidArgument exception when given too short list.
+   * Works in time O(n) and memory O(1).
+   */
+  public Nth[T] ([NotNull] l : list [T], n : int) : T {
+    match (l) {
+      | h :: t =>
+        if ( n == 0 )
+          h
+        else
+          Nth(t, n-1)
+      | [] => throw System.ArgumentOutOfRangeException ("NList.Nth")
+    }
+  }
+
+  /**
+   * Returns last element of list.
+   * Given empty list throws InvalidArgument exception.
+   * Works in time O(n) and memory O(1).
+   */
+  public Last[T] ([NotNull] l : list [T]) : T {
+    match (l) {
+      | [x] => x
+      | _ :: xs => Last (xs)
+      | [] => throw System.ArgumentException ("NList.Last called for empty list")
+    }
+  }
+
+
+  /**
+   * Returns reversed list, i.e. Rev([1, 2, 3]) = [3, 2, 1].
+   * Works in time and memory O(n).
+   */
+  public Rev[T] ([NotNull] l : list [T]) : list [T] {
+    def loop (acc : list [T], l : list [T]) : list [T] {
+      match (l) {
+        | x :: xs => loop (x :: acc, xs)
+        | [] => acc
+      }
+    }
+    loop ([], l)
+  }
+
+  /**
+   * Returns list made from appending list y at end of list x.
+   * Original list are not modified.
+   * Works in time and memory O(length(x)).
+   */
+  public Append[T] ([NotNull] x : list [T], y : list [T]) : list [T]
+  {
+    NList.RevAppend (NList.Rev (x), y)
+  }
+
+  /**
+   * Equivalent to Append(Rev(x),y).
+   */
+  public RevAppend[T] ([NotNull] x : list [T], y : list [T]) : list [T] {
+    match (x) {
+      | h :: t => RevAppend(t, h :: y)
+      | [] => y
+    }
+  }
+
+  /// Makes list one level more flat, i.e. Concat([[1, 2], [3, 4]]) = [1, 2, 3, 4].
+  /// Does not work deeper, i.e. Concat([[[1, 2], [3]], [[4]]]) = [[1, 2], [3], [4]].
+  public Concat[T]([NotNull] this l : list [list [T]]) : list [T]
+  {
+    NList.Rev(ConcatRev(l))
+  }
+
+  /// Equivalent to Concat(Rev(l))
+  public ConcatRev[T]([NotNull] l : list[list[T]]) : list[T]
+  {
+    NList.FoldLeft(l, [], NList.FoldLeft(_, _, _ :: _))
+  }
+
+  /// Alias for Concat(l).
+  public Flatten[T]([NotNull] this l : list[list[T]]) : list[T]
+  {
+    Concat(l)
+  }
+
+  /**
+   * Returns list l without elements equal to x.
+   */
+  public Remove[T] ([NotNull] l : list[T], x : T) : list[T]
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop (acc : list [T], from : list[T]) : list[T]
+    {
+      match (from) {
+        | [] => NList.Rev(acc)
+        | y :: ys  => loop(if (comparer.Equals(y, x)) acc else y :: acc, ys)
+      }
+    }
+
+    loop ([], l)
+  }
+
+
+  /**
+   * Returns a list without its last element and the list's last element
+   */
+  public DivideLast [T] ([NotNull] l : list [T]) : list [T] * T
+  {
+    def loop (ls, acc) {
+      match (ls) {
+        | [x] => (NList.Rev (acc), x)
+        | x :: xs => loop (xs, x :: acc)
+        | _ =>
+          throw System.ArgumentException ("NList.DivideLast called for empty list")
+      }
+    }
+
+    loop (l, [])
+  }
+
+
+  /* -- ITERATORS -------------------------------------------------------- */
+
+  public Iter[T] ([NotNull] l : list [T], f : T -> void) : void {
+    match (l) {
+      | x :: xs => f (x); Iter (xs, f)
+      | [] => ()
+    }
+  }
+
+  public MapFiltered[T, TOut](lst : list[T], predicate : T -> bool, convert : T -> TOut) : list[TOut]
+  {
+    $[ convert(x) | x in lst, predicate (x) ]
+  }
+
+  public Map[T, TOut] (lst : list [T], convert : T -> TOut) : list [TOut]
+  {
+    $[ convert(x) | x in lst ]
+  }
+
+  public RevMap[T, TOut] ([NotNull] l : list [T], convert : T -> TOut) : list [TOut]
+  {
+    def loop (acc : list [TOut], x : list [T]) : list [TOut]
+    {
+      match (x)
+      {
+        | h :: t => loop(convert(h) :: acc, t)
+        | [] => acc
+      }
+    }
+
+    loop ([], l)
+  }
+
+  public RevMapFiltered[T, TOut] ([NotNull] l : list [T], predicate : T -> bool, convert : T -> TOut) : list [TOut] {
+    def loop (acc : list [TOut], x : list [T]) : list [TOut] {
+      match (x) {
+        | h :: t => if (predicate (h)) loop (convert (h) :: acc, t) else loop (acc, t)
+        | [] => acc
+      }
+    }
+    loop ([], l)
+  }
+
+  public FoldLeft[T, TOut] ([NotNull] l : list [T], mutable acc : TOut, f : T * TOut -> TOut) : TOut {
+    def loop (_) {
+      | [] => acc
+      | x :: xs =>
+        acc = f (x, acc);
+        loop (xs)
+    }
+    loop (l);
+  }
+
+  public FoldRight[T, TOut] ([NotNull] l : list [T], acc : TOut, f : T * TOut -> TOut) : TOut {
+    match (l) {
+      | [] => acc
+      | x :: xs => f (x, FoldRight (xs, acc, f))
+    }
+  }
+
+  public MapFromArray[T, TOut] ([NotNull] x : array [T], f : T -> TOut) : list [TOut]
+  {
+    $[ f (e) | e in x ]
+  }
+
+  /* -- ITERATORS ON TWO LISTS ------------------------------------------- */
+
+  public Iter2[T, TOut] ([NotNull] a : list [T], [NotNull] b : list [TOut], f : T  * TOut -> void) : void {
+    match ((a, b)) {
+      | ([], []) => ()
+      | (x :: xs, y :: ys) => f (x, y); Iter2 (xs, ys, f)
+      | _ => throw System.ArgumentException ("NList.Iter2")
+    }
+  }
+
+  public Map2[T, TSecond, TOut] ([NotNull] x : list [T], [NotNull] y : list [TSecond], f : T * TSecond -> TOut) : list [TOut] {
+    match ((x, y)) {
+      | ([], []) => []
+      | (x :: xs, y :: ys) => f (x, y) :: Map2 (xs, ys, f)
+      | _ => throw System.ArgumentException ("NList.Map2")
+    }
+  }
+
+  public RevMap2[T, TSecond, TOut] ([NotNull] x : list [T],[NotNull]  y : list [TSecond], f : T * TSecond -> TOut)
+  : list [TOut]
+  {
+    def loop (acc : list [TOut], x : list [T], y : list [TSecond]) : list [TOut] {
+      match ((x, y)) {
+        | ([], []) => acc
+        | (x :: xs, y :: ys) => loop (f (x, y) :: acc, xs, ys)
+        | _ => throw System.ArgumentException ("NList.RevMap2")
+      }
+    }
+    loop([], x, y)
+  }
+
+  public FoldLeft2[TFirst, TSecond, TOut] ([NotNull] this a : list [TFirst],
+                                [NotNull] b : list [TSecond],
+                                acc : TOut,
+                                f : TFirst  * TSecond * TOut -> TOut) : TOut
+  {
+    match ((a, b)) {
+      | ([], []) => acc
+      | (x :: xs, y :: ys) => FoldLeft2 (xs, ys, f (x, y, acc), f)
+      | _ => throw System.ArgumentException ("NList.FoldLeft2")
+    }
+  }
+
+  public FoldRight2[TFirst, TSecond, TOut] ([NotNull] this a : list [TFirst],
+                                  [NotNull] b : list [TSecond],
+                                  c : TOut,
+                                  f : TFirst * TSecond  * TOut -> TOut) : TOut
+  {
+    match ((a, b)) {
+      | ([], []) => c
+      | (x :: xs, y :: ys) => f (x, y, FoldRight2 (xs, ys, c, f))
+      | _ => throw System.ArgumentException ("NList.FoldRight2")
+    }
+  }
+
+
+  /* -- LIST SCANNING ----------------------------------------------------- */
+
+  /**
+   * Returns 'true' if all of the 'l' list's elements satisfy
+   * the condition 'f'.
+   *
+   * Example of use:
+   *
+   *   NList.ForAll ([2, 4, 6, 8], fun (x) { x % 2 == 0 })
+   *
+   * evaluates to 'true' as all the list's elements are even.
+   */
+  public ForAll[T] ([NotNull] lst : list [T], predicate : T -> bool) : bool
+  {
+    match (lst) {
+      | x :: xs => predicate (x) && ForAll (xs, predicate)
+      | [] => true
+    }
+  }
+
+  public Equals[T1, TSecond] (lst1 : list [T1], lst2 : list [TSecond], compare : T1 * TSecond -> bool) : bool
+  {
+    match (lst1, lst2)
+    {
+      | (x1 :: xs1, x2 :: xs2) => compare (x1, x2) && Equals (xs1, xs2, compare)
+      | ([], []) => true
+      | _ => false
+    }
+  }
+
+  /**
+   * Returns 'true' if at least one of the 'l' list's elements
+   * satisfies the condition 'f'.
+   *
+   * Example of use:
+   *
+   *   NList.Exists (["a", "b", "abc", "d", "e"], fun (x) { x.Length > 2 })
+   *
+   * evaluates to 'true' as there is one string of length 3 on the list.
+   */
+  public Exists[T] ([NotNull] l : list [T], f : T -> bool) : bool
+  {
+    match (l)
+    {
+      | [] => false
+      | h :: t => f (h) || Exists (t, f)
+    }
+  }
+
+  public ForAll2[T, TSecond] (a : list [T], b : list [TSecond], f : T * TSecond -> bool) : bool {
+    match (a, b) {
+      | ([], []) => true
+      | (x :: xs, y :: ys) => f (x, y) && ForAll2 (xs, ys, f)
+      | _ => false
+    }
+  }
+
+  public Exists2[T, TSecond] ([NotNull] a : list [T], [NotNull] b : list [TSecond], f : T * TSecond -> bool) : bool {
+    match (a,b)
+    {
+      | ([], []) => false
+      | (x :: xs, y :: ys) => f(x,y) || Exists2(xs, ys, f)
+      | _ => throw System.ArgumentException ("NList.Exists2")
+    }
+  }
+
+  /// NList membership test, using the `Equals' method to compare objects.
+  public Member [T] (l : list [T], a : T) : bool
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop(l)
+    {
+      | h :: _ when comparer.Equals(h, a) => true
+      | _ :: t => loop(t)
+      | _ => false
+    }
+    loop(l)
+  }
+
+  /**
+   * NList membership test, using the reference equality.
+   *
+   * Returns true if and only if list [Collection] contains object with reference
+   * equal to [Obj] object
+   */
+  public ContainsRef [T] ([NotNull] Collection : list [T], Obj : T) : bool
+  where T : class
+  {
+    match (Collection) {
+      | h :: t  => (h : object) == Obj || ContainsRef (t, Obj)
+      | [] => false
+    }
+  }
+
+
+  /**
+   * NList membership test, using the `Equals' method to compare objects.
+   *
+   * This is an alias for the `Member' method.
+   */
+  public Contains [T] (l : list [T], a : T) : bool
+  {
+    Member (l, a)
+  }
+
+
+  /* -- LIST SEARCHING --------------------------------------------------- */
+
+  /**
+   * Finds the first elements for which a predicate is true.
+   */
+  public Find [T] ([NotNull] l : list [T], pred : T -> bool) : option [T]
+  {
+    match (l)
+    {
+      | h :: t =>
+        if (pred (h)) Some (h) else Find (t, pred)
+      | [] => None ()
+    }
+  }
+
+
+  /**
+   * Returns the number of elements for which a predicate is true.
+   */
+  public FilteredLength [T] ([NotNull] l : list [T], f : T -> bool) : int
+  {
+    def filtered_length (l, acc : int)
+    {
+      match (l) {
+        | [] => acc
+        | head :: tail =>
+          filtered_length (tail, if (f (head)) acc + 1 else acc)
+      }
+    }
+
+    filtered_length (l, 0)
+  }
+
+
+  /**
+   * Removes elements for which predicate is false
+   */
+  public Filter [T] (l : list [T], f : T -> bool) : list [T]
+  {
+    $[ x | x in l, f (x) ]
+  }
+
+
+  /**
+   * Removes elements for which predicate is false.
+   * The resulting list is reversed (operation is faster this way).
+   */
+  public RevFilter [T] ([NotNull] l : list [T], f : T -> bool) : list [T]
+  {
+    def loop (acc, l)
+    {
+      match (l) {
+        | x :: xs =>
+          if (f (x)) loop (x :: acc, xs)
+          else loop (acc, xs)
+        | [] => acc
+      }
+    }
+
+    loop ([], l)
+  }
+
+
+  /**
+   * This is an alias for ``Filter''
+   */
+  public FindAll [T] (l : list [T], f : T -> bool) : list [T]
+  {
+    Filter (l, f)
+  }
+
+
+  /**
+   * Partitions a list into two sublists according to a predicate.
+   */
+  public Partition[T] ([NotNull] l : list [T], pred : T -> bool) : list [T] * list [T]
+  {
+    def loop (l : list [T], sat : list [T], notsat : list [T])
+    {
+      match (l) {
+        | h :: t =>
+          if (pred (h))
+            loop (t, h :: sat, notsat)
+          else
+            loop (t, sat, h :: notsat)
+        | [] => (Rev (sat), Rev (notsat))
+      }
+    }
+    loop (l, [], [])
+  }
+
+
+  /**
+   * Groups equal element into lists
+   */
+  public Group [T] (l : list [T], cmp : T * T -> int) : list [list [T]]
+  {
+    def walk (l : list [T], acc : list [T]) : list [list [T]]
+    {
+      def h = NList.Head (acc);
+
+      match (l) {
+        | e :: rest =>
+          if (cmp (e, h) == 0)
+            walk (rest, e :: acc)
+          else
+            acc :: walk (rest, [e])
+        | [] => [acc]
+      }
+    }
+
+    if (NList.IsEmpty(l)) []
+    else {
+      def sorted = NList.Sort (l, cmp);
+
+      walk (NList.Tail (sorted), [NList.Head (sorted)])
+    }
+  }
+
+
+  /* -- ASSOCIATION LISTS ------------------------------------------------ */
+
+  public Assoc [T, TSecond] (l : list [T * TSecond], key : T) : option [TSecond]
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop(l)
+    {
+      | (k, v) :: _ when comparer.Equals(key, k) => Some (v)
+      | _ :: t => loop(t)
+      | _ => None()
+    }
+    loop(l)
+  }
+
+  public MemAssoc[T, TSecond] (l : list [T * TSecond], key : T) : bool
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop(l)
+    {
+      | (k, _) :: _ when comparer.Equals(key, k) => true
+      | _ :: t => loop(t)
+      | _ => false
+    }
+    loop(l)
+  }
+
+  public RemoveAssoc [T, TSecond] ([NotNull] l : list [T * TSecond], key : T) : list [T * TSecond]
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop (acc : list [T * TSecond], l : list [T * TSecond]) : list [T * TSecond]
+    {
+      match (l) {
+        | (k, v) :: t =>
+            if (comparer.Equals(key, k))
+              loop (acc, t)
+            else
+              loop ((k, v) :: acc, t)
+        | [] => Rev (acc)
+      }
+    }
+    loop ([], l)
+  }
+
+
+  /* -- LISTS OF PAIRS --------------------------------------------------- */
+
+
+  public Split[T, TSecond] ([NotNull] this l : list [T * TSecond]) : list [T] * list [TSecond] {
+    def loop (acc1 : list [T], acc2 : list [TSecond], l : list [T * TSecond])
+    {
+      match (l) {
+        | (a, b) :: t => loop (a :: acc1, b :: acc2, t)
+        | [] => (Rev (acc1), Rev (acc2))
+      }
+    }
+    loop([], [], l)
+  }
+
+  public Combine [T, TSecond] ([NotNull] this a : list [T], [NotNull] b : list [TSecond]) : list [T * TSecond] {
+    def loop (acc : list [T * TSecond], a : list [T], b : list [TSecond]) : list [T * TSecond]
+    {
+      match ((a, b)) {
+        | (x :: xs, y :: ys) => loop((x, y) :: acc, xs, ys)
+        | ([], []) => Rev (acc)
+        | _ => throw System.ArgumentException ("NList.Combine")
+      }
+    }
+    loop ([],a,b)
+  }
+
+  /* -- SORTING ---------------------------------------------------------- */
+
+  MergeSort[T] (cmp : (T * T) -> int, [NotNull] l : list [T]) : list [T] {
+    def split (l) {
+      def aux (l, acc, n) {
+        if (n == 0)
+          (NList.Rev (acc), l)
+        else
+          match (l) {
+            | x :: xs => aux (xs, x :: acc, (n - 1))
+            | [] => aux (l, acc, 0)
+          }
+      }
+      aux (l, [], (NList.Length (l) / 2))
+    }
+    def merge (cmp : (T * T) -> int, l1, l2) {
+      def aux (l1, l2, acc) {
+        match ((l1, l2)) {
+          | ([], _) => NList.RevAppend (acc, l2)
+          | (_, []) => NList.RevAppend (acc, l1)
+          | (x :: xs, y :: ys) =>
+            if (cmp (x, y) <= 0)
+              aux (xs, l2, x :: acc)
+            else
+              aux (l1, ys, y :: acc)
+        }
+      }
+      aux (l1, l2, [])
+    }
+
+    match (l) {
+      | []
+      | [_] => l
+      | _ =>
+        def (l1, l2) = split (l);
+        merge (cmp, MergeSort (cmp, l1), MergeSort (cmp, l2))
+    }
+  }
+
+  public Sort[T] ([NotNull] l : list [T], cmp : T * T -> int) : list [T]
+  {
+    MergeSort (cmp, l)
+  }
+
+  // what is it for?!
+  public Copy[T] ([NotNull] l : list [T]) : list [T]
+  {
+    def loop (acc : list[T], what : list[T]) {
+      match (what) {
+        | x::xs => loop (x::acc,xs)
+        | [] => Rev (acc)
+      }
+    }
+    loop ([],l)
+  }
+
+  /**
+   * Assumes that [prod] is a product of n - 1 lists, and extends
+   * product by adding every possible element of [x] to these lists.
+   */
+  private Product [T]
+      (
+       [NotNull] x    : list [T],
+       [NotNull] prod : list [list [T]]
+      )
+      : list [list [T]]
+  {
+      def extend (a, lst, result)
+      {
+          match (a){
+              | []      => result
+              | x :: xs => extend (xs, lst, (x :: lst) :: result)
+          }
+      }
+
+      def product (a, prod, result)
+      {
+          match (prod){
+              | []      => result
+              | x :: xs =>
+                product (a, xs, extend (a, x, []) + result)
+          }
+      }
+
+      product (x, prod, [])
+  }
+
+  /**
+   * Returns a product of lists stored in list [list].  Elements of
+   * result are lists of the same length = NList.Length (list).
+   *
+   * E.g.:
+   *    Product ([[1, 2], [3, 4, 5]]) =
+   *        [[1, 3],
+   *         [1, 4],
+   *         [1, 5],
+   *         [2, 3],
+   *         [2, 4],
+   *         [2, 5]]
+   *
+   *    Product ([[1, 2], [3, 4, 5], []]) = []
+   */
+  public Product [T]
+      (
+       [NotNull] this list : list [list [T]]
+      )
+      : list [list [T]]
+  {
+      def product (list, result)
+      {
+          match (list){
+              | []      => result
+              | x :: xs => product (xs, Product (x, result))
+          }
+      }
+
+      def list =
+          match (list){
+              | []      => []
+              | x :: xs => product (xs, NList.Map (x, fun (a) { [a] }))
+          };
+
+      NList.Map (list, NList.Rev)
+  }
+
+
+  /**
+   * Return a list of all possible partitions of [set] into [count] subsets.
+   */
+  public SubsetsPartitions [T]
+      (
+       [NotNull] set   : list [T],
+       count : int
+      )
+      : list [list [list [T]]]
+  {
+      /* Generate a list of [n] empty lists. */
+      def gen_empty (result, n)
+      {
+          | (result, 0) => result
+          | (result, n) => gen_empty ([] :: result, n - 1)
+      }
+
+      /* Pushes an element [elem] to a partition consisting of
+         [left] and [list], by putting a variable exactly inbetween. */
+      def push (elem, list, left, result)
+      {
+          match (list){
+              | []      => result
+              | x :: xs =>
+                    push (elem, xs, x :: left,
+                          (left + [elem :: x] + xs) :: result)
+          }
+      }
+
+      /* Extends a partition stored in list [list] with an element [elem]. */
+      def extend (elem, list, result)
+      {
+          match (list){
+              | []      => result
+              | x :: xs =>
+                extend (elem, xs, push (elem, x, [], []) + result)
+          }
+      }
+
+      /* Partitions elements stored in list [list] accross subsets,
+         by extending partition with one element at time. */
+      def partition (list, result)
+      {
+          match (list){
+              | []      => result
+              | x :: xs =>
+                partition (xs, extend (x, result, []))
+          }
+      }
+
+      partition (set, [gen_empty ([], count)])
+  }
+
+
+  public Singletons [T] ([NotNull] list : list [T])
+                : list [list [T]]
+  {
+      NList.RevMap (list, fun (a){ [a] })
+  }
+
+
+  /**
+   * Return list of all possible [n]-element subsets of set [list].
+   */
+  public SizeSubsets [T]
+      (
+       list : list [T],
+       n    : int
+      )
+      : list [list [T]]
+  {
+      /* Add [elem] to head of every element of [set]. */
+      def extend (elem, set, result)
+      {
+          match (set){
+              | []      => result
+              | x :: xs => extend (elem, xs, (elem :: x) :: result)
+          }
+      }
+
+      match ((list, n)){
+          | (_, 0)       => []
+          | ([], _)      => []
+          | (_, 1)       => Singletons (list)
+          | (x :: xs, n) =>
+            NList.RevAppend (extend (x, SizeSubsets (xs, n - 1), []),
+                            SizeSubsets (xs, n))
+      }
+  }
+
+  // NList creation
+
+  /** Return list consisting of [count] references to [elem].  */
+  public Repeat [T] (elem : T, count : int) : list [T]
+  {
+    def loop (acc, n) {
+      if (n <= 0) acc
+      else loop (elem :: acc, n - 1)
+    }
+    loop ([], count)
+  }
+
+  /** Return a list of integers from 0 to [end], excluding [end]. */
+  public Range (end : int) : list [int] {
+    Range (0, end)
+  }
+
+  /**
+   * Return a list of values incremented by [step], beginning
+   * with [beg], up/down to [end], excluding [end] itself.
+   */
+  public Range (beg : int, end : int, step = 1) : list [int]
+  {
+    when (step == 0)
+      throw System.ArgumentException ("Range () step argument must not be zero");
+
+    def loop (acc, i) {
+      if (i != beg)
+        loop (i :: acc, i - step)
+      else
+        i :: acc
+    }
+
+    if (beg < end && step < 0 || beg > end && step > 0 || beg == end)
+      []
+    else {
+      def last = if (end >= 0) end - 1 else end + 1;
+      loop ([], last - ((last - beg) % step))
+    }
+  }
+
+  /** Return a list of characters from 'a' to [end], excluding [end]. */
+  public Range (end : char) : list [char]
+  {
+    Range ('a', end)
+  }
+
+  /**
+   * Return a list of characters, which values are incremented by [step],
+   * beginning with [beg], up/down to [end], excluding [end] itself.
+   */
+  public Range (b : char, e : char, step = 1) : list [char]
+  {
+    when (step == 0)
+      throw System.ArgumentException ("Range () step argument must not be zero");
+
+    def (beg, end) = (b :> int, e :> int);
+
+    def loop (acc, i) {
+      if (i != beg)
+        loop ((i :> char) :: acc, i - step)
+      else
+        (i :> char) :: acc
+    }
+
+    if (beg < end && step < 0 || beg > end && step > 0 || beg == end)
+      []
+    else {
+      def last = if (step > 0) end - 1 else end + 1;
+      loop ([], last - ((last - beg) % step))
+    }
+  }
+  
+  public Filter2[T1, T2, Result](list1 : list[T1], list2 : list[T2], convert : T1 * T2 -> bool * Result) : list[Result]
+  {
+    def loop(list1 : list[T1], list2 : list[T2], result = SCG.List(list1?.Length), convert = convert)
+    {
+      match (list1, list2)
+      {
+        | (head1 :: tail1, head2 :: tail2) =>
+          match (convert(head1, head2))
+          {
+            | (true, value) => result.Add(value);
+            | _ => ()
+          }
+                
+          loop(tail1, tail2, result)
+
+        | ([], []) => result.NToList()
+        | (null, null) => []
+        | _ => throw ArgumentException("The list1 and list2 has different Length")
+      }
+    }
+          
+    loop(list1, list2)
+  }
+} /* end of module NList */
+
+// ---- Nemerle.Collections.n (Nemerle.Collections) ----
+  public type Seq[T] = SCG.IEnumerable[T];
+  
+  [DebuggerNonUserCode]
+  public module NCollectionsExtensions
+  {
+  public Grouping[TSource, TKey, TValue](this source : Seq[TSource], selector : TSource -> TKey * TValue): Hashtable[TKey, SCG.List[TValue]]
+  {
+    def table = Hashtable();
+    
+    foreach (elem in source)
+    {
+      def (key, value) = selector(elem);
+      mutable values;
+      
+      if (table.TryGetValue(key, out values))
+        values.Add(value);
+      else
+      {
+        values = SCG.List();
+        values.Add(value);
+        table.Add(key, values);
+      }
+    }
+    
+    table
+  }
+  
+  public Flatten[TEnu, TOut]([NotNull] this source : Seq[TEnu]) : Seq[TOut]
+      where TEnu : Seq[TOut]
+    {
+      foreach(elem1 in source)
+        foreach(elem2 in elem1 : Seq[TOut])
+          yield elem2;
+    }
+
+    public ZipLazy[TFirst, TSecond](
+        [NotNull] this first : Seq[TFirst],
+        [NotNull] second : Seq[TSecond]
+    ) : Seq[TFirst * TSecond]
+    {
+      Map2Lazy(first, second, x => x)
+    }
+
+    public Map2Lazy[TFirst, TSecond, TResult](
+        [NotNull] this first  : Seq[TFirst],
+        [NotNull]      second : Seq[TSecond],
+        [NotNull]      func   : TFirst * TSecond -> TResult
+    ) : Seq[TResult]
+    {
+      using (e2 = second.GetEnumerator(), e1 = first.GetEnumerator())
+      {
+        def loop(e1, e2)
+        {
+          match (e1.MoveNext(), e2.MoveNext())
+          {
+            | (true, true) => yield func(e1.Current, e2.Current); loop(e1, e2)
+            | (false, false) => ()
+            | (true, false) with arg = "second"
+            | (false, true) with arg = "first" =>
+              throw ArgumentException("The first & second mast be same length.", arg)
+          }
+        }
+
+        loop(e1, e2)
+      }
+    }
+
+    public Map2ToArray[First, Second, Result](
+      [NotNull] this first  : Seq[First],
+      [NotNull]      second : Seq[Second],
+      [NotNull]      func   : First * Second -> Result
+    )
+      : array[Result]
+    {
+      match (first, second)
+      {
+        | (f is array[First], s is array[Second]) => Map2ToArray(f, s, func)
+        | (f is SCG.ICollection[First], s is SCG.ICollection[Second]) => Map2ToArray(f.NToArray(), s.NToArray(), func)
+        | (f is list[First], s is list[Second]) =>
+           def foldFunc(left, right, (arr, index))
+           {
+             arr[index] = func(left, right);
+             (arr, index + 1)
+           }
+
+           def (result, _) = f.FoldLeft2(s, (array(f.Length), 0), foldFunc);
+           result
+
+        | _ =>
+          using (e1 = first.GetEnumerator(), e2 = second.GetEnumerator())
+          {
+            def loop (result) : array[Result]
+            {
+              match (e1.MoveNext(), e2.MoveNext())
+              {
+                | (true,   true) => result.Add(func(e1.Current, e2.Current)); loop(result)
+                | (false, false) => result.NToArray()
+                | (true,  false)
+                | (false,  true) => throw ArgumentException("Collections must have the same length", "first, second");
+              }
+            }
+
+            loop(SCG.List()).NToArray();
+          }
+      }
+    }
+
+    public Map2ToArray[First, Second, Result](
+      [NotNull] this first : array[First],
+      [NotNull] second : array[Second],
+      [NotNull] func: First * Second -> Result
+    )
+      : array[Result]
+    {
+      when (first.Length != second.Length)
+        throw ArgumentException("Collections must have the same length", "first, second");
+
+      def result = array(first.Length);
+
+      foreach (i in[0 .. first.Length - 1])
+        result[i] = func(first[i], second[i]);
+
+      result;
+    }
+
+    public ZipToArray[First, Second]([NotNull] this first : Seq[First], [NotNull] second : Seq[Second])
+      : array[First * Second]
+    {
+      Map2ToArray(first, second, x => x);
+    }
+
+    public ZipToArray[First, Second](
+      [NotNull] this first : SCG.ICollection[First],
+      [NotNull] second : SCG.ICollection[Second]
+    )
+      : array[First * Second]
+    {
+      Map2ToArray(first, second, x => x);
+    }
+
+    public ZipToArray[First, Second](
+      [NotNull] this first : array[First],
+      [NotNull] second : array[Second]
+    )
+      : array[First * Second]
+    {
+      Map2ToArray(first, second, x => x);
+    }
+
+    public ForAll2[T1, T2](this first : Seq[T1], second : Seq[T2], comparator : T1 * T2 -> bool) : bool
+    {
+      match (first, second)
+      {
+        | (f is array[T1],     s is array[T2])     => f.ForAll2(s, comparator)
+        | (f is SCG.IList[T1], s is SCG.IList[T2]) => f.ForAll2(s, comparator)
+        | _ =>
+          if (first == null)
+            second == null
+          else if (second == null)
+            first == null
+          else
+          {
+            def enum1 = first.GetEnumerator();
+            def enum2 = second.GetEnumerator();
+            try
+            {
+              def loop()
+              {
+                def exists1 = enum1.MoveNext();
+                def exists2 = enum2.MoveNext();
+                if (exists1 && exists2)
+                  if (comparator(enum1.Current, enum2.Current))
+                    loop()
+                  else false
+                else exists1 == exists2
+              }
+
+              loop()
+            }
+            finally
+            {
+              enum1.Dispose();
+              enum2.Dispose();
+            }
+          }
+      }
+    }
+
+    public ForAll2[T1, T2](this first : SCG.IList[T1], second : SCG.IList[T2], comparator : T1 * T2 -> bool) : bool
+    {
+      match (first, second)
+      {
+        | (f is array[T1], s is array[T2]) => f.ForAll2(s, comparator)
+        | _ =>
+          def loop(i)
+          {
+            if (i < first.Count && comparator(first[i], second[i])) loop(i + 1)
+            else i == first.Count
+          }
+
+          if (first : object == second)             true
+          else if (first == null || second == null) false
+          else if (first.Count != second.Count)     false
+          else loop(0)
+      }
+    }
+
+    public ForAll2[T1, T2](this first : array[T1], second : array[T2], comparator : T1 * T2 -> bool) : bool
+    {
+      def loop(i)
+      {
+        if (i < first.Length && comparator(first[i], second[i])) loop(i + 1)
+        else i == first.Length
+      }
+
+      if (first : object == second)             true
+      else if (first == null || second == null) false
+      else if (first.Length != second.Length)     false
+      else loop(0)
+    }
+
+    public IsEmpty(this seq : System.Collections.ICollection) : bool 
+    {
+      seq == null || seq.Count == 0
+    }
+    public IsEmpty(this str : string) : bool
+    {
+      str == null || str.Length == 0
+    }
+    public IsEmpty[T](this seq : array[T]) : bool
+    {
+      seq == null || seq.Length == 0
+    }
+    public IsEmpty[T](this seq : list[T]) : bool
+    {
+      | []     => true
+      | _ :: _ => false
+      | null   => true
+    }
+    public IsEmpty[T](this seq : SCG.IEnumerable[T]) : bool
+    { 
+      | []                                    => true
+      | _ :: _                                => false
+      | ary is array[T]                       => IsEmpty(ary)
+      | col is System.Collections.ICollection => IsEmpty(col)
+      | str is string                         => IsEmpty(str)
+      | null                                  => true
+      | _                                     =>
+        foreach (_ in seq) // This for call IDisposable...
+          Nemerle.Imperative.Return(false);
+        true
+    }
+
+    public NLastN[T]([NotNull] this source : array[T], n : int) : array[T]
+      requires n >= 0 requires n <= source.Length
+    {
+      def result = array(n);
+      
+      when (n > 0)
+        Array.Copy(source, source.Length - n, result, 0, n);
+        
+      result
+    }
+    
+    public static NCount[T](this seq : SCG.IEnumerable[T]) : int
+    {
+        | lst is array[T]     => lst.Length
+        | lst is list[T]      => lst.Length
+        | lst is SCG.List[T]  => lst.Count
+        | lst is SCG.IList[T] => lst.Count
+        | str is string       => str.Length
+        | null => 0
+        | _ => 
+          mutable i = 0;
+          
+          foreach (_x in seq)
+            i++;
+          i
+    }
+
+    public static NLast[T](this source : SCG.IList[T]) : T
+    {
+      source[source.Count - 1]
+    }
+
+    public static NLast[T](this source : array[T]) : T
+    {
+      source[source.Length - 1]
+    }
+
+    public static NLast[T](this source : SCG.IEnumerable[T]) : T
+    {
+      mutable exists = false;
+      mutable cur;
+
+      foreach (e in source)
+      {
+        exists = true;
+        cur = e;
+      }
+
+      if (exists) cur
+      else        throw IndexOutOfRangeException();
+    }
+
+    public static NFirst[T](this source : SCG.IList[T]) : T
+    {
+      source[0]
+    }
+
+    public static NFirst[T](this source : array[T]) : T
+    {
+      source[0]
+    }
+
+    public static NFirst[T](this source : SCG.IEnumerable[T]) : T
+    {
+      foreach (e in source)
+        return e;
+
+      throw IndexOutOfRangeException();
+    }
+
+    // Lazy functions
+    //
+
+    /// Convert a sequence of one type to sequence of another type.
+    /// Convertion execute in lazy manner.
+    public MapLazy[From, To](
+      this source : SCG.IEnumerable[From],
+      convert : From -> To
+    )
+      : SCG.IEnumerable[To]
+    {
+      foreach(elem in source)
+        yield convert(elem)
+    }
+
+    /// Convert a sequence of one type to sequence of another type with filtration.
+    /// Convertion execute in lazy manner.
+    public MapLazyFiltered[From, To](
+      this source : SCG.IEnumerable[From],
+      isMatch : From -> bool,
+      convert : From -> To
+    )
+      : SCG.IEnumerable[To]
+    {
+      foreach(elem when isMatch(elem) in source)
+        yield convert(elem);
+    }
+
+    /// Convert a sequence of one type to sequence of another type with filtration.
+    /// Convertion execute in lazy manner.
+    public MapLazyFiltered[From, To](
+      this source : SCG.IEnumerable[From],
+      matchAndConvert : From -> bool * To
+    )
+      : SCG.IEnumerable[To]
+    {
+      foreach(elem in source)
+      {
+        def (isMatch, convertedValue) = matchAndConvert(elem);
+        when (isMatch)
+          yield convertedValue;
+      }
+    }
+
+    /// Filter elements of sequence in lazy manner.
+    public FilterLazy[T](this source : SCG.IEnumerable[T], predicate : T -> bool) : SCG.IEnumerable[T]
+    {
+      foreach(elem when predicate(elem) in source)
+        yield elem;
+    }
+
+    public ExcludeLazy[T](
+      [NotNull] this source  : SCG.IEnumerable[T],
+      [NotNull]      exclude : SCG.IEnumerable[T]
+    )
+      : SCG.IEnumerable[T]
+    {
+      def ht = Hashtable();
+      foreach (elem in exclude)
+        ht[elem] = 0 : byte;
+
+      foreach (elem when !ht.Contains (elem) in source)
+        yield elem;
+    }
+
+    //
+    // Lazy functions
+
+    /// Iterate sequence and call action for each it elements.
+    public Iter[T](this source : SCG.IEnumerable[T], action : T -> void) : void
+    {
+      foreach (elem in source)
+        action (elem);
+    }
+
+    public FindIndex[T]([NotNull] this source : array[T], [NotNull] isMatch : T -> bool) : int
+    {
+      for (mutable i = 0; i < source.Length; i++)
+        when (isMatch(source[i]))
+          return i;
+
+      -1;
+    }
+
+    public FindIndex[T]([NotNull] this source : SCG.IList[T], [NotNull] isMatch : T -> bool) : int
+    { // doubling for performance reason
+      for (mutable i = 0; i < source.Count; i++)
+        when (isMatch(source[i]))
+          return i;
+
+      -1;
+    }
+
+    public FindIndex[T]([NotNull] this source : SCG.List[T], [NotNull] isMatch : T -> bool) : int
+    { // doubling for performance reason
+      for (mutable i = 0; i < source.Count; i++)
+        when (isMatch(source[i]))
+          return i;
+
+      -1;
+    }
+
+    public FoldLeft[TAccumulator, T](
+      this source : SCG.IEnumerable[T],
+      mutable ini : TAccumulator,
+      convert : T * TAccumulator -> TAccumulator
+    )
+      : TAccumulator
+    {
+      foreach (value in source)
+        ini = convert(value, ini);
+
+      ini
+    }
+
+    public FoldRight[TAccumulator, T](
+      this source : SCG.IEnumerable[T],
+      mutable ini : TAccumulator,
+      convert : T * TAccumulator -> TAccumulator
+    )
+      : TAccumulator
+    {
+      def ary = source.NToArray();
+      for (mutable i = ary.Length - 1; i >= 0; i--)
+        ini = convert(ary[i], ini);
+
+      ini
+    }
+
+    public Fold[TAccumulator, T](
+      this source : SCG.IEnumerable[T],
+      mutable ini : TAccumulator,
+      convert : T * TAccumulator -> TAccumulator
+    )
+      : TAccumulator
+    {
+      FoldLeft (source, ini, convert)
+    }
+
+    public BinarySearch[TElem](
+      this collection : array[TElem],
+      lo : int,
+      hi : int,
+      comparer : TElem -> int
+    ) : int
+    {
+      if (lo <= hi)
+      {
+        def i = (lo + hi) >> 1;
+        def cmpResult = comparer(collection[i]);
+
+        if (cmpResult == 0)
+          i
+        else if (cmpResult < 0)
+          BinarySearch (collection, i + 1, hi, comparer)
+        else
+          BinarySearch (collection, lo, i - 1, comparer)
+      }
+      else
+        ~lo
+    }
+
+    public BinarySearch[TElem](
+      this collection : array[TElem],
+      comparer : TElem -> int
+    ) : int
+    {
+      BinarySearch (collection, 0, collection.Length - 1, comparer);
+    }
+
+    public BinarySearch[TElem](
+      this collection : SCG.IList[TElem],
+      lo : int,
+      hi : int,
+      comparer : TElem -> int
+    ) : int
+    {
+      if (lo <= hi)
+      {
+        def i = (lo + hi) >> 1;
+        def cmpResult = comparer(collection[i]);
+
+        if (cmpResult == 0)
+          i
+        else if (cmpResult < 0)
+          BinarySearch (collection, i + 1, hi, comparer)
+        else
+          BinarySearch (collection, lo, i - 1, comparer)
+      }
+      else
+        ~lo
+    }
+
+    public BinarySearch[TElem](
+      this collection : SCG.IList[TElem],
+      comparer : TElem -> int
+    ) : int
+    {
+      BinarySearch (collection, 0, collection.Count - 1, comparer);
+    }
+
+    public NToList[T](this source : array[T]) : list[T]
+    {
+      ToNList (source)
+    }
+
+    public ToNList[T](this source : SCG.List[T]) : list[T] { NToList(source) }
+    
+    public NToList[T](this source : SCG.List[T]) : list[T]
+    {
+      def loop(index, acc) : list[T]
+      {
+        if (index >= 0)
+          loop(index - 1, source[index] :: acc)
+        else
+          acc
+      }
+
+      loop(source.Count - 1, [])
+    }
+
+    public NToList[T](this source : Seq[T]) : list[T]
+    {
+      NToList(SCG.List(source))
+    }
+
+    /// Convert collection to array.
+    public NToArray[T](this source : SCG.ICollection[T]) : array[T]
+    {
+      if (source == null)
+        array (0)
+      else
+      {
+        def tmp = array (source.Count);
+        source.CopyTo (tmp, 0);
+        tmp
+      }
+    }
+
+    /// Convert sequence to array.
+    public NToArray[T](this source : SCG.IEnumerable[T]) : array[T]
+    {
+      match (source)
+      {
+        | coll is SCG.ICollection[T] => coll.NToArray();
+        | null => array (0);
+        | _ =>
+          def dest = SCG.List();
+
+          foreach (elem in source)
+            dest.Add(elem);
+
+          dest.NToArray()
+      }
+    }
+
+    /// Copy a collection of one type to an array of another type (with cast it elements to To type).
+    /// Throw System.InvalidCastException if some elements can't be cast (VladD2: I hope :) ).
+    public UpCastToArray[From, To](this source : SCG.ICollection[From]) : array[To]
+      where From: class
+      where To:   From, class
+    {
+      match (source)
+      {
+        | null                => array (0);
+        | ary is array[From]  => ary.Map(_ :> To)
+        | x when x.Count == 0 => array (0);
+        | _                   =>
+          def ary : array[To] = array(source.Count);
+          source.CopyTo (ToBase(ary), 0);
+          ary // take covariance in account!
+      }
+    }
+
+    ///// Convert a collection of one type to an array of another type.
+    //public MapToArray[From, To](this source : SCG.ICollection[From], convert : From -> To) : array[To]
+    //{
+    //  match (source)
+    //  {
+    //    | null               => array (0);
+    //    | ary is array[From] => ary.Map (convert);
+    //    | _                  => MapCollectionToArray (source, convert);
+    //  }
+    //}
+
+    //private MapCollectionToArray[From, To](source : SCG.ICollection[From], convert : From -> To) : array[To]
+    //{
+    //  def tmp = array(source.Count);
+    //  source.CopyTo(tmp, 0);
+    //  tmp.Map(convert)
+    //}
+
+    ///// Convert collection of one type to array of another type. (Alias for MapToArray)
+    //public ConvertToArray[From, To](this source : SCG.ICollection[From], convert : From -> To) : array[To]
+    //{
+    //  MapToArray (source, convert)
+    //}
+
+    /// Convert a sequence of one type to an array of another type.
+    public MapToArray[From, To](this source : SCG.IEnumerable[From], convert : From -> To) : array[To]
+    {
+      match (source)
+      {
+        | null                          => array(0);
+        | ary is array[From]            => ary.Map(convert);
+        | coll is SCG.ICollection[From] => 
+          def tmp = array(coll.Count);
+          coll.CopyTo(tmp, 0);
+          tmp.Map(convert)
+        
+        | _ =>
+          def dest = SCG.List();
+
+          foreach (elem in source)
+            dest.Add(convert (elem));
+
+          dest.NToArray()
+      }
+    }
+
+    /// Convert sequence of one type to array of another type. (Alias for MapToArray)
+    public ConvertToArray[From, To](this source : SCG.IEnumerable[From], convert : From -> To) : array[To]
+    {
+      MapToArray(source, convert)
+    }
+
+    /// Convert sequence to array with filtration.
+    public ToArrayFiltered[T](this source : SCG.IEnumerable[T], isMatch : T -> bool) : array[T]
+    {
+      NToArrayFiltered(source, isMatch)
+    }
+    
+    public NToArrayFiltered[T](this source : SCG.IEnumerable[T], isMatch : T -> bool) : array[T]
+    {
+      match (source)
+      {
+        | null => array (0);
+        | _ =>
+          def dest = SCG.List();
+
+          foreach (elem when isMatch(elem) in source)
+            dest.Add (elem);
+
+          dest.NToArray()
+      }
+    }
+
+    InternalMapToArrayFiltered[From, To](
+      source  : array[From],
+      isMatch : From -> bool,
+      convert : From -> To
+    )
+      : array[To]
+    {
+      def dest = SCG.List(source.Length);
+
+      foreach (elem when isMatch(elem) in source)
+        dest.Add (convert (elem));
+
+      dest.NToArray()
+    }
+
+    /// Convert sequence to array with filtration.
+    public MapToArrayFiltered[From, To](
+      this source : array[From],
+      isMatch : From -> bool,
+      convert : From -> To
+    ) : array[To]
+    {
+      if (source == null || source.Length == 0)
+        array(0)
+      else if (source.Length == 1)
+      {
+        def tmp = source[0];
+        if (isMatch(tmp)) array[convert(tmp)] else array(0)
+      }
+      else
+        InternalMapToArrayFiltered(source, isMatch, convert)
+    }
+
+    /// Convert sequence to array with filtration.
+    public MapToArrayFiltered[From, To](
+      this source : SCG.IEnumerable[From],
+      isMatch : From -> bool,
+      convert : From -> To
+    ) : array[To]
+    {
+      match (source)
+      {
+        | null                => array (0);
+        | ary is array[From] => InternalMapToArrayFiltered(ary, isMatch, convert)
+        | _                   =>
+          def dest = SCG.List();
+
+          foreach (elem when isMatch(elem) in source)
+            dest.Add (convert (elem));
+
+          dest.NToArray()
+      }
+    }
+
+    public ConvertToArrayFiltered[From, To](
+      this source : SCG.IEnumerable[From],
+      isMatch : From -> bool,
+      convert : From -> To
+    ) : array[To]
+    {
+      MapToArrayFiltered(source, isMatch, convert)
+    }
+
+    public MapToList[From, To](this source : array[From], convert : From -> To) : list[To]
+    {
+      match (source)
+      {
+        | null => [];
+        | _ =>
+          mutable dest = [];
+
+          for (mutable i = source.Length - 1; i >= 0; i--)
+            dest ::= convert (source[i]);
+
+          dest
+      }
+    }
+
+    public MapToList[From, To](this source : SCG.IList[From], convert : From -> To) : list[To]
+    {
+      match (source)
+      {
+        | null                => [];
+        | ary is array[From] => ary.MapToList(convert);
+        | _ =>
+          mutable dest = [];
+
+          for (mutable i = source.Count - 1; i >= 0; i--)
+            dest ::= convert (source[i]);
+
+          dest
+      }
+    }
+
+    public MapToList[From, To](this source : SCG.IEnumerable[From], convert : From -> To) : list[To]
+    {
+      match (source)
+      {
+        | null                      => [];
+        | ary is array[From]       => ary.MapToList(convert);
+        | iList is SCG.IList[From] => iList.MapToList(convert);
+        | _ =>
+          def dest = SCG.List();
+
+          foreach (elem in source)
+            dest.Add (convert (elem));
+
+          dest.NToList ()
+      }
+    }
+
+    public Map[From, To](this source : SCG.IEnumerable[From], convert : From -> To) : list[To]
+    {
+      source.MapToList (convert)
+    }
+
+
+    public Filter[T](this seq : SCG.IEnumerable[T], predicate : T -> bool) : list[T]
+    {
+      $[ x | x in seq, predicate (x) ]
+    }
+
+    /// Convert sequence to array with filtration.
+    public FilterToArray[T](
+      this source : array[T],
+      isMatch : T -> bool
+    ) : array[T]
+    {
+      if (source == null || source.Length == 0)
+        array(0)
+      else if (source.Length == 1)
+      {
+        def tmp = source[0];
+        if (isMatch(tmp)) array[tmp] else array(0)
+      }
+      else
+        InternalFilterToArray(source, isMatch)
+    }
+
+    public FilterToArray[T](this source : SCG.IEnumerable[T], isMatch : T -> bool) : array[T]
+    {
+      match (source)
+      {
+        | null             => array (0);
+        | ary is array[T] => InternalFilterToArray (ary, isMatch)
+        | _                =>
+          def dest = SCG.List();
+
+          foreach (elem when isMatch(elem) in source)
+            dest.Add (elem);
+
+          dest.NToArray()
+      }
+    }
+
+    InternalFilterToArray[T](source : array[T], isMatch : T -> bool) : array[T]
+    {
+      def dest = SCG.List(source.Length);
+
+      foreach (elem when isMatch(elem) in source)
+        dest.Add (elem);
+
+      dest.NToArray()
+    }
+
+    /// Convert sequence to string.
+    public ToString[T](this source : SCG.IEnumerable[T], separator : string) : string
+    {
+      when (source == null)
+        return "";
+
+      mutable isFirstTime = true;
+      def sb = System.Text.StringBuilder();
+      foreach (elem in source)
+      {
+        if (isFirstTime) isFirstTime = false;
+        else             _ = sb.Append (separator);
+
+        _ = sb.Append (elem);
+      }
+
+      sb.ToString()
+    }
+
+    /// Return right-hand element or new object (if id does not exists).
+    public RightHand[T]([NotNull] this source : SCG.IList[T], index : int) : T
+      where T: new()
+    {
+      def nextIndex = index + 1;
+      if (nextIndex >= source.Count) T() else source[nextIndex];
+    }
+
+    /// Return left-hand element or new object (if id does not exists).
+    public LeftHand[T]([NotNull] this source : SCG.IList[T], index : int) : T
+      where T: new()
+    {
+      def nextIndex = index - 1;
+      if (nextIndex < 0) T() else source[nextIndex];
+    }
+
+    public NReverse[T]([NotNull] this seq : SCG.IEnumerable[T]) : SCG.List[T]
+    {
+      def lst = SCG.List(seq);
+      lst.Reverse();
+      lst;
+    }
+
+    public Find[T]([NotNull] this seq : SCG.IEnumerable[T], predicate : T -> bool) : option[T]
+    {
+      foreach (item in seq)
+        when (predicate(item))
+          return Some(item);
+
+      None();
+    }
+
+    /// Find reference type object. Return reference to found objec of null.
+    public FindObject[T]([NotNull] this seq : SCG.IEnumerable[T], predicate : T -> bool) : T
+      where T : class
+    {
+      foreach (item in seq)
+        when (predicate(item))
+          return item;
+
+      null;
+    }
+
+    public FindValue[T]([NotNull] this seq : SCG.IEnumerable[T], predicate : T -> bool) : T?
+      where T : struct
+    {
+      foreach (item in seq)
+        when (predicate(item))
+          return item;
+
+      null;
+    }
+  
+    public Append[T](mutable this source : array[T], value : T) : array[T]
+    {
+      def oldLen = source.Length;
+      System.Array.Resize(ref source, oldLen + 1);
+      source[oldLen] = value;
+      source
+    }
+
+    public Append[T]([NotNull] mutable this source : array[T], [NotNull] value : array[T]) : array[T]
+    {
+      def newLen = source.Length + value.Length;
+      def insertIndex = source.Length;
+      System.Array.Resize(ref source, newLen);
+      value.CopyTo(source, insertIndex);
+      source
+    }
+
+    /// Iterates a function over an array.
+    public Iter[T](this arr : array[T], f : T -> void) : void
+    {
+      def loop (i)
+      {
+        when (i < arr.Length) {
+          f (arr[i]);
+          loop (i + 1)
+        }
+      }
+
+      loop (0)
+    }
+
+
+    /// Return a fresh copy of[arr] with first[n] elements removed.
+    public ChopFirstN[T](this arr : array[T], n : int) : array[T]
+    {
+      if (arr.Length < n)
+        throw ArgumentException ("ChopFirstN called for too short array")
+      else
+      {
+        def res = array (arr.Length - n);
+        Array.Copy(arr, n, res, 0, res.Length);
+        res
+      }
+    }
+
+
+    /// Return a fresh copy of[arr] with last[n] elements removed.
+    public ChopLastN[T](this arr : array[T], n : int) : array[T]
+    {
+      if (arr.Length < n)
+        throw ArgumentException ("LastFirstN called for too short array")
+      else
+      {
+        def res = array (arr.Length - n);
+        Array.Copy(arr, 0, res, 0, res.Length);
+        res
+      }
+    }
+
+	/// Iterates a function over a sequence, passing both the item index
+    /// and value as the iterated function parameters.
+    public IterI[T]([NotNull] this seq : SCG.IEnumerable[T], f : int * T -> void) : void
+    {
+	  foreach (item in seq with index)
+	    f(index, item);
+    }
+
+    /// Iterates a function over an array, passing both the array index
+    /// and value as the iterated function parameters.
+    public IterI[T](this arr : array[T], f : int * T -> void) : void
+    {
+      def loop (i)
+      {
+        when (i < arr.Length) {
+          f (i, arr[i]);
+          loop (i + 1)
+        }
+      }
+
+      loop (0)
+    }
+
+    public Map[From, To](this from : array[From], f : From -> To) : array[To]
+    {
+      if (from == null)
+        array(0)
+      else
+      {
+        def result = array (from.Length);
+
+        for (mutable i = 0; i < from.Length; ++i)
+          result[i] = f (from[i]);
+
+        result
+      }
+    }
+
+    /// Convert array of one type to other. (This is a alias for Map().)
+    public ConvertAll[From, To](this source : array[From], f : From -> To) : array[To]
+    {
+      source.Map (f);
+    }
+
+    public Map[From, To](res_type : Type, ar : array[From], f : From -> To) : array[To]
+    {
+      assert(typeof (To).Equals (res_type));
+      Map (ar, f)
+    }
+
+
+    /// Folds a function over an array.
+    public Fold[TAccumulator, T](this arr : array[T], ini : TAccumulator, f : T * TAccumulator -> TAccumulator) : TAccumulator
+    {
+      def loop (acc, i)
+      {
+        if (i >= arr.Length) acc
+        else loop (f (arr[i], acc), i + 1)
+      }
+
+      loop (ini, 0)
+    }
+
+
+    /// Folds a function over an array, passing the array index
+    /// as an additional parameter to the folded function parameters.
+    public FoldI[TAccumulator, T](this arr : array[T], ini : TAccumulator, f : int * T * TAccumulator -> TAccumulator) : TAccumulator
+    {
+      def loop (acc, i)
+      {
+        if (i >= arr.Length) acc
+        else loop (f (i, arr[i], acc), i + 1)
+      }
+
+      loop (ini, 0)
+    }
+
+    public Exists[T]([NotNull] this seq : SCG.IEnumerable[T], predicate : T -> bool) : bool
+    {
+      foreach (item in seq)
+        when (predicate(item))
+          return true;
+
+      false
+    }
+
+
+    /// Returns 'true' if at least one of the 'l' arrays's elements
+    /// satisfies the condition 'f'.
+    ///
+    /// Example of use:
+    ///
+    ///   assert(array["a", "b", "abc", "d", "e"].Exists(x => x.Length > 2));
+    ///
+    /// evaluates to 'true' as there is one string of length 3 on the list.
+    public Exists[T](this a : array[T], f : T -> bool) : bool
+    {
+      def walk_array (i : int) : bool
+      {
+        i < a.Length && (f (a[i]) || walk_array (i + 1))
+      }
+
+      walk_array (0)
+    }
+
+
+    /// Returns 'true' if exactly all of the 'l' arrays's elements
+    /// satisfy the condition 'f'.
+    ///
+    /// Example of use:
+    ///
+    ///   array[2, 4, 6, 8, 10].ForAll(x => x % 2 == 0)
+    ///
+    /// evaluates to 'true' as all the array's elements are even integers.
+    public ForAll[T](this a : array[T], f : T -> bool) : bool
+    {
+      def walk_array (i : int) : bool
+      {
+        i >= a.Length || (f (a[i]) && walk_array (i + 1))
+      }
+
+      walk_array (0)
+    }
+
+    public FromList[T](t : Type, x : list[T]) : array[T]
+    {
+      assert(t.Equals(typeof (T)));
+      x.NToArray ()
+    }
+
+    public ToNList[T](this arr : array[T]) : list[T]
+    {
+      NList.FromArray (arr)
+    }
+
+    public Iter2[TFirst, TSecond](this a : list[TFirst], b : array[TSecond], f : TFirst  * TSecond -> void) : void
+    {
+      def loop (l, acc) : void
+      {
+        match (l)
+        {
+          | [] => ()
+          | x :: xs => f (x, b[acc]); loop (xs, acc + 1)
+        }
+      }
+
+      loop (a, 0)
+    }
+
+    public Iter2[TFirst, TSecond](this a : array[TFirst], b : list[TSecond], f : TFirst  * TSecond -> void) : void
+    {
+      def loop (l, acc) : void
+      {
+        match (l)
+        {
+          | [] => ()
+          | x :: xs  => f (a[acc], x); loop (xs, acc + 1)
+        }
+      }
+
+      loop (b, 0)
+    }
+
+    /// Iterate over two collection
+    public Iter2[TFirst, TSecond](this a : Seq[TFirst], b : Seq[TSecond], f : TFirst  * TSecond -> void) : void
+    {
+      def iter1 = a.GetEnumerator();
+      def iter2 = b.GetEnumerator();
+      
+      try
+      {
+        def loop(iter1, iter2)
+        {
+          def ok1 = iter1.MoveNext();
+          def ok2 = iter2.MoveNext();
+          
+          if (ok1 && ok2)
+          {
+            f(iter1.Current, iter2.Current);
+            loop(iter1, iter2);
+          }
+          else when (ok1 != ok2)
+            throw ArgumentException("Arguments has different length")
+        }
+        
+        loop(iter1, iter2);
+      }
+      finally
+      {
+        iter1.Dispose();
+        iter2.Dispose();
+      }
+    }
+
+    /// Iterate over several collections
+    public IterX[T](f : array[T] -> void, params sources : array[Seq[T]]) : void
+    {
+      def iters = array(sources.Length);
+      
+      foreach (s in sources with i)
+        iters[i] = s.GetEnumerator();
+      
+      try
+      {
+        def loop(iters)
+        {
+          mutable ok;
+          
+          foreach (iter in iters with i)
+          {
+            if (i == 0)
+              ok = iter.MoveNext();
+            else when (ok != iter.MoveNext())
+              throw ArgumentException("Arguments has different length", "sources");
+          }
+          
+          when (ok)
+          {
+            def values = array(iters.Length);
+            
+            foreach (iter in iters with i)
+              values[i] = iter.Current;
+              
+            f(values);
+            loop(iters);
+          }
+        }
+        
+        loop(iters);
+      }
+      finally
+      {
+        foreach (iter in iters)
+          iter.Dispose();
+      }
+    }
+
+    public Map2[TFirst, TSecond, TResult](this a : list[TFirst], b : array[TSecond], f : TFirst * TSecond -> TResult) : list[TResult]
+    {
+      def loop (l, acc) : list[TResult]
+      {
+        match (l) {
+          | [] => []
+          | x :: xs => f (x, b[acc]) :: loop (xs, acc + 1)
+        }
+      }
+
+      loop (a, 0)
+    }
+
+    public Map2[TFirst, TSecond, TResult](this a : array[TFirst], b : list[TSecond], f : TFirst * TSecond -> TResult) : list[TResult]
+    {
+      def loop (l, acc) : list[TResult]
+      {
+        match (l) {
+          | [] => []
+          | x :: xs => f (a[acc], x) :: loop (xs, acc + 1)
+        }
+      }
+
+      loop (b, 0)
+    }
+
+    public RevMap2[TFirst, TSecond, TResult](this a : list[TFirst], b : array[TSecond], f : TFirst * TSecond -> TResult) : list[TResult]
+    {
+      def loop (x, i, acc) : list[TResult]
+      {
+        match (x) {
+          | [] => acc
+          | h :: t => loop (t, i + 1, f (h, b[i]) :: acc)
+        }
+      }
+
+      loop(a, 0, [])
+    }
+
+    public RevMap2[TFirst, TSecond, TResult](this a : array[TFirst], b : list[TSecond], f : TFirst * TSecond -> TResult) : list[TResult]
+    {
+      def loop (x, i, acc) : list[TResult]
+      {
+        match (x)
+        {
+          | [] => acc
+          | h :: t => loop (t, i + 1, f (a[i], h) :: acc)
+        }
+      }
+
+      loop(b, 0, [])
+    }
+
+    public FoldLeft2[TFirst, TSecond, TResult](this a : list[TFirst], b : array[TSecond], acc : TResult, f : TFirst  * TSecond * TResult -> TResult) : TResult
+    {
+      def loop (x, i, ac) : TResult
+      {
+        match (x) {
+          | [] => ac
+          | h :: t => loop (t, i + 1, f (h, b[i], ac))
+        }
+      }
+
+      loop (a, 0, acc)
+    }
+
+    public FoldLeft2[TFirst, TSecond, TResult](this a : array[TFirst], b : list[TSecond], acc : TResult, f : TFirst  * TSecond * TResult -> TResult) : TResult
+    {
+      def loop (x, i, ac) : TResult
+      {
+        match (x)
+        {
+          | [] => ac
+          | h :: t => loop (t, i + 1, f (a[i], h, ac))
+        }
+      }
+
+      loop (b, 0, acc)
+    }
+
+    public FoldRight2[TFirst, TSecond, TResult](this a : list[TFirst], b : array[TSecond], c : TResult, f : TFirst * TSecond  * TResult -> TResult) : TResult
+    {
+      def loop (x, i, acc) : TResult
+      {
+        match (x)
+        {
+          | [] => acc
+          | h :: t => f (h, b[i], loop (t, i + 1, acc))
+        }
+      }
+
+      loop (a, 0, c)
+    }
+
+    public FoldRight2[TFirst, TSecond, TResult](this a : array[TFirst], b : list[TSecond], c : TResult, f : TFirst * TSecond  * TResult -> TResult) : TResult
+    {
+      def loop (x, i, acc) : TResult
+      {
+        match (x)
+        {
+          | [] => acc
+          | h :: t => f (a[i], h, loop (t, i + 1, acc))
+        }
+      }
+
+      loop (b, 0, c)
+    }
+
+    public ForAll2[TFirst, TSecond](this a : list[TFirst], b : array[TSecond], f : TFirst * TSecond -> bool) : bool
+    {
+      def loop (x, i) : bool {
+        match (x) {
+          | [] => true
+          | h :: t => f (h, b[i]) && loop (t, i + 1)
+        }
+      }
+
+      loop (a, 0)
+    }
+
+    public ForAll2[TFirst, TSecond](this a : array[TFirst], b : list[TSecond], f : TFirst * TSecond -> bool) : bool
+    {
+      def loop (x, i) : bool {
+        match (x) {
+          | [] => true
+          | h :: t => f (a[i], h) && loop (t, i + 1)
+        }
+      }
+
+      loop (b, 0)
+    }
+
+    public Exists2[TFirst, TSecond](this a : array[TFirst], b : list[TSecond], f : TFirst * TSecond -> bool) : bool
+    {
+      def loop (x, i) : bool {
+        match (x) {
+          | [] => false
+          | h :: t => f (a[i], h) || loop (t, i + 1)
+        }
+      }
+
+      loop (b, 0)
+    }
+
+    public Exists2[TFirst, TSecond](this a : list[TFirst], b : array[TSecond], f : TFirst * TSecond -> bool) : bool
+    {
+      def loop (x, i) : bool {
+        match (x) {
+          | [] => false
+          | h :: t => f (h, b[i]) || loop (t, i + 1)
+        }
+      }
+
+      loop (a, 0)
+    }
+
+    /// Filter elements to list.
+    public Filter[T](this ary : array[T], predicate : T -> bool) : list[T]
+    {
+      $[ x | x in ary, predicate (x) ]
+    }
+
+    /// Cast array to covariant subtype.
+    public ToBase[Derive, Base](this source : array[Derive]) : array[Base]
+      where Base: class
+      where Derive: Base, class
+    {
+      (source : object) :> array[Base]
+    }
+
+    /// Attention! It's inplace sort.
+    public SortInplace[T](this source : array[T], comparison : Comparison[T]) : array[T]
+    {
+      Array.Sort(source, comparison);
+      source
+    }
+
+    /// Attention! It's inplace sort.
+    public Sort[T, Val](this source : array[T], getComparableValue : T -> Val) : array[T]
+      where Val: IComparable[Val]
+    {
+      def Cmp(x : T, y : T) : int
+      {
+        getComparableValue(x).CompareTo(getComparableValue(y))
+      }
+      Array.Sort.[T](source, Comparison.[T](Cmp));
+      source
+    }
+
+    public Clone[T](this source : T) : T
+      where T: ICloneable
+    {
+      (source.Clone() :> T)
+    }
+
+    /// Convert array to string.
+    public ToString[T](this source : array[T], separator : string) : string
+    {
+      string.Join(separator, source.Map(value => value.ToString()));
+    }
+  } // end of module NCollectionsExtensions
+
+// ---- icollection.n (Nemerle.Collections) ----
+/**
+ * Exception thrown when an element access operation is performed
+ * on an empty ICollection object.
+ */
+public class EmptyCollection : System.Exception
+{
+  public msg : string;
+  public this (msg : string) { this.msg = msg; }
+}
+
+public interface ICovariantEnumerator [+T] {
+  MoveNext () : bool;
+  Current : T { get; }
+  Reset () : void;
+}
+
+public interface ICovariantEnumerable [+T] {
+  GetEnumerator () : ICovariantEnumerator [T];
+}
+
+//[Nemerle.Utility.ExtensionPattern ( Nil() = (x when x.IsEmpty) )]
+public interface ICovariantList [+T] {
+  IsEmpty : bool { get; }
+  Head : T { get; }
+  CovariantTail : ICovariantList [T] { get; }
+}
+  
+/**
+ * The collection interface.
+ */
+public interface ICollection ['a] : System.Collections.Generic.ICollection ['a],
+                                    System.Collections.Generic.IEnumerable ['a]
+{
+  /* -- PROPERTIES -------------------------------------------------------- */
+
+  /**
+   * Returns `true' if the collection is empty.
+   */
+  IsEmpty : bool { get; }
+
+  
+  /* -- METHODS ----------------------------------------------------------- */
+  
+  /**
+   * Returns the first of the collection elements, if there is one.
+   * Throws EmptyCollection exception otherwise.
+   */
+  First () : option ['a];
+  
+  /**
+   * Creates a shallow copy of this collection.
+   */
+  Clone () : ICollection ['a];
+
+  /**
+   * Folds the collection using the specified fold function and an initial
+   * value. Order in which the elements are folded is unspecified.
+   */
+  Fold ['b] (f : 'a * 'b -> 'b, x : 'b) : 'b;
+  
+  /**
+   * Maps the supplied function to the elements of this collection,
+   * creating a new collection.
+   */
+  Map ['b] (f : 'a -> 'b) : ICollection ['b];
+  
+  /**
+   * Calls the supplied function for all the elements of this collection.
+   */
+  Iter (f : 'a -> void) : void;
+
+  /**
+   * Checks if all the members of this collection satisfy the supplied
+   * predicate.
+   */
+  ForAll (f : 'a -> bool) : bool;
+  
+  /**
+   * Checks if there exists a member of collection that satisfies
+   * the supplied condition.
+   */
+  Exists (f : 'a -> bool) : bool;
+  
+  /**
+   * Filters the collection removing all elements that do not satisfy
+   * the supplied predicate.
+   */
+  Filter (f : 'a -> bool) : void;
+  
+  /** 
+   * Partitions collection into two collections: elements that satisfy
+   * and elements that do not satisfy the supplied predicate.
+   */
+  Partition (f : 'a -> bool) : ICollection ['a] * ICollection ['a];
+}
+
+// ---- hashtable.n (Nemerle.Collections) ----
+/**
+ * This is a subtype of Generic.Dictionary, which provides some additional
+ *  functional-style methods to its base type.
+ */
+[System.Serializable]
+[System.Runtime.InteropServices.ComVisible(false)]
+[DebuggerDisplay("Count = {Count}: {ToString()}")]
+[DebuggerNonUserCode]
+public class Hashtable [TKey, TValue] : SCG.Dictionary [TKey, TValue]
+  //           , IDictionary [TKey,TValue]
+{
+  /* -- PUBLIC CONSTRUCTORS ---------------------------------------------- */
+
+  /// <summary>Initializes a new instance of the <see cref="T:Nemerle.Collections.Hashtable`2"></see> class that is empty, has the default initial capacity, and uses the default equality comparer for the key type.</summary>
+  public this () { }
+
+  /// <summary>Initializes a new instance of the <see cref="T:Nemerle.Collections.Hashtable`2"></see> class that contains elements copied from the specified <see cref="T:System.Collections.Generic.IDictionary`2"></see> and uses the default equality comparer for the key type.</summary>
+  /// <param name="dictionary">The <see cref="T:System.Collections.Generic.IDictionary`2"></see> whose elements are copied to the new <see cref="T:Nemerle.Collections.Hashtable`2"></see>.</param>
+  /// <exception cref="T:System.ArgumentException">dictionary contains one or more duplicate keys.</exception>
+  /// <exception cref="T:System.ArgumentNullException">dictionary is null.</exception>
+  public this(dictionary : SCG.IDictionary[TKey, TValue]) { base (dictionary) }
+
+  /// <summary>Initializes a new instance of the <see cref="T:Nemerle.Collections.Hashtable`2"></see> class that contains elements copied from the specified <see cref="T:System.Collections.Generic.IEnumerable`1"></see> and uses the default equality comparer for the key type.</summary>
+  /// <param name="dictionary">The <see cref="T:System.Collections.Generic.IEnumerable`1"></see> whose elements are copied to the new <see cref="T:Nemerle.Collections.Hashtable`2"></see>.</param>
+  public this (generator : SC.Generic.IEnumerable [TKey * TValue])
+  {
+    base ();
+    foreach ((key, val) in generator)
+      Add (key, val)
+  }
+
+  /// <summary>Initializes a new instance of the Hashtable[,] class that is empty, has the default 
+  /// initial capacity, and uses the specified <see cref="T:System.Collections.Generic.IEqualityComparer`1"></see>.</summary>
+  /// <param name="comparer">The <see cref="T:System.Collections.Generic.IEqualityComparer`1"></see> implementation to use when comparing keys, or null to use the default <see cref="T:System.Collections.Generic.EqualityComparer`1"></see> for the type of the key.</param>
+  public this(comparer : SCG.IEqualityComparer[TKey]) { base (comparer) }
+
+  /// <summary>Initializes a new instance of the <see cref="T:Nemerle.Collections.Hashtable`2"></see> class that is empty, has the specified initial capacity, and uses the default equality comparer for the key type.</summary>
+  /// <param name="capacity">The initial number of elements that the <see cref="T:Nemerle.Collections.Hashtable`2"></see> can contain.</param>
+  /// <exception cref="T:System.ArgumentOutOfRangeException">capacity is less than 0.</exception>
+  public this (capacity : int) { base (capacity); }
+
+  /// <summary>Initializes a new instance of the <see cref="T:Nemerle.Collections.Hashtable`2"></see> class that contains elements copied from the specified <see cref="T:System.Collections.Generic.IDictionary`2"></see> and uses the specified <see cref="T:System.Collections.Generic.IEqualityComparer`1"></see>.</summary>
+  /// <param name="dictionary">The <see cref="T:System.Collections.Generic.IDictionary`2"></see> whose elements are copied to the new <see cref="T:Nemerle.Collections.Hashtable`2"></see>.</param>
+  /// <param name="comparer">The <see cref="T:System.Collections.Generic.IEqualityComparer`1"></see> implementation to use when comparing keys, or null to use the default <see cref="T:System.Collections.Generic.EqualityComparer`1"></see> for the type of the key.</param>
+  /// <exception cref="T:System.ArgumentException">dictionary contains one or more duplicate keys.</exception>
+  /// <exception cref="T:System.ArgumentNullException">dictionary is null.</exception>
+  public this(dictionary : SCG.IDictionary[TKey, TValue], comparer : SCG.IEqualityComparer[TKey])
+  {
+    base (dictionary, comparer)
+  }
+
+  /// <summary>Initializes a new instance of the <see cref="T:Nemerle.Collections.Hashtable`2"></see> class that is empty, has the specified initial capacity, and uses the specified <see cref="T:System.Collections.Generic.IEqualityComparer`1"></see>.</summary>
+  /// <param name="capacity">The initial number of elements that the <see cref="T:Nemerle.Collections.Hashtable`2"></see> can contain.</param>
+  /// <param name="comparer">The <see cref="T:System.Collections.Generic.IEqualityComparer`1"></see> implementation to use when comparing keys, or null to use the default <see cref="T:System.Collections.Generic.EqualityComparer`1"></see> for the type of the key.</param>
+  /// <exception cref="T:System.ArgumentOutOfRangeException">capacity is less than 0.</exception>
+  public this(capacity : int, comparer : SCG.IEqualityComparer[TKey])
+  {
+    base (capacity, comparer)
+  }
+
+  /* -- SERIALIZATION CONSTRUCTOR ---------------------------------------------- */
+
+  /// <summary>Initializes a new instance of the <see cref="T:System.Collections.Generic.Dictionary`2"></see> class with serialized data.</summary>
+  /// <param name="context">A <see cref="T:System.Runtime.Serialization.StreamingContext"></see> structure containing the source and destination of the serialized stream associated with the <see cref="T:System.Collections.Generic.Dictionary`2"></see>.</param>
+  /// <param name="info">A <see cref="T:System.Runtime.Serialization.SerializationInfo"></see> object containing the information required to serialize the <see cref="T:System.Collections.Generic.Dictionary`2"></see>.</param>
+  protected this (info : SerializationInfo, context :  StreamingContext)
+  {
+    base(info, context);
+  }
+
+  /* -- PUBLIC METHODS --------------------------------------------------- */
+      
+  /**
+   * Returns an optional value associated with the specified key.
+   */
+  public Get (key : TKey) : option [TValue]
+  {
+    mutable value;
+    
+    if (TryGetValue (key, out value))
+      Some (value)
+    else
+      None ()
+  }
+      
+  public TryGetValue(key : TKey) : TValue * bool
+  {
+    mutable value;
+    
+    if (TryGetValue (key, out value))
+      (value, true)
+    else
+      (value, false)
+  }
+
+  /**
+   * Returns value associated with the specified key or default value (null for 
+   * referece type and result of parameterless constractor for value type).
+   */
+  public GetValueOrDefault (key : TKey) : TValue
+  {
+    mutable value;
+    
+    ignore (TryGetValue (key, out value));
+    
+    value
+  }    
+  
+  /**
+   * Returns value associated with the specified key or defaultValue.
+   */
+  public GetValueOrDefault (key : TKey, defaultValue : TValue) : TValue
+  {
+    mutable value;
+    
+    if (TryGetValue (key, out value))
+      value
+    else
+      defaultValue
+  }
+  
+  /**
+   * Returns value associated with the specified key or result of call getDefaultValue().
+   * The getDefaultValue() called only if key not exists in collection.
+   */
+  public GetValueOrGetDefault (key : TKey, getDefaultValue : void -> TValue) : TValue
+  {
+    mutable value;
+    
+    if (TryGetValue (key, out value))
+      value
+    else
+      getDefaultValue()
+  }
+  
+  /**
+   * Returns value associated with the specified key or new value.
+   * The new value obtain by call getNewValue(). The new value add 
+   * to collection before return to caller.
+   * The getNewValue() called only if key not exists in collection.
+   * Example:
+   * def map = Hashtable();
+   * Console.WriteLine(map.GetValue("1", () => 1)); // Write "1"
+   * Console.WriteLine(map.GetValue("1", () => 2)); // Write "1"
+   * Console.WriteLine(map["1"]);                   // Write "1"
+   */
+  public GetValue (key : TKey, getNewValue : void -> TValue) : TValue
+  {
+    mutable value;
+    
+    if (TryGetValue (key, out value))
+      value
+    else
+    {
+      value = getNewValue();
+      Add(key, value);
+      value
+    }
+  }
+  
+  /**
+   * This is different from add, which can fail if the key is
+   * already in the underlying Framework hashtable.
+   */
+  public Set (key : TKey, val : TValue) : void
+  {
+    this [key] = val;
+  }
+
+  /**
+   * Updates value associated with the specified key.
+   * If key not exists defaultValue used instead.
+   */
+  public Update (key : TKey, defaultValue : TValue, updateFn : TValue -> TValue) : Hashtable [TKey, TValue]
+  {
+    mutable value;
+
+    unless (TryGetValue (key, out value))
+      value = defaultValue;
+
+    this[key] = updateFn(value);
+
+    this;
+  }
+
+  public Update (key : TKey, newValue : void -> TValue, updateFn : TValue -> TValue) : Hashtable [TKey, TValue]
+  {
+    mutable value;
+
+    unless (TryGetValue (key, out value))
+      value = newValue();
+
+    this[key] = updateFn(value);
+
+    this;
+  }
+
+  
+  /**
+   * Clones this hashtable.
+   */
+  public Clone () : Hashtable [TKey,TValue]
+  {
+    Hashtable (this)
+  }
+
+
+  
+  /**
+   * Returns `true' if the hashtable contains the specified key.
+   *
+   * NOTE: this is the same as ContainsKey.
+   */
+  public Contains (key : TKey) : bool
+  {
+    ContainsKey (key)
+  }
+
+  
+  /**
+   * Folds a function over the key/value pairs.
+   */
+  public Fold ['c] (s : 'c, f : (TKey * TValue * 'c) -> 'c) : 'c 
+  {
+    mutable acc = s;
+    
+    foreach (x in this)
+      acc = f (x.Key, x.Value, acc);
+      
+    acc
+  }
+
+  
+  /**
+   * Iterates a function over the key/value pairs in the hashtable.
+   */
+  public Iter (f : TKey * TValue -> void) : void
+  {
+    foreach (x in this)
+      f (x.Key, x.Value)
+  }
+
+  
+  /**
+   * Maps a given function defined of key-value pairs to the contents
+   * of this hashtable. A new hashtable object is created, containing
+   * the results of the application.
+   */
+  public Map ['c, 'd] (f : TKey * TValue -> 'c * 'd) : Hashtable ['c,'d]
+  {
+    def ht = Hashtable (Count);
+
+    foreach (x in this)
+    {
+      def (k, v) = f (x.Key, x.Value);
+      
+      ht.Add (k, v)
+    }
+    
+    ht
+  }
+
+  /**
+   * Removes elements for which predicate is false
+   */
+  public Filter (f : TKey * TValue -> bool) : Hashtable [TKey, TValue]
+  {
+    def ht = Hashtable ();
+
+    foreach (x in this)
+    when (f (x.Key, x.Value))
+      ht.Add (x.Key, x.Value);
+
+    ht
+  }
+
+  public new Remove (key : TKey) : void
+  {
+    _ = base.Remove (key)
+  }
+
+
+  /**
+   * Returns a collection of the key/value pairs from this hashtable
+   */
+  [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+  public KeyValuePairs : array [TKey * TValue]
+  {
+    get
+    {
+      def result = array(Count);
+      mutable i = 0;
+
+      foreach (kv in this)
+      {
+        result[i] = (kv.Key, kv.Value);
+        i++;
+      }
+
+      result
+    }
+  }
+
+  internal static better_to_string (x : object) : string {
+      match (x) {
+        | str is string => "\"" + str + "\""
+        | ch is char    => "'" + ch.ToString () + "'"
+        | null          => "<null>"
+        | _             => x.ToString ()
+      }
+  }
+      
+  public override ToString () : string
+  {
+    def sb = System.Text.StringBuilder ("{");
+    foreach (x in this) {
+      _ = sb.Append (better_to_string (x.Key));
+      _ = sb.Append (": ");
+      _ = sb.Append (better_to_string (x.Value));
+      _ = sb.Append (", ");
+    }
+    // cut the last ', ' if it exists
+    when (sb.Length > 1)
+      sb.Length = sb.Length - 2;
+    _ = sb.Append ('}');
+    sb.ToString ()
+  }
+} /* end of class Hashtable (TKey,TValue) */
+
+// ---- HashSetEx.n (Nemerle.Collections) ----
+[System.Serializable]
+[System.Runtime.InteropServices.ComVisible(false)]
+[DebuggerDisplay("Count = {Count}: {ToString()}")]
+[DebuggerNonUserCode]
+public class HashSetEx[T] : IEnumerable[T]
+{
+  _hashtable : Hashtable[T, T] = Hashtable();
+
+  [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+  public Items : Dictionary[T, T].KeyCollection { get { _hashtable.Keys } }
+
+  public IsEmpty : bool { get { _hashtable.Count == 0 } }
+  public Count   : int  { get { _hashtable.Count } }
+
+  public Contains(item : T) : bool
+  {
+    _hashtable.ContainsKey(item)
+  }
+
+  public Add(mutable item : T) : bool
+  {
+    AddOrGetFirstAddedItem(ref item)
+  }
+
+  /// <summary>
+  /// Return true if new item.
+  /// Return false and replace with old item otherwise.
+  /// </summary>
+  public AddOrGetFirstAddedItem(item : ref T) : bool
+  {
+    mutable oldKey;
+    if (_hashtable.TryGetValue(item, out oldKey))
+    {
+      item = oldKey;
+      false;
+    }
+    else
+    {
+      _hashtable.Add(item, item);
+      true;
+    }
+  }
+
+  public TryGetFirstAddedItem(item : T, oldItem : out T) : bool
+  {
+    _hashtable.TryGetValue(item, out oldItem)
+  }
+
+  public GetEnumerator() : IEnumerator[T]
+  {
+    _hashtable.Keys.GetEnumerator()
+  }
+}
+
+// ---- heap.n (Nemerle.Collections) ----
+  /**
+   * A handy shortcut for the EmptyCollection exception.
+   */
+  public class EmptyHeap : EmptyCollection
+  {
+    public this () { base ("Nemerle.Collections.Heap") }
+  }
+
+  /**
+   * General usage heap, can be used as priority queue.
+   */
+  public class Heap[T] : SCG.ICollection[T]
+  {
+    /* -- PUBLIC CONSTRUCTORS ----------------------------------------------- */
+
+    /** 
+     * Creates new heap that will initialy contain elements from array a.
+     * All the elements are copied into the heap, so later modifications of a
+     * do not influence the heap. This operation takes time O(n), where n 
+     * is the number of elements in array a.
+     */
+    public this(a : array[T])
+    {
+      this(a, NemerleCollectionsComparer.Comparer.Default)
+    }
+
+    public this(a : array[T], comparison : T * T -> int)
+    {
+      m_comparison = comparison;
+      m_elements_count = a.Length;
+      m_heap = array (a.Length + 1);
+      a.CopyTo (m_heap, 1);
+      build_heap ();
+    }
+
+    /**
+     * Creates new heap initially filled with elements from given collection
+     */
+    public this(coll : Seq[T])
+    {
+      this(coll, NemerleCollectionsComparer.Comparer.Default)
+    }
+
+	  public this(coll : Seq[T], comparison : T * T -> int)
+    {
+      m_comparison = comparison;
+      m_elements_count = 0;
+      m_heap = array (10);
+
+      foreach (x in coll)
+      {
+        when (m_elements_count >= m_heap.Length - 1)
+          grow ();
+        m_elements_count++;
+        m_heap [m_elements_count] = x;
+      }
+
+      build_heap ();
+    }
+
+    /**
+     * Creates a new empty heap with given initial capacity.
+     */
+    public this(capacity : int)
+    {
+      this(capacity, NemerleCollectionsComparer.Comparer.Default)
+    }
+
+    public this(capacity : int, comparison : T * T -> int)
+    {
+      m_comparison = comparison;
+      def capacity = if (capacity >= 10) capacity else 10;
+
+      m_heap = array (capacity + 1);
+      m_elements_count = 0
+    }
+    
+    /* -- PRIVATE CONSTRUCTORS ---------------------------------------------- */
+    
+    /** 
+     * Private constructor, do not use from outside this class.
+     */
+    private this (heap : array[T], count : int, comparison : T * T -> int)
+    {
+      m_comparison = comparison;
+      m_heap = heap;
+      m_elements_count = count;
+      build_heap();
+    }
+
+    /* -- PUBLIC PROPERTIES ------------------------------------------------- */
+    
+    /**
+     * Checks if the heap is empty.
+     */
+    public IsEmpty : bool
+    {
+      get { m_elements_count == 0 }
+    }
+
+    
+    /**
+     * Returns number of elements in the heap.
+     */
+    public Count : int
+    {
+      get { m_elements_count }
+    }
+
+    /**
+     * Returns the number of elements that this heap can store
+     * without the need to grow.
+     */
+    public CurrentCapacity : int
+    {
+      get { m_heap.Length - 1 }
+    }
+
+    /**
+     * Returns false.
+     */ 
+    public IsReadOnly : bool
+    {
+      get { false } 
+    }
+    
+    /**
+     * Returns the number of elements that this heap can store
+     * without the need to grow.
+     */
+    public Capacity : int
+    {
+      get { m_heap.Length - 1 }
+    }
+
+    /* -- PUBLIC METHODS ---------------------------------------------------- */
+    
+    /**
+     * Inserts a new element into the heap.
+     */
+    public Insert (x : T) : void
+    {
+      when (m_elements_count >= m_heap.Length - 1)
+        grow ();
+
+      ++m_elements_count;
+      
+      mutable i = m_elements_count;      
+      while (i > 1 && m_comparison(x, m_heap [parent (i)]) > 0)
+      {
+        m_heap [i] = m_heap [parent (i)];
+        i = parent (i)
+      }
+      
+      m_heap [i] = x
+    }
+
+    /*
+     * Adds element to heap. Alist for Insert method.
+     */
+    public Add (x : T) : void
+    {
+      Insert (x)
+    }
+    
+    /**
+     * Count is set to 0, and references to other objects from elements of the collection are also released.
+     *
+     * Capacity remains unchanged.
+     */
+    public Clear () : void
+    {
+      System.Array.Clear (m_heap, 1, m_elements_count);
+      m_elements_count = 0;
+    }
+    
+    /**
+     * Returns the first (with maximal priority) element from the heap
+     * without removing it. Throws EmptyHeap exception.
+     */
+    public Top () : T
+    {
+      if (m_elements_count == 0)
+        throw EmptyHeap ()
+      else 
+        m_heap [1]
+    }
+
+    
+    /**
+     * Returns the first (with maximal priority) element from the heap,
+     * removing it. Throws EmptyHeap exception.
+     */
+    public ExtractFirst () : T
+    {
+      if (m_elements_count < 1)
+        throw EmptyHeap ()
+      else
+      {
+        // FIXME: get rid of `result' -- use <--> instead
+        def result = m_heap [1];
+        m_heap [1] = m_heap [m_elements_count];
+        --m_elements_count;
+        heapify (1);
+        result
+      } 
+    }
+
+    /**
+     * Copies elements from heap to given array, starting at specified index in target array
+     */
+    public CopyTo (to : array [T], mutable startIdx : int) : void
+    {
+      startIdx--; // because i is 1-based
+      for (mutable i = 1; i <= m_elements_count; i++)
+        to [startIdx + i] = m_heap [i];
+    }
+    
+    /**
+     * Checks if given value is contained in heap. This is O(n) operation in worst case.
+     */ 
+    public Contains (x : T) : bool
+    {
+      System.Array.IndexOf (m_heap, x, 1) != -1
+    }
+    
+    /**
+     * Creates new heap of elements of type 'b. New heap is totally independent, i.e.
+     * any changes in original heap do not influence the second one and vice versa.
+     */
+    public Map[B](f : T -> B) : Heap[B]
+    {
+      Map(f, NemerleCollectionsComparer.Comparer.Default)
+    }
+
+    public Map[B](f : T -> B, comparison : B * B -> int) : Heap[B]
+    {
+      def newHeapArray = array (m_heap.Length + 1);
+      
+      for (mutable i = 1; i <= m_elements_count; ++i)
+        newHeapArray[i] = f(m_heap[i]);
+
+      Heap(newHeapArray, m_elements_count, comparison)
+    }
+
+    /**
+     * Calls the specified function for all elements of this heap.
+     */
+    public Iter (f : T -> void) : void 
+    {
+      for (mutable i = 1; i <= m_elements_count; ++i)
+        f (m_heap [i])
+    }
+
+    
+    /**
+     * Folds this heap's elements using the specified function
+     * and an initial value.
+     */
+    public Fold ['b] (f : ('b * T) -> 'b, x : 'b) : 'b
+    {
+      mutable v = x;
+      for (mutable i = 1; i <= m_elements_count; ++i)
+        v = f (v, m_heap [i]);
+      v  
+    }
+
+    public GetEnumerator () : SCG.IEnumerator [T]
+    {
+      for (mutable i = 1; i <= m_elements_count; i++)
+        yield m_heap [i];
+    }
+    
+    /* HIDDED INTERFACE IMPLEMENTATION */
+    
+    private Remove (_ : T) : bool implements SCG.ICollection[T].Remove
+    {
+      throw System.NotSupportedException ("remove operation is not supported by heap class");
+    }
+
+    /* -- PRIVATE METHODS --------------------------------------------------- */
+    
+    /**
+     * Grows the table that is used to store heap elements
+     * multiplying size by 2.
+     */
+    private grow () : void
+    {
+      def newSize = 2 * m_heap.Length;
+      def newHeap = array (newSize + 1);
+
+      m_heap.CopyTo (newHeap, 0);
+
+      m_heap = newHeap
+    }
+
+    
+    /**
+     * Checks if the element at index k is greater than the element at index l.
+     */
+    private is_greater (k : int, l : int) : bool
+    {
+      m_comparison(m_heap[k], m_heap [l]) > 0
+    }
+
+
+    /**
+     * Calculates the index of the parent of element at index i.
+     */
+    private static parent (i : int) : int
+    {
+      i >> 1
+    }
+
+    
+    /**
+     * Calculates the index of the left child of element at index i.
+     */
+    private static left (i : int) : int
+    {
+      i << 1
+    }
+
+    
+    /**
+     * Calculates the index of the right child of element at index i.
+     */
+    private static right (i : int) : int
+    {
+      2 * i + 1
+    }
+
+    /**
+     * Repairs the heap structure starting from element at index i, moving down.
+     * For explanations see Cormen, Leiserson, Rivest "Introduction to algorithms".
+     */
+    private heapify (i : int) : void
+    {
+      def l = left (i);
+      def r = right (i);
+      mutable largest = 0;
+      
+      if (l <= m_elements_count && is_greater (l, i)) 
+        largest = l
+      else
+        largest = i;
+        
+      when (r <= m_elements_count && is_greater (r, largest))
+        largest = r;
+        
+      when (largest != i)
+      {
+        m_heap [i] <-> m_heap [largest];
+        heapify (largest)
+      }
+    }
+
+    
+    /**
+     * Builds the heap from elements stored in the m_heap array. 
+     * This is done in time O (m_heap.Length).
+     */
+    private build_heap () : void
+    {
+      for (mutable i = m_elements_count / 2; i >= 1; --i)
+        heapify(i)
+    }
+    
+    public RebuildHeap () : void
+    {
+      build_heap();
+    }
+    
+    
+    /* -- PRIVATE FIELDS ---------------------------------------------------- */
+
+    private m_comparison : T * T -> int;
+
+    /**
+     * An array that stores the heap, elements are stored in heap[1]..heap[count]
+     */
+    private mutable m_heap : array [T];
+     
+    /**
+     * The number of the elements that are in the heap right now
+     */
+    private mutable m_elements_count : int;
+  }
+
+// ---- LightList.n (Nemerle.Collections) ----
+public struct LightList[T]
+{
+  private mutable _data : SCG.List[T];
+  private mutable _firstItem : T;
+  private mutable _hasFirstItem : bool;
+
+  public FirstItem : T { get _firstItem }
+
+  private Init() : void
+  {
+    when (_data == null)
+    {
+      _data = SCG.List();
+      when (_hasFirstItem)
+        _data.Add(_firstItem);
+    }
+  }
+
+  public Count : int
+  {
+    get
+    {
+      if (_data != null)
+        _data.Count
+      else if (_hasFirstItem)
+        1
+      else
+        0
+    }
+  }
+
+  public Add(item : T) : void
+  {
+    if (_hasFirstItem)
+    {
+      Init();
+      _data.Add(item);
+    }
+    else
+    {
+      _hasFirstItem = true;
+      _firstItem = item;
+    }
+  }
+
+  public AddRange(items : SCG.IEnumerable[T]) : void
+  {
+    Init();
+    _data.AddRange(items);
+  }
+
+  public Item[index : int] : T
+  {
+    get
+    {
+      if (index == 0 && _hasFirstItem)
+        _firstItem
+      else
+      {
+        assert(_data != null, "Index out of range");
+        _data[index]
+      }
+    }
+  }
+
+  public ToList() : SCG.List[T]
+  {
+    Init();
+    _data
+  }
+
+  public ToArray() : array[T]
+  {
+    if (_data != null)
+      _data.ToArray()
+    else if (_hasFirstItem)
+      array[_firstItem]
+    else
+      array(0)
+  }
+
+  public ToNList() : list[T]
+  {
+    if (_data != null)
+      _data.ToNList()
+    else if (_hasFirstItem)
+      [_firstItem]
+    else
+      []
+  }
+
+  public struct Enumerator
+  {
+    private _list : LightList[T];
+    private mutable _i : int;
+    public this(list : LightList[T])
+    {
+      _list = list;
+      _i = -1;
+    }
+
+    public Current : T { get; private set; }
+
+    public MoveNext() : bool
+    {
+      ++_i;
+      if (_i == 0 && _list._hasFirstItem)
+      {
+        Current = _list._firstItem;
+        true;
+      }
+      else if (_list._data != null)
+      {
+        if (_i < _list._data.Count)
+        {
+          Current = _list._data[_i];
+          true;
+        }
+        else
+          false;
+      }
+      else
+        false
+    }
+
+    public Reset() : void
+    {
+      _i = -1;
+    }
+  }
+
+  public GetEnumerator() : Enumerator
+  {
+    Enumerator(this)
+  }
+}
+
+// ---- linkedlist.n (Nemerle.Collections) ----
+/**
+ *  Doubly linked mutable list.
+ *
+ *  Insert and Remove operations on this list require constant time irrespective of whether it is
+ *  a single item or another LinkedList object, that is added. 
+ */
+public class LinkedList ['a] : System.Collections.Generic.LinkedList['a],
+  ICollection['a],
+  System.IEquatable[LinkedList['a]]
+{
+  public this () {
+    base ()
+  }
+  
+  /** Constructor initiliasing object with contents of a Nemerle list. */
+  public this (some_list : list ['a])
+  {
+    unless (some_list == null)
+      foreach (item in some_list) 
+        _ = AddLast (item);
+  }
+
+  concat_helper (separator : string, sb : System.Text.StringBuilder) : void
+  {
+    unless (IsEmpty) {
+      def e = GetEnumerator ();
+      _ = e.MoveNext ();
+      _ = sb.Append (e.Current);
+      while (e.MoveNext ()) {
+        _ = sb.Append (separator);
+        _ = sb.Append (e.Current);
+      }
+    }
+  }
+
+  /** Returns string representing contents of the list. */
+  public override ToString () : string
+  {
+    def sb = System.Text.StringBuilder ("[");
+    concat_helper (", ", sb);
+    sb.Append ("]").ToString ();
+  }
+
+  /** Constructs string out of list contents using given argument as a separator.
+    * <param name="separator">String to use a separator - it will be put between each
+    *  two items of the list.</param>
+    */
+  public ToString (separator : string) : string
+  {
+    def sb = System.Text.StringBuilder ();
+    concat_helper (separator, sb);
+    sb.ToString ();
+  }        
+
+  /** Compares two lists item by item using Equals method of contained objects. */
+  [Nemerle.OverrideObjectEquals]
+  public Equals (another_list : LinkedList ['a]) : bool
+    implements System.IEquatable[LinkedList['a]].Equals
+  {
+    def e = GetEnumerator ();
+    def f = another_list.GetEnumerator ();
+
+    def compare () : bool {
+      def rete = e.MoveNext ();
+      def retf = f.MoveNext ();
+      if (rete != retf)
+        false;
+      else
+        if (rete == true) // there is something to compare
+          if (e.Current.Equals (f.Current))
+            compare ();
+          else
+            false;
+        else // everything has been compared
+          true;
+    }
+
+    compare ();      
+  }
+
+  /** Reverses elements of the list. Complexity is O(n). */
+  public Reverse () : void
+  {
+    unless (IsEmpty) {
+      mutable current = Last.Previous;
+      while (current != null) {
+        _ = AddLast (current.Value);
+        def prev = current.Previous;
+        Remove (current);
+        current = prev;
+      }
+    }
+  }
+
+  /** Adds item at the beginning of the list. */
+  public Prepend (item : 'a) : void
+  {
+    _ = AddFirst (item)
+  }
+
+  /** Add given list at the beginning. The source will be cleared. */
+  public Prepend ([NotNull] l : LinkedList ['a]) : void
+  {
+    unless (l.IsEmpty) {
+      def enu = l.GetEnumerator ();
+      assert(enu.MoveNext ());
+      
+      mutable last_added = AddFirst (enu.Current);
+      while (enu.MoveNext ()) {
+        last_added = AddAfter (last_added, enu.Current);
+      }
+    }
+  }
+
+  /** Append item to the list. */
+  public Append (item : 'a) : void
+  {
+    _ = AddLast (item)
+  }
+
+  /** Append another list to an end. The source list will be cleared. */
+  public Append ([NotNull] l : LinkedList ['a]) : void
+  {
+    foreach (x in l)
+      _ = AddLast (x);
+  }
+
+  // Now the ICollection['a] interface implementation
+
+
+  /** Returns true, if the list is empty. */
+  public IsEmpty : bool
+  {
+    get { Count == 0 }
+  }
+
+  /** Adds item at the beginning of the list. */
+  public Add (item : 'a) : void
+  {
+    _ = AddFirst (item);
+  }
+
+  /** Returns first element of the list as an option. */
+  public new First () : option ['a]
+  {
+    match (base.First) {
+      | null => None ()
+      | node => Some (node.Value)
+    }
+  }
+
+  /** Returns shallow copy of the list. */
+  public Clone () : ICollection ['a]
+  {
+    def l = LinkedList ();
+    foreach (item in this)
+      l.Append (item);
+    l;
+  }
+
+  /**
+   * Folds the list using the specified fold function and an initial
+   * value. Elements are folded in order of appearance.
+   */
+  public Fold ['b] (f : 'a * 'b -> 'b, x : 'b) : 'b
+  {
+    mutable retval = x;
+    foreach (item in this)
+      retval = f (item, retval);
+    retval;
+  }
+
+  /**
+   * Creates new list with elements from the original with supplied
+   * function applied.
+   */
+  public Map ['b] (f : 'a -> 'b) : ICollection ['b]
+  {
+    def l = LinkedList();
+    foreach (item in this)
+      l.Append (f (item));
+    l;
+  }
+
+  /**
+   * Calls the supplied function for all the elements of the list.
+   */
+  public Iter (f : 'a -> void) : void
+  {
+    foreach (item in this)
+      f (item);
+  }
+
+  /**
+   * Checks if all the members of this list satisfy the supplied
+   * predicate.
+   */
+  public ForAll (f : 'a -> bool) : bool
+  {
+    def e = GetEnumerator ();
+    def check () : bool {
+      if (e.MoveNext())
+        if (f (e.Current))
+          check ();
+        else
+          false;
+      else
+        true;
+    }
+    check ();
+  }
+
+  /**
+   * Checks if there exists a member of list that satisfies
+   * the supplied condition.
+   */
+  public Exists (f : 'a -> bool) : bool
+  {
+    def e = GetEnumerator ();
+    def check () : bool {
+      if (e.MoveNext())
+        if (f (e.Current))
+          true;
+        else
+          check ();
+      else
+        false;
+    }
+    check ();
+  }
+
+  /**
+   * Filters the list removing all elements that do not satisfy
+   * the supplied predicate.
+   */
+  public Filter (f : 'a -> bool) : void
+  {
+    unless (IsEmpty) {
+      mutable current = base.First;
+      while (current != null) {
+        def next = current.Next;
+        unless (f (current.Value))
+          Remove (current);
+        current = next;
+      }
+    }
+  }
+
+
+  /** 
+   * Partitions list into two lists: elements that satisfy
+   * and elements that do not satisfy the supplied predicate.
+   */
+  public Partition (f : 'a -> bool) : ICollection ['a] * ICollection ['a]
+  {
+    def does = LinkedList ();
+    def donot = LinkedList ();
+    foreach (item in this)
+      if (f (item))
+        does.Append (item);
+      else
+        donot.Append (item);
+    (does, donot);
+  }
+
+  /** Remove all occurences of item from list */
+  public new Remove (item : 'a) : void {
+    while (base.Remove (item)) { }
+  }
+} // LinkedList
+
+// ---- listenumerator.n (Nemerle.Collections) ----
+/// The state of a list enumerator.
+internal enum ListEnumState
+{
+  | BeforeFirst
+  | Correct
+  | AfterLast
+}
+
+
+/// An enumerator for lists.
+public struct ListEnumerator[T] : System.Collections.Generic.IEnumerator[T], ICovariantEnumerator[T]
+{
+  // -- PUBLIC CONSTRUCTORS -----------------------------------------------
+
+  public this(@list : list[T]) 
+  {
+    _list  = @list;
+
+    Reset()
+  }
+
+  Dispose() : void implements System.IDisposable.Dispose { }
+
+  DoMove() : bool 
+  {
+    match (_rest)
+    {
+      | hd :: tl => 
+        _current = hd;
+        _rest    = tl;
+        true
+
+      | _ => 
+        _state = ListEnumState.AfterLast;
+        _current = default(T);
+        false
+    }       
+  }
+  
+  /// -- PUBLIC METHODS ----------------------------------------------------
+  
+  public MoveNext() : bool 
+  {
+    match (_state)
+    {
+      | ListEnumState.BeforeFirst =>
+        _state = ListEnumState.Correct;
+        DoMove()
+
+      | ListEnumState.Correct   => DoMove()
+      | ListEnumState.AfterLast => false
+    }
+  }
+
+  public Reset () : void
+  {
+    _rest  = _list;
+    _state = ListEnumState.BeforeFirst;
+  }
+
+
+  /* -- PUBLIC PROPERTIES ------------------------------------------------- */
+  
+  public Current : T  { get { _current } }
+  
+  ObjectCurrent : object implements System.Collections.IEnumerator.Current
+  {
+    get
+    {
+      match (_state)
+      {
+        | ListEnumState.Correct     => _current
+        | ListEnumState.BeforeFirst => throw System.InvalidOperationException("Enumeration has not started.")
+        | ListEnumState.AfterLast   => throw System.InvalidOperationException("Enumeration already finished.")
+      }
+    }
+  }
+  
+
+  /* -- PRIVATE FIELDS ---------------------------------------------------- */
+
+  private mutable _list    : list[T];
+  private mutable _current : T;
+  private mutable _rest    : list[T];
+  private mutable _state   : ListEnumState;
+}
+
+// ---- Map.n (Nemerle.Collections) ----
+[DebuggerDisplay("Count = {Count}: {ToString()}")]
+[DebuggerNonUserCode]
+public class Map[TKey, TValue] : SCG.IEnumerable[TKey * TValue]
+{
+  private struct Node
+  {
+    public Key : TKey;
+    public Value : TValue;
+
+    public this (k : TKey, v : TValue)
+    {
+      this.Key = k; 
+      this.Value = v;
+    }
+
+    public this (k : TKey)
+    {
+      this.Key = k;
+    }
+
+    public override ToString() : string
+    {
+      $"($Key, $Value)"
+    }
+  }
+
+  #region State
+
+  private _tree : TwoThreeTree.Node[Node];
+  private _cmp : Node * Node -> int;
+  private _size : int;
+
+  #endregion
+
+  #region Constructors
+
+  private static MakeNodeComparer(cmp : TKey * TKey -> int) : Node * Node -> int
+  {
+    (x, y) => cmp(x.Key, y.Key)
+  }
+
+  private static DefaultComparer() : Node * Node -> int
+  {
+    MakeNodeComparer(NemerleCollectionsComparer.Comparer[TKey].Default);
+  }
+
+  public this()
+  {
+    this(0, TwoThreeTree.Node.Leaf(), DefaultComparer());
+  }
+
+  public this(cmp : TKey * TKey -> int)
+  {
+    this(0, TwoThreeTree.Node.Leaf(), MakeNodeComparer(cmp));
+  }
+
+  public this(coll : SCG.IEnumerable [TKey * TValue])
+  {
+    this(0, TwoThreeTree.Node.Leaf(), DefaultComparer(), coll)
+  }
+
+  public this(coll : SCG.IEnumerable [TKey * TValue], cmp : TKey * TKey -> int)
+  {
+    this(0, TwoThreeTree.Node.Leaf(), MakeNodeComparer(cmp), coll)
+  }
+
+  private this(mutable size : int, tree : TwoThreeTree.Node[Node], cmp : Node * Node -> int, coll : SCG.IEnumerable[TKey * TValue])
+  {
+    _cmp = cmp;
+    _tree = coll.Fold(tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size) });
+    _size = size;
+  }
+
+  private this(size : int, tree : TwoThreeTree.Node[Node], cmp : Node * Node -> int)
+  {
+    _tree = tree;
+    _cmp = cmp;
+    _size = size;
+  }
+
+  #endregion
+
+  #region Contains
+
+  public Contains(key : TKey) : bool
+  {
+    mutable outNode;
+    _tree.TryGet(Node(key), _cmp, out outNode);
+  }
+
+  #endregion
+
+  public Clear() : Map[TKey, TValue]
+  {
+    Map(0, TwoThreeTree.Node.Leaf(), _cmp);
+  }
+
+  #region Add
+
+  public Add(key : TKey, value : TValue) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = _tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size);
+    Map(size, tree, _cmp);
+  }
+
+  public AddRange(elems : SCG.IEnumerable[TKey * TValue]) : Map[TKey, TValue]
+  {
+    Map(_size, _tree, _cmp, elems)
+  }
+
+  public AddList(elems : list[TKey * TValue]) : Map[TKey, TValue]
+  {
+    AddRange(elems)
+  }
+
+  #endregion
+
+  #region Remove
+
+  public Remove(key : TKey) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = _tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size);
+    Map(size, tree, _cmp);
+  }
+
+  public RemoveRange(elems : SCG.IEnumerable[TKey]) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, fun(key : TKey, tree) { tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size) });
+    Map(size, tree, _cmp);
+  }
+
+  public RemoveList(elems : list[TKey]) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, fun(key : TKey, tree) { tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size) });
+    Map(size, tree, _cmp);
+  }
+
+  #endregion
+
+  #region Replace
+
+  public Replace(key : TKey, value : TValue) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = _tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size);
+    Map(size, tree, _cmp);
+  }
+
+  public ReplaceRange(elems : SCG.IEnumerable[TKey * TValue]) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size) });
+    Map(size, tree, _cmp);
+  }
+
+  public ReplaceList(elems : list[TKey * TValue]) : Map[TKey, TValue]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size) });
+    Map(size, tree, _cmp);
+  }
+
+  #endregion
+
+  #region Fold
+
+  public Fold[TAccumulator](acc : TAccumulator, fn : TKey * TValue * TAccumulator -> TAccumulator) : TAccumulator
+  {
+    _tree.FoldLeft(acc, fun(node, acc) { fn(node.Key, node.Value, acc) });
+  }
+
+  public FoldLeft[TAccumulator](acc : TAccumulator, fn : TKey * TValue * TAccumulator -> TAccumulator) : TAccumulator
+  {
+    _tree.FoldLeft(acc, fun(node, acc) { fn(node.Key, node.Value, acc) });
+  }
+
+  public FoldRight[TAccumulator](acc : TAccumulator, fn : TKey * TValue * TAccumulator -> TAccumulator) : TAccumulator
+  {
+    _tree.FoldRight(acc, fun(node, acc) { fn(node.Key, node.Value, acc) });
+  }
+
+  #endregion
+
+  #region Iter
+
+  public Iter(fn : TKey * TValue -> void) : void
+  {
+    _ = _tree.FoldLeft(null, (node, _) => { fn(node.Key, node.Value); null; })
+  }
+
+  public IterLeft(fn : TKey * TValue -> void) : void
+  {
+    _ = _tree.FoldLeft(null, (node, _) => { fn(node.Key, node.Value); null; })
+  }
+
+  public IterRight(fn : TKey * TValue -> void) : void
+  {
+    _ = _tree.FoldRight(null, (node, _) => { fn(node.Key, node.Value); null; })
+  }
+
+  #endregion
+
+  #region Filter
+
+  public Filter(fn : TKey * TValue -> bool) : Map[TKey, TValue]
+  {
+    def (size, tree) = _tree.Filter(_cmp, node => fn(node.Key, node.Value));
+    Map(size, tree, _cmp);
+  }
+
+  #endregion
+
+  #region Partition
+
+  public Partition(fn : TKey * TValue -> bool) : Map[TKey, TValue] * Map[TKey, TValue]
+  {
+    def (ysize, ytree, nsize, ntree) = _tree.Partition(_cmp, node => fn(node.Key, node.Value));
+    (Map(ysize, ytree, _cmp), Map(nsize, ntree, _cmp));
+  }
+
+  #endregion
+
+  #region ForAll
+
+  public ForAll(fn : TKey * TValue -> bool) : bool
+  {
+    _tree.ForAll(node => fn(node.Key, node.Value));
+  }
+
+  #endregion
+
+  #region Exists
+
+  public Exists(fn : TKey * TValue -> bool) : bool
+  {
+    _tree.Exists(node => fn(node.Key, node.Value));
+  }
+
+  #endregion
+
+  public Find(key : TKey) : option[TValue]
+  {
+    mutable value;
+    if (_tree.TryGet(Node(key), _cmp, out value))
+      Some(value.Value);
+    else
+      None();
+  }
+
+  public Get(key : TKey) : TValue
+  {
+    mutable value;
+    if (_tree.TryGet(Node(key), _cmp, out value))
+      value.Value;
+    else
+    {
+      throw System.ArgumentException("key not found. key=" + key);
+    }
+  }
+
+  public ToList() : list[TKey * TValue]
+  {
+    _tree.MapToList(node => (node.Key, node.Value));
+  }
+
+  public ToArray() : array[TKey * TValue]
+  {
+    _tree.MapToArray(node => (node.Key, node.Value));
+  }
+
+  public MapToList[U](fn : TKey * TValue -> U) : list[U]
+  {
+    _tree.MapToList(node => (fn(node.Key, node.Value)));
+  }
+
+  public MapToArray[U](fn : TKey * TValue -> U) : array[U]
+  {
+    _tree.MapToArray(node => (fn(node.Key, node.Value)));
+  }
+
+  public IsEmpty : bool
+  {
+    get { _size == 0 }
+  }
+
+  #region ICollection
+
+  public GetEnumerator() : SCG.IEnumerator[TKey * TValue]
+  {
+    foreach (elem in _tree.Enumerate())
+      yield (elem.Key, elem.Value)
+  }
+
+  public CopyTo(arr : array[TKey * TValue], mutable arrayIndex : int) : void
+  {
+    def copyOne(value, arrayIndex)
+    {
+      arr[arrayIndex] = (value.Key, value.Value);
+      arrayIndex + 1;
+    }
+    _ = _tree.Fold(arrayIndex, copyOne);
+  }
+
+  public IsReadOnly : bool
+  {
+    get { true }
+  }
+
+  public Count : int
+  {
+    get { _size }
+  }
+  #endregion
+
+  public override ToString() : string
+  {
+    _tree.ToString("Map[", ", ", "]");
+  }
+}
+
+// ---- NemerleCollectionsComparer.n (Nemerle.Collections) ----
+  internal class NemerleCollectionsComparer
+  {
+    public abstract class Comparer[T]
+    {
+      private static default_ : T * T -> int = Create();
+      public static Default : T * T -> int
+      {
+        get
+        {
+          if (default_ == null)
+          {
+            throw ArgumentException($"Type $(typeof(T).FullName) must implement System.IComparable[$(typeof(T).FullName)].");
+          }
+          else
+          {
+            default_;
+          }
+        }
+      }
+
+      public abstract CreateImpl() : T * T -> int;
+
+      private static Create() : T * T -> int
+      {
+        def create(comparerType, comparableType)
+        {
+          def comparerType = comparerType.GetGenericTypeDefinition().MakeGenericType(array[comparableType]);
+          def creator = Activator.CreateInstance(comparerType) :> Comparer[T];
+          creator.CreateImpl();
+        }
+        match (typeof(T))
+        {
+        | comparableType when typeof(IComparable[T]).IsAssignableFrom(comparableType) =>
+          create(typeof(GenericComparer[int]), comparableType);
+        | _ => null;
+        }
+      }
+    }
+
+    private class GenericComparer[T] : Comparer[T]
+      where T : IComparable[T]
+    {
+      public override CreateImpl() : T * T -> int
+      {
+        _.CompareTo(_)
+      }
+    }
+/*
+    private class NullableComparer[T] : Comparer[T?]
+      where T : struct
+    {
+      private _cmp : T * T -> int = NemerleCollectionsComparer.Comparer.Default;
+      protected override CreateImpl() : T? * T? -> int
+      {
+        fun(x, y)
+        {
+          if (x.HasValue)
+          {
+            if (y.HasValue)
+            {
+              _cmp(x.Value, y.Value);
+            }
+            else
+            {
+              1;
+            }
+          }
+          else
+          {
+            if (y.HasValue)
+            {
+              -1;
+            }
+            else
+            {
+              0;
+            }
+          }
+        }
+      }
+    }
+*/
+  }
+
+// ---- queue.n (Nemerle.Collections) ----
+ 
+/**
+ * Class representing first-in-first-out queue.
+ */
+public class Queue ['a] : System.Collections.Generic.Queue ['a]
+{
+  /* -- PUBLIC CONSTRUCTORS ----------------------------------------------- */
+  
+  /** Create a new empty queue. */
+  public this () {  base ();  }
+
+  public this (size : int) { base (size) }
+
+  public this (enu : System.Collections.Generic.IEnumerable ['a]) { base (enu) }
+  
+
+  /* -- PUBLIC PROPERTIES ------------------------------------------------- */
+
+  /**
+   * Return `true` iff the queue is empty.
+   */
+  public IsEmpty : bool
+  {
+    get { Count == 0 }
+  }
+
+  
+  /**
+   * Alias for Count.
+   */
+  public Length : int
+  { 
+    get { Count }
+  }
+
+  
+  /* -- PUBLIC METHODS ---------------------------------------------------- */
+
+  /**
+   * Alias for Enqueue.
+   */
+  public Push (x : 'a) : void
+  {
+    Enqueue (x)
+  }
+
+
+  /**
+   * Alias for Enqueue.
+   */
+  public Add (x : 'a) : void
+  {
+    Enqueue (x);
+  }
+   
+  /**
+   * Return the first element of the queue and remove it.
+   */
+  public Take () : 'a
+  {
+    Dequeue ()
+  }
+
+
+  /**
+   * Alias for Take.
+   */
+  public Pop () : 'a
+  {
+    Dequeue ()
+  }
+
+
+
+  /**
+   * Alias for Peek.
+   */
+  public Top () : 'a
+  {
+    Peek ()
+  }
+
+
+  /** 
+   * Return some element from the queue, implements ICollection.First.
+   */
+  public First () : option ['a]
+  {
+    if (Count > 0)
+      Some (Peek ())
+    else
+      None ()
+  }
+
+
+  /**
+   * Create a shallow copy of the queue.
+   */
+  public Clone () : Queue ['a]
+  {
+    Queue (this)
+  }
+
+  
+  /**
+   * Call supplied function for every element of the queue.
+   */
+  public Iter (f : 'a -> void) : void
+  {
+    foreach (x in this)
+      f (x)
+  }
+      
+  
+  /**
+   * Fold elements of the queue with supplied function and initial
+   * value.
+   */
+  public Fold['b] (f : 'a * 'b -> 'b, mutable x : 'b) : 'b
+  {
+    foreach (el in this)
+      x = f (el, x);
+    x
+  }
+
+
+  /**
+   * Transfer all elements of the queue q to the end of this queue.
+   */
+  public Transfer (q : Queue['a]) : void
+  {
+    Clear ();
+    foreach (x in q)
+      Push (x)
+  }
+
+
+  /**
+   * Return `true' iff every element of the queue satisfy predicate f.
+   */
+  public ForAll (f : 'a -> bool) : bool
+  {
+    ret: {
+      foreach (x in this)
+        unless (f (x))
+          ret (false);
+      true
+    }
+  }
+
+        
+  /**
+   * Return true iff the queue contains an element that
+   * satisfies predicate f.
+   */
+  public Exists (f : 'a -> bool) : bool
+  {
+    ret: {
+      foreach (x in this)
+        when (f (x))
+          ret (true);
+      false
+    }
+  }
+
+
+  /**
+   * Remove from queue every element that does not satisfy
+   * predicate f.
+   */
+  public Filter (f : 'a -> bool) : void
+  {
+    def temp = ToArray ();
+    Clear ();
+    for (mutable i = 0; i < temp.Length; i++)
+      when (f (temp [i]))
+        Push (temp [i]);
+  }
+
+
+  /**
+   * Map queue to a new queue using mapping f.
+   */
+  public Map ['b] (f : 'a -> 'b) : Queue ['b]
+  {
+    def mapped = array (Count);
+    mutable i = 0;
+    foreach (x in this) {
+      mapped [i] = f (x);
+      i++;
+    }
+    def result = Queue (mapped.Length);
+    for (i = 0; i < mapped.Length; i++)
+      result.Push (mapped [i]);
+    result
+  }
+
+
+  /**
+   * Partition the queue into two queues: first with elements
+   * that satisfy predicate f, second with the rest.
+   */
+  public Partition (f : 'a -> bool) : Queue ['a] * Queue ['a]
+  {
+    def sat        = Queue ();
+    def nonsat     = Queue ();
+
+    foreach (x in this)
+      if (f (x))
+        sat.Push (x)
+      else
+        nonsat.Push (x);
+    
+    (sat, nonsat)
+  }
+
+  concat_helper (separator : string, sb : System.Text.StringBuilder) : void
+  {
+    unless (IsEmpty) {
+      def e = GetEnumerator ();
+      _ = e.MoveNext ();
+      _ = sb.Append (e.Current);
+      while (e.MoveNext ()) {
+        _ = sb.Append (separator);
+        _ = sb.Append (e.Current);
+      }
+    }
+  }
+
+  /** Returns string representing contents of the queue. */
+  public override ToString () : string
+  {
+    def sb = System.Text.StringBuilder ("[");
+    concat_helper (", ", sb);
+    sb.Append ("]").ToString ();
+  }
+
+  /** Constructs string out of queue contents using given argument as a separator.
+    * <param name="separator">String to use a separator - it will be put between each
+    *  two items of the list.</param>
+    */
+  public ToString (separator : string) : string
+  {
+    def sb = System.Text.StringBuilder ();
+    concat_helper (separator, sb);
+    sb.ToString ();
+  }        
+} /* end of class Queue */
+
+// ---- rlist.n (Nemerle.Collections) ----
+  /** An auxillary data-structure for RList used instead of a regular
+      tuple (which is a struct) for performance reasons.
+   */
+  [Record]
+  public class Pair ['a] : System.Collections.Generic.IEnumerable['a],
+    System.IEquatable[Pair['a]]
+  {
+    public fst : 'a;
+    public snd : 'a;
+
+    [Nemerle.OverrideObjectEquals]
+    public Equals (p : Pair ['a]) : bool
+      implements System.IEquatable[Pair['a]].Equals
+    {
+      this.fst.Equals (p.fst) && this.snd.Equals (p.snd)
+    }
+
+    public override ToString () : string {
+      $"($(this.fst), $(this.snd))"
+    }
+
+    public GetEnumerator () : SCG.IEnumerator ['a] {
+      yield (this.fst);
+      yield (this.snd)
+    }
+  }
+
+  /** RList is short for Random Access List. It is a purely functional
+      data-structure. This implementation is based on the SML sources
+      found in Chris Okasaki's "Purely Functional Data Structures"
+      (Cambridge University Press, 1999).
+   */
+  public variant RList ['a] : System.Collections.Generic.IEnumerable['a],
+    System.IEquatable[RList['a]]
+  {
+    | Nil
+    | Zero {
+      arg : RList [Pair ['a]]
+    }
+    | One {
+      arg1 : 'a;
+      arg2 : RList [Pair ['a]]
+    }
+
+    /** Returns an empty RList.
+        Time complexity: O (1).
+        <returns>
+          An empty RList.
+        </returns>
+     */
+    public static Empty : RList ['a] = Nil ();
+
+    /** Checks, whether the RList [xs] is empty.
+        Time complexity: O (1).
+        <param name="xs">
+          The list to check for emptiness.
+        </param>
+        <returns>
+          true if the [xs] is empty,
+          false otherwise.
+        </returns>
+     */
+    public static IsEmpty (xs : RList ['a]) : bool {
+      | Nil => true
+      | _ => false
+    }
+
+    /** Checks, whether [this] is an empty RList.
+        Time complexity: O (1).
+        <returns>
+          true if [this] is an empty RList,
+          false otherwise.
+        </returns>
+     */
+    public IsEmpty () : bool {
+      IsEmpty (this)
+    }
+
+    /** Checks, whether two RLists are equal, by cheking if their
+        respective elements are equal.
+        Time complexity: O (min (|xs|, |ys|)).
+        <param name="xs">
+          The first compared RList.
+        </param>
+        <param name="ys">
+          The second compared RList.
+        </param>
+        <returns>
+          true if [xs] and [ys] are equal,
+          false otherwise.
+        </returns>
+     */
+    public static Equals (xs : RList ['a], ys : RList ['a]) : bool {
+      | (Zero (ps), Zero (qs))
+      | (One (x, ps), One (y, qs)) when x.Equals (y) => RList [Pair ['a]].Equals (ps, qs)
+      | (Nil, Nil) => true
+      | _ => false
+    }
+
+    /** Checks, whether [this] and [ys] are equal RLists, by cheking if their
+        respective elements are equal.
+        Time complexity: O (min (|this|, |ys|)).
+        <param name="ys">
+          The RList [this] is compared to.
+        </param>
+        <returns>
+          true if [this] and [ys] are equal,
+          false otherwise.
+        </returns>
+     */
+    [Nemerle.OverrideObjectEquals]
+    public Equals (ys : RList ['a]) : bool
+      implements System.IEquatable[RList['a]].Equals
+    {
+      //PERFORMANCE: maybe it would be worth checking lenghts first ?
+      Equals (this, ys)
+    }
+
+    /** Returns a new RList composed by adding [x], to the head of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        <param name="x">
+          The element being added to the head of [xs].
+        </param>
+        <param name="xs">
+          The RList, to which head [x] is being added.
+        </param>
+        <returns>
+          A new RList composed of [x] as the new head and [xs] as the new tail.
+        </returns>
+     */
+    public static Cons (x : 'a, xs : RList ['a]) : RList ['a] {
+      match (xs) {
+        | One (y, ps) => Zero (RList [Pair ['a]].Cons (Pair (x, y), ps))
+        | Zero (ps) => One (x, ps)
+        | Nil => One (x, Nil ())
+      }
+    }
+
+    /** Returns a new RList composed by adding [x], to the head of the RList [this].
+        Time complexity: O (log (|this|)).
+        <param name="x">
+          The element being added to the head of [this].
+        </param>
+        <returns>
+          A new RList composed of [x] as the new head and [this] as the new tail.
+        </returns>
+     */
+    public Cons (x : 'a) : RList ['a] {
+      Cons (x, this)
+    }
+
+    /** Separates and returns the head and tail of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        <param name="xs">
+          The RList, which tail is going to be returned along with the separated head.
+        </param>
+        <returns>
+          The head and tail of [xs].
+        </returns>
+     */
+    public static UnCons (xs : RList ['a]) : 'a * RList ['a] {
+      | Zero (ps) => def ((x, y), ps') = RList [Pair ['a]].UnCons (ps);
+                     (x, One (y, ps'))
+      | One (x, Nil) => (x, Nil ())
+      | One (x, ps) => (x, Zero (ps))
+      | Nil => throw Exception ("Empty")
+    }
+
+    /** Separates and returns the head and tail of the RList [this].
+        Time complexity: O (log (|this|)).
+        <returns>
+          The head and tail of [this].
+        </returns>
+     */
+    public UnCons () : 'a * RList ['a] {
+      UnCons (this)
+    }
+
+    /** Returns the head of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        <param name="xs">
+          The RList, which head is going to be returned.
+        </param>
+        <returns>
+          The head of [xs].
+        </returns>
+     */
+    public static Head (xs : RList ['a]) : 'a {
+      | Zero (ps) => def (x, _) = RList [Pair ['a]].Head (ps);
+                     x
+      | One (x, _) => x
+      | Nil => throw Exception ("Empty")
+    }
+
+    /** Returns the head of the RList [this].
+        Time complexity: O (log (|this|)).
+        <returns>
+          The head of [this].
+        </returns>
+     */
+    public Head () : 'a {
+      Head (this)
+    }
+
+    /** Returns the head of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        An alias for Head.
+        <param name="xs">
+          The RList, which head is going to be returned.
+        </param>
+        <returns>
+          The head of [xs].
+        </returns>
+     */
+    public static Hd (xs : RList ['a]) : 'a {
+      Head (xs)
+    }
+
+    /** Returns the head of the RList [this].
+        Time complexity: O (log (|this|)).
+        An alias for Head.
+        <returns>
+          The head of [this].
+        </returns>
+     */
+    public Hd () : 'a {
+      Head (this)
+    }
+
+    /** Returns the tail of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        <param name="xs">
+          The RList, which tail is going to be returned.
+        </param>
+        <returns>
+          The tail of [xs].
+        </returns>
+     */
+    public static Tail (xs : RList ['a]) : RList ['a] {
+      def (_, xs') = UnCons (xs);
+      xs'
+    }
+
+    /** Returns the tail of the RList [this].
+        Time complexity: O (log (|this|)).
+        <returns>
+          The tail of [this].
+         </returns>
+     */
+    public Tail () : RList ['a] {
+      Tail (this)
+    }
+
+    /** Returns the tail of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        An alias for Tail.
+        <param name="xs">
+          The RList, which tail is going to be returned.
+        </param>
+        <returns>
+          The tail of [xs].
+        </returns>
+     */
+    public static Tl (xs : RList ['a]) : RList ['a] {
+      Tail (xs)
+    }
+
+    /** Returns the tail of the RList [this].
+        Time complexity: O (log (|this|)).
+        An alias fot Tail.
+        <returns>
+          The tail of [this].
+        </returns>
+     */
+    public Tl () : RList ['a] {
+      Tail (this)
+    }
+
+    /** Returns the last element of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        <param name="xs">
+          The RList, which last element is going to be returned.
+        </param>
+        <returns>
+          The last element of [xs].
+        </returns>
+     */
+    public static Last (xs : RList ['a]) : 'a {
+      | Zero (ps) => RList [Pair ['a]].Last (ps).snd;
+      | One (x, Nil) => x
+      | One (_, ps) => RList [Pair ['a]].Last (ps).snd;
+      | Nil => throw System.ArgumentException ("RList.Last called for empty RList")
+    }
+
+    /** Returns the last element of the RList [this].
+        Time complexity: O (log (|this|)).
+        <returns>
+          The last element of [this].
+        </returns>
+     */
+    public Last () : 'a {
+      Last (this)
+    }
+
+    /* An auxillary function used by the Length property.
+       Time complexity: O (log (|xs|)).
+     */
+    static _Length (xs : RList ['a], tmp = 1, count = 0) : int {
+      match (xs) {
+        | Zero (ps) => RList [Pair ['a]]._Length (ps, tmp * 2, count)
+        | One (_, ps) => RList [Pair ['a]]._Length (ps, tmp * 2, count + tmp)
+        | Nil => count
+      }
+    }
+
+    /** Returns the length of the RList [this].
+        Time complexity: O (log (|this|)).
+        <returns>
+          The length of [this].
+        </returns>
+     */
+    public Length : int {
+      get {
+        _Length (this)
+      }
+    }
+
+    /** Returns true if there exists an element on [xs], that
+        satisfies the predicate [f] (that is f (elem) == true).
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList containing the tested elements.
+        </param>
+        <param name="f">
+          The predicate used during the tests.
+        </param>
+        <returns>
+          Returns true if for any element on the RList [xs],
+          applying [f] to that element returns true, otherwise
+          returns false.
+        </returns>
+     */
+    public static Exists (xs : RList ['a], f : 'a -> bool) : bool {
+      def f' (x) { f (x.fst) || f (x.snd) }
+      match (xs) {
+        | One (x, ps) => f (x) || RList [Pair ['a]].Exists (ps, f')
+        | Zero (ps) => RList [Pair ['a]].Exists (ps, f')
+        | Nil => false
+      }
+    }
+
+    /** Returns true if there exists an element on [this], that
+        satisfies the predicate [f] (that is f (elem) == true).
+        Time complexity: O (|xs|).
+        <param name="f">
+          The predicate used during the tests.
+        </param>
+        <returns>
+          Returns true if for any element on the RList [this],
+          applying [f] to that element returns true, otherwise
+          returns false.
+        </returns>
+     */
+    public Exists (f : 'a -> bool) : bool {
+      Exists (this, f)
+    }
+
+    /** Returns true if the element [elem] exists on the
+        RList [xs].
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList containing the tested elements.
+        </param>
+        <param name="elem">
+          The element, which existence on the RList [xs] is
+          being tested.
+        </param>
+        <returns>
+          Returns true if for any element on the RList [xs],
+          element.Equals ([elem]), otherwise returns false.
+        </returns>
+     */
+    public static Member (xs : RList ['a], elem : 'a) : bool {
+      Exists (xs, x => x.Equals (elem))
+    }
+
+    /** Returns true if the element [elem] exists on the
+        RList [this].
+        Time complexity: O (|this|).
+        <param name="elem">
+          The element, which existence on the RList [this] is
+          being tested.
+        </param>
+        <returns>
+          Returns true if for any element on the RList [this],
+          element.Equals ([elem]), otherwise returns false.
+        </returns>
+     */
+    public Member (elem : 'a) : bool {
+      Member (this, elem)
+    }
+
+    /** Returns true if the element [elem] exists on the
+        RList [xs].
+        Time complexity: O (|xs|).
+        An alias for Member.
+        <param name="xs">
+          The RList containing the tested elements.
+        </param>
+        <param name="elem">
+          The element, which existence on the RList [xs] is
+          being tested.
+        </param>
+        <returns>
+          Returns true if for any element on the RList [xs],
+          element.Equals ([elem]), otherwise returns false.
+        </returns>
+     */
+    public static Contains (xs : RList ['a], elem : 'a) : bool {
+      Member (xs, elem)
+    }
+
+    /** Returns true if the element [elem] exists on the
+        RList [this].
+        Time complexity: O (|this|).
+        An alias for Member.
+        <param name="elem">
+          The element, which existence on the RList [this] is
+          being tested.
+        </param>
+        <returns>
+          Returns true if for any element on the RList [this],
+          element.Equals ([elem]), otherwise returns false.
+        </returns>
+     */
+    public Contains (elem : 'a) : bool {
+      Member (this, elem)
+    }
+
+    /** Returns the [i]-th element of the RList [xs].
+        Time complexity: O (log (|xs|)).
+        <param name="xs">
+          The RList, which [i]-th element is going to be returned.
+        </param>
+        <param name="i">
+          The index under which the return element is located in [xs].
+        </param>
+        <returns>
+          The [i]-th element of [xs].
+        </returns>
+     */
+    public static Nth (xs : RList ['a], i : int) : 'a {
+      match (xs) {
+        | Zero (ps) => def (x, y) = RList [Pair ['a]].Nth (ps, i / 2);
+                       if (i % 2 == 0) x else y
+        | One (x, ps) =>
+          if (i == 0) x
+          else {
+            // the three lines below could be substituted with Nth (Zero (ps), i - 1)
+            def (x, y) = RList [Pair ['a]].Nth (ps, (i - 1) / 2);
+            if (i % 2 != 0) x
+            else y
+          }
+        | Nil => throw Exception ("Subscript")
+      }
+    }
+
+    /** Returns the [i]-th element of the RList [this].
+        Time complexity: O (log (|this|)).
+        <param name="i">
+          The index under which the return element is located in [this].
+        </param>
+        <returns>
+          The [i]-th element of [this].
+        </returns>
+     */
+    public Nth (i : int) : 'a {
+      Nth (this, i)
+    }
+
+    /* A helper function used by update
+       Time complexity: O (log (|xs|)).
+     */
+    static _Update (f : 'a -> 'a, i : int, xs : RList ['a]) : RList ['a] {
+      match (xs) {
+        | Zero (ps) => def f' (p) { if (i % 2 == 0) Pair (f (p.fst), p.snd) else Pair (p.fst, f (p.snd)) }
+                       Zero (RList [Pair ['a]]._Update (f', i / 2, ps))
+        | One (x, ps) => if (i == 0) One (f (x), ps) else Cons (x, _Update (f, i - 1, Zero (ps)))
+        | Nil => throw Exception ("Subscript")
+      }
+    }
+
+    /** Returns a new RList composed by substituting the [i]-th element
+        of the RList [xs], with [x].
+        Time complexity: O (log (|xs|)).
+        <param name="xs">
+          The RList used in composing the return value.
+        </param>
+        <param name="i">
+          The index under which the element to be substituted resides in [xs].
+        </param>
+        <returns>
+          A new RList composed by substituting the [i]-th element
+          of the RList [xs], with [x].
+        </returns>
+     */
+    public static Update (i : int, y : 'a, xs : RList ['a]) : RList ['a] {
+      _Update (_ => y, i, xs)
+    }
+
+    /** Returns a new RList composed by substituting the [i]-th element
+        of the RList [this], with [x].
+        Time complexity: O (log (|this|)).
+        <param name="i">
+          The index under which the element to be substituted resides in [this].
+        </param>
+        <returns>
+          A new RList composed by substituting the [i]-th element
+          of the RList [this], with [x].
+        </returns>
+     */
+    public Update (i : int, y : 'a) : RList ['a] {
+      Update (i, y, this)
+    }
+
+    /** Iterates over the RList [xs] from left to right, composing the return
+        value, by applying [f], to each of [xs]'s elements and the current [acc].
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList over which FoldLeft is going to iterate.
+        </param>
+        <param name="acc">
+          The accumulator being updated on each level of recursion, to
+          finally become the return value of FoldLeft.
+          The supplied value will be used by [f] in the first step.
+        </param>
+        <param name="f">
+          The function being applied to ([RList-elem], [acc]) in each step.
+        </param>
+        <returns>
+          Acc in it's final state at the last step of recursion
+        </returns>
+     */
+    public static FoldLeft ['b] (xs : RList ['a], acc : 'b, f : 'a * 'b -> 'b) : 'b {
+      match (xs) {
+        | Zero (ps) => RList [Pair ['a]].FoldLeft (ps, acc, (a, b) => f (a.snd, f (a.fst, b)))
+        | One (x, ps) => RList [Pair ['a]].FoldLeft (ps, f (x, acc), (a, b) => f (a.snd, f (a.fst, b)))
+        | Nil => acc
+      }
+    }
+
+    /** Iterates over the RList [this] from left to right, composing the return
+        value, by applying [f], to each of [this]' elements and the current [acc].
+        Time complexity: O (|this|).
+        <param name="acc">
+          The accumulator being updated on each level of recursion, to
+          finally become the return value of FoldLeft.
+          The supplied value will be used by [f] in the first step.
+        </param>
+        <param name="f">
+          The function being applied to ([RList-elem], [acc]) in each step.
+        </param>
+        <returns>
+          Acc in it's final state at the last step of recursion
+        </returns>
+     */
+    public FoldLeft ['b] (acc : 'b, f : 'a * 'b -> 'b) : 'b {
+      FoldLeft (this, acc, f)
+    }
+
+    /** Iterates over the RList [xs] from right to left, composing the return
+        value, by applying [f], to each of [xs]'s elements and the current [acc].
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList over which FoldRight is going to iterate.
+        </param>
+        <param name="acc">
+          The accumulator updated on each level of recursion and used by [f].
+          The supplied value will be used by [f] in the last step.
+        </param>
+        <param name="f">
+          The function being applied to ([RList-elem], [acc]) in each step.
+        </param>
+        <returns>
+          The result of applying [f] to each element of [xs] and the current [acc].
+        </returns>
+     */
+    public static FoldRight ['b] (xs : RList ['a], acc : 'b, f : 'a * 'b -> 'b) : 'b {
+      match (xs) {
+        | Zero (ps) => RList [Pair ['a]].FoldRight (ps, acc, (a, b) => f (a.fst, f (a.snd, b)))
+        | One (x, ps) => f (x, RList [Pair ['a]].FoldRight (ps, acc, (a, b) => f (a.fst, f (a.snd, b))))
+        | Nil => acc
+      }
+    }
+
+    /** Iterates over the RList [this] from right to left, composing the return
+        value, by applying [f], to each of [this]' elements and the current [acc].
+        Time complexity: O (|this|).
+        <param name="acc">
+          The accumulator updated on each level of recursion and used by [f].
+          The supplied value will be used by [f] in the last step.
+        </param>
+        <param name="f">
+          The function being applied to ([RList-elem], [acc]) in each step.
+        </param>
+        <returns>
+          The result of applying [f] to each element of [xs] and the current [acc].
+        </returns>
+     */
+    public FoldRight ['b] (acc : 'b, f : 'a * 'b -> 'b) : 'b {
+      FoldRight (this, acc, f)
+    }
+
+    /** Returns a new RList composed from [xs] by applying [f]
+        to every element on that RList.
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The source RList from which the return RList is composed by
+          applying [f] to each of its elements.
+        </param>
+        <param name="f">
+          The function being applied to every [xs] element. The values
+          it returns will make up the new RList returned by Map.
+        </param>
+        <returns>
+          A new RList composed from [xs] by applying [f] to every
+          element on that RList.
+        </returns>
+     */
+    public static Map ['b] (xs : RList ['a], f : 'a -> 'b) : RList ['b] {
+      def f' (x) { Pair (f (x.fst), f (x.snd)) }
+      match (xs) {
+        | One (x, ps) => One (f (x), RList [Pair ['a]].Map (ps, f'))
+        | Zero (ps) => Zero (RList [Pair ['a]].Map (ps, f'))
+        | Nil => Nil ()
+      }
+    }
+
+    /** Returns a new RList composed from [this] by applying [f]
+        to every element on that RList.
+        Time complexity: O (|this|).
+        <param name="f">
+          The function being applied to every [this] element. The values
+          it returns will make up the new RList returned by Map.
+        </param>
+        <returns>
+          A new RList composed from [this] by applying [f] to every
+          element on that RList.
+        </returns>
+     */
+    public Map ['b] (f : 'a -> 'b) : RList ['b] {
+      Map (this, f)
+    }
+
+    /** Iterates over [xs] applying [f] to each of its elements.
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList on which [f] is iterated.
+        </param>
+        <param name="f">
+          The function being applied to every [xs] element during
+          iteration.
+        </param>
+     */
+    public static Iter (xs : RList ['a], f : 'a -> void) : void {
+      def f' (x) { f (x.fst); f (x.snd) }
+      match (xs) {
+        | One (x, ps) => f (x); RList [Pair ['a]].Iter (ps, f')
+        | Zero (ps) => RList [Pair ['a]].Iter (ps, f')
+        | Nil => ()
+      }
+    }
+
+    /** Iterates over [this] applying [f] to each of its elements.
+        Time complexity: O (|this|).
+        <param name="f">
+          The function being applied to every [this] element during
+          iteration.
+        </param>
+     */
+    public Iter (f : 'a -> void) : void {
+      Iter (this, f)
+    }
+
+    /** Returns an RList composed by reversing [xs].
+        Time complexity: O (|xs| * log (|xs|)).
+        <param name="xs">
+          The RList used when composing the return value.
+        </param>
+        <returns>
+          An RList composed by reversing [xs].
+        </returns>
+     */
+    public static Rev (xs : RList ['a]) : RList ['a] {
+      FoldLeft (xs, Nil (), Cons)
+    }
+
+//    PERFORMANCE: O (n) complexity - gotta benchmark if it's faster, than the above
+//    public static Rev_2 (xs : RList ['a]) : RList ['a] {
+//      FromList (FoldLeft (xs, [], _ :: _))
+//    }
+
+    /** Returns an RList composed by reversing [this].
+        Time complexity: O (|this| * log (|this|)).
+        <returns>
+          An RList composed by reversing [this].
+        </returns>
+     */
+    public Rev () : RList ['a] {
+      Rev (this)
+    }
+
+    /** Returns an a new RList composed by appending [ys]
+        at the end of [xs].
+        Time complexity: roughly O (|xs| * log (|ys| + |xs|)).
+        <param name="xs">
+          The RList, which elements come first in the resulting RList.
+        </param>
+        <param name="ys">
+          The RList, which elements come second in the resulting RList.
+        </param>
+        <returns>
+          An RList composed by appending [ys] at the end of [xs].
+        </returns>
+     */
+    public static Append (xs : RList ['a], ys : RList ['a]) : RList ['a] {
+      FoldRight (xs, ys, Cons)
+    }
+
+//    PERFORMANCE: O (n) complexity - gotta benchmark if it's faster, than the above
+//    public static Append_2 (xs : RList ['a], ys : RList ['a]) : RList ['a] {
+//      FromList (FoldRight (xs, ToList (ys), _ :: _))
+//    }
+
+    /** Returns an a new RList composed by appending [ys]
+        at the end of [this].
+        Time complexity: roughly O (|this| * log (|this| + |ys|)).
+        <param name="ys">
+          The RList, which elements come second in the resulting RList.
+        </param>
+        <returns>
+          An RListcomposed by appending [ys] at the end of [this].
+        </returns>
+     */
+    public Append (ys : RList ['a]) : RList ['a] {
+      Append (this, ys)
+    }
+
+    /** Returns an a new RList composed by appending [ys]
+        at the end of [xs].
+        Time complexity: roughly O (|xs| * log (|ys| + |xs|)).
+        An alias for Append.
+        <param name="xs">
+          The RList, which elements come first in the resulting RList.
+        </param>
+        <param name="ys">
+          The RList, which elements come second in the resulting RList.
+        </param>
+        <returns>
+          An RList composed by appending [ys] at the end of [xs].
+        </returns>
+     */
+    public static @+ (xs : RList ['a], ys : RList ['a]) : RList ['a] {
+      Append (xs, ys)
+    }
+
+    /** Returns an RList composed of the elements of list [xs].
+        Use RList (xs, |xs|) if |xs| is known.
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The list used when composing the return value.
+        </param>
+        <returns>
+          An RList composed of the elements of [xs].
+        </returns>
+     */
+    public static FromList (xs : list ['a]) : RList ['a] {
+      FromList (xs, xs.Length)
+    }
+
+    /** Returns an RList composed of the elements of list [xs], of
+        length [i].
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The list used when composing the return value.
+        </param>
+        <param name="i">
+          The length of [xs] and therefore of the return value as well.
+        </param>
+        <returns>
+          An RList composed of the elements of [xs].
+        </returns>
+     */
+    public static FromList (xs : list ['a], i : int) : RList ['a] {
+      _FromList (xs, i, l => match (l) { | x :: tl => (x, tl) | [] => throw Exception ("Empty") })
+    }
+
+    /* An auxillary function used by FromList (xs, i).
+       Time complexity: O (|xs|).
+     */
+    static _FromList ['b] (xs : list ['b], i : int, f : list ['b] -> 'a * list ['b]) : RList ['a] {
+      def f' (l) {
+        def (elem1, rest1) = f (l);
+        def (elem2, rest2) = f (rest1);
+        (Pair (elem1, elem2), rest2)
+      }
+      if (i % 2 == 1) {
+        def (elem, rest) = f (xs);
+        One (elem, RList [Pair ['a]]._FromList (rest, i / 2, f'))
+      }
+      else
+        if (i == 0)
+          Nil ()
+        else
+          Zero (RList [Pair ['a]]._FromList (xs, i / 2, f'))
+    }
+
+    /** Returns a list of elements of the RList [xs] in the same order.
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList used when composing the return value.
+        </param>
+        <returns>
+          A list of elements of the RList [xs] in the same order.
+        </returns>
+     */
+    public static ToList (xs : RList ['a]) : list ['a] {
+      FoldRight (xs, [], _ :: _)
+    }
+
+    /** Returns a list of elements of the RList [this] in the same order.
+        Time complexity: O (|this|).
+        <returns>
+          A list of elements of the RList [this] in the same order.
+        </returns>
+     */
+    public ToList () : list ['a] {
+      ToList (this)
+    }
+
+    /** Returns a string representation of the RList [xs].
+        Time complexity: O (|xs|).
+        <param name="xs">
+          The RList used when composing the return value.
+        </param>
+        <returns>
+          A string representation of the RList [xs].
+        </returns>
+     */
+    public static ToString (xs : RList ['a]) : string {
+      xs.ToString ()
+    }
+
+    /** Returns a string representation of the RList [this].
+        Time complexity: O (|this|).
+        <returns>
+          A string representation of the RList [this].
+        </returns>
+     */
+    public override ToString () : string {
+      match (this) {
+        | Zero (ps) => $"Zero ($ps)"
+        | One (x, ps) => $"One ($x, $ps)"
+        | Nil => "Nil"
+      }
+    }
+
+    public GetEnumerator () : SCG.IEnumerator ['a] {
+      match (this) {
+        | Zero (ps) =>
+          foreach (elem in ps) {
+            yield elem.fst;
+            yield elem.snd
+          }
+        | One (x, ps) =>
+          yield x;
+          foreach (elem in ps) {
+            yield elem.fst;
+            yield elem.snd
+          }
+        | Nil => {}
+      }
+    }
+
+    public Item [index : int] : 'a {
+      get { Nth (this, index) }
+    }
+  }
+
+// ---- set.n (Nemerle.Collections) ----
+[DebuggerDisplay("Count = {Count}: {ToString()}")]
+[DebuggerNonUserCode]
+public class Set[T] : SCG.ICollection[T], IComparable[Set[T]]
+{
+  #region State
+
+  private _tree : TwoThreeTree.Node[T];
+  private _cmp : T * T -> int;
+  private _size : int;
+
+  #endregion
+
+  #region Constructors
+
+  public this()
+  {
+    this(0, TwoThreeTree.Node.Leaf(), NemerleCollectionsComparer.Comparer[T].Default);
+  }
+
+  public this(cmp : T * T -> int)
+  {
+    this(0, TwoThreeTree.Node.Leaf(), cmp);
+  }
+
+  public this(coll : SCG.IEnumerable [T])
+  {
+    this(0, TwoThreeTree.Node.Leaf(), NemerleCollectionsComparer.Comparer[T].Default, coll)
+  }
+
+  public this(coll : SCG.IEnumerable [T], cmp : T * T -> int)
+  {
+    this(0, TwoThreeTree.Node.Leaf(), cmp, coll)
+  }
+
+  private this(mutable size : int, tree : TwoThreeTree.Node[T], cmp : T * T -> int, coll : SCG.IEnumerable[T])
+  {
+    _cmp = cmp;
+    _tree = coll.Fold(tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size));
+    _size = size;
+  }
+
+  private this(size : int, tree : TwoThreeTree.Node[T], cmp : T * T -> int)
+  {
+    _tree = tree;
+    _cmp = cmp;
+    _size = size;
+  }
+
+  #endregion
+
+  public Clear() : Set[T]
+  {
+    Set(0, TwoThreeTree.Node.Leaf(), _cmp);
+  }
+
+  #region Add
+
+  public Add(value : T) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size);
+    Set(size, tree, _cmp);
+  }
+
+  public AddRange(elems : SCG.IEnumerable[T]) : Set[T]
+  {
+    Set(_size, _tree, _cmp, elems)
+  }
+
+  public AddList(elems : list[T]) : Set[T]
+  {
+    AddRange(elems)
+  }
+
+  #endregion
+
+  #region Remove
+
+  public Remove(value : T) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size);
+    Set(size, tree, _cmp);
+  }
+
+  public RemoveRange(elems : SCG.IEnumerable[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, (value, tree) => tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size));
+    Set(size, tree, _cmp);
+  }
+
+  public RemoveList(elems : list[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, (value, tree) => tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size));
+    Set(size, tree, _cmp);
+  }
+
+  #endregion
+
+  #region Replace
+
+  public Replace(value : T) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size);
+    Set(size, tree, _cmp);
+  }
+
+  public ReplaceRange(elems : SCG.IEnumerable[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size));
+    Set(size, tree, _cmp);
+  }
+
+  public ReplaceList(elems : list[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = elems.Fold(_tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size));
+    Set(size, tree, _cmp);
+  }
+
+  #endregion
+
+  #region Fold
+
+  public Fold[TAccumulator](acc : TAccumulator, fn : T * TAccumulator -> TAccumulator) : TAccumulator
+  {
+    _tree.FoldLeft(acc, fn);
+  }
+
+  public FoldLeft[TAccumulator](acc : TAccumulator, fn : T * TAccumulator -> TAccumulator) : TAccumulator
+  {
+    _tree.FoldLeft(acc, fn);
+  }
+
+  public FoldRight[TAccumulator](acc : TAccumulator, fn : T * TAccumulator -> TAccumulator) : TAccumulator
+  {
+    _tree.FoldRight(acc, fn);
+  }
+
+  #endregion
+
+  #region Iter
+
+  public Iter(fn : T -> void) : void
+  {
+    _ = _tree.FoldLeft(null, (value, _) => { fn(value); null; })
+  }
+
+  public IterLeft(fn : T -> void) : void
+  {
+    _ = _tree.FoldLeft(null, (value, _) => { fn(value); null; })
+  }
+
+  public IterRight(fn : T -> void) : void
+  {
+    _ = _tree.FoldRight(null, (value, _) => { fn(value); null; })
+  }
+
+  #endregion
+
+  #region Filter
+
+  public Filter(fn : T -> bool) : Set[T]
+  {
+    def (size, tree) = _tree.Filter(_cmp, fn);
+    Set(size, tree, _cmp);
+  }
+
+  #endregion
+
+  #region Partition
+
+  public Partition(fn : T -> bool) : Set[T] * Set[T]
+  {
+    def (ysize, ytree, nsize, ntree) = _tree.Partition(_cmp, fn);
+    (Set(ysize, ytree, _cmp), Set(nsize, ntree, _cmp));
+  }
+
+  #endregion
+
+  #region ForAll
+
+  public ForAll(fn : T -> bool) : bool
+  {
+    _tree.ForAll(fn);
+  }
+
+  #endregion
+
+  #region Exists
+
+  public Exists(fn : T -> bool) : bool
+  {
+    _tree.Exists(fn);
+  }
+
+  #endregion
+
+  #region Contains
+
+  public Contains(value : T) : bool
+  {
+    mutable outValue;
+    _tree.TryGet(value, _cmp, out outValue)
+  }
+
+  public Item[value : T] : bool
+  {
+    get { Contains(value) }
+  }
+
+  #endregion
+
+  #region Sum
+
+  public Sum(that : Set[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Sum(ref size, that._tree, _cmp);
+    Set(size, tree, _cmp)
+  }
+
+  #endregion
+
+  #region Subtract
+
+  public Subtract(that : Set[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Subtract(ref size, that._tree, _cmp);
+    Set(size, tree, _cmp)
+  }
+
+  #endregion
+
+  #region Intersect
+
+  public Intersect(that : Set[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Intersect(ref size, that._tree, _cmp);
+    Set(size, tree, _cmp)
+  }
+
+  #endregion
+
+  #region Xor
+
+  public Xor(that : Set[T]) : Set[T]
+  {
+    mutable size = _size;
+    def tree = _tree.Xor(ref size, that._tree, _cmp);
+    Set(size, tree, _cmp)
+  }
+
+  #endregion
+
+  public ToList() : list[T]
+  {
+    _tree.ToList();
+  }
+
+  public ToArray() : array[T]
+  {
+    _tree.ToArray();
+  }
+
+  public MapToList[U](fn : T -> U) : list[U]
+  {
+    _tree.MapToList(fn);
+  }
+
+  public MapToArray[U](fn : T -> U) : array[U]
+  {
+    _tree.MapToArray(fn);
+  }
+
+  public IsEmpty : bool
+  {
+    get { _size == 0 }
+  }
+
+  #region ICollection[T]
+
+  public GetEnumerator() : SCG.IEnumerator[T]
+  {
+    _tree.Enumerate().GetEnumerator();
+  }
+
+  public CopyTo(arr : array[T], mutable arrayIndex : int) : void
+  {
+    def copyOne(value, arrayIndex)
+    {
+      arr[arrayIndex] = value;
+      arrayIndex + 1;
+    }
+    _ = _tree.Fold(arrayIndex, copyOne);
+  }
+
+  public IsReadOnly : bool
+  {
+    get { true }
+  }
+
+  public Count : int
+  {
+    get { _size }
+  }
+
+  private Remove_Invalid (_ : T) : bool implements SCG.ICollection[T].Remove
+  {
+    throw System.NotSupportedException ("this is functional set, which is read-only");
+  }
+
+  private Clear_Invalid() : void implements SCG.ICollection[T].Clear
+  {
+    throw System.NotSupportedException ("this is functional set, which is read-only");
+  }
+
+  private Add_Invalid (_ : T) : void implements SCG.ICollection[T].Add
+  {
+    throw System.NotSupportedException ("this is functional set, which is read-only and returns new instance upon adding element");
+  }
+
+  #endregion
+
+  public override ToString() : string
+  {
+    _tree.ToString("Set[", ", ", "]");
+  }
+
+  public override GetHashCode() : int
+  {
+    _tree.GetHashCode();
+  }
+
+  public override Equals(that : object) : bool
+  {
+    match (that)
+    {
+    | that is Set[T] => _size == that._size && ForAll(that.Contains(_));
+    | _ => false;
+    }
+  }
+
+  public CompareTo(that : Set[T]) : int
+  {
+    res:
+    {
+      def items1 = this.ToArray();
+      def items2 = that.ToArray();
+      def len = Math.Min(items1.Length, items2.Length);
+      for (mutable i = 0; i < len; ++i)
+      {
+        def r = _cmp(items1[i], items2[i]);
+        when (r != 0)
+          res(r);
+      }
+      if (items1.Length == items2.Length)
+        0;
+      else if (items1.Length < items2.Length)
+        -1;
+      else
+        1;
+    }
+  }
+
+  public static Sum(this sets : list[Set[T]]) : Set[T]
+  {
+    sets.Fold(Set(), (e, s) => s.Sum(e))
+  }
+
+  public static Sum(this sets : list[Set[T]], cmp : T * T -> int) : Set[T]
+  {
+    sets.Fold(Set(cmp), (e, s) => s.Sum(e))
+  }
+}
+
+// ---- stack.n (Nemerle.Collections) ----
+/**
+ * A stack
+ */
+public class Stack ['a] : System.Collections.Generic.Stack ['a]
+{
+  public RemoveLast () : void {
+    _ = Pop ()
+  }
+
+  public Add (x : 'a) : void {
+    Push (x)
+  }
+
+  /* -- PUBLIC CONSTRUCTORS ----------------------------------------------- */
+  
+  public this () {  base ()  }
+
+  public this (capacity : int) { base (capacity) }
+
+  public this (enu : System.Collections.Generic.IEnumerable ['a]) { base (enu) }
+  
+
+  /* -- PUBLIC PROPERTIES ------------------------------------------------- */
+
+  /**
+   * Returns `true' iff the stack is empty.
+   */
+  public IsEmpty : bool
+  {
+    get { Count == 0 }
+  }
+
+  /**
+   * An alias for `Count'.
+   */
+  public Length : int
+  {
+    get { Count }
+  }
+  
+  /**
+   * An alias for `Count'.
+   */
+  public Height : int
+  {
+    get { Count }
+  }
+
+
+  /* -- PUBLIC METHODS ---------------------------------------------------- */
+
+  /**
+   * When read -- peeks at the object on the top of the stack. When
+   * written -- replaces the topmost element with specified value (there
+   * has to be one).
+   */
+  public Top : 'a
+  {
+    get {
+      Peek ()
+    }
+    set {
+      _ = Pop ();
+      Push (value)
+    }
+  }
+
+  
+  /**
+   * Same as Peek, but does not throw an exception
+   * -- instead it returns an optional result.
+   */
+  public First () : option ['a] 
+  { 
+    if (Count > 0)
+      Some (Peek ())
+    else
+      None ()
+  }
+
+  
+  /**
+   * Creates a shallow copy of this stack
+   */
+  public Clone () : Stack ['a]
+  {
+    Stack (this)
+  }
+
+  /// See NList.Iter.
+  public Iter (f : ('a -> void)) : void
+  {
+    foreach (x in this)
+      f (x)
+  }
+
+  
+  /// See NList.Map.
+  public Map ['b] (f : 'a -> 'b) : Stack ['b]
+  {
+    def mapped = array (Count);
+    mutable i = 0;
+    foreach (x in this)
+    {
+      mapped [i] = f (x);
+      i++;
+    }
+    def result = Stack (mapped.Length);
+    for (i = mapped.Length - 1; i >= 0; i--)
+      result.Push (mapped [i]);
+    result
+  }
+
+
+  /// See NList.Filter.
+  public Filter (f : 'a -> bool) : void
+  {
+    def temp = ToArray ();
+    Clear ();
+    for (mutable i = temp.Length - 1; i >= 0; i--)
+      when (f (temp [i]))
+        Push (temp [i]);
+  }
+
+
+  /// See NList.ForAll.
+  public ForAll (f : 'a -> bool) : bool
+  {
+    ret: {
+      foreach (x in this)
+        unless (f (x))
+          ret (false);
+      true
+    }
+  }
+
+
+  /// See NList.Exists.
+  public Exists (f : 'a -> bool) : bool
+  {
+    ret: {
+      foreach (x in this)
+        when (f (x))
+          ret (true);
+      false
+    }
+  }
+
+
+  /// See NList.FoldLeft.
+  public Fold ['b] (f : 'a * 'b -> 'b, mutable x : 'b) : 'b
+  {
+    foreach (el in this)
+      x = f (el, x);
+    x
+  }
+
+
+  /// See NList.Partition.
+  public Partition (f : 'a -> bool) : (Stack ['a] * Stack ['a])
+  {
+    def temp = ToArray ();
+    def sat = Stack ();
+    def nonsat = Stack ();
+    for (mutable i = temp.Length - 1; i >= 0; i--) {
+      def x = temp [i];
+      if (f (x))
+        sat.Push (x)
+      else
+        nonsat.Push (x);
+    }
+    
+    (sat, nonsat)
+  }
+
+  concat_helper (separator : string, sb : System.Text.StringBuilder) : void
+  {
+    unless (IsEmpty) {
+      def e = GetEnumerator ();
+      _ = e.MoveNext ();
+      _ = sb.Append (e.Current);
+      while (e.MoveNext ()) {
+        _ = sb.Append (separator);
+        _ = sb.Append (e.Current);
+      }
+    }
+  }
+
+  /** Returns string representing contents of the queue. */
+  public override ToString () : string
+  {
+    def sb = System.Text.StringBuilder ("[");
+    concat_helper (", ", sb);
+    sb.Append ("]").ToString ();
+  }
+
+  /** Constructs string out of queue contents using given argument as a separator.
+    * <param name="separator">String to use a separator - it will be put between each
+    *  two items of the list.</param>
+    */
+  public ToString (separator : string) : string
+  {
+    def sb = System.Text.StringBuilder ();
+    concat_helper (separator, sb);
+    sb.ToString ();
+  }        
+}
+
+// ---- TwoThreeTree.n (Nemerle.Collections) ----
+internal module TwoThreeTree
+{
+  public enum InsertOptions
+  {
+  | Replace
+  | ThrowIfDuplicate
+  //| IgnoreDuplicate
+  }
+
+  public enum DeleteOptions
+  {
+  | IgnoreMissed
+  | ThrowIfMissed
+  }
+
+  public variant Node[T]
+  {
+    | Leaf
+    | Node2 { low : Node[T]; value1 : T; hi : Node[T] }
+    | Node3 { low : Node[T]; value1 : T; mid : Node[T]; value2 : T; hi : Node[T] }
+
+    public Insert(value : T, cmp : T * T -> int, options : InsertOptions, size : ref int) : Node[T]
+    {
+      mutable retL;
+      mutable retV;
+      mutable retH;
+      mutable replaced = false;
+      def eq(options, value)
+      {
+        match (options : InsertOptions)
+        {
+        | Replace => true
+        //| IgnoreDuplicate => ();
+        | ThrowIfDuplicate => throw ArgumentException($"\"$value\" already in the tree");
+        | _                => throw ArgumentException($<#The parameter options has invalid value: "$options"#>, "options");
+        }
+      }
+      def insert(_) : bool
+      {
+      | Leaf =>
+        retL = Leaf();
+        retV = value;
+        retH = Leaf();
+        false;
+      | Node2 as node =>
+        match (cmp(value, node.value1))
+        {
+        | c when c < 0 =>
+          if (insert(node.low))
+          {
+            retL = Node2(retL, node.value1, node.hi);
+            true;
+          }
+          else
+          {
+            retL = Node3(retL, retV, retH, node.value1, node.hi);
+            true;
+          }
+        | c when c > 0 =>
+          if (insert(node.hi))
+          {
+            retL = Node2(node.low, node.value1, retL);
+            true;
+          }
+          else
+          {
+            retL = Node3(node.low, node.value1, retL, retV, retH);
+            true;
+          }
+        | _ =>
+          replaced = eq(options, value);
+          retL = Node2(node.low, value, node.hi);
+          true;
+        }
+      | Node3 as node =>
+        match (cmp(value, node.value1))
+        {
+        | c when c < 0 =>
+          if (insert(node.low))
+          {
+            retL = Node3(retL, node.value1, node.mid, node.value2, node.hi);
+            true;
+          }
+          else
+          {
+            retL = Node2(retL, retV, retH);
+            retV = node.value1;
+            retH = Node2(node.mid, node.value2, node.hi);
+            false;
+          }
+        | c when c > 0 =>
+          match (cmp(value, node.value2))
+          {
+          | c when c < 0 =>
+            if (insert(node.mid))
+            {
+              retL = Node3(node.low, node.value1, retL, node.value2, node.hi);
+              true;
+            }
+            else
+            {
+              retL = Node2(node.low, node.value1, retL);
+              //retV = retV;
+              retH = Node2(retH, node.value2, node.hi);
+              false;
+            }
+          | c when c > 0 =>
+            if (insert(node.hi))
+            {
+              retL = Node3(node.low, node.value1, node.mid, node.value2, retL);
+              true;
+            }
+            else
+            {
+              retH = Node2(retL, retV, retH);
+              retL = Node2(node.low, node.value1, node.mid);
+              retV = node.value2;
+              false;
+            }
+          | _ =>
+            replaced = eq(options, value);
+            retL = Node3(node.low, node.value1, node.mid, value, node.hi);
+            true;
+          }
+        | _ =>
+          replaced = eq(options, value);
+          retL = Node3(node.low, value, node.mid, node.value2, node.hi);
+          true;
+        }
+      }
+      def ret = if (insert(this))
+        retL;
+      else
+        Node2(retL, retV, retH);
+      unless (replaced)
+        ++size;
+      ret;
+    }
+
+    private abstract class CmpBase
+    {
+      public abstract Cmp21(node : Node[T].Node2) : int;
+      public abstract Cmp31(node : Node[T].Node3) : int;
+      public abstract Cmp32(node : Node[T].Node3) : int;
+    }
+
+    [Record]
+    private class CmpValue : CmpBase
+    {
+      private _value : T;
+      private _cmp : T * T -> int;
+
+      public override Cmp21(node : Node[T].Node2) : int { _cmp(_value, node.value1) }
+      public override Cmp31(node : Node[T].Node3) : int { _cmp(_value, node.value1) }
+      public override Cmp32(node : Node[T].Node3) : int { _cmp(_value, node.value2) }
+    }
+
+    private class CmpReplacement : CmpBase
+    {
+      public override Cmp21(node : Node[T].Node2) : int { match (node.low) { | Leaf => 0 | _ => -1 } }
+      public override Cmp31(node : Node[T].Node3) : int { match (node.low) { | Leaf => 0 | _ => -1 } }
+      public override Cmp32(node : Node[T].Node3) : int { match (node.low) { | Leaf => 0 | _ => -1 } }
+    }
+    private static _cmpReplacement : CmpBase = CmpReplacement();
+
+    public Delete(value : T, cmp : T * T -> int, options : DeleteOptions, size : ref int) : Node[T]
+    {
+      mutable retValue : T;
+      mutable retNode : Node[T];
+      mutable isMissed = false;
+      def missed(node : Node[T])
+      {
+        match (options)
+        {
+        | ThrowIfMissed => throw ArgumentException($"\"$value\" not in the tree");
+        | IgnoreMissed =>
+          isMissed = true;
+          retNode = node;
+          false;
+        }
+      }
+      //return isEmptyNode
+      def delete(node : Node[T], cmp : CmpBase) : bool
+      {
+        match (node)
+        {
+        | Leaf as node => missed(node);
+        | Node2 as node =>
+          def balanceLow(isEmpty, value, node)
+          {
+            if (isEmpty)
+            {
+              match (node.hi)
+              {
+              | Node2 as child =>
+                retNode = Node3(retNode, value, child.low, child.value1, child.hi);
+                true;
+              | Node3 as child =>
+                retNode = Node2(Node2(retNode, value, child.low), child.value1, Node2(child.mid, child.value2, child.hi));
+                false;
+              | Leaf => assert(false);
+              }
+            }
+            else
+            {
+              retNode = Node2(retNode, value, node.hi);
+              false;
+            }
+          }
+          def balanceHi(isEmpty, value, node)
+          {
+            if (isEmpty)
+            {
+              match (node.low)
+              {
+              | Node2 as child =>
+                retNode = Node3(child.low, child.value1, child.hi, value, retNode);
+                true;
+              | Node3 as child =>
+                retNode = Node2(Node2(child.low, child.value1, child.mid), child.value2, Node2(child.hi, value, retNode));
+                false;
+              | Leaf => assert(false);
+              }
+            }
+            else
+            {
+              retNode = Node2(node.low, value, retNode);
+              false;
+            }
+          }
+          match (cmp.Cmp21(node))
+          {
+          | c when c < 0 =>
+            balanceLow(delete(node.low, cmp), node.value1, node);
+          | c when c > 0 =>
+            balanceHi(delete(node.hi, cmp), node.value1, node);
+          | _ =>
+            match (node.low)
+            {
+            | Leaf =>
+              retValue = node.value1;
+              retNode = Leaf();
+              true;
+            | _ =>
+              balanceHi(delete(node.hi, _cmpReplacement), retValue, node);
+            }
+          }
+        | Node3 as node =>
+          def balanceLow(isEmpty, value, node)
+          {
+            if (isEmpty)
+            {
+              match (node.mid)
+              {
+              | Node2 as child =>
+                retNode = Node2(Node3(retNode, value, child.low, child.value1, child.hi), node.value2, node.hi);
+                false;
+              | Node3 as child =>
+                retNode = Node3(Node2(retNode, value, child.low), child.value1, Node2(child.mid, child.value2, child.hi), node.value2, node.hi);
+                false;
+              | Leaf => assert(false);
+              }
+            }
+            else
+            {
+              retNode = Node3(retNode, value, node.mid, node.value2, node.hi);
+              false;
+            }
+          }
+          def balanceMid(isEmpty, value, node)
+          {
+            if (isEmpty)
+            {
+              match (node.low)
+              {
+              | Node2 as child =>
+                retNode = Node2(Node3(child.low, child.value1, child.hi, value, retNode), node.value2, node.hi);
+                false;
+              | Node3 as child =>
+                retNode = Node3(Node2(child.low, child.value1, child.mid), child.value2, Node2(child.hi, value, retNode), node.value2, node.hi);
+                false;
+              | Leaf => assert(false);
+              }
+            }
+            else
+            {
+              retNode = Node3(node.low, value, retNode, node.value2, node.hi);
+              false;
+            }
+          }
+          def balanceHi(isEmpty, value, node)
+          {
+            if (isEmpty)
+            {
+              match (node.mid)
+              {
+              | Node2 as child =>
+                retNode = Node2(node.low, node.value1, Node3(child.low, child.value1, child.hi, value, retNode));
+                false;
+              | Node3 as child =>
+                retNode = Node3(node.low, node.value1, Node2(child.low, child.value1, child.mid), child.value2, Node2(child.hi, value, retNode));
+                false;
+              | Leaf => assert(false);
+              }
+            }
+            else
+            {
+              retNode = Node3(node.low, node.value1, node.mid, value, retNode);
+              false;
+            }
+          }
+          match (cmp.Cmp31(node))
+          {
+          | c when c < 0 =>
+            balanceLow(delete(node.low, cmp), node.value1, node);
+          | c when c > 0 =>
+            match (cmp.Cmp32(node))
+            {
+            | c when c < 0 =>
+              balanceMid(delete(node.mid, cmp), node.value1, node);
+            | c when c > 0 =>
+              balanceHi(delete(node.hi, cmp), node.value2, node);
+            | _ =>
+              match (node.low)
+              {
+              | Leaf =>
+                retValue = node.value2;
+                retNode = Node2(Leaf(), node.value1, Leaf());
+                false;
+              | _ =>
+                balanceHi(delete(node.hi, _cmpReplacement), retValue, node);
+              }
+            }
+          | _ =>
+            match (node.low)
+            {
+            | Leaf =>
+              retValue = node.value1;
+              retNode = Node2(Leaf(), node.value2, Leaf());
+              false;
+            | _ =>
+              balanceMid(delete(node.mid, _cmpReplacement), retValue, node);
+            }
+          }
+        }
+      }
+      _ = delete(this, CmpValue(value, cmp));
+      if (isMissed)
+      {
+        this;
+      }
+      else
+      {
+        --size;
+        retNode;
+      }
+    }
+
+    public Filter(cmp : T * T -> int, fn : T -> bool) : int * Node[T]
+    {
+      mutable size = 0;
+      def filterFn(value, tree)
+      {
+        if (fn(value))
+          tree.Insert(value, cmp, InsertOptions.ThrowIfDuplicate, ref size)
+        else
+          tree
+      }
+      (size, this.Fold(Node[T].Leaf(), filterFn));
+    }
+
+    public Partition(cmp : T * T -> int, fn : T -> bool) : int * Node[T] * int * Node[T]
+    {
+      mutable ysize = 0;
+      mutable ytree = Node[T].Leaf();
+      mutable nsize = 0;
+      mutable ntree = Node[T].Leaf();
+      def partitionFn(value, dummy)
+      {
+        if (fn(value))
+          ytree = ytree.Insert(value, cmp, InsertOptions.ThrowIfDuplicate, ref ysize);
+        else
+          ntree = ntree.Insert(value, cmp, InsertOptions.ThrowIfDuplicate, ref nsize);
+        dummy;
+      }
+      _ = this.Fold(null, partitionFn);
+      (ysize, ytree, nsize, ntree);
+    }
+
+    public TryGet(value : T, cmp : T * T -> int, outValue : out T) : bool
+    {
+      def tryGet(node)
+      {
+      | Leaf => false
+      | Node2 as node =>
+        match (cmp(value, node.value1))
+        {
+        | c when c < 0 => tryGet(node.low);
+        | c when c > 0 => tryGet(node.hi);
+        | _ =>
+          outValue = node.value1;
+          true;
+        }
+      | Node3 as node =>
+        match (cmp(value, node.value1))
+        {
+        | c when c < 0 => tryGet(node.low);
+        | c when c > 0 =>
+          match (cmp(value, node.value2))
+          {
+          | c when c < 0 => tryGet(node.mid);
+          | c when c > 0 => tryGet(node.hi);
+          | _ =>
+            outValue = node.value2;
+            true;
+          }
+        | _ =>
+          outValue = node.value1;
+          true;
+        }
+      }
+      outValue = value;
+      tryGet(this);
+    }
+
+    public Enumerate() : SCG.IEnumerable[T]
+    {
+      ToArray();
+    }
+
+    public Fold[TAccumulator](acc : TAccumulator, fn : T * TAccumulator -> TAccumulator) : TAccumulator
+    {
+      FoldLeft(acc, fn);
+    }
+
+    public FoldLeft[TAccumulator](acc : TAccumulator, fn : T * TAccumulator -> TAccumulator) : TAccumulator
+    {
+      match (this)
+      {
+      | Leaf => acc;
+      | Node2 as node =>
+        def acc = node.low.FoldLeft(acc, fn);
+        def acc = fn(node.value1, acc);
+        def acc = node.hi.FoldLeft(acc, fn);
+        acc;
+      | Node3 as node =>
+        def acc = node.low.FoldLeft(acc, fn);
+        def acc = fn(node.value1, acc);
+        def acc = node.mid.FoldLeft(acc, fn);
+        def acc = fn(node.value2, acc);
+        def acc = node.hi.FoldLeft(acc, fn);
+        acc;
+      }
+    }
+
+    public FoldRight[TAccumulator](acc : TAccumulator, fn : T * TAccumulator -> TAccumulator) : TAccumulator
+    {
+      match (this)
+      {
+      | Leaf => acc;
+      | Node2 as node =>
+        def acc = node.hi.FoldRight(acc, fn);
+        def acc = fn(node.value1, acc);
+        def acc = node.low.FoldRight(acc, fn);
+        acc;
+      | Node3 as node =>
+        def acc = node.hi.FoldRight(acc, fn);
+        def acc = fn(node.value2, acc);
+        def acc = node.mid.FoldRight(acc, fn);
+        def acc = fn(node.value1, acc);
+        def acc = node.low.FoldRight(acc, fn);
+        acc;
+      }
+    }
+
+    public ForAll[TAccumulator](fn : T -> bool) : bool
+    {
+      match (this)
+      {
+      | Leaf => true;
+      | Node2 as node => fn(node.value1) && node.low.ForAll(fn) && node.hi.ForAll(fn);
+      | Node3 as node => fn(node.value1) && fn(node.value2) && node.low.ForAll(fn) && node.mid.ForAll(fn) && node.hi.ForAll(fn);
+      }
+    }
+
+    public Exists[TAccumulator](fn : T -> bool) : bool
+    {
+      match (this)
+      {
+      | Leaf => false;
+      | Node2 as node => fn(node.value1) || node.low.Exists(fn) || node.hi.Exists(fn);
+      | Node3 as node => fn(node.value1) || fn(node.value2) || node.low.Exists(fn) || node.mid.Exists(fn) || node.hi.Exists(fn);
+      }
+    }
+
+    public Count : int
+    {
+      get
+      {
+        match (this)
+        {
+        | Leaf          => 0;
+        | Node2 as node => 1 + node.low.Count + node.hi.Count;
+        | Node3 as node => 2 + node.low.Count + node.mid.Count + node.hi.Count;
+        }
+      }
+    }
+
+    public Sum[TAccumulator](size : ref int, that : Node[T], cmp : T * T -> int) : Node[T]
+    {
+      mutable sz = size;
+      def res = that.Fold(this, (value, tree) => tree.Insert(value, cmp, InsertOptions.Replace, ref sz));
+      size = sz;
+      res;
+    }
+
+    public Subtract[TAccumulator](size : ref int, that : Node[T], cmp : T * T -> int) : Node[T]
+    {
+      mutable sz = size;
+      def res = that.Fold(this, (value, tree) => tree.Delete(value, cmp, DeleteOptions.IgnoreMissed, ref sz));
+      size = sz;
+      res;
+    }
+
+    public Intersect[TAccumulator](size : ref int, that : Node[T], cmp : T * T -> int) : Node[T]
+    {
+      mutable sz = 0;
+      mutable outValue;
+      def res = that.Fold
+        (Node[T].Leaf(), (value, tree) =>
+          if (this.TryGet(value, cmp, out outValue))
+            tree.Insert(value, cmp, InsertOptions.ThrowIfDuplicate, ref sz)
+          else
+            tree
+        );
+      size = sz;
+      res;
+    }
+
+    public Xor[TAccumulator](size : ref int, that : Node[T], cmp : T * T -> int) : Node[T]
+    {
+      mutable sz = 0;
+      mutable outValue;
+      def tree = Node[T].Leaf();
+      def tree = that.Fold
+        (tree, (value, tree) =>
+          if (this.TryGet(value, cmp, out outValue))
+            tree
+          else
+            tree.Insert(value, cmp, InsertOptions.ThrowIfDuplicate, ref sz)
+        );
+      def tree = this.Fold
+        (tree, (value, tree) =>
+          if (that.TryGet(value, cmp, out outValue))
+            tree
+          else
+            tree.Insert(value, cmp, InsertOptions.ThrowIfDuplicate, ref sz)
+        );
+      size = sz;
+      tree
+    }
+
+    public ToArray() : array[T]
+    {
+      FoldLeft(SCG.List(), (value, lst) => { lst.Add(value); lst}).ToArray();
+    }
+
+    public ToList() : list[T]
+    {
+      FoldRight([], _ :: _);
+    }
+
+    public MapToArray[U](fn : T -> U) : array[U]
+    {
+      FoldLeft(SCG.List(), (value, lst) => { lst.Add(fn(value)); lst}).ToArray();
+    }
+
+    public MapToList[U](fn : T -> U) : list[U]
+    {
+      FoldRight([], (value, acc) => fn(value) :: acc);
+    }
+
+    public ToString(first : string, delim : string, last : string) : string
+    {
+      def sb = System.Text.StringBuilder().Append(first);
+      def sb = FoldLeft(sb, (value, sb) => sb.Append(value : object).Append(delim) );
+      when (sb.Length > first.Length)
+        sb.Length -= delim.Length;
+      _ = sb.Append(last);
+      sb.ToString();
+    }
+
+    public override GetHashCode() : int
+    {
+      FoldLeft(0, (val, hash) => unchecked { (hash ^ val.GetHashCode()) * 5 + hash } )
+    }
+  }
+}

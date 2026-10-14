@@ -39,7 +39,9 @@ namespace Nemerle.Compiler
         else
         {
           def genericArgs = t.GetGenericArguments();
-          def ns = if (t.Namespace == "") "" else t.Namespace + ".";
+          // A generic type nested in a file module's class: the class is part of the name (Nemerle.Core.ValueOption).
+          def ns = if (t.IsNested && !t.DeclaringType.IsGenericType) TypeFullName(t.DeclaringType) + "."
+                   else if (string.IsNullOrEmpty(t.Namespace)) "" else t.Namespace + ".";
           $"$ns$(t.Name)[..$(genericArgs.Map(_.Name))]"
         }
       }

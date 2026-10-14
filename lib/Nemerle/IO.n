@@ -1,0 +1,295 @@
+/*
+ * Copyright (c) 2005-2008 The University of Wroclaw.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.IO;
+using System.Text;
+
+// ---- input.n (Nemerle.IO, formerly module Nemerle.IO) ----
+/**
+ * Helper functions for handling the standard input stream
+ */
+public class InvalidInput : Exception
+{ }
+
+public ConsumeWhiteSpace (input : TextReader) : void
+{
+  mutable ch = 0;
+  while ({ ch = input.Peek ();
+    ch >= 0 && Char.IsWhiteSpace (Convert.ToChar (ch)) }) 
+  {
+    ignore (input.Read ())
+  }
+}
+
+/// Read digital characters returning integer value of read string
+public ReadIntDigits (input : TextReader) : string
+{
+  def first = input.Read ();
+  if (first >= 0)
+  {
+    def firstc = Convert.ToChar (first);
+      
+    if (Char.IsDigit (firstc) || firstc == '-' || firstc == '+')
+    {
+      def buf = System.Text.StringBuilder();
+      _ = buf.Append (firstc);
+        
+      while ({ def ch = input.Peek (); ch >= 0 && Char.IsDigit (Convert.ToChar (ch))}) 
+        _ = buf.Append (Convert.ToChar (input.Read ()));
+          
+      buf.ToString ()
+    }
+    else throw InvalidInput ()
+  }
+  else throw InvalidInput ()
+}
+
+/**
+ * Read digital characters returning real value of read string
+ */
+/*
+public ReadRealDigits (input : TextReader) : string
+{
+  def first = input.Read ();
+  if (first >= 0) {
+    def firstc = Convert.ToChar (first);
+      
+    if (Char.IsDigit (firstc) || firstc == '-' || firstc == '+' || firstc == '.') {
+      mutable buf = System.Text.StringBuilder();
+      buf = buf.Append (firstc);
+        
+      while ({ def ch = input.Peek (); ch >= 0 && 
+        Char.IsDigit (Convert.ToChar (ch))}) {
+             buf = buf.Append (Convert.ToChar (input.Read ()))
+      }
+          
+      buf.ToString ()
+    }
+    else throw InvalidInput ()
+  }
+  else throw InvalidInput ()
+}
+*/  
+/**
+ * Reads characters up to first occurence of whitespace and returns 
+ * read string
+ */
+public ReadString (input : TextReader) : string
+{
+  def buf = Text.StringBuilder();
+        
+  while ( { def ch = input.Peek (); ch >= 0 && 
+    !Char.IsWhiteSpace (Convert.ToChar (ch)) })
+  {
+    ignore (buf.Append (Convert.ToChar (input.Read ())))
+  }
+
+  buf.ToString ()
+}
+
+public ReadChar (input : TextReader) : int
+{
+  def c = input.Read ();
+  if (c >= 0) c else throw InvalidInput ();
+}
+
+/**
+ * Checks if input consist exactly of given string (all consecutive 
+ * sequences of whitespaces in string and input are treated as single 
+ * whitespace character, thus they match each other)
+ */
+public CheckInput (str : string, input : TextReader) : void
+{
+  def n = str.Length;
+  mutable i = 0;
+
+  while (i < n)
+  {
+    if (Char.IsWhiteSpace (str [i]))
+    {
+      ConsumeWhiteSpace (input);
+      
+      while (i < n && Char.IsWhiteSpace (str [i]))
+        ++i
+    } 
+    else
+    {
+      def inp = input.Read ();
+
+      unless (inp >= 0 && Convert.ToChar (inp) == str [i])
+        throw InvalidInput ();
+      ++i;
+    }
+  }
+}
+
+// ---- PipeReader.n (Nemerle.IO) ----
+public class PipeReader : TextReader
+{
+  input_reader : TextReader;
+  filter : string -> string;
+  mutable input_ptr : int;
+  mutable line : string = "";
+
+  /// [filter] is called for each line of the input.
+  public this (input_reader : TextReader, filter : string -> string)
+  {
+    this.filter = filter;
+    this.input_reader = input_reader;
+  }
+
+  fill_buffer () : void
+  {
+    input_ptr = 0;
+    def orig = input_reader.ReadLine ();
+    if (orig == null)
+      line = ""
+    else
+    {
+      line = filter (orig + "\n");
+      when (line == "")
+        fill_buffer ()
+    }
+  }
+
+  protected override Dispose (disposing : bool) : void
+  {
+    base.Dispose (disposing);
+    (input_reader : IDisposable).Dispose ()
+  }
+
+  public override Peek () : int
+  {
+    when (line.Length <= input_ptr)
+      fill_buffer ();
+    if (line.Length <= input_ptr) -1
+    else line [input_ptr] :> int
+  }
+
+  public override Read () : int
+  {
+    def ch = Peek ();
+    when (ch != -1) input_ptr++;
+    ch
+  }
+
+  public override ReadToEnd () : string
+  {
+    def ch = Read ();
+    if (ch == -1)
+      null
+    else
+    {
+      def buf = StringBuilder ();
+      _ = buf.Append (ch :> char);
+      def loop ()
+      {
+        match (Read ())
+        {
+          | -1 => buf.ToString ()
+          | ch => _ = buf.Append (ch :> char); loop ()
+        }
+      }
+      loop ()
+    }
+  }
+
+  public override ReadLine () : string
+  {
+    def ch = Read ();
+    if (ch == -1)
+      null
+    else
+    {
+      def buf = StringBuilder ();
+      _ = buf.Append (ch :> char);
+      def loop ()
+      {
+        def ch = Read ();
+        if (ch == '\r' :> int)
+          loop ()
+        else if (ch == '\n' :> int || ch == -1)
+          buf.ToString ()
+        else
+        {
+          _ = buf.Append (ch :> char);
+          loop ()
+        }
+      }
+      loop ()
+    }
+  }
+}
+
+// ---- PipeWriter.n (Nemerle.IO) ----
+public class PipeWriter : TextWriter
+{
+  output_writer : TextWriter;
+  filter : string -> string;
+  line : StringBuilder = StringBuilder ();
+
+  /// [filter] is called for each line of the input.
+  public this (output_writer : TextWriter, filter : string -> string)
+  {
+    this.filter = filter;
+    this.output_writer = output_writer;
+  }
+
+  public override Encoding : Encoding
+  {
+    get { output_writer.Encoding }
+  }
+
+  flush_line () : void
+  {
+    def filtered = filter (line.ToString ());
+    line.Length = 0;
+    output_writer.Write (filtered)
+  }
+
+  protected override Dispose (disposing : bool) : void
+  {
+    base.Dispose (disposing);
+    when (line.Length > 0)
+      flush_line ();
+    (output_writer : IDisposable).Dispose ()
+  }
+
+  public override Flush () : void
+  {
+    output_writer.Flush ()
+  }
+
+  public override Write (ch : char) : void
+  {
+    _ = line.Append (ch);
+    when (ch == '\n')
+      flush_line ()
+  }
+}

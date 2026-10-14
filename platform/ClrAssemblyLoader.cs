@@ -62,12 +62,30 @@ namespace Nemerle.Platform
                     throw new InvalidOperationException("Conflicting shared assembly identity: " + assembly.FullName);
                 loaded[assembly.FullName] = assembly;
             }
+            // Another build of a core assembly (see OtherRuntimeBuild) lives in its own context, so that code which
+            // was built for the running compiler (macro libraries) never binds to it.
+            sealed class TargetRuntimeContext : AssemblyLoadContext
+            {
+                readonly ReferenceContext owner;
+                internal TargetRuntimeContext(ReferenceContext owner) : base("Nemerle target runtime") { this.owner = owner; }
+                protected override Assembly Load(AssemblyName name) { return owner.Resolve(name); }
+            }
+            TargetRuntimeContext target;
             internal Assembly LoadReference(string path)
             {
                 path = Path.GetFullPath(path);
                 var name = AssemblyName.GetAssemblyName(path);
-                if (Shared(name.Name) && !OtherRuntimeBuild(name, path)) return Default.LoadFromAssemblyName(name);
                 Assembly previous;
+                if (Shared(name.Name))
+                {
+                    if (!OtherRuntimeBuild(name, path)) return Default.LoadFromAssemblyName(name);
+                    if (loaded.TryGetValue(name.FullName, out previous)) return previous;
+                    directories.Add(Path.GetDirectoryName(path));
+                    if (target == null) target = new TargetRuntimeContext(this);
+                    var other = target.LoadFromAssemblyPath(path);
+                    loaded[name.FullName] = other;
+                    return other;
+                }
                 if (loaded.TryGetValue(name.FullName, out previous))
                 {
                     // Scripts loaded from validated PE bytes have no Location. A
@@ -82,13 +100,14 @@ namespace Nemerle.Platform
                 loaded[name.FullName] = assembly;
                 return assembly;
             }
-            // Bootstrapping a runtime whose types moved: a compiler running on one Nemerle.dll may compile against a
-            // different build of it. Only the runtime is treated this way; the same build (same module id) stays shared.
+            // Bootstrapping a runtime whose types moved: a compiler running on one build of Nemerle.dll /
+            // Nemerle.Compiler.dll / Nemerle.Macros.dll may compile against a different build of them (whose
+            // signatures use the new runtime). The same build (same module id) stays shared with the running compiler.
             static bool OtherRuntimeBuild(AssemblyName name, string path)
             {
-                if (name.Name != "Nemerle") return false;
+                if (name.Name != "Nemerle" && name.Name != "Nemerle.Compiler" && name.Name != "Nemerle.Macros") return false;
                 foreach (var running in Default.Assemblies)
-                    if (running.GetName().Name == "Nemerle" && running.Location.Length > 0)
+                    if (running.GetName().Name == name.Name && running.Location.Length > 0)
                         return ModuleId(running.Location) != ModuleId(path);
                 return false;
             }
@@ -108,10 +127,22 @@ namespace Nemerle.Platform
                     name == "mscorlib" || name == "netstandard" ||
                     File.Exists(Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location), name + ".dll"));
             }
-            protected override Assembly Load(AssemblyName name)
+            protected override Assembly Load(AssemblyName name) { return Resolve(name); }
+            internal Assembly Resolve(AssemblyName name)
             {
                 Assembly assembly;
                 if (loaded.TryGetValue(name.FullName, out assembly)) return assembly;
+                // A dependency on another build of a core assembly (e.g. the newer Nemerle.dll next to a newer
+                // Nemerle.Compiler.dll) resolves in this context when that build sits in a reference directory.
+                foreach (var directory in directories)
+                {
+                    var candidate = Path.Combine(directory, name.Name + ".dll");
+                    if (!File.Exists(candidate)) continue;
+                    var candidateName = AssemblyName.GetAssemblyName(candidate);
+                    // Only for a request of that build's version: code built for the running runtime keeps it.
+                    if ((name.Version == null || name.Version.Equals(candidateName.Version)) && OtherRuntimeBuild(candidateName, candidate))
+                        return LoadReference(candidate);
+                }
                 if (Shared(name.Name)) return Default.LoadFromAssemblyName(name);
                 foreach (var directory in directories)
                 {

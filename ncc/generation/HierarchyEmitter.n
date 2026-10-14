@@ -374,7 +374,9 @@ namespace Nemerle.Compiler
      */
     private static is_aux_decl (ti : TypeBuilder) : bool
     {
-      ti.FullName.StartsWith("Nemerle.Internal.")
+      // Nemerle.Internal (compiler helpers and the runtime attributes other types need) is emitted first. In the
+      // runtime written as file modules it is a class (module Nemerle.Internal) that encloses those types.
+      ti.FullName == "Nemerle.Internal" || ti.FullName.StartsWith("Nemerle.Internal.")
     }
 
     private static make_platform_flags (platform : string) : PortableExecutableKinds * ImageFileMachine

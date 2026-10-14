@@ -1,0 +1,1232 @@
+/*
+ * Copyright (c) 2003-2008 The University of Wroclaw,
+ *               2008-2011 Nemerle Project Team
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *    1. Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *    2. Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *    3. The name of the University may not be used to endorse or promote
+ *       products derived from this software without specific prior
+ *       written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+ * NO EVENT SHALL THE UNIVERSITY BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Nemerle.Utility;
+using Nemerle.Collections;
+using Nemerle.Collections.NList;
+using Nemerle.Assertions;
+using System;
+using System.Diagnostics;
+using NCL = Nemerle.Collections.NList;
+using SCG = System.Collections.Generic;
+using System.IO;
+
+// ---- AssemblyInfo.n ----
+[assembly: AssemblyTitle("Nemerle Library")]
+[assembly: AssemblyDescription("Nemerle (http://nemerle.org) Functional Library")]
+[assembly: AssemblyCompany("University of Wroclaw")]
+[assembly: AssemblyProduct("Nemerle Library")]
+[assembly: AssemblyCopyright("Copyright (c) University of Wroclaw 2003-2008, Nemerle Project Team 2008-2013")]
+
+// AssemblyVersion: passed by the build (-assembly-version), the same git-derived version as the compiler's.
+[assembly: ComVisible(false)]
+
+[assembly: CompilationRelaxations(8)]
+[assembly: DefaultDependency(LoadHint.Always)]
+[assembly: StringFreezing]
+[assembly: System.Security.AllowPartiallyTrustedCallers]
+
+// ---- core.n (Nemerle.Core) ----
+[System.Serializable]
+public class AssertionException : System.Exception 
+{
+  public this () {}
+
+  public this (file : string, line : int, cond : string, msg : string) 
+  { 
+    def cond = if (cond != "") " ``" + cond + "''" else "";
+    def m = "assertion" + cond + " failed in file " + file + ", line " 
+            + line.ToString ();
+    def m = if (msg != "") m + ": " + msg else m;
+    base (m);
+  }
+}
+
+[System.Serializable]
+public class MatchFailureException : System.Exception 
+{
+  public this () {}
+}
+
+[System.Serializable]
+public class NullMatchException : MatchFailureException
+{
+  public this () {}
+
+  public static raise_self () : bool 
+  { 
+    throw NullMatchException ()
+  }
+}
+
+[System.Serializable]
+public class AssemblyFindException : System.Exception 
+{
+  public this() {}
+  public this(message : string) { base(message) }
+}
+
+public type byte = System.Byte;
+public type sbyte = System.SByte;  
+public type short = System.Int16;
+public type ushort = System.UInt16;  
+public type int = System.Int32;
+public type uint = System.UInt32;  
+public type long = System.Int64;
+public type ulong = System.UInt64;  
+public type float = System.Single;
+public type double = System.Double;
+public type decimal = System.Decimal; 
+public type string = System.String;
+public type object = System.Object;
+public type bool = System.Boolean;
+public type char = System.Char;
+
+// ---- list.n (Nemerle.Core) ----
+/** The core datastructure allowing easy manipulating of small
+    and medium sized collections of elements.
+
+    It has a builtin syntax [] for empty list, x :: xs for creating list
+    from head element and tail.
+ */
+[System.Serializable]
+[Nemerle.MarkOptions (System.Serializable)]
+[Nemerle.MarkOptions (DebuggerNonUserCode)]
+[System.Runtime.InteropServices.ComVisible(false)]
+[DebuggerDisplay("Length = {Length}: {ToString()}"), DebuggerNonUserCode]
+public variant list[T] :
+  SCG.IEnumerable[T],
+  Nemerle.Collections.ICovariantList[T],
+  System.IEquatable[list[T]]
+  // , Nemerle.Collections.ICovariantEnumerable [T] //unfortunately this is prevented by MS.NET bug
+{
+  | Cons
+    {
+      [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+      hd : T;
+      [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+      [Nemerle.Extensions.CompilerMutable]
+      tl : list [T];
+
+      // For debugging purpose.
+      [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+      AsArray2 : array [T] { get { _ = NToArray; ToArray () } }
+    }
+
+  | Nil { public override ToString () : string { "[]" } }
+
+  public override ToString () : string { "[" + ToString(", ") + "]" }
+
+  public ToString (separator : string) : string
+  {
+    $"..$(this; separator)"
+  }
+
+  public CovariantTail : Nemerle.Collections.ICovariantList [T]
+  {
+    get { Tail }
+  }
+
+  public static @== (x : list [T], y : list [T]) : bool
+  {
+    if(ReferenceEquals(null, x))
+      ReferenceEquals(x, y)
+    else
+      x.Equals(y)
+  }
+
+  public static @!= (x : list [T], y : list [T]) : bool
+  {
+    if(ReferenceEquals(null, x))
+      !ReferenceEquals(x, y)
+    else
+      !x.Equals(y)
+  }
+
+  [Nemerle.OverrideObjectEquals]
+  public Equals (other : list [T]) : bool
+    implements System.IEquatable[list[T]].Equals
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop (a, b) {
+      if(ReferenceEquals(a, b))
+        true
+      else
+        match(a) {
+          | x :: xs =>
+            match(b) {
+              | y :: ys when comparer.Equals(x, y) => loop(xs, ys)
+              | _ => false
+            }
+          | [] =>
+            match(b) {
+              | [] => true
+              | _ => false
+            }
+          | null => ReferenceEquals(null, b)
+        }
+    }
+    loop(this, other);
+  }
+
+  public Equals[TSecond] (lst2 : list [TSecond], compare : T * TSecond -> bool) : bool
+  {
+    NCL.Equals (this, lst2, compare)
+  }
+
+  public override GetHashCode () : int
+  {
+    def comparer = SCG.EqualityComparer.Default;
+    def loop (a, acc) {
+      match(a) {
+        | x :: xs => loop(xs, unchecked(757927 * acc + comparer.GetHashCode(x)))
+        | _ => acc
+      }
+    }
+    loop(this, 842801)
+  }
+
+  [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+  public Length : int
+  {
+    get {
+      NCL.Length (this)
+    }
+  }
+
+  public GetElementType () : System.Type {
+    _ = this; // suppress warning
+    typeof (T)
+  }
+
+  /**
+   * Returns true if the given list is empty.
+   */
+  [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+  public IsEmpty : bool
+  {
+    get { NCL.IsEmpty(this) }
+  }
+
+  /**
+   * Returns head (first element) of list.
+   * Given empty list throws System.ArgumentException.
+   */
+  [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+  public Head : T
+  {
+    get
+    {
+      match (this)
+      {
+        | x :: _ => x
+        | [] => throw System.ArgumentException("NList.Head called with empty list");
+      }
+    }
+  }
+
+  /**
+   * Returns tail (all elements except the first one) of list.
+   */
+  [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+  public Tail : list [T] {
+    get {
+      match (this) {
+        | _ :: tl => tl
+        | [] => throw System.ArgumentException ("NList.Tail called for empty list")
+      }
+    }
+  }
+
+  /**
+   * Returns last element of list.
+   * Given empty list throws InvalidArgument exception.
+   * Works in time O(n) and memory O(1).
+   */
+  [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+  public Last : T {
+    get {
+      NCL.Last (this)
+    }
+  }
+
+
+  /* -- ENUMERATION SUPPORT   -------------------------------------------- */
+
+  /**
+   * Creates enumerator for elements of list.
+   */
+  public GetEnumerator() : Nemerle.Collections.ListEnumerator[T]
+  {
+    Nemerle.Collections.ListEnumerator(this)
+  }
+
+  public static @+ (x : list [T], y : list [T]) : list [T]
+  {
+    NCL.Append (x, y)
+  }
+
+
+  /**
+   * Returns first n elements of the list.
+   * Works in time and memory O(n).
+   */
+  public FirstN (n : int) : list [T]
+  {
+    def loop (k, acc, lst) {
+      if (k == 0) NList.Rev (acc)
+      else
+        match (lst) {
+          | x :: xs => loop (k - 1, x :: acc, xs)
+          | [] =>
+            throw System.ArgumentException ("NList.FirstN called for too short list")
+        }
+    }
+
+    loop (n, [], this)
+  }
+
+
+  /** Return [this] without first [n] elements. Works in time O(n)
+      and constant memory. Throws ArgumentException when called on
+      too short list.  */
+  public ChopFirstN (n : int) : list [T]
+  {
+    def loop (n, l) {
+      if (n == 0) l
+      else
+        match (l) {
+          | _ :: xs => loop (n - 1, xs)
+          | [] =>
+            throw System.ArgumentException ("NList.ChopFirstN called for too short list")
+        }
+    }
+    loop (n, this)
+  }
+
+
+  public LastN (n : int) : list [T]
+  {
+    def len = Length;
+    if (n > len)
+      throw System.ArgumentException ("NList.LastN called for too short list")
+    else
+      ChopFirstN (len - n)
+  }
+
+  public Nth (n : int) : T { NCL.Nth (this, n) }
+
+
+  /**
+   * Returns reversed list, i.e. [1,2,3].Reverse().Equals ([3,2,1]).
+   * Works in time and memory O(n).
+   */
+  public Reverse () : list [T] { NCL.Rev (this) }
+
+  /**
+   * Returns list made from appending list y at end of list x.
+   * Original list are not modified.
+   * Works in time and memory O(length(x)).
+   */
+  public Append (y : list [T]) : list [T] { NCL.RevAppend (Reverse (), y) }
+
+  /**
+   * Equivalent to Reverse().Append(y), but faster.
+   */
+  public RevAppend (y : list [T]) : list [T] {
+    NCL.RevAppend(this, y)
+  }
+
+
+  /**
+   * Returns current list without elements equal to x.
+   * Equals method is used to compare elements.
+   */
+  public Remove (x : T) : list[T]
+  {
+    NCL.Remove (this, x)
+  }
+
+
+  /**
+   * Returns a list without its last element and the list's last element
+   */
+  public DivideLast () : list [T] * T
+  {
+    NCL.DivideLast (this)
+  }
+
+
+  /* -- ITERATORS -------------------------------------------------------- */
+
+  public Iter (f : T -> void) : void {
+    NCL.Iter (this, f)
+  }
+
+  public IterI (mutable acc : int, f : int * T -> void) : void {
+    foreach (x in this) {
+      f (acc, x);
+      acc++
+    }
+  }
+
+  public Map[TOut] (convert : T -> TOut) : list [TOut]
+  {
+    NCL.Map (this, convert)
+  }
+
+  public MapIRev[TOut](convert : int * T -> TOut) : list[TOut]
+  {
+    def loop(src, res, index)
+    {
+      match (src)
+      {
+        | []           => res
+        | item :: tail => loop(tail, convert(index, item) :: res, index + 1)
+      }
+    }
+    loop(this, [], 0)
+  }
+
+  public MapI[TOut](convert : int * T -> TOut) : list[TOut]
+  {
+    MapIRev(convert).Reverse()
+  }
+
+  public Zip[TSecond](second : list[TSecond]) : list [T * TSecond]
+  {
+    match (this, second)
+    {
+      | (x :: xs, y :: ys) => (x, y) :: xs.Zip(ys)
+      | ([], []) => []
+      | (null, _) => throw System.ArgumentNullException("this")
+      | (_, null) => throw System.ArgumentNullException("second")
+      | (_, _) => throw System.ArgumentException("list[T].Zip(): Collections mast have same", "second")
+    }
+  }
+
+  public MapFiltered[TOut] (predicate : T -> bool, convert : T -> TOut) : list [TOut] {
+    NCL.MapFiltered (this, predicate, convert)
+  }
+
+  public RevMap[TOut] (f : T -> TOut) : list [TOut] {
+    NCL.RevMap (this, f)
+  }
+
+  public FoldLeft[TOut] (acc : TOut, f : T * TOut -> TOut) : TOut {
+    NCL.FoldLeft (this, acc, f)
+  }
+
+  public FoldRight[TOut] (acc : TOut, f : T * TOut -> TOut) : TOut {
+    NCL.FoldRight (this, acc, f)
+  }
+
+  public Group (cmp : T * T -> int) : list [list [T]] {
+    NCL.Group (this, cmp)
+  }
+
+  /* -- LIST SCANNING ----------------------------------------------------- */
+
+  /**
+   * Returns 'true' if all of the 'l' list's elements satisfy
+   * the condition 'f'.
+   *
+   * Example of use:
+   *
+   *   NList.ForAll ([2, 4, 6, 8], fun (x) { x % 2 == 0 })
+   *
+   * evaluates to 'true' as all the list's elements are even.
+   */
+  public ForAll (f : T -> bool) : bool
+  {
+    NCL.ForAll (this, f)
+  }
+
+  public ForAll2[TSecond] (lst2 : list [TSecond], predicate : T * TSecond -> bool) : bool
+  {
+    NCL.ForAll2 (this, lst2, predicate)
+  }
+
+  /**
+   * Returns 'true' if at least one of the 'l' list's elements
+   * satisfies the condition 'f'.
+   *
+   * Example of use:
+   *
+   *   NList.Exists (["a", "b", "abc", "d", "e"], fun (x) { x.Length > 2 })
+   *
+   * evaluates to 'true' as there is one string of length 3 on the list.
+   */
+  public Exists (f : T -> bool) : bool
+  {
+    NCL.Exists (this, f)
+  }
+
+  /**
+   * NList membership test, using the `Equals' method to compare objects.
+   */
+  public Contains (a : T) : bool
+  {
+    NCL.Member (this, a)
+  }
+
+
+  /* -- LIST SEARCHING --------------------------------------------------- */
+
+  /**
+   * Finds the first elements for which a predicate is true.
+   */
+  public Find (pred : T -> bool) : option [T]
+  {
+    NCL.Find (this, pred)
+  }
+
+  /**
+   * Finds the first elements for which a predicate is true.
+   */
+  public FindWithDefault (default : T, pred : T -> bool) : T
+  {
+    def loop (l) {
+      | h :: t =>
+        if (pred (h)) h else loop (t)
+      | [] => default
+    }
+    loop (this)
+  }
+
+
+
+  /**
+   * Returns the number of elements for which a predicate is true.
+   */
+  public FilteredLength (f : T -> bool) : int
+  {
+    NCL.FilteredLength (this, f)
+  }
+
+
+  /**
+   * Removes elements for which predicate is false
+   */
+  public Filter (f : T -> bool) : list [T]
+  {
+    NCL.Filter (this, f)
+  }
+
+
+  /**
+   * Removes elements for which predicate is false.
+   * The resulting list is reversed (operation is faster this way).
+   */
+  public RevFilter (f : T -> bool) : list [T]
+  {
+    NCL.RevFilter (this, f)
+  }
+
+
+  /**
+   * Return list, reversed or not, with elements not fulfilling [f] removed.
+   * Avoid allocation if possible.
+   */
+  public RevFilterWhenNeeded (f : T -> bool) : list [T]
+  {
+    if (NCL.ForAll (this, f)) this
+    else NCL.RevFilter (this, f)
+  }
+
+  /**
+   * This is an alias for ``Filter''
+   */
+  public FindAll (f : T -> bool) : list [T]
+  {
+    Filter (f)
+  }
+
+
+  /**
+   * Partitions a list into two sublists according to a predicate.
+   */
+  public Partition (pred : T -> bool) : list [T] * list [T]
+  {
+    NCL.Partition (this, pred)
+  }
+
+  public Singletons()
+                : list [list [T]]
+  {
+      NList.Singletons(this)
+  }
+
+
+  /**
+   * Return list of all possible [n]-element subsets of set [list].
+   */
+  public SizeSubsets
+      (
+       n    : int
+      )
+      : list [list [T]]
+  {
+      NList.SizeSubsets(this, n)
+  }
+
+  /** Return list consisting of [count] references to [elem].  */
+  public static Repeat(elem : T, count : int) : list [T]
+  {
+    def loop (acc, n) {
+      if (n <= 0) acc
+      else loop (elem :: acc, n - 1)
+    }
+    loop ([], count)
+  }
+
+  /** Return a list of integers from 0 to [end], excluding [end]. */
+  public static Range (end : int) : list [int] {
+    Range (0, end)
+  }
+
+  /**
+   * Return a list of values incremented by [step], beginning
+   * with [beg], up/down to [end], excluding [end] itself.
+   */
+  public static Range (beg : int, end : int, step = 1) : list [int]
+  {
+    NList.Range(beg, end, step)
+  }
+
+  /** Return a list of characters from 'a' to [end], excluding [end]. */
+  public static Range (end : char) : list [char]
+  {
+    NList.Range(end)
+  }
+
+  /**
+   * Return a list of characters, which values are incremented by [step],
+   * beginning with [beg], up/down to [end], excluding [end] itself.
+   */
+  public static Range (b : char, e : char, step = 1) : list [char]
+  {
+    NList.Range(b, e, step)
+  }
+  
+  /**
+   * Returns reversed list, i.e. Rev([1,2,3]) = [3,2,1].
+   * Works in time and memory O(n).
+   */
+  public Rev () : list [T]
+  {
+    NCL.Rev (this)
+  }
+
+
+  /* -- SORTING ---------------------------------------------------------- */
+
+  public Sort (cmp : T * T -> int) : list [T]
+  {
+    NCL.Sort (this, cmp)
+  }
+
+  public static IsOrdered[TSecond] (this lst : list[TSecond], great : TSecond * TSecond -> bool) : bool
+  {
+    match (lst)
+    {
+      | first :: ((second :: _) as tail) =>
+        if (great (first, second)) false else IsOrdered (tail, great)
+
+      | [_] | [] | null => true
+    }
+  }
+
+  public static IsOrdered[TSecond](this lst : list[TSecond]) : bool
+    where TSecond: System.IComparable[TSecond]
+  {
+    IsOrdered(lst, (x, y) => x.CompareTo(y) > 0)
+  }
+
+
+  public RemoveDuplicates () : list [T]
+  {
+    NCL.RemoveDuplicates (this)
+  }
+
+
+  // For debugging purpose.
+  [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+  protected NToArray : array [T]
+  {
+    get { ToArray () }
+  }
+
+  public ToArray () : array [T]
+  {
+    def result = array (Length);
+    CopyTo (result);
+    result
+  }
+
+  /**
+   * Copies first [len] elements from current list to specified array beginning with index 0
+   */
+  public CopyTo (dest : array [T], len : int) : void
+  {
+    mutable i = 0;
+    foreach (el in this) {
+      when (i >= len) Nemerle.Imperative.Break ();
+      dest [i] = el;
+      i++;
+    }
+    when (i < len)
+      throw System.ArgumentException ($"insufficient amount of elements in current list: expected $len, has $i");
+  }
+
+  /**
+   * Copies all elements from current list to specified array beginning with index 0
+   */
+  public CopyTo (dest : array [T]) : void
+  {
+    mutable i = 0;
+    foreach (el in this) {
+      dest [i] = el;
+      i++;
+    }
+  }
+  
+  public MapToArray [TOut] (f : T -> TOut) : array [TOut]
+  {
+    def result = array (Length);
+    mutable i = 0;
+    foreach (x in this) {
+      result [i] = f (x);
+      i++;
+    }
+    result
+  }
+
+  public Flatten[TOut](selector : T * SCG.List[TOut] -> void) : list[TOut]
+  {
+    def result = SCG.List();
+
+    foreach (elem in this)
+      selector(elem, result);
+
+    result.NToList()
+  }
+
+  public Flatten[TOut](selector : T -> SCG.IEnumerable[TOut]) : list[TOut]
+  {
+    def result = SCG.List();
+
+    foreach (elem in this)
+      result.AddRange(selector(elem));
+
+    result.NToList()
+  }
+
+  public Filter2[T2, Result](list2 : list[T2], convert : T * T2 -> bool * Result) : list[Result]
+  {
+    NCL.Filter2(this, list2, convert)
+  }
+  
+  public OfTypeRevert[TResult]() : list[TResult]
+  {
+    mutable res = [];
+    
+    foreach (x is TResult in this)
+      res ::= x;
+      
+    res
+  }
+
+  public OfType[TResult]() : list[TResult]
+  {
+    def res = SCG.List(Length);
+    
+    foreach (x is TResult in this)
+      res.Add(x);
+      
+    res.NToList();
+  }
+}
+
+// ---- option.n (Nemerle.Core) ----
+/**
+ * The optional value variant.
+ */
+[DebuggerNonUserCode]
+[System.Serializable]
+[Nemerle.MarkOptions (System.Serializable)]    
+[Nemerle.MarkOptions (DebuggerNonUserCode)]    
+public variant option[T] : System.IEquatable[option[T]]
+{
+  | None
+  | Some { val : T; }
+
+  /**
+   * Pretty prints the optional value.
+   */
+  public override ToString () : string
+  {
+    match (this){
+      | Some (x) when x : object == null => "Some()"
+      | Some (x)                         => "Some (" + x.ToString () + ")"
+      | None                             => "None"
+    }
+  }
+
+  /**
+   * Typesafe equality checks.
+   */
+  [Nemerle.OverrideObjectEquals]
+  public Equals (o : option [T]) : bool
+    implements System.IEquatable[option[T]].Equals
+  {
+    Nemerle.Core.Option.Equals (this, o)
+  }
+
+  
+  /**
+   *  Structural HashCode provider
+   */
+  public override GetHashCode () : int
+  {
+    match (this) {
+      | None => 0
+      | Some (x) => x.GetHashCode ()
+    }
+  }
+
+  public GetValueOrDefault() : T
+  {
+    match (this)
+    {
+      | Some(v) => v
+      | None    => default(T)
+    }
+  }
+
+  public IsSome : bool
+  {
+    get { this is Some (_) }
+  }
+
+
+  public IsNone : bool
+  {
+    get { this is None () }
+  }
+
+  public WithDefault(defaultValue : T) : T
+  {
+    match (this)
+    {
+      | Some(v) => v
+      | None    => defaultValue
+    }
+  }
+
+  public HasValue : bool
+  {
+    get { this is Some (_) }
+  }
+
+  public Value : T
+  {
+    get { 
+      match (this) {
+        | Some (x) => x
+        | None =>
+          throw System.ArgumentException ("option.Value")
+      }
+    }
+  }
+
+  public static @:[TFrom](value : System.Nullable[TFrom]) : option[TFrom]
+    where TFrom: struct
+  {
+    if (value.HasValue) Some(value.Value) else None()
+  }
+}
+
+
+/**
+ * Operations on optional values
+ */
+public module Option
+{
+  /**
+   * Safe equality check
+   */
+  public Equals [T] (x : option [T], y : option [T]) : bool
+  {
+    | (Some (a), Some (b)) => a.Equals (b)
+    | (None, None)         => true
+    | (null, null)         => throw System.ArgumentException ("option can't be null")
+    | _                    => false
+  }
+
+  /**
+   * Safe optional value mapping.
+   */
+  public Map [T, TTo] (this x : option [T], f : T -> TTo) : option [TTo]
+  {
+    match (x) {
+      | Some (x) => Some (f (x))
+      | null     => throw System.ArgumentException ("option can't be null")
+      | None => None ()
+    }
+  }    
+
+  /**
+   * Same as ignore (Map (x, f)).
+   */
+  public Iter [T] (this x : option [T], f : T -> void) : void
+  {
+    match (x) {
+      | Some (x)    => f (x)
+      | null | None => ()
+    }
+  }    
+
+  /**
+   * Checks if the optional value is present.
+   */
+  public IsSome [T] (x : option [T]) : bool
+  {
+    match (x) {
+      | Some => true
+      | _ => false
+    }
+  }
+
+  /**
+   * Returns `true' if the optional value is not present.
+   */
+  public IsNone[T] (x : option [T]) : bool
+  {
+    match (x) {
+      | None => true
+      | null => throw System.ArgumentException ("option can't be null")
+      | _ => false
+    }
+  }  
+
+  /**
+   * Unwraps an optional value; throws an argument exception
+   * if the value is not present.
+   */
+  public UnSome [T] (this x : option [T]) : T
+  {
+    match (x) {
+      | Some (x) => x
+      | _        => throw System.ArgumentException ("Option.UnSome")
+    }
+  }
+
+  /**
+   * Converts nullable value to optional value.
+   */
+  public ToOption[T](this x : System.Nullable[T]) : option[T]
+    where T: struct
+  {
+    x
+  }
+}
+
+public module ValueOptionStatic
+{
+  public VSome[T](value : T) : ValueOption[T] { ValueOption(value) }
+  public VNone[T]()          : ValueOption[T] { default(ValueOption[T]) }
+}
+
+[ExtensionPattern(VSome(value) = ValueOption where(HasValue=true, Value=value))]
+[ExtensionPattern(VNone()      = ValueOption where(HasValue=false))]
+public struct ValueOption[T]
+{
+  _value : T;
+  public Value : T
+  {
+    get
+    {
+      if (HasValue) _value 
+      else assert(false, "try use Value when it not set");
+    }
+  }
+  public HasValue : bool;
+
+  public GetValueOrDefault() : T { _value }
+
+  public WithDefault(defaultValue : T) : T
+  {
+    match (HasValue)
+    {
+      | true => Value
+      | _    => defaultValue
+    }
+  }
+  
+  public IsSome : bool
+  {
+    get { HasValue }
+  }
+
+  public IsNone : bool
+  {
+    get { !HasValue }
+  }
+
+  public this(value : T)
+  {
+    _value   = value;
+    HasValue = true;
+  }
+  
+  public static None()          : ValueOption[T] { default(ValueOption[T]) }
+  public static Some(value : T) : ValueOption[T] { ValueOption(value) }
+
+  public static @:[TFrom](value : System.Nullable[TFrom]) : ValueOption[TFrom]
+    where TFrom: struct
+  {
+    if (value.HasValue) ValueOption[TFrom].Some(value.Value) else default(System.Nullable[TFrom])
+  }
+}
+
+// ---- FakeVoid.n (Nemerle) ----
+public struct FakeVoid { }
+
+// ---- icloneable.n (Nemerle) ----
+public interface ICloneable ['a]
+{
+  Clone() : 'a;
+}
+
+// ---- LazyValue.n (Nemerle) ----
+/// class representing a lazy value (delayed computation of some function)
+/// it is constructed using Nemerle.lazy(complex_code()) macro
+public class LazyValue ['a] 
+{
+  /// memoized value
+  mutable val : 'a;
+
+  /// function to obtain the value
+  mutable computation : void -> 'a;    
+
+  /// Create lazy value with given computation function to create the value
+  /// when needed
+  public this (f : void -> 'a) {
+    computation = f;
+  }
+
+  /// Create already initialized value
+  public static FromValue (val : 'a) : LazyValue ['a]
+  {
+    LazyValue (val, null)
+  }
+  
+  /// Create lazy value with fully specified state
+  private this (val : 'a, fn : void -> 'a) {
+    this.val = val;
+    computation = fn;
+  }
+
+  public static @: (x : LazyValue ['a]) : 'a {
+    x.Value
+  }
+
+  public static @: (x : 'a) : LazyValue ['a] {
+    FromValue (x)
+  }
+  
+  public override ToString () : string {      
+    System.Convert.ToString(Value);
+  }
+
+  public override Equals (x : object) : bool {
+    Value.Equals (x)
+  }
+
+  public override GetHashCode () : int {
+    Value.GetHashCode ()
+  }
+  
+  /// Get the underlying value stored in lazy computation. Perform computation
+  /// if it the value was not fethed before
+  ///
+  /// This function is thread safe. Exceptions are rethrowed, but if one occurs during
+  /// computation, then in future it will be always thrown when fetching value.
+  public Value : 'a {
+    get {
+      lock (this) {
+        try {          
+          when (computation != null) {
+            val = computation ();
+            computation = null;
+          }
+          val
+        }
+        catch {
+          | e => 
+            def e = e;
+            computation = fun () { throw e }
+            throw;
+        }
+      }
+    }
+  }
+}
+
+///result of asyncronous operation
+///If called Value calling thread is waiting for operation to compleate
+public class DelayedValue['a] : LazyValue['a]
+{
+  thread : System.Threading.Thread;
+  mutable val : 'a;
+  public this (f : void -> 'a)
+  {
+    base(()=>{thread.Join();val});
+    
+    thread = System.Threading.Thread(()=>val=f()); 
+    thread.Start ();
+  }
+  
+  public this (threadName : string, f : void -> 'a)
+  {
+    base(()=>{thread.Join();val});
+    
+    thread = System.Threading.Thread(()=>val=f()); 
+    thread.Name = threadName;
+    thread.Start ();
+  }
+  
+  public static @: (dv : DelayedValue['a] ) : 'a
+  {
+    dv.Value
+  }
+  
+  public HasValue : bool
+  {
+    get
+    {
+      !thread.IsAlive
+    }
+  }
+  
+  public Join() : void
+  {
+    thread.Join()
+  }
+  
+  public Join(timeout : int) : bool
+  {
+    thread.Join(timeout)
+  }    
+}
+
+// ---- macros.n (Nemerle) ----
+  public type MacroTargets = System.AttributeTargets;
+
+//  public enum MacroTargets { // values taken from System.AttributeTargets
+//      | Assembly = 1         // I think that we can be sure they won't change
+//      | Module = 2
+//      | Class = 4
+//      | Struct = 8
+//      | Enum = 0x10
+//      | Constructor = 0x20
+//      | Method = 0x40
+//      | Property = 0x80
+//      | Field = 0x100
+//      | Event = 0x200
+//      | Interface = 0x400
+//      | Parameter = 0x800
+//      | Delegate = 0x1000
+//      | ReturnValue = 0x2000
+//      | GenericParameter = 0x4000
+//      | WithinClass = 0x8000  // single value added beyod the ones in System.AttributeTargets
+//      | All = 0x7fff
+//  }
+
+  [System.FlagsAttribute ()]
+  public enum MacroPhase {
+    | None
+    | BeforeInheritance
+    | BeforeTypedMembers
+    | WithTypedMembers
+  }
+  
+  [System.AttributeUsage (System.AttributeTargets.Class)]
+  public sealed class MacroUsageAttribute : System.Attribute
+  {
+//    valid_on : System.AttributeTargets;
+    valid_on: MacroTargets;
+    mutable allow_multiple : bool;
+    mutable inherited : bool;
+    phase : MacroPhase;
+
+    public this (phase : MacroPhase, validOn : MacroTargets)
+    {
+      valid_on = validOn;
+      this.phase = phase;
+    }
+
+    public AllowMultiple : bool {
+      get { allow_multiple; }
+      set {
+        allow_multiple = value;
+      }
+    }
+
+    public Inherited : bool {
+      get { inherited; }
+      set {
+        inherited = value;
+      }
+    }
+
+    public ValidOn : MacroTargets {
+      get { 
+          valid_on
+      }
+    }
+  }
+
+  [System.AttributeUsage (System.AttributeTargets.Class)]
+  public sealed class TailRecursionTransparentAttribute : System.Attribute
+  {
+    mutable is_transparent : bool;
+
+    public this (tr : bool) {
+      is_transparent = tr;
+    }
+
+    public IsTransparent : bool {
+      get { is_transparent; }
+    }
+  }

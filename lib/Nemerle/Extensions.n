@@ -1,4 +1,4 @@
-﻿//
+//
 // Anonymous Class Macro for Nemerle
 // Copyright (c) 2010, Stanislav Matveev (hardcaseminator@gmail.com)
 // All rights reserved.
@@ -33,55 +33,51 @@ using SCG = System.Collections.Generic;
 using Nemerle;
 using Nemerle.Assertions;
 
-namespace Nemerle.Extensions {
+// ---- IAnonymous.n (Nemerle.Extensions) ----
+  ///<summary>
+  ///This interface is implemented by any Nemerle anonymous class.
+  ///</summary>
+  public interface IAnonymous {
 
-    ///<summary>
-    ///This interface is implemented by any Nemerle anonymous class.
-    ///</summary>
-    public interface IAnonymous {
+      ///<summary>
+      ///Field indexer. Returns null when specified field does not exist.
+      ///</summary>
+      Item[field : string] : object {
+          get
+      }
 
-        ///<summary>
-        ///Field indexer. Returns null when specified field does not exist.
-        ///</summary>
-        Item[field : string] : object {
-            get
-        }
+      ///<summary>
+      ///List of fields that anonymous class instance has.
+      ///</summary>
+      GetFields() : ReadOnlyCollection[string];
 
-        ///<summary>
-        ///List of fields that anonymous class instance has.
-        ///</summary>
-        GetFields() : ReadOnlyCollection[string];
+      ///<summary>
+      ///Entire content of anonymous type depending on number of fields:
+      ///a) null if there is not fields,
+      ///b) value of single field,
+      ///c) tuple when there are more than one field,
+      ///d) list if there are more fields than tuple can hold.
+      ///</summary>
+      GetContent() : object;
 
-        ///<summary>
-        ///Entire content of anonymous type depending on number of fields:
-        ///a) null if there is not fields,
-        ///b) value of single field,
-        ///c) tuple when there are more than one field,
-        ///d) list if there are more fields than tuple can hold.
-        ///</summary>
-        GetContent() : object;
+  }
 
-    }
+  public module Anonymous {
 
-    public module Anonymous {
+      [Memoize]
+      private FieldsAreEqual(a : ReadOnlyCollection[string], b : ReadOnlyCollection[string]) : bool {
+          when(ReferenceEquals(a, b))
+              Nemerle.Imperative.Return(true);
+          def aseq = a.GetEnumerator();
+          def bseq = b.GetEnumerator();
+          while(aseq.MoveNext() && bseq.MoveNext())
+              unless(aseq.Current == bseq.Current)
+                  Nemerle.Imperative.Return(false);
+          !(aseq.MoveNext() || bseq.MoveNext())
+      }
 
-        [Memoize]
-        private FieldsAreEqual(a : ReadOnlyCollection[string], b : ReadOnlyCollection[string]) : bool {
-            when(ReferenceEquals(a, b))
-                Nemerle.Imperative.Return(true);
-            def aseq = a.GetEnumerator();
-            def bseq = b.GetEnumerator();
-            while(aseq.MoveNext() && bseq.MoveNext())
-                unless(aseq.Current == bseq.Current)
-                    Nemerle.Imperative.Return(false);
-            !(aseq.MoveNext() || bseq.MoveNext())
-        }
+      public Equals([NotNull] a : IAnonymous, [NotNull] b : IAnonymous) : bool {
+          FieldsAreEqual(a.GetFields(), b.GetFields()) && SCG.EqualityComparer.Default.Equals(a.GetContent(), b.GetContent())
+      }
 
-        public Equals([NotNull] a : IAnonymous, [NotNull] b : IAnonymous) : bool {
-            FieldsAreEqual(a.GetFields(), b.GetFields()) && SCG.EqualityComparer.Default.Equals(a.GetContent(), b.GetContent())
-        }
-
-    }
-
-
-}
+  }

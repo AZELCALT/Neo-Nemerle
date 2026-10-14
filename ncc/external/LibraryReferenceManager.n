@@ -139,7 +139,13 @@ namespace Nemerle.Compiler
         when (Manager.Options.GreedyReferences)
         {
           def refs = assembly.GetReferencedAssemblies();
-          foreach (name : SR.AssemblyName in refs)
+          // A dependency never adds a second assembly of a name that is already referenced (e.g. a macro library
+          // built against an older Nemerle.dll while compiling against a newer one): the explicit reference wins.
+          def referencedNames = SCG.HashSet(StringComparer.OrdinalIgnoreCase);
+          foreach (loaded in _loaded_assemblies_by_name.Keys) _ = referencedNames.Add(SR.AssemblyName(loaded).Name);
+          foreach (explicit in Manager.Options.ReferencedLibraries)
+            _ = referencedNames.Add(Path.GetFileNameWithoutExtension(explicit));
+          foreach (name : SR.AssemblyName when !referencedNames.Contains(name.Name) in refs)
           {
             def asm =
               try { assemblyLoad (name) }
@@ -414,7 +420,15 @@ namespace Nemerle.Compiler
         | _ => ()
       }
 
-      def assemblyAttributes = assembly.GetCustomAttributes(false);
+      def assemblyAttributes =
+        try { assembly.GetCustomAttributes(false) }
+        catch { | e is System.TypeLoadException =>
+          def contexts = System.Text.StringBuilder();
+          foreach (context in System.Runtime.Loader.AssemblyLoadContext.All)
+            foreach (loaded when loaded.GetName().Name.StartsWith("Nemerle") in context.Assemblies)
+              _ = contexts.Append($" [$(context.Name): $(loaded.GetName().Name) $(loaded.GetName().Version) $(loaded.Location)]");
+          def owner = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(assembly);
+          throw System.TypeLoadException($"$(e.Message) (reading attributes of macro assembly $(assembly.FullName) from $(getAssemblyLocation(assembly)) in context $(owner?.Name); loaded:$contexts)", e) };
       def macroDefs = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.ContainsMacroAttribute");
       def operDefs  = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.OperatorAttribute");
 
