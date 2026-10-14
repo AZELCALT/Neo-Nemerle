@@ -403,7 +403,9 @@ public class LibraryReferenceManager
 
   public LoadPluginsFrom(name : string, strongPart : string = null, loadMacros : bool = true, loadParsers : bool = true) : void
   {
-    mutable assembly = LookupAssembly (name);
+    // A plugin given by path keeps its own dependencies when the compilation references another build of them
+    mutable assembly = if (System.IO.File.Exists(name)) try { clr_libraries.LoadPlugin(name) } catch { | _ => LookupAssembly (name) }
+                       else LookupAssembly (name);
 
     when (assembly == null && strongPart != null)
       assembly = assemblyLoad (name + strongPart);
@@ -478,7 +480,17 @@ public class LibraryReferenceManager
       {
         def parserTypeName = late(definition.Name) :> string;
         def fileExtension = late(definition.Extension) :> string;
-        match(assembly.GetType(parserTypeName))
+        // a path names a type nested in its file module (Nitra.Compiler.Integration.NitraParser is
+        // Nitra.Compiler+Integration+NitraParser in the CLR)
+        def nested(name : string, dot : int) : System.Type
+        {
+          match (assembly.GetType(name))
+          {
+            | null when dot > 0 => def next = name.Substring(0, dot) + "+" + name.Substring(dot + 1); nested(next, next.LastIndexOf('.', dot - 1))
+            | t => t
+          }
+        }
+        match(nested(parserTypeName, parserTypeName.LastIndexOf('.')))
         {
           | null       => Message.Warning($"failed to lookup parser `$parserTypeName' in assembly $(assembly.FullName)");
           | parserType => Manager.Parser.Register(parserType, fileExtension);

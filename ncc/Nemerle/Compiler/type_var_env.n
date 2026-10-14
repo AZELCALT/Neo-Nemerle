@@ -193,6 +193,23 @@ public class TypeVarEnv
             else
               types;
 
+          // A nested type hides a nested type of the same name in a base class (as in C#): X.IAstList is X's own
+          // IAstList when X derives from a type declaring one too.
+          def hidden(type : Nemerle.Compiler.type_info.TypeInfo) : bool
+          {
+            type.DeclaringType != null && types.Exists(other => !other.Equals(type) && other.Name == type.Name
+              && other.DeclaringType != null && !other.DeclaringType.Equals(type.DeclaringType)
+              && other.DeclaringType.HasSuperTypes && other.DeclaringType.IsDerivedFrom(type.DeclaringType))
+          }
+          def types =
+            if (types.Exists(hidden))
+            {
+              def ret = SCG.List();
+              foreach (type when !hidden(type) in types) ret.Add(type);
+              ret
+            }
+            else types;
+
           // Текущий тип (если он есть) и внешние типы (т.е. типы в которых он объявлен) имеют 
           // преимущество над другими типами.
 
@@ -601,6 +618,8 @@ public class TypeVarEnv
         if (ti.DeclaringType == null)
           when (ti.NamespaceNode.Parent != null)
             SetTypedObjects(expr, ti.NamespaceNode.Parent);
+        else if (!ti.DeclaringType.HasMemType) // the enclosing type (a file module) is not fixed up yet
+          SetTypedObjects(expr, ti.DeclaringType.NamespaceNode)
         else
           SetTypedObjects(expr, ti.DeclaringType.GetMemType()); // FIXME: we need calculate applied DeclaringType
       

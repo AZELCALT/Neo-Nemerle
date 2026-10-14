@@ -906,6 +906,17 @@ using Nemerle.Compiler.Utility;
                 tc
               | Some => assert(false);
 
+              | None when system_type.GetNestedType(NString.Split(name, array ['.', '+']).Last,
+                                                    SR.BindingFlags.Public | SR.BindingFlags.NonPublic) != null =>
+                // an option of a variant nested in a module and not exported to this compilation (an internal variant
+                // of another library): its nested type, not the namespace tree
+                def option = system_type.GetNestedType(NString.Split(name, array ['.', '+']).Last, SR.BindingFlags.Public | SR.BindingFlags.NonPublic);
+                match (lib.TypeInfoOfType(option))
+                {
+                  | tc is ExternalNemerleTypeInfo => tc.VariantOptionCode = index; tc
+                  | _ => assert(false)
+                }
+
               | None =>
                 if (lib.LibRefManager.IsAssemblyLoaded(system_type.Assembly.FullName))
                 {

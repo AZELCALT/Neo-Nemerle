@@ -185,6 +185,9 @@ using Nemerle.Compiler.Utility;
     }
 
     private mutable is_expanding : bool = false;
+    /// The parsed declarations are being turned into TypeBuilders (ManagerClass.Run): an assembly macro expanded now
+    /// would run before later files' module classes exist.
+    internal mutable Scanning : bool;
 
     internal ExpandMacros () : void
     {
@@ -194,6 +197,9 @@ using Nemerle.Compiler.Utility;
       def stage = current_macro_phase;
       is_expanding = true;
 
+      // File modules: an assembly macro runs once every file's module class exists (it may define types under a
+      // module's path, which nest in that module), not when scanning one file happens to expand macros.
+      def deferred = SCG.List();
       try
       {
         while (!attribute_macros_queue.IsEmpty)
@@ -202,12 +208,19 @@ using Nemerle.Compiler.Utility;
 
           when (first.Phase :> int > stage :> int) 
             break;
-           
-          //Message.Debug ($"expanding $first");
-          _ = attribute_macros_queue.ExtractFirst().Expand();
+
+          if (Scanning && Manager.Options.FileModules && first is AssemblyAttributeMacroExpansion)
+            deferred.Add(attribute_macros_queue.ExtractFirst());
+          else
+            //Message.Debug ($"expanding $first");
+            _ = attribute_macros_queue.ExtractFirst().Expand();
         }
       }
-      finally { is_expanding = false; }
+      finally
+      {
+        foreach (expansion in deferred) attribute_macros_queue.Add(expansion);
+        is_expanding = false;
+      }
     }
     
     current_macro_phase : MacroPhase

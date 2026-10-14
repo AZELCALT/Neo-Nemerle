@@ -239,7 +239,7 @@ internal sealed class NitraSourceSession
     unless(System.IO.File.Exists(hostPath))
       throw ArgumentException("grammar and space blocks need the Nitra runtime (Integrated.Nitra.Compiler.dll and its Integrated.* dependencies) next to Nemerle.Compiler.dll in "+directory);
     def assembly=System.Reflection.Assembly.LoadFrom(hostPath);
-    def type=assembly.GetType("Nitra.Compiler.NativeSourceHost",true);
+    def type=assembly.GetType("Nitra.Compiler+NativeSourceHost",true); // nested in the file module Nitra.Compiler
     def host=Activator.CreateInstance(type) :> INitraNativeSourceHost;
     host.Initialize(manager,definitions); host
   }

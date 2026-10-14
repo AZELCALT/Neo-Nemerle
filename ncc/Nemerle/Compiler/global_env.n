@@ -228,6 +228,11 @@ public class GlobalEnv
       {
         | NamespaceTree.TypeInfoCache.Cached(tb is TypeBuilder)
             when tb.IsModule && Manager.FileModuleRegistry.ModulePrefix(node.FullName) != null => return Some((tb, rest))
+        // the source module beside a type of the same path from a loaded library (a macro library's own copy)
+        | NamespaceTree.TypeInfoCache.CachedAmbiguous(types)
+            when Manager.FileModuleRegistry.ModulePrefix(node.FullName) != null
+              && types.Exists(t => t is TypeBuilder && t.IsModule) =>
+          return Some((types.Find(t => t is TypeBuilder && t.IsModule).Value :> TypeBuilder, rest))
         | _ => rest ::= node.PartName
       }
     }
@@ -260,7 +265,11 @@ public class GlobalEnv
             def inner = match (outer.DeclaredNestedTypes.Find(t => t.Name == part && t.IsModule))
             {
               | Some(t) => t
-              | None => outer.DefineNestedType(<[ decl: public module $(part : usesite) { } ]> :> PT.ClassMember.TypeDeclaration, false)
+              | None =>
+                // a module of its own, complete like any type a macro defines (fixed up, compiled)
+                def created = outer.DefineNestedType(<[ decl: public module $(part : usesite) { } ]> :> PT.ClassMember.TypeDeclaration, true);
+                created.Compile();
+                created
             };
             nest(inner, tail)
           }

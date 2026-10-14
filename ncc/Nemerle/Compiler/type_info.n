@@ -1121,6 +1121,12 @@ public abstract class TypeInfo : MemberInfo, IMember,
    *
    * Used mainly with [FreshSubst ()] or [MakeSubst ()].
    */
+  /// IsDerivedFrom is available (the super types have been calculated).
+  internal HasSuperTypes : bool { get { _superTypesCalculated } }
+
+  /// GetMemType is available (the type has been fixed up).
+  internal HasMemType : bool { get { self_type != null } }
+
   public GetMemType() : FixedType.Class
   {
     assert(self_type != null, FullName);

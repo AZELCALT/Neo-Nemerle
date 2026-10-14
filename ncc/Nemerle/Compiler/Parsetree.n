@@ -216,6 +216,22 @@ using Nemerle.Compiler.Utility;
             td.Name
         }
 
+        // Code inside a mask is in the mask's namespace already: the enclosing modules that namespace names are not
+        // repeated (Nitra.Internal.Recovery.ParseRecord, not Nitra.Internal.Recovery.Recovery.ParseRecord).
+        def enclosing(td : TopDeclaration, acc : list[TopDeclaration])
+        {
+          if (td.DefinedIn == null || isFileClass(td.DefinedIn)) td :: acc else enclosing(td.DefinedIn, td :: acc)
+        }
+        def relativeTo(ns : list[string], chain : list[TopDeclaration]) : string
+        {
+          def names = chain.Map(_.Name);
+          mutable drop = 0;
+          for (mutable k = chain.Length - 1; k > 0 && drop == 0; k--)
+            when (k <= ns.Length && ns.LastN(k).Equals(names.FirstN(k))
+                  && chain.FirstN(k).ForAll(d => d.Attributes %&& NemerleModifiers.Static))
+              drop = k;
+          names.ChopFirstN(drop).ToString(".")
+        }
         match (TryGetEnv())
         {
           | Some(env) when env != null =>
@@ -223,7 +239,7 @@ using Nemerle.Compiler.Utility;
             if (string.IsNullOrEmpty(msName))
               makeName(this)
             else
-              msName + "." + makeName(this);
+              msName + "." + relativeTo(env.CurrentNamespace.FullName, enclosing(this, []));
 
           | _ => makeName(this)
         }
