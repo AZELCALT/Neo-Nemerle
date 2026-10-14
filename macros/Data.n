@@ -269,12 +269,12 @@ namespace Nemerle.Data
     }
     
     public ConnectionExpr (mgr : ManagerClass, con_name : string) : Parsetree.PExpr {
-      def connClass = connections [con_name].GetType ().TypeFullName ();
+      def connClass = Nemerle.Compiler.ClrNames.TypeFullName (connections [con_name].GetType ());
       Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass)
     }
     
     public CommandExpr (mgr : ManagerClass, con_name : string, query : string, conn : Parsetree.PExpr) : Parsetree.PExpr {
-      def connClass = connections [con_name].GetType ().TypeFullName ();
+      def connClass = Nemerle.Compiler.ClrNames.TypeFullName (connections [con_name].GetType ());
       def cmdExpr = Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass.Replace ("Connection", "Command"));
       def connExpr = Parsetree.PExpr.FromQualifiedIdentifier (mgr, connClass);
       
@@ -282,7 +282,7 @@ namespace Nemerle.Data
     }
     
     public ParameterChar (conName : string) : char {
-      def connClass = connections [conName].GetType ().TypeFullName ();
+      def connClass = Nemerle.Compiler.ClrNames.TypeFullName (connections [conName].GetType ());
       if (connClass.EndsWith (".SqlConnection"))
         '@' 
       else if (connClass.EndsWith (".NpgsqlConnection"))

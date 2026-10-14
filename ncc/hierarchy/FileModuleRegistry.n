@@ -67,8 +67,13 @@ namespace Nemerle.Compiler
             + (if (files.Contains(name)) " (" + files[name] + " and " + file + ")" else ""));
           continue;
         }
-        // A file may sit beside a directory of the same name (Nemerle/Core.n and Nemerle/Core/list.n):
-        // module Nemerle.Core and its child modules Nemerle.Core.list.
+        // A module path may not also be a directory of other modules: the file would be a type and the directory a
+        // namespace of the same name, which C# and other .NET languages reject (CS0434).
+        foreach (existing in owners.Keys)
+          when (name.StartsWith(existing + ".", StringComparison.Ordinal)
+             || existing.StartsWith(name + ".", StringComparison.Ordinal))
+            Message.Error(loc, "file module conflicts with a directory module path: " + name + " and " + existing
+              + " (a file may not sit beside a directory of the same name)");
         owners.Add(name, source.FileIndex);
         files.Add(name, file);
         paths.Add(source.FileIndex, parts);

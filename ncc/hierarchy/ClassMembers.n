@@ -321,7 +321,7 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
           | _                    => "<unknown>"
         };
 
-      def makeTypeName (ty) { ty.TypeFullName ().Replace ('+', '.') }
+      def makeTypeName (ty) { ClrNames.TypeFullName (ty).Replace ('+', '.') }
       def add (str, iaAdd) { if (iaAdd) str + " " else "" }
       def makeGetSet (canRead, canWrite)
       {

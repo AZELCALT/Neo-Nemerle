@@ -54,7 +54,7 @@ namespace Nemerle.Compiler
 
       public this(lib : LibraryReference, h : System.Type, ns_node : NamespaceTree.Node)
       {
-        base(ns_node, lib.Manager, Util.StripGenericMark(h.TypeFullName().Replace ('+', '.').TrimStart('.')));
+        base(ns_node, lib.Manager, Util.StripGenericMark(ClrNames.TypeFullName(h).Replace ('+', '.').TrimStart('.')));
         
         TyparmsCount = h.GetGenericArguments().Length;
         

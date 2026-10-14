@@ -20,8 +20,8 @@ mask helpers { public Two() : int { 2 } }   // a named group inside the file
   name (`util.text.Shout`). Opening a directory exposes nothing.
 - **No `namespace` blocks and no `partial`.** A type lives in exactly one file.
 - **Groups inside a file use `mask`.**
-- **A file may sit beside a directory of the same name.** `Nemerle/Core.n` is module `Nemerle.Core`;
-  `Nemerle/Core/list.n` is its child module `Nemerle.Core.list`.
+- **A file may not sit beside a directory of the same name** (`a.n` with `a/b.n`). The file would be a type and
+  the directory a namespace with the same name, which C# and other .NET languages reject (CS0434).
 - **The source root** is `-source-root:DIR`, else the project path (or its directory when it names a
   project file), else the current directory. Path components must be identifiers.
 - **Other languages' files are not modules.** Only `.n` sources are; `.nitra` files, for example, keep

@@ -1,3 +1,4 @@
+using Nemerle.Collections;
 using SR = System.Reflection;
 
 namespace Nemerle.Compiler
@@ -27,6 +28,27 @@ namespace Nemerle.Compiler
         i = candidate.LastIndexOf('.', i - 1);
       }
       found
+    }
+
+    /// System.Type.FullName is null when the type contains free generic parameters; this name never is.
+    public TypeFullName(t : System.Type) : string
+    {
+      if (t.FullName != null)
+      {
+        if (!t.ContainsGenericParameters) t.FullName
+        else
+        {
+          def genericArgs = t.GetGenericArguments();
+          def ns = if (t.Namespace == "") "" else t.Namespace + ".";
+          $"$ns$(t.Name)[..$(genericArgs.Map(_.Name))]"
+        }
+      }
+      else
+      {
+        mutable e = t;
+        while (e.HasElementType) e = e.GetElementType();
+        if (e.IsNested) t.Name else t.ToString()
+      }
     }
 
     /// The implemented interface with the given Nemerle-spelled name, or null.

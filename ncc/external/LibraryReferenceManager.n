@@ -576,10 +576,10 @@ namespace Nemerle.Compiler
           node.Value = NamespaceTree.TypeInfoCache.Cached (tc)
 
         | NamespaceReference | MacroCall =>
-          Util.ice ("wanted to cache in wrong place - value " + t.TypeFullName ())
+          Util.ice ("wanted to cache in wrong place - value " + ClrNames.TypeFullName (t))
 
         | Cached | CachedAmbiguous =>
-          Util.ice ("wanted to cache cached value " + t.TypeFullName ())
+          Util.ice ("wanted to cache cached value " + ClrNames.TypeFullName (t))
       }
     }
 
@@ -590,7 +590,7 @@ namespace Nemerle.Compiler
       {
         | NamespaceTree.TypeInfoCache.Cached(tc) => tc
         | NamespaceTree.TypeInfoCache.No => lib.ConstructTypeInfo (t, node);
-        | _ => Util.ice ("not loaded internal type... " + t.Assembly.Location + ":" + t.TypeFullName ())
+        | _ => Util.ice ("not loaded internal type... " + t.Assembly.Location + ":" + ClrNames.TypeFullName (t))
       }
     }
 
