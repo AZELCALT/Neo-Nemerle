@@ -713,7 +713,7 @@ using Nemerle.Compiler.Utility;
           match (groups.Child)
           {
             | Token.Using(newEnv, _, _) => parser.env = GlobalEnv(newEnv, ["mask"]);
-            | Token.Namespace => Message.Error(groups.Location, "Namespaces are not allowed in scripts; use file qualification and masks");
+            | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
             | token when IsMemberStart(token, true) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
             | _ => foreach (expression in parser.parse_expr_sequence(groups)) addExpression(expression);
