@@ -250,6 +250,42 @@ selection or pass a definition explicitly. Each definition has `Id`, `Version`,
 `FileExtension`, typed inputs, imports/aliases, base/receiver configuration and
 explicit references. A custom suffix is removed when deriving file qualification.
 
+## Script kinds declared by libraries
+
+As with Kotlin's `@KotlinScript` definitions, a library can declare a **script kind**. Every script whose file name ends
+with the kind's extension is compiled as that kind, so it needs no setup lines:
+
+```nemerle
+// buildkind.n, compiled to buildkind.dll (references Nemerle.Scripting.dll)
+using Nemerle.Scripting.kinds;
+
+[ScriptDefinition(".build.n", DisplayName = "Build script", Imports = array["System.Console", "buildkind"])]
+public class BuildScript
+{
+  public Target : string { get { "release" } }
+  public Log(message : string) : void { System.Console.WriteLine("[build] " + message) }
+}
+```
+
+```nemerle
+// deploy.build.n
+Log("target " + Target);          // members of the kind's base class
+WriteLine(space Steps { copy });   // the library's grammar, through its continuation section
+```
+
+- The annotated class is the scripts' **base class**. A static module only configures and is not a base class.
+- `Imports` are opened in every script of the kind, and `DisplayName` labels the definition.
+- The **library** is a reference of every script of the kind. Its grammars, macros and the helpers those macros use
+  come with it (see `doc/CONTINUATION.md`).
+- An optional `public static Configure(definition : ScriptDefinition) : void` on the class refines the rest, as a
+  Kotlin compilation configuration does: receivers, properties, packages, compiler options.
+
+`nscript` looks for kinds in the dlls of its own directory, of every directory in `NEMERLE_SCRIPT_PATH` and of the
+script's directory. It reads only their metadata, and loads a library only when a script of its kind runs. The longest
+matching extension wins, and the default definition handles everything else. A file named like a kind that no library
+declares is reported, together with the directories that were searched. Embedded hosts use `ScriptKinds.Find`,
+`ScriptKinds.Definition` and `ScriptKinds.Register` with a `ScriptDefinitionRegistry`.
+
 ## Source-script composition
 
 Acquiring a script and opening its names are separate operations:

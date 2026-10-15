@@ -128,6 +128,7 @@ if not a.quick:
                             '--checks', 'NitraDialectChecks.cs']),
         ('native-output', ['check-native-output.py', '--toolchain', T, '--references', R, '--native-core', T]),
         ('scripting-nuget', ['check-scripting-nuget.py', '--toolchain', T, '--references', T / 'references']),
+        ('script-kinds', ['check-script-kinds.py', '--toolchain', T, '--references', R]),
         ('continuation', ['check-continuation.py', '--toolchain', T, '--references', R]),
     ]
     if not a.no_comparison:

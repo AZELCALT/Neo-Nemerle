@@ -10,6 +10,8 @@ using Nemerle.Scripting.cache;
 using Nemerle.Scripting.dependencies;
 using Nemerle.Scripting.session;
 using Nemerle.Scripting.facilities;
+using Nemerle.Scripting.definitions;
+using Nemerle.Scripting.kinds;
 
 public class ScriptRunner
 {
@@ -161,11 +163,38 @@ public class ScriptRunner
       }
       when (positions.Count < 2) throw ArgumentException("Missing source or artifact");
       mutable script : CompiledScript = null;
-      if (positions[0] == "run-compiled") script = host.Load(positions[1], definition);
+      if (positions[0] == "run-compiled")
+      {
+        // an artifact of a library-declared script kind loads with that kind's definition
+        try { script = host.Load(positions[1], definition) }
+        catch
+        {
+          | mismatch is ArgumentException =>
+            foreach (kind in ScriptKinds.Find(ScriptKinds.SearchPath(positions[1])))
+              when (script == null)
+                try { script = host.Load(positions[1], ScriptKinds.Definition(kind, definition)) }
+                catch { | _ is ArgumentException => () }
+            when (script == null) throw mismatch;
+        }
+      }
       else
       {
         unless (positions[0] == "run" || positions[0] == "compile") throw ArgumentException("Unknown script command");
-        def compilation = host.Compile(ScriptSource(File.ReadAllText(positions[1]), Path.GetFullPath(positions[1])), definition);
+        def source = ScriptSource(File.ReadAllText(positions[1]), Path.GetFullPath(positions[1]));
+        // the script kind (a library's [ScriptDefinition(".x.n")] class) is chosen by file name, as in Kotlin
+        def registry = ScriptDefinitionRegistry(definition);
+        def searched = ScriptKinds.SearchPath(source.Path);
+        ScriptKinds.Register(registry, definition, searched);
+        def selected = registry.Select(source);
+        def name = Path.GetFileName(source.Path);
+        def stem = if (name.EndsWith(selected.FileExtension, StringComparison.Ordinal)) name.Substring(0, name.Length - selected.FileExtension.Length) else name;
+        when (stem.Contains("."))
+        {
+          Console.Error.WriteLine($"no script kind declares the extension .$(stem.Substring(stem.IndexOf('.') + 1))$(selected.FileExtension) of $name;"
+            + $" searched $(string.Join(\", \", searched.ToArray())) (set NEMERLE_SCRIPT_PATH, or rename the script)");
+          return(1);
+        }
+        def compilation = host.Compile(source, selected);
         Diagnostics(compilation); unless (compilation.Success) return(1); script = compilation.Script;
         when (positions[0] == "compile")
         {

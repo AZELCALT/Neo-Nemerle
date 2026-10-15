@@ -50,6 +50,8 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 ### Tools
 - **Scripting:** `nscript run`, `compile`, `run-compiled` and `repl`. Scripts can reference NuGet packages and run
   without the SDK installed.
+  Libraries can declare script kinds (`[ScriptDefinition(".build.n")]`, as Kotlin's `@KotlinScript`): a script
+  named `x.build.n` gets the kind's base class, imports, grammars and macros without setup lines.
 - **Language server:** Nemerle's own parser, plus Nitra for `grammar`/`space` blocks, with a VS Code client
   (`tools/language-server/`).
 - **Build:** `./bootstrap` builds everything from the pinned compiler in `boot/coreclr` and runs every test suite.

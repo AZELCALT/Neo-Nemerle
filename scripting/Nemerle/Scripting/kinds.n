@@ -1,0 +1,147 @@
+// Script kinds declared by libraries, like Kotlin's @KotlinScript script definitions: a library marks a class with
+// [ScriptDefinition(".build.n")] and every script whose file name ends that way is compiled as that kind. The class is
+// the scripts' base class, the library is their reference (so its grammars, macros and their helpers come with it
+// through the continuation section), and an optional static Configure(ScriptDefinition) refines the rest.
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.definitions;
+
+/// Marks a class as a script kind: scripts whose file name ends with `extension` (".build.n") derive from it.
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+public sealed class ScriptDefinitionAttribute : Attribute
+{
+  public this(extension : string) { Extension = extension }
+  public Extension : string { get; }
+  public DisplayName : string { get; set; }
+  /// Namespaces and modules every script of the kind opens.
+  public Imports : array[string] { get; set; }
+}
+
+/// A script kind found in a library, read from its metadata without loading it.
+public sealed class ScriptKind
+{
+  public Library : string;
+  /// CLR name of the class (nested types joined with +).
+  public TypeName : string;
+  public Extension : string;
+  public this(library : string, typeName : string, extension : string) { Library = library; TypeName = typeName; Extension = extension; }
+}
+
+public module ScriptKinds
+{
+  /// The script kinds declared in the dlls of these directories. Only metadata is read; nothing is loaded.
+  public Find(directories : IEnumerable[string]) : List[ScriptKind]
+  {
+    def result = List();
+    def seen = HashSet(StringComparer.Ordinal);
+    foreach (directory when !string.IsNullOrEmpty(directory) && Directory.Exists(directory) in directories)
+      foreach (path in Directory.GetFiles(directory, "*.dll"))
+        when (seen.Add(Path.GetFullPath(path))) result.AddRange(Read(path));
+    result
+  }
+
+  /// The script kinds one library declares (empty for non-.NET files).
+  public Read(path : string) : List[ScriptKind]
+  {
+    def result = List();
+    try
+    {
+      using (pe = PEReader(File.OpenRead(path)))
+        when (pe.HasMetadata)
+        {
+          def md = pe.GetMetadataReader();
+          def attributeName(handle : CustomAttributeHandle) : string
+          {
+            def attribute = md.GetCustomAttribute(handle);
+            match (attribute.Constructor.Kind)
+            {
+              | HandleKind.MemberReference =>
+                def parent = md.GetMemberReference(attribute.Constructor :> MemberReferenceHandle).Parent;
+                if (parent.Kind == HandleKind.TypeReference) md.GetString(md.GetTypeReference(parent :> TypeReferenceHandle).Name) else ""
+              | HandleKind.MethodDefinition =>
+                md.GetString(md.GetTypeDefinition(md.GetMethodDefinition(attribute.Constructor :> MethodDefinitionHandle).GetDeclaringType()).Name)
+              | _ => ""
+            }
+          }
+          def clrName(handle : TypeDefinitionHandle) : string
+          {
+            def type = md.GetTypeDefinition(handle);
+            def outer = type.GetDeclaringType();
+            if (!outer.IsNil) clrName(outer) + "+" + md.GetString(type.Name)
+            else
+            {
+              def ns = md.GetString(type.Namespace);
+              if (ns == "") md.GetString(type.Name) else ns + "." + md.GetString(type.Name)
+            }
+          }
+          foreach (handle in md.TypeDefinitions)
+            foreach (a when attributeName(a) == "ScriptDefinitionAttribute" in md.GetTypeDefinition(handle).GetCustomAttributes())
+            {
+              def blob = md.GetBlobReader(md.GetCustomAttribute(a).Value);
+              when (blob.ReadUInt16() == 1)   // prolog; the first fixed argument is the extension
+              {
+                def extension = blob.ReadSerializedString();
+                when (!string.IsNullOrEmpty(extension)) result.Add(ScriptKind(Path.GetFullPath(path), clrName(handle), extension));
+              }
+            }
+        }
+    }
+    catch
+    {
+      | _ is BadImageFormatException => ()
+      | _ is IOException => ()
+    }
+    result
+  }
+
+  /// The definition of a kind: the fallback's settings, then the kind's base class, imports and display name, its
+  /// library as a reference, and last the class's own static Configure(ScriptDefinition) when it has one.
+  public Definition(kind : ScriptKind, fallback : ScriptDefinition) : ScriptDefinition
+  {
+    def assembly = Assembly.LoadFrom(kind.Library);
+    def type = assembly.GetType(kind.TypeName, true);
+    def definition = fallback.Snapshot();
+    definition.FileExtension = kind.Extension;
+    definition.Id = kind.TypeName;
+    // a static module (abstract sealed) only configures; any other class is the scripts' base class
+    unless (type.IsAbstract && type.IsSealed) definition.BaseType = type;
+    foreach (attribute in type.GetCustomAttributes(false))
+      match (attribute)
+      {
+        | declared is ScriptDefinitionAttribute =>
+          when (declared.DisplayName != null) definition.DisplayName = declared.DisplayName;
+          when (declared.Imports != null) definition.Imports.AddRange(declared.Imports);
+        | _ => ()
+      }
+    unless (definition.References.Contains(kind.Library)) definition.References.Add(kind.Library);
+    unless (definition.RuntimeReferences.Contains(kind.Library)) definition.RuntimeReferences.Add(kind.Library);
+    unless (definition.SharedAssemblies.Contains(assembly)) definition.SharedAssemblies.Add(assembly);
+    def configure = type.GetMethod("Configure", BindingFlags.Public | BindingFlags.Static, null, array[typeof(ScriptDefinition)], null);
+    when (configure != null) _ = configure.Invoke(null, array[definition : object]);
+    definition
+  }
+
+  /// Registers the kinds found in the directories, each built on the fallback definition.
+  public Register(registry : ScriptDefinitionRegistry, fallback : ScriptDefinition, directories : IEnumerable[string]) : void
+  {
+    foreach (kind in Find(directories)) registry.Register(Definition(kind, fallback));
+  }
+
+  /// Where script kinds are looked for: the host's own directory, every directory of NEMERLE_SCRIPT_PATH, and the
+  /// script's directory when there is one.
+  public SearchPath(scriptPath : string) : List[string]
+  {
+    def result = List();
+    result.Add(AppDomain.CurrentDomain.BaseDirectory);
+    def variable = Environment.GetEnvironmentVariable("NEMERLE_SCRIPT_PATH");
+    unless (string.IsNullOrEmpty(variable))
+      foreach (entry in variable.Split(Path.PathSeparator)) unless (entry == "") result.Add(entry);
+    unless (string.IsNullOrEmpty(scriptPath)) result.Add(Path.GetDirectoryName(Path.GetFullPath(scriptPath)));
+    result
+  }
+}

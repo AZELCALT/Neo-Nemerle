@@ -16,6 +16,7 @@ plugins, Gradle adapters and IDE integration are outside this comparison.
 | `displayName` | `ScriptDefinition.DisplayName` | Definition label; no IDE adapter |
 | `defaultIdentifier` / source name | `ScriptSource.Path`, file owner | Nemerle requires a source path and derives qualification from its filename |
 | `fileExtension`, `filePathPattern` | `FileExtension`, regex `FilePathPattern`, registry | Longest suffix, specific matching pattern, explicit definition wins; path selection tests |
+| `@KotlinScript` definitions discovered on the classpath | `[ScriptDefinition(".x.n")]` classes in libraries, `ScriptKinds` discovery | Found in nscript's directory, `NEMERLE_SCRIPT_PATH` and the script's directory by metadata only; the class is the base, `Configure` refines; `tests/check-script-kinds.py` |
 | `baseClass` | `BaseType` | Typed base contracts and inherited members tested |
 | `implicitReceivers` | `ReceiverTypes`, `ScriptInputs.Receivers` | Ordered receiver resolution and overload/precedence tests; paired Kotlin host fixture |
 | `providedProperties` | `Properties`, `ScriptInputs.Properties` | CLR type and object identity, typed/null values, missing/extra/type checks; paired host fixture |
