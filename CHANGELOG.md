@@ -57,6 +57,11 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 - **Build:** `./bootstrap` builds everything from the pinned compiler in `boot/coreclr` and runs every test suite.
   `--update-boot` refreshes the pinned compiler once everything passes.
 
+### Installation
+- `install/install.sh` (Linux, macOS) and `install/install.cmd` / `install.ps1` (Windows; PowerShell 7 elsewhere) install
+  the toolchain, build the language server, put `ncc`, `nscript` and `nemerle-lsp` on `PATH`, set up the VS Code /
+  VSCodium extension, and uninstall again. Only the .NET 10 runtime is required.
+
 ### Documentation
 - [The Nemerle Book](doc/book/src/SUMMARY.md): a guide to the language in the style of the Rust book, from values
   and functions to variants, files as modules, macros, grammars and scripts. Its 79 examples run as tests

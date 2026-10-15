@@ -12,7 +12,8 @@ function activate(context) {
   if (config.get('log')) args.push('--log', config.get('log'));
   if (config.get('sourceRoot')) args.push('--source-root', config.get('sourceRoot'));
   if (config.get('fileNameNamespaces')) args.push('--file-name-namespaces');
-  const server = { command, args, transport: 0 /* stdio */ };
+  // On Windows the launcher is nemerle-lsp.cmd, which Node only starts through a shell.
+  const server = { command, args, transport: 0 /* stdio */, options: process.platform === 'win32' ? { shell: true } : undefined };
   client = new LanguageClient('nemerle', 'Nemerle', { run: server, debug: server },
     { documentSelector: [{ scheme: 'file', language: 'nemerle' }, { scheme: 'untitled', language: 'nemerle' }] });
   client.start();

@@ -1,44 +1,117 @@
 # Nemerle (revived)
 
-Nemerle is a statically typed .NET language that was well ahead of its time. It offered variants and pattern matching,
-type inference, first-class functions and a C#-like syntax years before mainstream languages adopted them, and it had a
-macro system strong enough to grow the language itself: new syntax, embedded DSLs, compile-time code generation.
-
-It was designed at the University of Wroclaw and carried on by an open-source community for more than a decade.
-This fork brings their work back on **.NET 10**:
-
-- **Self-hosting on CoreCLR.** The compiler, runtime and macros build themselves on .NET 10. No Mono or .NET Framework
-  is needed to run them.
-- **A file is its namespace.** `src/util/text.n` is the module `util.text`. `namespace` declarations are gone;
-  `mask` groups members inside a file, and top-level statements are the file's `Main`. See [doc/FILE-MODULES.md](doc/FILE-MODULES.md).
-- **Nitra built in.** Nitra, the language workbench from the same RSDN community (copyright JetBrains, 2014), is part of
-  the language. Grammars are declared with `grammar` and used in place with `space`, mapping straight back into Nemerle
-  code. See [grammar/](grammar) and [native-nitra/](native-nitra).
-- **Scripting.** `nscript run`, `compile` and `repl`, with NuGet references. See [scripting/](scripting).
-- **Language server.** LSP for any editor, with a VS Code client in [tools/language-server/](tools/language-server).
-
-Only .NET 10 is targeted for now. **What changed compared with upstream: [CHANGELOG.md](CHANGELOG.md).**
-
-**Learn the language: [The Nemerle Book](doc/book/src/SUMMARY.md)**: syntax and semantics chapter by chapter, from
-values to macros, grammars and scripts. Every example in it is compiled and run by the test suite.
-
-## Hello world
+Nemerle is a statically typed language for .NET. It combines functional, object-oriented and imperative programming,
+infers types, and has a macro system strong enough to grow the language itself. It was well ahead of its time when the
+University of Wroclaw created it in 2003. This repository brings it back on **.NET 10**, with its compiler, a language
+server, scripting and grammars built into the language.
 
 ```nemerle
-// hello.n
 using System.Console;
 
-WriteLine("Hello world")
+variant Shape
+{
+  | Circle { radius : double }
+  | Rectangle { width : double; height : double }
+}
+
+Area(shape : Shape) : double
+{
+  | Shape.Circle(r) => 3.14 * r * r
+  | Shape.Rectangle(w, h) => w * h
+}
+
+foreach (shape in [Shape.Circle(1.0), Shape.Rectangle(2.0, 3.0)])
+  WriteLine(Area(shape))
 ```
+
+## Goals
+
+- **A living Nemerle.** The original work went quiet after 2015, on .NET Framework and Mono. Here it runs on today's
+  .NET and builds itself from source, so it can keep evolving.
+- **Extensible, and disciplined.** You can extend the language with macros and with whole grammars (`grammar` and
+  `space`). The structure stays predictable:
+  - a source file is its namespace, so there is no namespace spaghetti;
+  - a file uses each grammar in one place;
+  - language extensions are always published as source, so nobody ships a private dialect that users mistake for
+    Nemerle.
+- **Tooling you can rely on.**
+  - one install for the compiler, scripts and a language server for any editor;
+  - scripts that configure themselves the way Kotlin's do;
+  - compiled grammars and macros that travel inside the libraries that define them.
+- **Classic Nemerle stays Nemerle.** Only `namespace` blocks and `partial` are gone; everything else of the classic
+  language works. Where the compiler behaves differently from classic Nemerle in other ways, that's treated as a bug.
+
+## Install
+
+You need the **.NET 10 runtime** ([download](https://dotnet.microsoft.com/download/dotnet/10.0)). Then clone the
+repository and run the installer for your system:
 
 ```sh
-boot/coreclr/ncc hello.n -out:hello.exe && dotnet hello.exe     # compile
-boot/coreclr/nscript run hello.n                                 # or run as a script
+git clone https://github.com/AZELCALT/Neo-Nemerle.git
+cd Neo-Nemerle
+install/install.sh            # Linux, macOS (sh)
 ```
 
-## Building
+```bat
+install\install.cmd           :: Windows (Command Prompt or PowerShell)
+```
 
-Requirements: the .NET 10 SDK, Python 3, and `sn` (Mono's strong-name tool, used to verify signed outputs).
+The installer:
+1. copies the toolchain (compiler, standard library and macros, Nitra, scripting) into a folder of your own;
+2. builds the language server from source with that compiler;
+3. puts `ncc`, `nscript` and `nemerle-lsp` on your `PATH`;
+4. installs the VS Code / VSCodium extension if it finds the editor and `npm`;
+5. checks that a script runs.
+
+| | Linux / macOS (`install.sh`) | Windows (`install.cmd`, `install.ps1`) |
+|---|---|---|
+| Installs to | `~/.local/share/nemerle` (`--prefix`) | `%LOCALAPPDATA%\Nemerle` (`-Prefix`) |
+| Commands go to | `~/.local/bin` (`--bin`) | `%LOCALAPPDATA%\Nemerle\bin`, added to your user `PATH` |
+| Build from source first | `--build` | `-Build` |
+| Skip the language server | `--no-lsp` | `-NoLsp` |
+| Editor extension | `--editor auto\|code\|codium\|none` | `-Editor auto\|code\|codium\|none` |
+| Remove everything | `--uninstall` | `-Uninstall` |
+
+`install/install.ps1` also runs under PowerShell 7 on Linux and macOS. The Windows-specific parts (`.cmd` launchers, the
+user `PATH`) have not been tested on Windows yet; please report problems.
+
+**Without installing**, everything also runs straight from the clone: `boot/coreclr/ncc` and `boot/coreclr/nscript`.
+
+### Editors
+
+The language server speaks LSP over stdio. It gives diagnostics, semantic highlighting, folding and document symbols,
+including inside `grammar` and `space` blocks.
+- **VS Code / VSCodium:** the installer sets up the extension. It runs `nemerle-lsp` from `PATH`, or the
+  `nemerle.languageServer.path` setting.
+- **Other editors:** configure an LSP client to start `nemerle-lsp` for `*.n` files.
+
+Details are in [tools/language-server/README.md](tools/language-server/README.md).
+
+## Your first program
+
+```sh
+echo 'System.Console.WriteLine("Hello, world!")' > hello.n
+nscript run hello.n              # run it as a script
+ncc hello.n -out:hello.exe       # or compile it
+dotnet hello.exe
+```
+
+A compiled program needs `Nemerle.dll`, the standard library, next to it when it uses the library. Find it in the
+installed toolchain folder.
+
+## Learn more
+
+- **[The Nemerle Book](doc/book/src/SUMMARY.md):** the language from the ground up, from values and functions to
+  pattern matching, files as modules, macros, grammars and scripts. Every example in it is compiled and tested.
+- **[CHANGELOG.md](CHANGELOG.md):** what this revival changed compared with upstream Nemerle.
+- **Reference notes:**
+  - [doc/FILE-MODULES.md](doc/FILE-MODULES.md) for files as modules;
+  - [doc/CONTINUATION.md](doc/CONTINUATION.md) for the continuation section;
+  - [scripting/README.md](scripting/README.md) for the scripting API.
+
+## Building from source
+
+Building needs the .NET 10 SDK, Python 3 and `sn` (Mono's strong-name tool, which verifies signed outputs).
 
 ```sh
 ./bootstrap                  # boot/coreclr -> stage 1 -> stage 2, Nitra, scripting, LSP, then every test suite
@@ -46,24 +119,25 @@ Requirements: the .NET 10 SDK, Python 3, and `sn` (Mono's strong-name tool, used
 ./bootstrap --update-boot    # also replace boot/coreclr with the result when everything passed
 ```
 
-The new toolchain lands in `out/bootstrap/toolchain`, with one log per step in `out/bootstrap/logs`.
-`boot/coreclr` is the pinned compiler that every build starts from. Update it only when a bootstrap passes.
+The new toolchain lands in `out/bootstrap/toolchain`, with one log per step in `out/bootstrap/logs`. `boot/coreclr` is
+the pinned compiler that every build starts from; update it only when a bootstrap passes.
 
 | Directory | Contents |
 |---|---|
 | `ncc/`, `lib/`, `macros/` | compiler, standard library, standard macros |
-| `native-nitra/`, `grammar/` | Nitra (runtime, grammar, compiler) as file modules; grammar/space docs and examples |
-| `scripting*/`, `tools/language-server/` | scripting host, NuGet adapter, language server |
+| `native-nitra/`, `grammar/` | Nitra (runtime, grammar, compiler) as file modules; grammar/space notes and examples |
+| `scripting*/`, `tools/language-server/` | scripting host, NuGet adapter, language server and VS Code extension |
 | `platform/` | CLR backend adapter (C#) |
+| `install/` | the installers |
 | `build/` | build scripts and `bootstrap.py`; `build/migrations/` holds the one-off source migrations |
 | `tests/`, `testsuite/` | test suites and fixtures; upstream's language testsuite |
 | `boot/coreclr/` | pinned .NET 10 toolchain used to bootstrap |
-| `doc/` | documentation; `doc/revive/` has the notes from the port |
+| `doc/` | the book, reference notes, and `doc/revive/` with the notes from the port |
 | `misc/` | signing keys, editor modes |
 | `legacy/` | upstream's .NET Framework / Mono / Visual Studio build files and side projects, kept unchanged ([legacy/README.md](legacy/README.md)) |
 
 The original upstream README (Windows installer, Mono, Visual Studio) is kept in
-[doc/ORIGINAL-README.md](doc/ORIGINAL-README.md). Those instructions are for the original .NET Framework tree, not this fork.
+[doc/ORIGINAL-README.md](doc/ORIGINAL-README.md). Those instructions are for the original .NET Framework tree.
 
 ## The people behind Nemerle
 

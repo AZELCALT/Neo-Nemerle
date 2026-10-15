@@ -17,6 +17,9 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
 Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
 `semanticTokens/full`, `foldingRange` and `documentSymbol`.
 
+The installers in `install/` build and install it, together with the VS Code / VSCodium extension (see the
+top-level README). To build it by hand:
+
 ## Build and check
 
 ```sh
