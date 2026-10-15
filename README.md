@@ -17,7 +17,7 @@ This fork brings their work back on **.NET 10**:
 - **Scripting.** `nscript run`, `compile` and `repl`, with NuGet references. See [scripting/](scripting).
 - **Language server.** LSP for any editor, with a VS Code client in [tools/language-server/](tools/language-server).
 
-Only .NET 10 is targeted for now.
+Only .NET 10 is targeted for now. **What changed compared with upstream: [CHANGELOG.md](CHANGELOG.md).**
 
 ## Hello world
 
@@ -49,12 +49,15 @@ The new toolchain lands in `out/bootstrap/toolchain`, with one log per step in `
 | Directory | Contents |
 |---|---|
 | `ncc/`, `lib/`, `macros/` | compiler, standard library, standard macros |
-| `native-nitra/` | Nitra (runtime, grammar, compiler) as file modules |
+| `native-nitra/`, `grammar/` | Nitra (runtime, grammar, compiler) as file modules; grammar/space docs and examples |
 | `scripting*/`, `tools/language-server/` | scripting host, NuGet adapter, language server |
+| `platform/` | CLR backend adapter (C#) |
 | `build/` | build scripts and `bootstrap.py`; `build/migrations/` holds the one-off source migrations |
-| `tests/` | test suites and their fixtures |
+| `tests/`, `testsuite/` | test suites and fixtures; upstream's language testsuite |
 | `boot/coreclr/` | pinned .NET 10 toolchain used to bootstrap |
 | `doc/` | documentation; `doc/revive/` has the notes from the port |
+| `misc/` | signing keys, editor modes |
+| `legacy/` | upstream's .NET Framework / Mono / Visual Studio build files and side projects, kept unchanged ([legacy/README.md](legacy/README.md)) |
 
 The original upstream README (Windows installer, Mono, Visual Studio) is kept in
 [doc/ORIGINAL-README.md](doc/ORIGINAL-README.md). Those instructions are for the original .NET Framework tree, not this fork.

@@ -6,7 +6,6 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
-import xml.etree.ElementTree as ET
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--bootstrap', type=pathlib.Path, required=True)
@@ -18,12 +17,8 @@ repo = pathlib.Path(__file__).resolve().parents[1]
 work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-core-selfbuild-'))
 print('CoreCLR source-build artifacts:', work, flush=True)
 previous = args.bootstrap.resolve()
-ns = {'ms': 'http://schemas.microsoft.com/developer/msbuild/2003'}
-root = ET.parse(repo / 'Nemerle.Compiler.nproj').getroot()
-sources = []
-for item in root.findall('.//ms:Compile', ns):
-    pattern = item.attrib['Include'].replace('\\', '/')
-    sources.extend(sorted(repo.glob(pattern)))
+# The compiler is every file module under ncc/Nemerle/Compiler (source root ncc).
+sources = sorted(repo.glob('ncc/Nemerle/Compiler/*.n'))
 runtime_rows = [line.split() for line in subprocess.check_output(['dotnet', '--list-runtimes'], text=True).splitlines() if line.startswith('Microsoft.NETCore.App ')]
 selected_runtime = max(runtime_rows, key=lambda row: tuple(int(v) for v in row[1].split('.')))
 runtime = pathlib.Path(selected_runtime[2].strip('[]')) / selected_runtime[1]

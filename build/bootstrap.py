@@ -4,7 +4,8 @@
     build/bootstrap.py [--quick] [--no-comparison] [--update-boot] [--output DIR] [--boot DIR] [--references DIR]
 
 Steps (each logs to <output>/logs/<step>.log):
-  1. compiler: boot -> stage 1 -> stage 2 (runtime, compiler, macros, ncc), stage 2 checked by rebuilding itself
+  1. compiler: boot -> stage 1 -> stage 2 (runtime, compiler, macros, ncc), stage 2 checked by rebuilding itself;
+     then the C# platform adapter (platform/) from source
   2. nitra:    Nitra runtime/grammar/compiler built by the new compiler, native bootstrap = boot/coreclr
   3. tools:    scripting (nscript) and the language server
   4. tests:    every suite under tests/ (--quick: the fast ones only; --no-comparison: skip the 72-case differential)
@@ -90,6 +91,8 @@ text = step('compiler', [py, build / 'build-coreclr-toolchain.py', '--bootstrap'
 stage2 = pathlib.Path(re.findall(r'Verified CoreCLR source toolchain: (\S+)/ncc\.exe', text)[-1])
 shutil.copytree(stage2, toolchain)
 if not (toolchain / 'references').exists(): shutil.copytree(boot / 'references', toolchain / 'references')
+# The CLR platform adapter (platform/*.cs, C#) is rebuilt from source into the new toolchain
+step('platform', [py, build / 'build-coreclr-platform.py', '--toolchain', toolchain, '--references', refs])
 # 2. Nitra, built by the new compiler; the previous Nitra compiler (boot) generates its grammars
 text = step('nitra', [py, build / 'build-nitra-core.py', '--snapshot', 'Nitra', '--bootstrap', toolchain,
                       '--native-bootstrap', boot, '--references', refs])
