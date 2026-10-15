@@ -397,20 +397,34 @@ using Nemerle.Compiler.Utility;
             | Token.Using(newEnv, _, _) => fileParser.env = newEnv;
             | Token.Namespace => () // already diagnosed by the preparser
             | null => ()
-            | token =>
+            | token when IsMemberStart(token, false) =>
               def next = topstream.Next;
               topstream.Next = null;
-              try
+              try members.AddRange(fileParser.ParseClassMembers(topstream, "module"))
+              finally { topstream.Next = next; }
+            | _ =>
+              // consecutive statements are one sequence, as in classic Nemerle, so a construct may continue on the
+              // next line (`try { }` then `catch`, `if (...)` then `else`); the run ends at a member or a using
+              mutable last = topstream;
+              def continues(group : Token.LooseGroup) : bool
               {
-                if (IsMemberStart(token, false))
-                  members.AddRange(fileParser.ParseClassMembers(topstream, "module"));
-                else
+                match (group.Child)
                 {
-                  when (statements.Count == 0) statementsLocation = topstream.Location;
-                  statements.AddRange(fileParser.parse_expr_sequence(topstream));
+                  | null | Token.Using | Token.Namespace => false
+                  | token => !IsMemberStart(token, false)
                 }
               }
-              finally { topstream.Next = next; }
+              while (last.Next is Token.LooseGroup && continues(last.Next :> Token.LooseGroup))
+                last = last.Next :> Token.LooseGroup;
+              def after = last.Next;
+              last.Next = null;
+              try
+              {
+                when (statements.Count == 0) statementsLocation = topstream.Location;
+                statements.AddRange(fileParser.parse_expr_sequence(topstream));
+              }
+              finally { last.Next = after; }
+              topstream = last;
           }
           topstream = topstream.Next :> Token.LooseGroup;
         }

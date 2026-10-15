@@ -271,6 +271,22 @@ if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'),
 ran = run([runtime, work / 'program.exe'])
 if ran.stdout.split() != ['42', '7']: raise RuntimeError('top-level statements: ' + ran.stdout)
 print('PASS: top-level statements of a file module are its Main (members in between, typeless mutable is a local)', flush=True)
+# a top-level statement may continue on the next line, as in classic Nemerle
+flow = source('flow.n', """using System.Console;
+try { throw System.Exception("boom") }
+catch { | e => WriteLine("caught " + e.Message) }
+finally { WriteLine("finally") }
+def n = 3;
+if (n > 2)
+  WriteLine("big")
+else
+  WriteLine("small");""")
+run([runtime, compiler, flow, '-source-root:' + str(work), '-out:' + str(work / 'flow.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'flow.runtimeconfig.json')
+ran = run([runtime, work / 'flow.exe'])
+if ran.stdout.split('\n')[:3] != ['caught boom', 'finally', 'big']:
+    raise RuntimeError('multi-line top-level statements: ' + ran.stdout)
+print('PASS: top-level try/catch/finally and if/else continue across lines', flush=True)
 
 # File modules are the only layout: a namespace block is an error, and the removed switches are unknown options.
 plain = source('plain.n', 'public Run() : int { 1 }')
