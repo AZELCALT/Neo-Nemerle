@@ -228,6 +228,9 @@ using Nemerle.Compiler.XmlDump;
 
     mutable _userData : SC.IDictionary;
 
+    /// EXPERIMENT: what this compilation writes into its continuation section (-experimental-continuation).
+    public Continuation : Nemerle.Compiler.continuation.ContinuationStore { get; private set; }
+
     public UserData : SC.IDictionary
     {
       get
@@ -553,6 +556,7 @@ using Nemerle.Compiler.XmlDump;
       }
 
       _userData = null;
+      Continuation = Nemerle.Compiler.continuation.ContinuationStore();
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)

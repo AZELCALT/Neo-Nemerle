@@ -721,6 +721,12 @@ using Nemerle.Compiler.Utility;
         def (portableExecutableKind, imageFileMachine) = make_platform_flags (Manager.Options.Platform);
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
+        // EXPERIMENT: added last, because the metadata rewrite above would drop a custom section
+        when (Manager.Options.ExperimentalContinuation && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
+        {
+          Manager.Continuation.CompilerVersion = typeof(ManagerClass).Assembly.GetName().Version.ToString();
+          ClrEmitter.AppendCompilerSection(_OutputFileName, Manager.Continuation.Write());
+        }
         //when (_debug_emit != null) _debug_emit.Close ();
       }
       catch

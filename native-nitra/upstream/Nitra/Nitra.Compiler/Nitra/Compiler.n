@@ -9927,12 +9927,14 @@ internal sealed class SelectedRegistry
   }
 }
 
-public sealed class NativeSourceHost : INitraNativeSourceHost
+public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImageHost
 {
   static InputKey : string = "Nitra.Compiler.NativeSourceHost.RecognizedDefinitions";
   mutable registry : SelectedRegistry;
   /// The grammar assembly Nitra's compiler generated for the initialized definitions (descriptors for ParseSession).
   public GrammarAssembly : Assembly { get; private set; }
+  /// EXPERIMENT (-experimental-continuation): the bytes of the compiled grammar image, kept for the continuation section.
+  public Image : array[byte] { get; private set; }
   public Initialize(manager : ManagerClass, definitions : SCG.IEnumerable[NitraDocument]) : void
   {
     def inputs=SCG.List(definitions);
@@ -9944,7 +9946,9 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
     {
       def directory=Path.GetDirectoryName(typeof(NativeSourceHost).Assembly.Location);
       def options=CompilationOptions();
-      options.CompileToMemory=true; options.TargetIsLibrary=true; options.TargetIsSet=true;
+      // EXPERIMENT: the continuation section needs the image's bytes, so the grammar is compiled to a file then
+      def persist=manager.Options.ExperimentalContinuation;
+      options.CompileToMemory = !persist; options.TargetIsLibrary=true; options.TargetIsSet=true;
       options.ProgressBar=false; options.ColorMessages=false; options.IgnoreConfusion=true;
       options.TargetReferenceDirectory=manager.Options.TargetReferenceDirectory;
       _=Directory.CreateDirectory(scratch);
@@ -9974,9 +9978,18 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
       compiler.CompilationStart += current => current.UserData.Add(InputKey,inputs);
       try { compiler.Run(); }
       catch { | exception => when(errors==0) throw exception; }
-      when(errors>0 || compiler.GeneratedAssembly==null) throw ArgumentException("native grammar compilation failed:\n"+messages.ToString());
-      GrammarAssembly=compiler.GeneratedAssembly;
-      registry=SelectedRegistry(); AddBuiltins(registry); registry.Add(compiler.GeneratedAssembly);
+      if(persist)
+      {
+        when(errors>0 || !File.Exists(options.OutputFileName)) throw ArgumentException("native grammar compilation failed:\n"+messages.ToString());
+        Image=File.ReadAllBytes(options.OutputFileName);
+        GrammarAssembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(Image,options.SharedAssemblies,refs.NToList().ToArray());
+      }
+      else
+      {
+        when(errors>0 || compiler.GeneratedAssembly==null) throw ArgumentException("native grammar compilation failed:\n"+messages.ToString());
+        GrammarAssembly=compiler.GeneratedAssembly;
+      }
+      registry=SelectedRegistry(); AddBuiltins(registry); registry.Add(GrammarAssembly);
     }
     finally
     {

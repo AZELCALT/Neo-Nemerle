@@ -47,6 +47,10 @@ using Nemerle.Compiler.Utility;
     /// A source file is its namespace (root-relative path); `namespace` blocks are rejected. Script compilation
     /// has its own scope.
     public FileModules : bool { get { Script == null } }
+    /// EXPERIMENT -experimental-continuation: write the continuation section (.nemir) into the output.
+    public mutable ExperimentalContinuation : bool;
+    /// EXPERIMENT -experimental-continue:<dll>: binaries whose continuation section this compilation continues from.
+    public mutable ContinueFrom : list[string] = [];
     /// -file-name-namespaces: a file's namespace is its file name only (no directory path); file names must be unique.
     public mutable FileNameNamespaces : bool;
     /// -assembly-version: the AssemblyVersion of the output (null: from the sources).
@@ -418,6 +422,16 @@ using Nemerle.Compiler.Utility;
                        aliases = ["-experimental-nitra-syntax"],
                        help = "Print the Nitra declarations of each source as JSON without executing or compiling them",
                        handler = fun () { this.InspectNitraSyntax = true; }),
+
+        Getopt.CliOption.Flag (name = "-experimental-continuation",
+                       aliases = [],
+                       help = "EXPERIMENT: write the continuation section (grammar image and marks) into the output",
+                       handler = fun () { this.ExperimentalContinuation = true; }),
+
+        Getopt.CliOption.String (name = "-experimental-continue",
+                       aliases = [],
+                       help = "EXPERIMENT: continue from the continuation section of the given binary",
+                       handler = fun (path) { this.ContinueFrom = this.ContinueFrom + [path]; }),
 
         Getopt.CliOption.Flag (name = "-file-name-namespaces",
                        aliases = [],

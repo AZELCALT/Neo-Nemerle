@@ -1,0 +1,222 @@
+// EXPERIMENT (-experimental-continuation): the continuation section. A binary carries, in its .nemir section, what a
+// later late-bound compilation (a script compiled by the embedded compiler) needs to continue from it. Today: the
+// compiled Nitra grammar image plus a mark trace of every grammar declaration. See doc/CONTINUATION.md.
+using System;
+using System.IO;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Compiler.NitraSyntaxModel;
+
+/// One declaration of a grammar (syntax module, rule or alternative) as its source showed it. Edits are matched to
+/// declarations by (Kind, Scope, Name) and the hash of their text.
+public sealed class ContinuationMark
+{
+  public mutable Kind : string = "";
+  public mutable Name : string = "";
+  public mutable Scope : string = "";
+  public mutable Start : int;
+  public mutable End : int;
+  public mutable Hash : ulong;
+  /// Index of the enclosing declaration in the grammar's mark list, -1 at the top.
+  public mutable Parent : int = -1;
+}
+
+public sealed class ContinuationGrammar
+{
+  public mutable Name : string = "";
+  /// Source file that declared the grammar.
+  public mutable Owner : string = "";
+  public Marks : SCG.List[ContinuationMark] = SCG.List();
+}
+
+public sealed class ContinuationStore
+{
+  static Magic : array[byte] = array[0x4E :> byte, 0x45 :> byte, 0x4D :> byte, 0x43 :> byte]; // "NEMC"
+  public static FormatVersion : int = 1;
+  static GrammarKind : byte = 1;
+
+  public mutable CompilerVersion : string = "";
+  /// The compiled grammar image (one assembly for all grammars of the binary), uncompressed; null when none.
+  public mutable GrammarImage : array[byte];
+  public Grammars : SCG.List[ContinuationGrammar] = SCG.List();
+
+  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 } }
+
+  /// The marks of a grammar's declarations, depth first, each with its parent's index. `delta` moves the document's
+  /// offsets to positions in the source file; declarations that start before `bodyStart` are synthetic wrappers (not
+  /// source text) and are skipped, their children recorded in their place.
+  public static Marks(document : NitraDocument, delta : int, bodyStart : int) : SCG.List[ContinuationMark]
+  {
+    def result = SCG.List();
+    def walk(declarations : SCG.IEnumerable[NitraDeclaration], parent : int) : void
+    {
+      foreach (d in declarations)
+        if (d.Start + delta < bodyStart) walk(d.Children, parent)
+        else
+        {
+          def m = ContinuationMark();
+          m.Kind = d.Kind ?? ""; m.Name = d.Name ?? ""; m.Scope = d.Scope ?? "";
+          m.Start = d.Start + delta; m.End = d.End + delta; m.Hash = Hash(d.Text ?? ""); m.Parent = parent;
+          result.Add(m);
+          walk(d.Children, result.Count - 1);
+        }
+    }
+    walk(document.Declarations, -1);
+    result
+  }
+
+  /// 64-bit FNV-1a over the UTF-16 code units of the text.
+  public static Hash(text : string) : ulong
+  {
+    mutable h : ulong = 14695981039346656037UL;
+    foreach (c in text)
+      unchecked { h = (h ^ (c :> ulong)) * 1099511628211UL; }
+    h
+  }
+
+  // ---- encoding: header, string table, subsections; numbers are ECMA-335 compressed integers ----
+
+  public Write() : array[byte]
+  {
+    def strings = SCG.List.[string]();
+    def index = SCG.Dictionary.[string, int](StringComparer.Ordinal);
+    def str(s : string) : int
+    {
+      def s = s ?? "";
+      mutable i;
+      unless (index.TryGetValue(s, out i)) { i = strings.Count; strings.Add(s); index.Add(s, i); }
+      i
+    }
+    // grammar subsection first, so its strings are interned before the table is written
+    def grammar = MemoryStream();
+    when (GrammarImage != null || Grammars.Count > 0)
+    {
+      def image = if (GrammarImage == null) array(0) else Nemerle.Platform.ClrCompilerSection.Compress(GrammarImage);
+      WriteInt(grammar, if (GrammarImage == null) 0 else GrammarImage.Length);
+      WriteBlob(grammar, image);
+      WriteInt(grammar, Grammars.Count);
+      foreach (g in Grammars)
+      {
+        WriteInt(grammar, str(g.Name)); WriteInt(grammar, str(g.Owner)); WriteInt(grammar, g.Marks.Count);
+        foreach (m in g.Marks)
+        {
+          WriteInt(grammar, str(m.Kind)); WriteInt(grammar, str(m.Name)); WriteInt(grammar, str(m.Scope));
+          WriteInt(grammar, m.Start); WriteInt(grammar, m.End - m.Start); WriteInt(grammar, m.Parent + 1);
+          def hash = BitConverter.GetBytes(m.Hash); grammar.Write(hash, 0, hash.Length);
+        }
+      }
+    }
+    def output = MemoryStream();
+    output.Write(Magic, 0, Magic.Length);
+    WriteInt(output, FormatVersion);
+    WriteString(output, CompilerVersion);
+    WriteInt(output, strings.Count);
+    foreach (s in strings) WriteString(output, s);
+    def subsections = if (grammar.Length > 0) 1 else 0;
+    WriteInt(output, subsections);
+    when (grammar.Length > 0)
+    {
+      output.WriteByte(GrammarKind);
+      WriteBlob(output, grammar.ToArray());
+    }
+    output.ToArray()
+  }
+
+  public static Read(data : array[byte]) : ContinuationStore
+  {
+    def r = Reader(data);
+    for (mutable i = 0; i < Magic.Length; ++i)
+      unless (r.Byte() == Magic[i]) throw InvalidDataException("not a Nemerle continuation section");
+    def version = r.Int();
+    unless (version == FormatVersion) throw InvalidDataException($"continuation format $version is not supported (expected $FormatVersion)");
+    def store = ContinuationStore();
+    store.CompilerVersion = r.String();
+    def strings = array(r.Int());
+    for (mutable i = 0; i < strings.Length; ++i) strings[i] = r.String();
+    def count = r.Int();
+    repeat (count)
+    {
+      def kind = r.Byte();
+      def payload = Reader(r.Blob());
+      when (kind == GrammarKind)
+      {
+        def size = payload.Int();
+        def image = payload.Blob();
+        store.GrammarImage = if (size == 0) null else Nemerle.Platform.ClrCompilerSection.Decompress(image);
+        repeat (payload.Int())
+        {
+          def g = ContinuationGrammar();
+          g.Name = strings[payload.Int()]; g.Owner = strings[payload.Int()];
+          repeat (payload.Int())
+          {
+            def m = ContinuationMark();
+            m.Kind = strings[payload.Int()]; m.Name = strings[payload.Int()]; m.Scope = strings[payload.Int()];
+            m.Start = payload.Int(); m.End = m.Start + payload.Int(); m.Parent = payload.Int() - 1;
+            m.Hash = BitConverter.ToUInt64(payload.Bytes(8), 0);
+            g.Marks.Add(m);
+          }
+          store.Grammars.Add(g);
+        }
+      }
+      // unknown subsection kinds are skipped: newer writers may add them
+    }
+    store
+  }
+
+  /// The continuation of an image (file contents), or null when it carries none.
+  public static FromImage(image : array[byte]) : ContinuationStore
+  {
+    def data = Nemerle.Platform.ClrCompilerSection.ReadBytes(image);
+    if (data == null) null else Read(data)
+  }
+
+  /// Loads a stored grammar image so that it shares the given assemblies (the compiler, Nitra) with the caller.
+  public static LoadImage(image : array[byte], shared : array[System.Reflection.Assembly], references : array[string]) : System.Reflection.Assembly
+  {
+    Nemerle.Platform.ClrScriptSupport.Load(image, null, shared, references)
+  }
+
+  static WriteInt(s : Stream, value : int) : void
+  {
+    when (value < 0) throw ArgumentOutOfRangeException("value");
+    if (value < 0x80) s.WriteByte(value :> byte)
+    else if (value < 0x4000) { s.WriteByte((0x80 | (value >> 8)) :> byte); s.WriteByte((value & 0xFF) :> byte); }
+    else if (value < 0x20000000)
+    {
+      s.WriteByte((0xC0 | (value >> 24)) :> byte); s.WriteByte(((value >> 16) & 0xFF) :> byte);
+      s.WriteByte(((value >> 8) & 0xFF) :> byte); s.WriteByte((value & 0xFF) :> byte);
+    }
+    else throw ArgumentOutOfRangeException("value", "too large for a compressed integer");
+  }
+  static WriteBlob(s : Stream, bytes : array[byte]) : void { WriteInt(s, bytes.Length); s.Write(bytes, 0, bytes.Length); }
+  static WriteString(s : Stream, text : string) : void { WriteBlob(s, UTF8Encoding(false).GetBytes(text ?? "")); }
+
+  sealed class Reader
+  {
+    data : array[byte];
+    mutable pos : int;
+    public this(data : array[byte]) { this.data = data; }
+    public Byte() : byte
+    {
+      when (pos >= data.Length) throw InvalidDataException("truncated continuation section");
+      def b = data[pos]; ++pos; b
+    }
+    public Int() : int
+    {
+      def b = Byte() :> int;
+      if ((b & 0x80) == 0) b
+      else if ((b & 0xC0) == 0x80) ((b & 0x3F) << 8) | (Byte() :> int)
+      else if ((b & 0xE0) == 0xC0) ((b & 0x1F) << 24) | ((Byte() :> int) << 16) | ((Byte() :> int) << 8) | (Byte() :> int)
+      else throw InvalidDataException("bad compressed integer")
+    }
+    public Bytes(n : int) : array[byte]
+    {
+      when (n < 0 || pos + n > data.Length) throw InvalidDataException("truncated continuation section");
+      def result = array(n); Array.Copy(data, pos, result, 0, n); pos += n; result
+    }
+    public Blob() : array[byte] { Bytes(Int()) }
+    public String() : string { UTF8Encoding(false, true).GetString(Blob()) }
+  }
+}

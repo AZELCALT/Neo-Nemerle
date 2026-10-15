@@ -40,6 +40,12 @@ namespace Nemerle.Platform
             return publicKey;
         }
 
+        /// Adds the compiler's continuation section to the finished output, signing it again with this emission's key.
+        public void AppendCompilerSection(string path, byte[] data)
+        {
+            ClrCompilerSection.AppendToFile(path, data, signingBlob);
+        }
+
         public void CompleteAssembly(string path, AssemblyName name)
         {
 #if MODERN_CLR

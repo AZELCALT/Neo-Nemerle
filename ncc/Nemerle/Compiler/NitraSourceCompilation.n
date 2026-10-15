@@ -53,6 +53,11 @@ public interface INitraNativeSourceHost
   Prepare(modules : SCG.IEnumerable[string]) : NitraPreparedGrammar;
   Expand(rule : string, selected : NitraStructure, typer : Typer, location : Location, context : NitraDialectContext) : PExpr;
 }
+/// EXPERIMENT: a native host that kept the bytes of the grammar image it compiled (-experimental-continuation).
+public interface INitraGrammarImageHost
+{
+  Image : array[byte] { get; }
+}
 internal sealed class NitraSourceZone
 {
   public mutable Id : int;
@@ -78,6 +83,7 @@ internal sealed class NitraSourceSession
   owners : SCG.Dictionary[string,int] = SCG.Dictionary();
   files : SCG.Dictionary[int,string] = SCG.Dictionary();
   zones : SCG.List[NitraSourceZone] = SCG.List();
+  markSources : SCG.Dictionary[string,NitraDocument*int*int] = SCG.Dictionary();
   mutable nativeHost : INitraNativeSourceHost;
   // grammar name, file index, block start (keyword), block end
   internal GrammarBlocks : SCG.List[string * int * int * int] = SCG.List();
@@ -153,6 +159,10 @@ internal sealed class NitraSourceSession
             record.Start=block.Start+1+c.Start-("namespace "+name+" {").Length;
             record.End=record.Start+c.End-c.Start; configuration.InactiveConstructs.Add(record);
           }
+          // EXPERIMENT: the continuation's mark trace needs every declaration's span, read textually (cheap) and
+          // moved from the wrapped grammar text to positions in the source file
+          when(manager.Options.ExperimentalContinuation)
+            markSources[name]=(Nemerle.Compiler.NitraDeclarations.NitraDeclarationReader(nativeSource,file).Read(),block.Start+1-("namespace "+name+" {").Length,block.Start+1);
           definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
         }
         else if(!t.Quoted && previous!="." &&
@@ -193,6 +203,25 @@ internal sealed class NitraSourceSession
     {
       def inputs=SCG.List(definitions.Values);
       nativeHost=if(configuration.ProvideHost!=null) configuration.ProvideHost.Invoke(manager,inputs) else CreateNativeHost(manager,inputs);
+      // EXPERIMENT: the compiled grammar image and the marks of every declaration go into the continuation section
+      when(manager.Options.ExperimentalContinuation && !IndexOnly)
+        match(nativeHost)
+        {
+          | host is INitraGrammarImageHost when host.Image!=null =>
+            manager.Continuation.GrammarImage=host.Image;
+            foreach(pair in definitions)
+            {
+              def g=Nemerle.Compiler.continuation.ContinuationGrammar();
+              g.Name=pair.Key; g.Owner=if(owners.ContainsKey(pair.Key) && files.ContainsKey(owners[pair.Key])) Location.GetFileName(owners[pair.Key]) else "";
+              when(markSources.ContainsKey(pair.Key))
+              {
+                def (marks,delta,bodyStart)=markSources[pair.Key];
+                g.Marks.AddRange(Nemerle.Compiler.continuation.ContinuationStore.Marks(marks,delta,bodyStart));
+              }
+              manager.Continuation.Grammars.Add(g);
+            }
+          | _ => ()
+        }
     }
     foreach(z in zones)
     {

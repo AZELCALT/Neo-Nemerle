@@ -4,11 +4,11 @@
     build/bootstrap.py [--quick] [--no-comparison] [--update-boot] [--output DIR] [--boot DIR] [--references DIR]
 
 Steps (each logs to <output>/logs/<step>.log):
-  1. compiler: boot -> stage 1 -> stage 2 (runtime, compiler, macros, ncc), stage 2 checked by rebuilding itself;
-     then the C# platform adapter (platform/) from source
-  2. nitra:    Nitra runtime/grammar/compiler built by the new compiler, native bootstrap = boot/coreclr
-  3. tools:    scripting (nscript) and the language server
-  4. tests:    every suite under tests/ (--quick: the fast ones only; --no-comparison: skip the 72-case differential)
+  1. platform: the C# platform adapter (platform/) from source, into a copy of boot
+  2. compiler: that copy -> stage 1 -> stage 2 (runtime, compiler, macros, ncc), stage 2 checked by rebuilding itself
+  3. nitra:    Nitra runtime/grammar/compiler built by the new compiler, native bootstrap = boot/coreclr
+  4. tools:    scripting (nscript) and the language server
+  5. tests:    every suite under tests/ (--quick: the fast ones only; --no-comparison: skip the 72-case differential)
 With --update-boot, boot/coreclr is replaced by the result, but only when every step passed.
 """
 import argparse, os, pathlib, re, shutil, subprocess, sys, time
@@ -86,22 +86,25 @@ def finish():
 
 
 py = sys.executable
-# 1. compiler, two stages from the pinned boot compiler
-text = step('compiler', [py, build / 'build-coreclr-toolchain.py', '--bootstrap', boot, '--references', refs])
+# 1. The CLR platform adapter (platform/*.cs, C#, independent of Nemerle) is built first into a copy of boot, so the
+#    compiler stages compile against the platform API of this source tree.
+seed = out / 'seed'
+shutil.copytree(boot, seed)
+step('platform', [py, build / 'build-coreclr-platform.py', '--toolchain', seed, '--references', refs])
+# 2. compiler, two stages from the seed
+text = step('compiler', [py, build / 'build-coreclr-toolchain.py', '--bootstrap', seed, '--references', refs])
 stage2 = pathlib.Path(re.findall(r'Verified CoreCLR source toolchain: (\S+)/ncc\.exe', text)[-1])
 shutil.copytree(stage2, toolchain)
 if not (toolchain / 'references').exists(): shutil.copytree(boot / 'references', toolchain / 'references')
-# The CLR platform adapter (platform/*.cs, C#) is rebuilt from source into the new toolchain
-step('platform', [py, build / 'build-coreclr-platform.py', '--toolchain', toolchain, '--references', refs])
-# 2. Nitra, built by the new compiler; the previous Nitra compiler (boot) generates its grammars
+# 3. Nitra, built by the new compiler; the previous Nitra compiler (boot) generates its grammars
 text = step('nitra', [py, build / 'build-nitra-core.py', '--snapshot', 'Nitra', '--bootstrap', toolchain,
                       '--native-bootstrap', boot, '--references', refs])
 nitra = pathlib.Path(re.findall(r'(/tmp/nemerle-nitra-core-\w+/output)', text)[-1])
 for f in nitra.glob('Integrated.*'): shutil.copy2(f, toolchain / f.name)
-# 3. tools
+# 4. tools
 step('scripting-build', [py, build / 'build-scripting.py', '--toolchain', toolchain, '--references', toolchain / 'references'])
 step('lsp-build', [py, build / 'build-language-server.py', '--toolchain', toolchain, '--references', refs, '--output', out / 'lsp'])
-# 4. tests (a failing suite is reported, the others still run)
+# 5. tests (a failing suite is reported, the others still run)
 T, R = toolchain, refs
 suites = [
     ('file-modules', ['check-file-modules.py', T / 'ncc.exe', '--runtime', 'dotnet', '--target-references', R]),
