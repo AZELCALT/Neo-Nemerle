@@ -57,6 +57,8 @@ public interface INitraNativeSourceHost
 public interface INitraGrammarImageHost
 {
   Image : array[byte] { get; }
+  /// Adds a grammar image stored in a continuation section; no compilation.
+  AddImage(manager : ManagerClass, image : array[byte]) : void;
 }
 internal sealed class NitraSourceZone
 {
@@ -84,6 +86,7 @@ internal sealed class NitraSourceSession
   files : SCG.Dictionary[int,string] = SCG.Dictionary();
   zones : SCG.List[NitraSourceZone] = SCG.List();
   markSources : SCG.Dictionary[string,NitraDocument*int*int] = SCG.Dictionary();
+  continuedNames : SCG.HashSet[string] = SCG.HashSet();
   mutable nativeHost : INitraNativeSourceHost;
   // grammar name, file index, block start (keyword), block end
   internal GrammarBlocks : SCG.List[string * int * int * int] = SCG.List();
@@ -199,17 +202,40 @@ internal sealed class NitraSourceSession
       }
       files.Add(source.FileIndex,string(chars));
     }
+    // EXPERIMENT: grammars stored in the continuation sections of -experimental-continue binaries. A grammar the
+    // sources define themselves wins; its stored image is not used (E3 will diff the marks instead).
+    def continued=SCG.List.[array[byte]]();
+    when(configuration.CreateContext==null)
+      foreach(path in manager.Options.ContinueFrom)
+      {
+        def store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
+        when(store!=null && store.GrammarImage!=null && !store.Grammars.Exists(g => definitions.ContainsKey(g.Name)))
+        {
+          continued.Add(store.GrammarImage);
+          foreach(g in store.Grammars)
+          {
+            def placeholder=NitraDocument(); placeholder.File=g.Owner; placeholder.Source="";
+            continuedNames.Add(g.Name); definitions.Add(g.Name,placeholder);
+          }
+        }
+      }
+    def sourceDefinitions=SCG.List.[NitraDocument]();
+    foreach(pair when !continuedNames.Contains(pair.Key) in definitions) sourceDefinitions.Add(pair.Value);
     when(configuration.CreateContext==null && (definitions.Count>0 || zones.Count>0))
     {
-      def inputs=SCG.List(definitions.Values);
-      nativeHost=if(configuration.ProvideHost!=null) configuration.ProvideHost.Invoke(manager,inputs) else CreateNativeHost(manager,inputs);
+      def inputs=sourceDefinitions;
+      nativeHost=if(configuration.ProvideHost!=null) configuration.ProvideHost.Invoke(manager,inputs)
+                 else if(inputs.Count==0 && continued.Count>0) CreateEmptyNativeHost()
+                 else CreateNativeHost(manager,inputs);
+      foreach(image in continued)
+        match(nativeHost) { | host is INitraGrammarImageHost => host.AddImage(manager,image) | _ => throw ArgumentException("the native host cannot load continuation grammar images") }
       // EXPERIMENT: the compiled grammar image and the marks of every declaration go into the continuation section
       when(manager.Options.ExperimentalContinuation && !IndexOnly)
         match(nativeHost)
         {
           | host is INitraGrammarImageHost when host.Image!=null =>
             manager.Continuation.GrammarImage=host.Image;
-            foreach(pair in definitions)
+            foreach(pair when !continuedNames.Contains(pair.Key) in definitions)
             {
               def g=Nemerle.Compiler.continuation.ContinuationGrammar();
               g.Name=pair.Key; g.Owner=if(owners.ContainsKey(pair.Key) && files.ContainsKey(owners[pair.Key])) Location.GetFileName(owners[pair.Key]) else "";
@@ -259,6 +285,13 @@ internal sealed class NitraSourceSession
       manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
       manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
     }
+  }
+  /// EXPERIMENT: the native host without compiled definitions (only continuation images are added to it).
+  static CreateEmptyNativeHost() : INitraNativeSourceHost
+  {
+    def directory=System.IO.Path.GetDirectoryName(typeof(ManagerClass).Assembly.Location);
+    def assembly=System.Reflection.Assembly.LoadFrom(System.IO.Path.Combine(directory,"Integrated.Nitra.Compiler.dll"));
+    Activator.CreateInstance(assembly.GetType("Nitra.Compiler+NativeSourceHost",true)) :> INitraNativeSourceHost
   }
   /// Loads the native semantic compiler next to Nemerle.Compiler.dll and compiles the grammar definitions with it.
   public static CreateNativeHost(manager : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost

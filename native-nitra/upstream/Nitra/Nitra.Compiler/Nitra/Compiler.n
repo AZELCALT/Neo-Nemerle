@@ -9997,6 +9997,27 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       try { when(Directory.Exists(scratch)) Directory.Delete(scratch,true) } catch { | _ => () }
     }
   }
+  /// EXPERIMENT: add a grammar image stored in a continuation section, without compiling anything.
+  public AddImage(manager : ManagerClass, image : array[byte]) : void
+  {
+    when(registry==null) { registry=SelectedRegistry(); AddBuiltins(registry); }
+    def directory=Path.GetDirectoryName(typeof(NativeSourceHost).Assembly.Location);
+    def refs=SCG.HashSet.[string](StringComparer.OrdinalIgnoreCase);
+    def shared=SCG.HashSet.[Assembly]();
+    foreach(reference in manager.ReferencedAssemblies)
+    {
+      _=shared.Add(reference.Assembly);
+      when(reference.IsUserReference && !String.IsNullOrEmpty(reference.Assembly.Location)) _=refs.Add(reference.Assembly.Location);
+    }
+    foreach(name in array["Nemerle.Compiler.dll","Integrated.Nitra.Runtime.dll","Integrated.DotNetLang.dll","Integrated.Nitra.Grammar.dll","Integrated.Nitra.Compiler.dll"])
+    {
+      _=refs.Add(Path.Combine(directory,name));
+      _=shared.Add(Assembly.LoadFrom(Path.Combine(directory,name)));
+    }
+    def assembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(image,SCG.List(shared).ToArray(),refs.NToList().ToArray());
+    when(GrammarAssembly==null) GrammarAssembly=assembly;
+    registry.Add(assembly);
+  }
   static AddBuiltins(registry : SelectedRegistry) : void
   {
     registry.Add(typeof(Nitra.Runtime.ParseTree).Assembly);
