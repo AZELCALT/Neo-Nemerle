@@ -4,7 +4,7 @@ This optional library compiles ordinary Nemerle syntax with the existing compile
 macros and CLR backend. Script mode adds a generated instance for supplied inputs,
 script fields and execution. It does not introduce an interpreter or another language.
 
-The CoreCLR distribution includes `Nemerle.Scripting.dll` and `nscript`:
+The .NET 10 toolchain includes `Nemerle.Scripting.dll` and `nscript`:
 
 ```sh
 ./toolchain/coreclr/nscript run demo.n -- first second
@@ -132,7 +132,7 @@ caching are described below. Physical unloading is not guaranteed.
 
 ## Build and checks
 
-From the workspace root, with a working source-built CoreCLR toolchain:
+From the workspace root, with a working source-built .NET 10 toolchain:
 
 ```sh
 python3 build/build-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references

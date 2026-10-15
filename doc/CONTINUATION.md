@@ -55,7 +55,7 @@ no section.
 | Only alternatives of extensible rules changed, were added or removed | `patch`: just those alternatives are compiled, as `extend syntax` blocks of a patch module over the stored module, and the stale stored alternatives are dropped. |
 | Anything else (a rule, a module, `using`s, a precedence group) | `fallback`: the grammar is compiled in full. |
 | The binary defines macros | They are loaded without `-m`. |
-| A host macro expands to an internal member of its module | The member is visible to the compiler, and the output carries `IgnoresAccessChecksTo(<host>)` so CoreCLR allows the call. Internals of other modules stay hidden. |
+| A host macro expands to an internal member of its module | The member is visible to the compiler, and the output carries `IgnoresAccessChecksTo(<host>)` so the .NET runtime allows the call. Internals of other modules stay hidden. |
 
 ## Measurements
 

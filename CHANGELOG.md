@@ -6,8 +6,8 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 
 ## Unreleased: the revival
 
-### Platform: .NET 10 / CoreCLR
-- The compiler, standard library and macros build themselves on .NET 10 (CoreCLR). Neither Mono nor .NET Framework is needed
+### Platform: .NET 10
+- The compiler, standard library and macros build themselves on .NET 10. Neither Mono nor .NET Framework (what upstream ran on) is needed
   to run them.
 - New CLR backend adapter in `platform/` (`Nemerle.Platform.dll`, C#). It covers emission, metadata, signing,
   resources, reference assemblies and assembly loading. Plugins such as macro libraries get an isolated load context when
