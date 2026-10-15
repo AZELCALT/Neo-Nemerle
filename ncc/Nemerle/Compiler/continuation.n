@@ -18,7 +18,11 @@ public sealed class ContinuationMark
   public mutable Scope : string = "";
   public mutable Start : int;
   public mutable End : int;
+  /// Hash of the declaration's whole text, whitespace runs outside literals collapsed.
   public mutable Hash : ulong;
+  /// Hash of the declaration's own text (its children cut out), normalized the same way: a declaration whose own
+  /// text did not change is clean even when a child changed.
+  public mutable Own : ulong;
   /// Index of the enclosing declaration in the grammar's mark list, -1 at the top.
   public mutable Parent : int = -1;
 }
@@ -29,6 +33,20 @@ public sealed class ContinuationGrammar
   /// Source file that declared the grammar.
   public mutable Owner : string = "";
   public Marks : SCG.List[ContinuationMark] = SCG.List();
+}
+
+public sealed class ContinuationDiff
+{
+  public Changed : SCG.List[ContinuationMark] = SCG.List();
+  public Added : SCG.List[ContinuationMark] = SCG.List();
+  public Removed : SCG.List[ContinuationMark] = SCG.List();
+  public mutable Unchanged : int;
+  public IsClean : bool { get { Changed.Count == 0 && Added.Count == 0 && Removed.Count == 0 } }
+  public override ToString() : string
+  {
+    def names(marks : SCG.List[ContinuationMark]) { string.Join(",", marks.ConvertAll(m => m.Kind + ":" + m.Name).ToArray()) }
+    $"changed=[$(names(Changed))] added=[$(names(Added))] removed=[$(names(Removed))] unchanged=$Unchanged"
+  }
 }
 
 public sealed class ContinuationStore
@@ -56,15 +74,100 @@ public sealed class ContinuationStore
         if (d.Start + delta < bodyStart) walk(d.Children, parent)
         else
         {
+          def text = d.Text ?? "";
+          def own = StringBuilder();
+          mutable at = d.Start;
+          foreach (c in d.Children)
+            when (c.Start >= at && c.End <= d.End)
+            {
+              _ = own.Append(text, at - d.Start, c.Start - at).Append(' ');
+              at = c.End;
+            }
+          when (at <= d.End) _ = own.Append(text, at - d.Start, d.End - at);
           def m = ContinuationMark();
           m.Kind = d.Kind ?? ""; m.Name = d.Name ?? ""; m.Scope = d.Scope ?? "";
-          m.Start = d.Start + delta; m.End = d.End + delta; m.Hash = Hash(d.Text ?? ""); m.Parent = parent;
+          m.Start = d.Start + delta; m.End = d.End + delta; m.Hash = Hash(Normalize(text)); m.Own = Hash(Normalize(own.ToString()));
+          m.Parent = parent;
           result.Add(m);
           walk(d.Children, result.Count - 1);
         }
     }
     walk(document.Declarations, -1);
     result
+  }
+
+  /// Collapses every whitespace run outside "..." and '...' literals to one space and trims the ends, so layout-only
+  /// edits do not change a mark.
+  public static Normalize(text : string) : string
+  {
+    def b = StringBuilder(text.Length);
+    mutable quote = '\0';
+    mutable space = false;
+    for (mutable i = 0; i < text.Length; ++i)
+    {
+      def c = text[i];
+      if (quote != '\0')
+      {
+        _ = b.Append(c);
+        if (c == '\\' && i + 1 < text.Length) { ++i; _ = b.Append(text[i]); }
+        else when (c == quote) quote = '\0';
+      }
+      else if (char.IsWhiteSpace(c)) space = true
+      else
+      {
+        when (space && b.Length > 0) _ = b.Append(' ');
+        space = false;
+        _ = b.Append(c);
+        when (c == '"' || c == '\'') quote = c;
+      }
+    }
+    b.ToString()
+  }
+
+  /// What changed between the stored marks of a grammar and its current source: declarations whose own text changed,
+  /// added declarations and removed ones (only the outermost of an added or removed subtree). Matching is by the path
+  /// of (kind, name) from the root, with an ordinal among same-named siblings.
+  public static Diff(stored : ContinuationGrammar, current : ContinuationGrammar) : ContinuationDiff
+  {
+    def keys(marks : SCG.List[ContinuationMark]) : array[string]
+    {
+      def result = array(marks.Count);
+      def seen = SCG.Dictionary.[string, int](StringComparer.Ordinal);
+      for (mutable i = 0; i < marks.Count; ++i)
+      {
+        def m = marks[i];
+        def prefix = (if (m.Parent < 0) "" else result[m.Parent]) + "/" + m.Kind + ":" + m.Name;
+        mutable n;
+        _ = seen.TryGetValue(prefix, out n);
+        seen[prefix] = n + 1;
+        result[i] = prefix + "#" + n.ToString();
+      }
+      result
+    }
+    def oldKeys = keys(stored.Marks);
+    def newKeys = keys(current.Marks);
+    def oldIndex = SCG.Dictionary.[string, int](StringComparer.Ordinal);
+    for (mutable i = 0; i < oldKeys.Length; ++i) oldIndex[oldKeys[i]] = i;
+    def newIndex = SCG.Dictionary.[string, int](StringComparer.Ordinal);
+    for (mutable i = 0; i < newKeys.Length; ++i) newIndex[newKeys[i]] = i;
+    def diff = ContinuationDiff();
+    for (mutable i = 0; i < newKeys.Length; ++i)
+    {
+      def m = current.Marks[i];
+      mutable j;
+      if (oldIndex.TryGetValue(newKeys[i], out j))
+      {
+        if (stored.Marks[j].Own != m.Own) diff.Changed.Add(m) else ++diff.Unchanged;
+      }
+      else when (m.Parent < 0 || oldIndex.ContainsKey(newKeys[m.Parent])) diff.Added.Add(m);
+    }
+    for (mutable j = 0; j < oldKeys.Length; ++j)
+    {
+      def m = stored.Marks[j];
+      when (!newIndex.ContainsKey(oldKeys[j]) && (m.Parent < 0 || newIndex.ContainsKey(oldKeys[m.Parent])))
+        diff.Removed.Add(m);
+    }
+    diff
   }
 
   /// 64-bit FNV-1a over the UTF-16 code units of the text.
@@ -105,6 +208,7 @@ public sealed class ContinuationStore
           WriteInt(grammar, str(m.Kind)); WriteInt(grammar, str(m.Name)); WriteInt(grammar, str(m.Scope));
           WriteInt(grammar, m.Start); WriteInt(grammar, m.End - m.Start); WriteInt(grammar, m.Parent + 1);
           def hash = BitConverter.GetBytes(m.Hash); grammar.Write(hash, 0, hash.Length);
+          def own = BitConverter.GetBytes(m.Own); grammar.Write(own, 0, own.Length);
         }
       }
     }
@@ -155,6 +259,7 @@ public sealed class ContinuationStore
             m.Kind = strings[payload.Int()]; m.Name = strings[payload.Int()]; m.Scope = strings[payload.Int()];
             m.Start = payload.Int(); m.End = m.Start + payload.Int(); m.Parent = payload.Int() - 1;
             m.Hash = BitConverter.ToUInt64(payload.Bytes(8), 0);
+            m.Own = BitConverter.ToUInt64(payload.Bytes(8), 0);
             g.Marks.Add(m);
           }
           store.Grammars.Add(g);

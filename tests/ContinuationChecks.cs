@@ -33,7 +33,7 @@ static class ContinuationChecks
             // every mark is the exact span of its declaration in the source file
             var source = File.ReadAllText(args[3]);
             foreach (var m in grammar.Marks)
-                Check(m.End <= source.Length && Store.Hash(source.Substring(m.Start, m.End - m.Start)) == m.Hash,
+                Check(m.End <= source.Length && Store.Hash(Store.Normalize(source.Substring(m.Start, m.End - m.Start))) == m.Hash,
                     "mark " + m.Kind + " " + m.Name + " [" + m.Start + "," + m.End + ") does not match the source text");
             int rules = int.Parse(args[4]);
             Check(grammar.Marks.Count >= rules, "expected at least one mark per alternative (" + rules + "), got " + grammar.Marks.Count);

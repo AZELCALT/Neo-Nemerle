@@ -87,6 +87,8 @@ internal sealed class NitraSourceSession
   zones : SCG.List[NitraSourceZone] = SCG.List();
   markSources : SCG.Dictionary[string,NitraDocument*int*int] = SCG.Dictionary();
   continuedNames : SCG.HashSet[string] = SCG.HashSet();
+  /// EXPERIMENT E3: per redefined stored grammar, what changed against its stored marks.
+  public ContinuationDiffs : SCG.Dictionary[string,Nemerle.Compiler.continuation.ContinuationDiff] = SCG.Dictionary();
   mutable nativeHost : INitraNativeSourceHost;
   // grammar name, file index, block start (keyword), block end
   internal GrammarBlocks : SCG.List[string * int * int * int] = SCG.List();
@@ -164,7 +166,7 @@ internal sealed class NitraSourceSession
           }
           // EXPERIMENT: the continuation's mark trace needs every declaration's span, read textually (cheap) and
           // moved from the wrapped grammar text to positions in the source file
-          when(manager.Options.ExperimentalContinuation)
+          when(manager.Options.ExperimentalContinuation || !manager.Options.ContinueFrom.IsEmpty)
             markSources[name]=(Nemerle.Compiler.NitraDeclarations.NitraDeclarationReader(nativeSource,file).Read(),block.Start+1-("namespace "+name+" {").Length,block.Start+1);
           definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
         }
@@ -209,6 +211,19 @@ internal sealed class NitraSourceSession
       foreach(path in manager.Options.ContinueFrom)
       {
         def store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
+        // E3: a stored grammar the source redefines is diffed against the stored marks (the compile still falls back
+        // to compiling the grammar in full)
+        when(store!=null)
+          foreach(stored when definitions.ContainsKey(stored.Name) && markSources.ContainsKey(stored.Name) in store.Grammars)
+          {
+            def (marks,delta,bodyStart)=markSources[stored.Name];
+            def current=Nemerle.Compiler.continuation.ContinuationGrammar(); current.Name=stored.Name;
+            current.Marks.AddRange(Nemerle.Compiler.continuation.ContinuationStore.Marks(marks,delta,bodyStart));
+            def diff=Nemerle.Compiler.continuation.ContinuationStore.Diff(stored,current);
+            ContinuationDiffs[stored.Name]=diff;
+            when(Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1")
+              Console.Error.WriteLine("continuation diff "+stored.Name+": "+diff.ToString());
+          }
         when(store!=null && store.GrammarImage!=null && !store.Grammars.Exists(g => definitions.ContainsKey(g.Name)))
         {
           continued.Add(store.GrammarImage);

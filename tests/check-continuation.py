@@ -6,13 +6,15 @@
 E1: -experimental-continuation writes a .nemir section with the grammar image and marks; the output still runs and
     verifies when signed; without the flag nothing is written.
 E2: a program with only `space Demo { ... }` compiles with -experimental-continue:<host binary> against the host's
-    stored grammar (no grammar in its source, no nested grammar compile) and prints the same result."""
+    stored grammar (no grammar in its source, no nested grammar compile) and prints the same result.
+E3: a program that redefines the stored grammar gets an exact mark diff (changed / added / removed declarations);
+    layout-only edits are clean. The grammar still compiles in full."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
 
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
-p.add_argument('--stage', default='E2', help='run the stages up to and including this one')
+p.add_argument('--stage', default='E3', help='run the stages up to and including this one')
 a = p.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 repo = here.parent
@@ -126,4 +128,47 @@ if a.stage >= 'E2':
     print('E2 times: 10-rule grammar fresh %.2fs, continued %.2fs; 120-rule grammar fresh %.2fs, continued %.2fs'
           % (t_cont, t10, t_plain120, t120), flush=True)
     print('PASS: E2 programs continue from a stored grammar without compiling it', flush=True)
+
+
+def diff_of(name, text, expected_output):
+    """Compile an edited copy of the 10-rule grammar program against the stored one; return the reported diff."""
+    import os, re
+    root = w / name
+    root.mkdir()
+    source = root / 'demo.n'
+    source.write_text(text)
+    env = dict(os.environ, NEMERLE_CONTINUATION_DIFF='1')
+    r = subprocess.run([str(T / 'ncc'), str(source), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
+                        '-no-color', '-experimental-continue:' + str(unsigned)], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise SystemExit('FAILED: %s\n%s%s' % (name, r.stdout, r.stderr))
+    shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'demo.runtimeconfig.json')
+    output = run(['dotnet', root / 'demo.exe'], cwd=root).stdout.strip()
+    if output != expected_output:
+        raise SystemExit('FAILED: %s printed %r, expected %r' % (name, output, expected_output))
+    line = next((l for l in (r.stdout + r.stderr).splitlines() if l.startswith('continuation diff Demo:')), None)
+    if line is None:
+        raise SystemExit('FAILED: %s reported no diff\n%s%s' % (name, r.stdout, r.stderr))
+    parts = dict(re.findall(r'(\w+)=\[([^\]]*)\]', line))
+    return {k: [x for x in v.split(',') if x] for k, v in parts.items()}, line
+
+
+if a.stage >= 'E3':
+    base = grammar_program(10)
+    cases = [
+        ('body', base.replace('<[ 3 ]>', '<[ 33 ]>').replace('space Demo { k9 }', 'space Demo { k3 }'), '33',
+         lambda d: d['added'] == [] and d['removed'] == [] and d['changed'] and all('A3' in c or c.startswith('retained') for c in d['changed'])),
+        ('added', base.replace('      | A9 = "k9" { map PExpr = <[ 9 ]>; }', '      | A9 = "k9" { map PExpr = <[ 9 ]>; }\n      | A10 = "k10" { map PExpr = <[ 10 ]>; }').replace('space Demo { k9 }', 'space Demo { k10 }'), '10',
+         lambda d: d['added'] == ['alternative:A10'] and d['removed'] == []),
+        ('renamed', base.replace('| A3 = ', '| B3 = '), '9',
+         lambda d: d['added'] == ['alternative:B3'] and d['removed'] == ['alternative:A3'] and d['changed'] == []),
+        ('layout', base.replace('\n      | A5', '\n\n         |   A5').replace('map PExpr = <[ 7 ]>', 'map   PExpr =   <[ 7 ]>'), '9',
+         lambda d: d['added'] == [] and d['removed'] == [] and d['changed'] == []),
+    ]
+    for name, text, expected, ok in cases:
+        d, line = diff_of('edit-' + name, text, expected)
+        print('  %-8s %s' % (name, line.split(': ', 1)[1]), flush=True)
+        if not ok(d):
+            raise SystemExit('FAILED: E3 %s diff is not exact: %s' % (name, line))
+    print('PASS: E3 mark diff is exact for body, added, renamed and layout-only edits', flush=True)
 shutil.rmtree(w, ignore_errors=True)
