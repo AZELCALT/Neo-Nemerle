@@ -6,22 +6,24 @@ you build with it remain yours.
 
 | Part | License |
 |---|---|
-| The compiler (`ncc/`), the Nitra compiler and grammar (`native-nitra/upstream/Nitra/Nitra.Compiler`, `Nitra.Grammar`), scripting (`scripting*/`), the language server (`tools/language-server/`), `platform/`, `build/`, `tests/` | **GPL-2.0-or-later** with the **Nemerle Compiler Output Exception** ([LICENSE](LICENSE), [exception](LICENSES/LicenseRef-Nemerle-Output-Exception.txt)) |
+| The compiler (`ncc/`), Nitra (`native-nitra/`: runtime, grammar, compiler, DotNetLang), scripting (`scripting*/`), the language server (`tools/language-server/`), `platform/`, `build/`, `tests/` | **GPL-2.0-or-later** with the **Nemerle Compiler Output Exception** ([LICENSE](LICENSE), [exception](LICENSES/LicenseRef-Nemerle-Output-Exception.txt)) |
 | The standard library (`lib/`, `Nemerle.dll`) and standard macros (`macros/`, `Nemerle.Macros.dll`) | **BSD-3-Clause** ([lib/LICENSE](lib/LICENSE), [macros/LICENSE](macros/LICENSE)) |
-| The Nitra runtime and DotNetLang (`native-nitra/upstream/Nitra/Nitra.Runtime`, `DotNetLang`) | **BSD-3-Clause** ([Nitra.Runtime/LICENSE](native-nitra/upstream/Nitra/Nitra.Runtime/LICENSE), [DotNetLang/LICENSE](native-nitra/upstream/Nitra/DotNetLang/LICENSE)) |
 | The pinned toolchain (`boot/coreclr/`) | binaries of all of the above, plus the third-party components below |
 
 [REUSE.toml](REUSE.toml) holds the same map in machine-readable form.
 
 **What this means in practice:**
 - **Programs you compile are yours.** The output exception says that code the compiler, its macros, quotations or
-  Nitra grammar compiler put into your assemblies is not covered by the GPL. The libraries those assemblies use at run
-  time are BSD.
-- **The compiler stays free.** If you distribute a modified compiler, you distribute its source under the GPL too.
+  `space` blocks put into your assemblies is not covered by the GPL. The standard library those assemblies use at run
+  time is BSD; a compiled `space` needs no Nitra at run time.
+- **The compiler and Nitra stay free.** If you distribute a modified compiler or Nitra, you distribute its source
+  under the GPL too.
+- **Compiled grammars are GPL.** A grammar compiled into a reusable grammar image extends the compiler, so the
+  exception does not cover it: if you distribute one, its source goes with it under the GPL.
 
 ## Original work
 
-The GPL parts include code written by the original Nemerle and Nitra teams under BSD-3-Clause. BSD-3 allows a modified
+The GPL parts include code written by the original Nemerle and Nitra teams under BSD-3-Clause; Nitra is entirely such code. BSD-3 allows a modified
 version to be distributed under the GPL. Its conditions are kept here:
 - The original copyright notices and license texts stay with the code.
   - **Nemerle:** Copyright (c) 2003-2008 The University of Wroclaw, Copyright (c) 2008-2014 Nemerle Project Team.

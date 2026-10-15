@@ -85,6 +85,7 @@ Upstream development went quiet after 2015. This fork picks up where they stoppe
 ## License
 
 The compiler is **GPL-2.0-or-later** with an output exception: programs you compile with it are yours, under any
-license you choose. The standard library, the standard macros and the Nitra runtime stay **BSD-3-Clause** like the
-originals, so they can ship inside your programs. The original Nemerle and Nitra copyright notices are kept with their
+license you choose. Nitra and compiled grammars are GPL like the compiler: a grammar you distribute comes with its source.
+The standard library and the standard macros stay **BSD-3-Clause** like the originals, so they can ship inside your
+programs. The original Nemerle and Nitra copyright notices are kept with their
 code. See [NOTICE.md](NOTICE.md) for the full map.

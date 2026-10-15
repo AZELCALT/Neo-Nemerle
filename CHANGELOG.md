@@ -57,5 +57,6 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
   [legacy/NEWS](legacy/NEWS).
 
 ### License
-- The compiler and tools are GPL-2.0-or-later with the Nemerle Compiler Output Exception. The standard library, macros,
-  Nitra runtime and DotNetLang stay BSD-3-Clause with their original notices. See [NOTICE.md](NOTICE.md).
+- The compiler, Nitra and the tools are GPL-2.0-or-later with the Nemerle Compiler Output Exception. Compiled programs are
+  not covered; compiled grammar images are. The standard library and macros stay BSD-3-Clause with their original
+  notices. See [NOTICE.md](NOTICE.md).

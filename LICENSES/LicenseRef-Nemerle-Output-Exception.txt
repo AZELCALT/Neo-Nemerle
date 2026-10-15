@@ -7,8 +7,12 @@ being covered by the GNU General Public License.
 "Output" means the assemblies, generated source and other files that the compiler produces from your input, including
 any code that the compiler itself, its standard macros, its quotations or its Nitra grammar compiler insert into them.
 
-This exception does not apply to a program whose output is itself the compiler or a modified version of it, and it does
-not cover code copied out of the compiler's own sources by other means than compiling.
+This exception does not apply to:
+- output that is itself the compiler, Nitra, or a modified version of either;
+- compiled grammars (grammar images): assemblies that hold Nitra grammars compiled to be loaded into the compiler or
+  into Nitra. They extend the compiler and are covered by the GNU General Public License like the compiler itself.
+  Programs produced by compiling `grammar` and `space` blocks are output and remain covered by this exception;
+- code copied out of the compiler's own sources by other means than compiling.
 
 If you modify the compiler, you may extend this exception to your version, but you are not obliged to do so. If you do
 not wish to, delete this exception statement from your version.
