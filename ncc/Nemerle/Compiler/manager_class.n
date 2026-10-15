@@ -644,6 +644,15 @@ using Nemerle.Compiler.XmlDump;
         foreach (file in Options.MacrosToLoad.Reverse())
           tryEx(() => LibrariesManager.LoadPluginsFrom(file, loadMacros = true, loadParsers = true));
 
+        // EXPERIMENT E5: a binary this compilation continues from lends it the macros its section indexes
+        foreach (path in Options.ContinueFrom)
+          tryEx(() =>
+          {
+            def store = Nemerle.Compiler.continuation.ContinuationStore.FromImage(IO.File.ReadAllBytes(path));
+            when (store != null && store.Macros.Count > 0)
+              LibrariesManager.LoadPluginsFrom(IO.Path.GetFullPath(path), loadMacros = true, loadParsers = false);
+          });
+
         tryEx(() =>
         {
           def isNemerleDll(path : string) : bool

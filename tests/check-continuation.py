@@ -8,13 +8,15 @@ E1: -experimental-continuation writes a .nemir section with the grammar image an
 E2: a program with only `space Demo { ... }` compiles with -experimental-continue:<host binary> against the host's
     stored grammar (no grammar in its source, no nested grammar compile) and prints the same result.
 E3: a program that redefines the stored grammar gets an exact mark diff (changed / added / removed declarations);
-    layout-only edits are clean. The grammar still compiles in full."""
+    layout-only edits are clean. The grammar still compiles in full.
+E5: a host library's macros are indexed in its section (name, class, source span) and a program that continues
+    from it uses them without -m."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
 
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
-p.add_argument('--stage', default='E3', help='run the stages up to and including this one')
+p.add_argument('--stage', default='E5', help='run the stages up to and including this one')
 a = p.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 repo = here.parent
@@ -171,4 +173,23 @@ if a.stage >= 'E3':
         if not ok(d):
             raise SystemExit('FAILED: E3 %s diff is not exact: %s' % (name, line))
     print('PASS: E3 mark diff is exact for body, added, renamed and layout-only edits', flush=True)
+
+if a.stage >= 'E5':
+    root = w / 'macrohost'
+    root.mkdir()
+    (root / 'host.n').write_text('using Nemerle.Compiler;\n\nmacro twice(e)\n{\n  <[ $e * 2 ]>\n}\n\npublic Hello() : string { "host" }\n')
+    run([T / 'ncc', root / 'host.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'), '-no-color',
+         '-r:' + str(T / 'Nemerle.Compiler.dll'), '-experimental-continuation'])
+    print(reader(root / 'host.dll', T, '--macros', root / 'host.n'), flush=True)
+    user = w / 'macrouser'
+    user.mkdir()
+    (user / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(twice(21)); }\n}\n')
+    run([T / 'ncc', user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
+         '-r:' + str(root / 'host.dll'), '-experimental-continue:' + str(root / 'host.dll')])
+    shutil.copy2(T / 'ncc.runtimeconfig.json', user / 'use.runtimeconfig.json')
+    shutil.copy2(root / 'host.dll', user / 'host.dll')
+    output = run(['dotnet', user / 'use.exe'], cwd=user).stdout.strip()
+    if output != '42':
+        raise SystemExit('FAILED: E5 program printed %r, expected 42' % output)
+    print('PASS: E5 a continued program uses the host\'s macro (twice(21) = 42) without -m', flush=True)
 shutil.rmtree(w, ignore_errors=True)

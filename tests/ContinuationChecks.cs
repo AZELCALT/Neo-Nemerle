@@ -23,6 +23,20 @@ static class ContinuationChecks
         }
         Check(raw != null, "missing .nemir section");
         var store = Store.FromImage(image);
+        if (args[2] == "--macros")
+        {
+            // E5: every macro defined in the binary is indexed, and its mark is the exact span of its definition
+            Check(store.Macros.Count > 0, "no macros indexed");
+            var text = File.ReadAllText(args[3]);
+            foreach (var m in store.Macros)
+            {
+                Check(m.Start >= 0 && m.End <= text.Length && Store.Hash(Store.Normalize(text.Substring(m.Start, m.End - m.Start))) == m.Hash,
+                    "macro mark " + m.Name + " [" + m.Start + "," + m.End + ") does not match the source text");
+                Check(Assembly.LoadFrom(args[0]).GetType(m.TypeName) != null, "macro class " + m.TypeName + " not in the binary");
+            }
+            Console.WriteLine("PASS: macro subsection: " + string.Join(", ", store.Macros.Select(m => m.Name + " (" + m.TypeName + ") [" + m.Start + "," + m.End + ")")) + "; marks match the source");
+            return 0;
+        }
         Check(store.GrammarImage != null, "no grammar image");
         var grammar = store.Grammars.FirstOrDefault(g => g.Name == args[2]);
         Check(grammar != null, "grammar " + args[2] + " not recorded; have: " + string.Join(",", store.Grammars.Select(g => g.Name)));

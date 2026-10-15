@@ -776,6 +776,20 @@ using Nemerle.Compiler.Utility;
           {
             def attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.ContainsMacroAttribute, ti.GetTypeBuilder ().FullName);
             ClrEmitter.SetAttribute(_assembly_builder, attr);
+            // EXPERIMENT E5: the continuation section indexes the macro with its source span
+            when (Manager.Options.ExperimentalContinuation && Manager.Continuation != null)
+            {
+              def m = Nemerle.Compiler.continuation.ContinuationMacro();
+              m.Name = ti.Name; m.TypeName = ti.GetTypeBuilder().FullName;
+              def loc = ti.Location;
+              m.File = loc.File;
+              def source = Manager.Options.Sources.Find(s => s.FileIndex == loc.FileIndex);
+              def text = match (source) { | Some(s) => s.GetText() | None => null };
+              def (start, end) = Nemerle.Compiler.continuation.ContinuationStore.Span(text, loc);
+              m.Start = start; m.End = end;
+              m.Hash = if (start >= 0 && end >= start) Nemerle.Compiler.continuation.ContinuationStore.Hash(Nemerle.Compiler.continuation.ContinuationStore.Normalize(text.Substring(start, end - start))) else 0UL;
+              Manager.Continuation.Macros.Add(m);
+            }
           }
         }
       }

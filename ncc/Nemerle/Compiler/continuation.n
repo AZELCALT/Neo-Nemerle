@@ -35,6 +35,17 @@ public sealed class ContinuationGrammar
   public Marks : SCG.List[ContinuationMark] = SCG.List();
 }
 
+/// A macro defined in the binary: its user-visible name, the CLR name of its macro class, and where it is defined.
+public sealed class ContinuationMacro
+{
+  public mutable Name : string = "";
+  public mutable TypeName : string = "";
+  public mutable File : string = "";
+  public mutable Start : int;
+  public mutable End : int;
+  public mutable Hash : ulong;
+}
+
 public sealed class ContinuationDiff
 {
   public Changed : SCG.List[ContinuationMark] = SCG.List();
@@ -54,13 +65,33 @@ public sealed class ContinuationStore
   static Magic : array[byte] = array[0x4E :> byte, 0x45 :> byte, 0x4D :> byte, 0x43 :> byte]; // "NEMC"
   public static FormatVersion : int = 1;
   static GrammarKind : byte = 1;
+  static MacroKind : byte = 2;
 
   public mutable CompilerVersion : string = "";
   /// The compiled grammar image (one assembly for all grammars of the binary), uncompressed; null when none.
   public mutable GrammarImage : array[byte];
   public Grammars : SCG.List[ContinuationGrammar] = SCG.List();
+  public Macros : SCG.List[ContinuationMacro] = SCG.List();
 
-  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 } }
+  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 } }
+
+  /// Offsets in the source text of a location (lines and columns are 1-based), or (-1, -1) when unknown.
+  public static Span(text : string, location : Nemerle.Compiler.AST.Location) : int * int
+  {
+    def offset(line : int, column : int) : int
+    {
+      mutable at = 0;
+      mutable l = 1;
+      while (l < line && at >= 0)
+      {
+        at = text.IndexOf('\n', at);
+        when (at >= 0) { ++at; ++l; }
+      }
+      if (at < 0) -1 else Math.Min(text.Length, at + column - 1)
+    }
+    if (text == null || location.Line <= 0) (-1, -1)
+    else (offset(location.Line, location.Column), offset(location.EndLine, location.EndColumn))
+  }
 
   /// The marks of a grammar's declarations, depth first, each with its parent's index. `delta` moves the document's
   /// offsets to positions in the source file; declarations that start before `bodyStart` are synthetic wrappers (not
@@ -212,18 +243,34 @@ public sealed class ContinuationStore
         }
       }
     }
+    def macros = MemoryStream();
+    when (Macros.Count > 0)
+    {
+      WriteInt(macros, Macros.Count);
+      foreach (m in Macros)
+      {
+        WriteInt(macros, str(m.Name)); WriteInt(macros, str(m.TypeName)); WriteInt(macros, str(m.File));
+        WriteInt(macros, m.Start + 1); WriteInt(macros, m.End - m.Start + 1);
+        def hash = BitConverter.GetBytes(m.Hash); macros.Write(hash, 0, hash.Length);
+      }
+    }
     def output = MemoryStream();
     output.Write(Magic, 0, Magic.Length);
     WriteInt(output, FormatVersion);
     WriteString(output, CompilerVersion);
     WriteInt(output, strings.Count);
     foreach (s in strings) WriteString(output, s);
-    def subsections = if (grammar.Length > 0) 1 else 0;
+    def subsections = (if (grammar.Length > 0) 1 else 0) + (if (macros.Length > 0) 1 else 0);
     WriteInt(output, subsections);
     when (grammar.Length > 0)
     {
       output.WriteByte(GrammarKind);
       WriteBlob(output, grammar.ToArray());
+    }
+    when (macros.Length > 0)
+    {
+      output.WriteByte(MacroKind);
+      WriteBlob(output, macros.ToArray());
     }
     output.ToArray()
   }
@@ -265,6 +312,15 @@ public sealed class ContinuationStore
           store.Grammars.Add(g);
         }
       }
+      when (kind == MacroKind)
+        repeat (payload.Int())
+        {
+          def m = ContinuationMacro();
+          m.Name = strings[payload.Int()]; m.TypeName = strings[payload.Int()]; m.File = strings[payload.Int()];
+          m.Start = payload.Int() - 1; m.End = m.Start + payload.Int() - 1;
+          m.Hash = BitConverter.ToUInt64(payload.Bytes(8), 0);
+          store.Macros.Add(m);
+        }
       // unknown subsection kinds are skipped: newer writers may add them
     }
     store
