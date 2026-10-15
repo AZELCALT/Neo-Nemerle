@@ -58,3 +58,6 @@ nemerle.pc
 # revive build output
 /out/
 __pycache__/
+
+# mdBook output
+/doc/book/book/

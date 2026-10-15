@@ -19,6 +19,9 @@ This fork brings their work back on **.NET 10**:
 
 Only .NET 10 is targeted for now. **What changed compared with upstream: [CHANGELOG.md](CHANGELOG.md).**
 
+**Learn the language: [The Nemerle Book](doc/book/src/SUMMARY.md)**: syntax and semantics chapter by chapter, from
+values to macros, grammars and scripts. Every example in it is compiled and run by the test suite.
+
 ## Hello world
 
 ```nemerle

@@ -57,6 +57,11 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 - **Build:** `./bootstrap` builds everything from the pinned compiler in `boot/coreclr` and runs every test suite.
   `--update-boot` refreshes the pinned compiler once everything passes.
 
+### Documentation
+- [The Nemerle Book](doc/book/src/SUMMARY.md): a guide to the language in the style of the Rust book, from values
+  and functions to variants, files as modules, macros, grammars and scripts. Its 79 examples run as tests
+  (`tests/check-book.py`, part of `./bootstrap`).
+
 ### Repository
 - `build/` (build scripts, `bootstrap.py`, one-off migrations in `build/migrations/`) and `tests/` (suites and
   fixtures) are new. `boot/coreclr/` is the pinned .NET 10 toolchain.

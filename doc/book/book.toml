@@ -1,0 +1,8 @@
+[book]
+title = "The Nemerle Book"
+authors = ["azelcalt and the contributors of this fork"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"

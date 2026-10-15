@@ -1,0 +1,233 @@
+# Variants and pattern matching
+
+## Variants
+
+A `variant` is a type whose values come in a fixed set of shapes. Rust calls this an enum with data, and ML calls it an
+algebraic data type. Each shape is an *option* with its own fields:
+
+```nemerle
+using System.Console;
+
+variant Shape
+{
+  | Circle { radius : double }
+  | Rectangle { width : double; height : double }
+  | Point
+}
+
+def shapes = [Shape.Circle(1.0), Shape.Rectangle(2.0, 3.0), Shape.Point()];
+WriteLine(shapes.Length)
+```
+
+```text
+3
+```
+
+## `match`
+
+`match` takes a value apart by its shape. The first case whose pattern fits is taken, and its value is the value of
+the whole `match`:
+
+```nemerle
+using System.Console;
+
+variant Shape
+{
+  | Circle { radius : double }
+  | Rectangle { width : double; height : double }
+  | Point
+}
+
+Area(shape : Shape) : double
+{
+  match (shape)
+  {
+    | Shape.Circle(r) => 3.14 * r * r
+    | Shape.Rectangle(w, h) => w * h
+    | Shape.Point => 0.0
+  }
+}
+
+foreach (s in [Shape.Circle(1.0), Shape.Rectangle(2.0, 3.0), Shape.Point()])
+  WriteLine(Area(s))
+```
+
+```text
+3.14
+6
+0
+```
+
+The compiler checks that a `match` covers every case. Leave one out and it warns you.
+
+A function whose whole body is a `match` on its parameters can drop the `match (...)` and list the cases directly:
+
+```nemerle
+using System.Console;
+
+Describe(n : int) : string
+{
+  | 0 => "zero"
+  | 1 | 2 | 3 => "small"
+  | _ => "many"
+}
+
+WriteLine($"$(Describe(0)) $(Describe(2)) $(Describe(40))")
+```
+
+```text
+zero small many
+```
+
+`_` matches anything, and `|` between patterns means "any of these".
+
+### Patterns
+
+Patterns can look inside lists, tuples, variants and types, and can be refined with a `when` guard:
+
+```nemerle
+using System.Console;
+
+Sum(items : list[int]) : int
+{
+  | [] => 0
+  | first :: rest => first + Sum(rest)
+}
+
+Classify(point : int * int) : string
+{
+  | (0, 0) => "origin"
+  | (x, 0) => $"on the x axis at $x"
+  | (x, y) when x == y => "on the diagonal"
+  | _ => "somewhere else"
+}
+
+Kind(value : object) : string
+{
+  | s is string => $"a string of length $(s.Length)"
+  | n is int when n < 0 => "a negative int"
+  | _ is int => "an int"
+  | _ => "something else"
+}
+
+WriteLine(Sum([1, 2, 3, 4]));
+WriteLine(Classify((3, 0)));
+WriteLine(Classify((2, 2)));
+WriteLine(Kind("hello"));
+WriteLine(Kind(-5));
+WriteLine(Kind(2.5))
+```
+
+```text
+10
+on the x axis at 3
+on the diagonal
+a string of length 5
+a negative int
+something else
+```
+
+- **`[]`** matches the empty list; **`first :: rest`** matches a non-empty one and names its head and tail.
+- **`x is T`** matches when the value has type `T`, and names it with that type.
+- **`as`** names the whole of a matched part: `| (_, y) as pair => ...`.
+
+## `option`
+
+`option[T]` is the standard variant for "a value or nothing", with the shapes `Some(value)` and `None()`. It replaces
+`null` for values that may be missing:
+
+```nemerle
+using System.Console;
+
+Find(names : list[string], wanted : string) : option[int]
+{
+  def search(items, index)
+  {
+    match (items)
+    {
+      | [] => None()
+      | name :: rest => if (name == wanted) Some(index) else search(rest, index + 1)
+    }
+  }
+  search(names, 0)
+}
+
+Show(found : option[int]) : string
+{
+  | Some(index) => $"found at $index"
+  | None => "not there"
+}
+
+def names = ["ada", "alan", "grace"];
+WriteLine(Show(Find(names, "alan")));
+WriteLine(Show(Find(names, "linus")))
+```
+
+```text
+found at 1
+not there
+```
+
+Match on a value whose type is `option[T]`, such as a parameter or a return value. A bare `Some(5)` has the narrower
+type `Some[int]`, so a `None` case wouldn't fit it.
+
+## Variants with members
+
+A variant can have methods like a class. Inside them, `this` is the value being matched:
+
+```nemerle
+using System.Console;
+
+variant Expr
+{
+  | Number { value : int }
+  | Add { left : Expr; right : Expr }
+  | Multiply { left : Expr; right : Expr }
+
+  public Eval() : int
+  {
+    match (this)
+    {
+      | Number(v) => v
+      | Add(l, r) => l.Eval() + r.Eval()
+      | Multiply(l, r) => l.Eval() * r.Eval()
+    }
+  }
+
+  public override ToString() : string
+  {
+    match (this)
+    {
+      | Number(v) => v.ToString()
+      | Add(l, r) => $"($l + $r)"
+      | Multiply(l, r) => $"$l * $r"
+    }
+  }
+}
+
+def e = Expr.Add(Expr.Number(2), Expr.Multiply(Expr.Number(3), Expr.Number(4)));
+WriteLine($"$e = $(e.Eval())")
+```
+
+```text
+(2 + 3 * 4) = 14
+```
+
+## Enums
+
+For plain named constants without data, use a .NET `enum`:
+
+```nemerle
+using System.Console;
+
+enum Colour { | Red | Green | Blue }
+
+def c = Colour.Green;
+WriteLine(c);
+WriteLine(c :> int)
+```
+
+```text
+Green
+1
+```
