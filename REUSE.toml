@@ -1,0 +1,46 @@
+# Machine-readable license map (https://reuse.software). The last matching annotation wins.
+# Prose version: NOTICE.md. Original copyright headers inside files stay authoritative for those files.
+version = 1
+
+# Default: the compiler, Nitra compiler and grammar, scripting, language server, platform, build and tests.
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = [
+  "2003-2008 The University of Wroclaw",
+  "2008-2014 Nemerle Project Team",
+  "2014 JetBrains s.r.o.",
+  "2026 azelcalt and the contributors of this fork",
+]
+SPDX-License-Identifier = "GPL-2.0-or-later AND LicenseRef-Nemerle-Output-Exception AND BSD-3-Clause"
+
+# Libraries that ship inside users' programs: BSD-3-Clause, not covered by the GPL.
+[[annotations]]
+path = ["lib/**", "macros/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = [
+  "2003-2008 The University of Wroclaw",
+  "2008-2014 Nemerle Project Team",
+  "2026 azelcalt and the contributors of this fork",
+]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["native-nitra/upstream/Nitra/Nitra.Runtime/**", "native-nitra/upstream/Nitra/DotNetLang/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2014 JetBrains s.r.o.", "2026 azelcalt and the contributors of this fork"]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# The pinned toolchain bundles all of the above plus third-party binaries (Mono.Cecil, .NET pieces, NuGet, Newtonsoft).
+[[annotations]]
+path = "boot/coreclr/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = [
+  "2003-2014 The University of Wroclaw and the Nemerle Project Team",
+  "2014 JetBrains s.r.o.",
+  "2026 azelcalt and the contributors of this fork",
+  ".NET Foundation and Contributors",
+  "2008-2015 Jb Evain, 2008-2011 Novell, Inc. (Mono.Cecil)",
+  "James Newton-King (Newtonsoft.Json)",
+]
+SPDX-License-Identifier = "GPL-2.0-or-later AND LicenseRef-Nemerle-Output-Exception AND BSD-3-Clause AND MIT AND Apache-2.0"

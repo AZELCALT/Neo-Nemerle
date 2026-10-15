@@ -1,0 +1,14 @@
+Nemerle Compiler Output Exception
+
+As a special exception to the GNU General Public License, the copyright holders of the Nemerle compiler give you
+permission to use, modify and distribute the output of the compiler under terms of your choice, without that output
+being covered by the GNU General Public License.
+
+"Output" means the assemblies, generated source and other files that the compiler produces from your input, including
+any code that the compiler itself, its standard macros, its quotations or its Nitra grammar compiler insert into them.
+
+This exception does not apply to a program whose output is itself the compiler or a modified version of it, and it does
+not cover code copied out of the compiler's own sources by other means than compiling.
+
+If you modify the compiler, you may extend this exception to your version, but you are not obliged to do so. If you do
+not wish to, delete this exception statement from your version.

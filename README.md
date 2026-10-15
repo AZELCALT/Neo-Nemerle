@@ -1,13 +1,19 @@
 # Nemerle (revived)
 
-Nemerle is a statically typed language for .NET with functional, object-oriented and imperative features, a C#-like
-syntax and a powerful macro system. This fork brings it back on **.NET 10**:
+Nemerle is a statically typed .NET language that was well ahead of its time. It offered variants and pattern matching,
+type inference, first-class functions and a C#-like syntax years before mainstream languages adopted them, and it had a
+macro system strong enough to grow the language itself: new syntax, embedded DSLs, compile-time code generation.
 
-- **Self-hosting on CoreCLR.** The compiler, runtime and macros build themselves on .NET 10. No Mono or .NET Framework is needed to run them.
+It was designed at the University of Wroclaw and carried on by an open-source community for more than a decade.
+This fork brings their work back on **.NET 10**:
+
+- **Self-hosting on CoreCLR.** The compiler, runtime and macros build themselves on .NET 10. No Mono or .NET Framework
+  is needed to run them.
 - **A file is its namespace.** `src/util/text.n` is the module `util.text`. `namespace` declarations are gone;
   `mask` groups members inside a file, and top-level statements are the file's `Main`. See [doc/FILE-MODULES.md](doc/FILE-MODULES.md).
-- **Nitra built in.** Grammars are declared with `grammar` and used in place with `space`, mapping straight back into
-  Nemerle code. See [grammar/](grammar) and [native-nitra/](native-nitra).
+- **Nitra built in.** Nitra, the language workbench from the same RSDN community (copyright JetBrains, 2014), is part of
+  the language. Grammars are declared with `grammar` and used in place with `space`, mapping straight back into Nemerle
+  code. See [grammar/](grammar) and [native-nitra/](native-nitra).
 - **Scripting.** `nscript run`, `compile` and `repl`, with NuGet references. See [scripting/](scripting).
 - **Language server.** LSP for any editor, with a VS Code client in [tools/language-server/](tools/language-server).
 
@@ -53,8 +59,29 @@ The new toolchain lands in `out/bootstrap/toolchain`, with one log per step in `
 The original upstream README (Windows installer, Mono, Visual Studio) is kept in
 [doc/ORIGINAL-README.md](doc/ORIGINAL-README.md). Those instructions are for the original .NET Framework tree, not this fork.
 
-## License and credits
+## The people behind Nemerle
 
-This fork is distributed under **GPL-2.0-or-later** ([LICENSE](LICENSE)). Nemerle (University of Wroclaw, Nemerle
-Project Team) and Nitra (JetBrains) remain under their original BSD licenses, and their notices are kept. See
-[NOTICE.md](NOTICE.md) for details and credits. The original authors are listed in [AUTHORS](AUTHORS).
+Everything here stands on the work of the original team, and the revival exists because that work was good enough
+to bring back.
+
+- **Nemerle was born at the University of Wroclaw.** The first commit in this history dates from September 2003.
+  It was led by **Michal Moskal**, with **Kamil Skalski** and **Pawel Olszta**. Dawid Duda wrote the standard library,
+  and Ewa Dacko, Bartosz Podlejski, Jacek Sliwerski, Wojtek Knapik and many others contributed. See [AUTHORS](AUTHORS).
+- **The Nemerle Project Team and the [RSDN](https://rsdn.org) community** carried it from 2008 on. They added the
+  Visual Studio integration, the PEG parser, computation expressions and much more. The busiest years were 2010 and
+  2011, with about a thousand commits each.
+- **[Nitra](https://github.com/rsdn/nitra)**, the language workbench published under the same RSDN organization
+  (copyright JetBrains, 2014), supplies the grammar machinery this fork builds into the language.
+
+The most active committers in the upstream history, by git handle: malekith, nazgul, VladD2, hardcase, olszta,
+CodingUnit, NN, Dmitry Ivankov, rampelstinskin, rzyj, Pavel Bludov, earendil and Igor Tkachev. Hundreds of commits
+by others are kept in this repository's history too (`git shortlog -sn master`).
+
+Upstream development went quiet after 2015. This fork picks up where they stopped. Thank you.
+
+## License
+
+The compiler is **GPL-2.0-or-later** with an output exception: programs you compile with it are yours, under any
+license you choose. The standard library, the standard macros and the Nitra runtime stay **BSD-3-Clause** like the
+originals, so they can ship inside your programs. The original Nemerle and Nitra copyright notices are kept with their
+code. See [NOTICE.md](NOTICE.md) for the full map.
