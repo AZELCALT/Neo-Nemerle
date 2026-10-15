@@ -34,6 +34,8 @@ static class ContinuationChecks
                     "macro mark " + m.Name + " [" + m.Start + "," + m.End + ") does not match the source text");
                 Check(Assembly.LoadFrom(args[0]).GetType(m.TypeName) != null, "macro class " + m.TypeName + " not in the binary");
             }
+            if (store.Types.Count > 0)
+                Console.WriteLine("type subsection: " + string.Join("; ", store.Types.Select(t => t.TypeName + " {" + string.Join(", ", t.Members) + "}")));
             Console.WriteLine("PASS: macro subsection: " + string.Join(", ", store.Macros.Select(m => m.Name + " (" + m.TypeName + ") [" + m.Start + "," + m.End + ")")) + "; marks match the source");
             return 0;
         }

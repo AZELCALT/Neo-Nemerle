@@ -793,6 +793,30 @@ using Nemerle.Compiler.XmlDump;
           ProgressBar (2);
 
           Hierarchy = TypesManager (this);
+          // EXPERIMENT E6: members a continued binary makes visible are also reachable at run time: CoreCLR skips access
+          // checks into an assembly named by IgnoresAccessChecksTo, an attribute type the calling assembly defines.
+          mutable accessType = null;
+          foreach (path in Options.ContinueFrom)
+          {
+            def store = Nemerle.Compiler.continuation.ContinuationStore.FromImage(IO.File.ReadAllBytes(path));
+            when (store != null && store.Types.Count > 0)
+            {
+              when (accessType == null)
+              {
+                accessType = CoreEnv.EnterIntoNamespace(["System", "Runtime", "CompilerServices"]).Define(<[ decl:
+                  [System.AttributeUsage(System.AttributeTargets.Assembly, AllowMultiple = true)]
+                  public sealed class IgnoresAccessChecksToAttribute : System.Attribute
+                  {
+                    public this(assemblyName : string) { AssemblyName = assemblyName }
+                    public AssemblyName : string { get; }
+                  }
+                ]>);
+                accessType.Compile();
+              }
+              def name = System.Reflection.AssemblyName.GetAssemblyName(IO.Path.GetFullPath(path)).Name;
+              Hierarchy.AddAssemblyAttribute(CoreEnv, <[ System.Runtime.CompilerServices.IgnoresAccessChecksTo($(name : string)) ]>);
+            }
+          }
           when (Options.AssemblyVersion != null)
             Hierarchy.AddAssemblyAttribute(CoreEnv, <[ System.Reflection.AssemblyVersion($(Options.AssemblyVersion : string)) ]>);
 

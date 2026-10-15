@@ -10,13 +10,15 @@ E2: a program with only `space Demo { ... }` compiles with -experimental-continu
 E3: a program that redefines the stored grammar gets an exact mark diff (changed / added / removed declarations);
     layout-only edits are clean. The grammar still compiles in full.
 E5: a host library's macros are indexed in its section (name, class, source span) and a program that continues
-    from it uses them without -m."""
+    from it uses them without -m.
+E6: a host macro that expands to an internal helper of its module works in a continued program (type subsection +
+    IgnoresAccessChecksTo); internals of modules without macros stay hidden."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
 
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
-p.add_argument('--stage', default='E5', help='run the stages up to and including this one')
+p.add_argument('--stage', default='E6', help='run the stages up to and including this one')
 a = p.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 repo = here.parent
@@ -192,4 +194,33 @@ if a.stage >= 'E5':
     if output != '42':
         raise SystemExit('FAILED: E5 program printed %r, expected 42' % output)
     print('PASS: E5 a continued program uses the host\'s macro (twice(21) = 42) without -m', flush=True)
+
+if a.stage >= 'E6':
+    root = w / 'scopehost'
+    root.mkdir()
+    (root / 'host.n').write_text('using Nemerle.Compiler;\n\nmacro tripled(e)\n{\n  <[ host.Helper($e) ]>\n}\n\ninternal Helper(x : int) : int { x * 3 }\n')
+    (root / 'other.n').write_text('internal Secret() : int { 7 }\n')
+    run([T / 'ncc', root / 'host.n', root / 'other.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'),
+         '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll'), '-experimental-continuation'])
+    print(reader(root / 'host.dll', T, '--macros', root / 'host.n'), flush=True)
+    user = w / 'scopeuser'
+    user.mkdir()
+    (user / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(tripled(14)); }\n}\n')
+    run([T / 'ncc', user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
+         '-r:' + str(root / 'host.dll'), '-experimental-continue:' + str(root / 'host.dll')])
+    shutil.copy2(T / 'ncc.runtimeconfig.json', user / 'use.runtimeconfig.json')
+    shutil.copy2(root / 'host.dll', user / 'host.dll')
+    output = run(['dotnet', user / 'use.exe'], cwd=user).stdout.strip()
+    if output != '42':
+        raise SystemExit('FAILED: E6 program printed %r, expected 42' % output)
+    hidden = w / 'scopehidden'
+    hidden.mkdir()
+    (hidden / 'peek.n').write_text('module Program\n{\n  Main() : void { System.Console.WriteLine(other.Secret()); }\n}\n')
+    r = subprocess.run([str(T / 'ncc'), str(hidden / 'peek.n'), '-source-root:' + str(hidden), '-out:' + str(hidden / 'peek.exe'),
+                        '-no-color', '-r:' + str(root / 'host.dll'), '-experimental-continue:' + str(root / 'host.dll')],
+                       capture_output=True, text=True)
+    if r.returncode == 0 or 'Secret' not in r.stdout + r.stderr:
+        raise SystemExit('FAILED: E6 an internal of a module without macros must stay hidden\n' + r.stdout + r.stderr)
+    print('PASS: E6 a host macro expanding to an internal helper works in a continued program (tripled(14) = 42); '
+          'internals of modules without macros stay hidden', flush=True)
 shutil.rmtree(w, ignore_errors=True)

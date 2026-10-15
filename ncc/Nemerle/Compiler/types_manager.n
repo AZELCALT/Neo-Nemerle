@@ -725,6 +725,21 @@ using Nemerle.Compiler.Utility;
         when (Manager.Options.ExperimentalContinuation && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
         {
           Manager.Continuation.CompilerVersion = typeof(ManagerClass).Assembly.GetName().Version.ToString();
+          // E6: members of the relevant modules that a referencing compilation cannot see (macros may expand to them)
+          foreach (owner in continuation_modules)
+          {
+            def t = Nemerle.Compiler.continuation.ContinuationType();
+            def clrName(ty : Nemerle.Compiler.type_info.TypeInfo) : string
+            {
+              if (ty.DeclaringType == null) ty.FullName else clrName(ty.DeclaringType) + "+" + ty.Name
+            }
+            t.TypeName = clrName(owner);
+            foreach (member in owner.GetDirectMembers())
+              when (!(member.Attributes %&& NemerleModifiers.Public) && member.Name != ".ctor" && member.Name != ".cctor"
+                    && !(member is Nemerle.Compiler.type_info.TypeInfo) && !t.Members.Contains(member.Name))
+                t.Members.Add(member.Name);
+            when (t.Members.Count > 0) Manager.Continuation.Types.Add(t);
+          }
           ClrEmitter.AppendCompilerSection(_OutputFileName, Manager.Continuation.Write());
         }
         //when (_debug_emit != null) _debug_emit.Close ();
@@ -789,6 +804,8 @@ using Nemerle.Compiler.Utility;
               m.Start = start; m.End = end;
               m.Hash = if (start >= 0 && end >= start) Nemerle.Compiler.continuation.ContinuationStore.Hash(Nemerle.Compiler.continuation.ContinuationStore.Normalize(text.Substring(start, end - start))) else 0UL;
               Manager.Continuation.Macros.Add(m);
+              // E6: the module defining the macro is in the relevant set
+              match (ti.DeclaringType) { | owner is TypeBuilder => _ = continuation_modules.Add(owner) | _ => () }
             }
           }
         }
@@ -908,6 +925,8 @@ using Nemerle.Compiler.Utility;
     /* -- PRIVATE FIELDS --------------------------------------------------- */
 
     private   mutable _assembly_session : Nemerle.Platform.ClrAssemblySession;
+    /// EXPERIMENT E6: modules that define macros (the relevant set of the continuation's type subsection).
+    private continuation_modules : SCG.HashSet[TypeBuilder] = SCG.HashSet();
     private   mutable _assembly_name              : System.Reflection.AssemblyName;
     private   mutable _assembly_builder           : Emit.AssemblyBuilder;
     internal  mutable _module_builder             : Emit.ModuleBuilder;

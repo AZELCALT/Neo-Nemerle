@@ -46,6 +46,15 @@ public sealed class ContinuationMacro
   public mutable Hash : ulong;
 }
 
+/// A module of the relevant set (it defines macros) and its members that CLR visibility hides from a referencing
+/// compilation; a compilation that continues from the binary may use exactly these.
+public sealed class ContinuationType
+{
+  /// CLR full name of the module class.
+  public mutable TypeName : string = "";
+  public Members : SCG.List[string] = SCG.List();
+}
+
 public sealed class ContinuationDiff
 {
   public Changed : SCG.List[ContinuationMark] = SCG.List();
@@ -66,14 +75,16 @@ public sealed class ContinuationStore
   public static FormatVersion : int = 1;
   static GrammarKind : byte = 1;
   static MacroKind : byte = 2;
+  static TypeKind : byte = 3;
 
   public mutable CompilerVersion : string = "";
   /// The compiled grammar image (one assembly for all grammars of the binary), uncompressed; null when none.
   public mutable GrammarImage : array[byte];
   public Grammars : SCG.List[ContinuationGrammar] = SCG.List();
   public Macros : SCG.List[ContinuationMacro] = SCG.List();
+  public Types : SCG.List[ContinuationType] = SCG.List();
 
-  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 } }
+  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 } }
 
   /// Offsets in the source text of a location (lines and columns are 1-based), or (-1, -1) when unknown.
   public static Span(text : string, location : Nemerle.Compiler.AST.Location) : int * int
@@ -254,13 +265,23 @@ public sealed class ContinuationStore
         def hash = BitConverter.GetBytes(m.Hash); macros.Write(hash, 0, hash.Length);
       }
     }
+    def types = MemoryStream();
+    when (Types.Count > 0)
+    {
+      WriteInt(types, Types.Count);
+      foreach (t in Types)
+      {
+        WriteInt(types, str(t.TypeName)); WriteInt(types, t.Members.Count);
+        foreach (m in t.Members) WriteInt(types, str(m));
+      }
+    }
     def output = MemoryStream();
     output.Write(Magic, 0, Magic.Length);
     WriteInt(output, FormatVersion);
     WriteString(output, CompilerVersion);
     WriteInt(output, strings.Count);
     foreach (s in strings) WriteString(output, s);
-    def subsections = (if (grammar.Length > 0) 1 else 0) + (if (macros.Length > 0) 1 else 0);
+    def subsections = (if (grammar.Length > 0) 1 else 0) + (if (macros.Length > 0) 1 else 0) + (if (types.Length > 0) 1 else 0);
     WriteInt(output, subsections);
     when (grammar.Length > 0)
     {
@@ -271,6 +292,11 @@ public sealed class ContinuationStore
     {
       output.WriteByte(MacroKind);
       WriteBlob(output, macros.ToArray());
+    }
+    when (types.Length > 0)
+    {
+      output.WriteByte(TypeKind);
+      WriteBlob(output, types.ToArray());
     }
     output.ToArray()
   }
@@ -320,6 +346,14 @@ public sealed class ContinuationStore
           m.Start = payload.Int() - 1; m.End = m.Start + payload.Int() - 1;
           m.Hash = BitConverter.ToUInt64(payload.Bytes(8), 0);
           store.Macros.Add(m);
+        }
+      when (kind == TypeKind)
+        repeat (payload.Int())
+        {
+          def t = ContinuationType();
+          t.TypeName = strings[payload.Int()];
+          repeat (payload.Int()) t.Members.Add(strings[payload.Int()]);
+          store.Types.Add(t);
         }
       // unknown subsection kinds are skipped: newer writers may add them
     }
