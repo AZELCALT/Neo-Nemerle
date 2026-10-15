@@ -16,6 +16,18 @@ ncc use.n  -experimental-continue:host.dll ...      # continue from it (repeatab
 ```
 
 The embedded compiler uses `CompilationOptions.ExperimentalContinuation` and `CompilationOptions.ContinueFrom`.
+
+**Scripts** continue by default from every referenced binary that carries a section. Scripts can always declare their
+own `grammar` and use `space`. With `[assembly: DependsOn("host.dll")]` they also use the host library's grammars in
+`space`, its macros, and the internal helpers those macros expand to, without compiling the grammar again:
+
+```nemerle
+[assembly: DependsOn("host.dll")]
+using host;
+System.Console.WriteLine(space Demo { k0 });   // the host's grammar, no grammar compile in the script
+System.Console.WriteLine(twice(21));          // the host's macro
+System.Console.WriteLine(tripled(14));        // a host macro that expands to an internal helper
+```
 `NEMERLE_CONTINUATION_DIFF=1` prints what a continued compilation did with each stored grammar: `diff`, `patch`, `reuse`,
 `fallback` or `skipped`.
 
@@ -67,6 +79,7 @@ Measured by `tests/check-continuation.py` on one machine; a plain compile with n
 | 120 rules, alternative added / renamed (patch) | 3.8 s / 3.6 s |
 | 120 rules, redefined unchanged (reuse) | 1.5 s |
 | 120 rules, a new non-alternative rule (fallback) | 9.0 s |
+| Script using a host library's grammar, macros and helper | 1.5–1.7 s |
 
 The section for a 10-rule grammar is about 21 KB; its 64.5 KB image compresses to a third of that. Writing the section
 adds no measurable time to a compile.
@@ -78,7 +91,6 @@ adds no measurable time to a compile.
 - **Patched results aren't stored:** a patched compilation does not write a grammar subsection of its own.
 - **Narrow patch scope:** changes inside precedence groups, to whole rules or to modules fall back to the full compile.
 - **Carrier:** only PE images, with header room for one more section.
-- **Tooling:** `nscript` does not expose `ContinueFrom` yet; hosts set it through the compiler API.
 - **Trust:** loading a stored grammar image runs code from that binary, the same trust as referencing it.
 
 `NEMERLE_DUMP_GRAMMAR_IMAGE=<path>` writes the grammar image a compilation produces, for inspection.

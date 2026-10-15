@@ -13,6 +13,8 @@ E5: a host library's macros are indexed in its section (name, class, source span
     from it uses them without -m.
 E6: a host macro that expands to an internal helper of its module works in a continued program (type subsection +
     IgnoresAccessChecksTo); internals of modules without macros stay hidden.
+S:  a script that depends on such a host library (DependsOn) continues from it by default: it uses the host's
+    grammar in `space`, its macros and the internal helper a macro expands to, with no grammar compile of its own.
 E4: redefining the stored 120-rule grammar with only alternative edits compiles a patch grammar of just those
     alternatives over the stored image; other edits fall back to the full compile; results are identical."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
@@ -260,4 +262,51 @@ if a.stage in ('E4', 'E6'):
         if how != way:
             raise SystemExit('FAILED: E4 %s took the %s path, expected %s' % (name, how, way))
     print('PASS: E4 alternative edits compile as patches over the stored grammar; other edits fall back; results identical', flush=True)
+
+if a.stage == 'E6':
+    lib = w / 'scriptlib'
+    lib.mkdir()
+    (lib / 'host.n').write_text('''using Nemerle.Compiler;
+
+grammar Demo
+{
+  using Nemerle.Compiler.Parsetree;
+  syntax module Query
+  {
+    using Nitra.Core;
+    [StartRule] syntax Input = Item { map PExpr { Item } }
+    syntax Item
+    {
+      map PExpr;
+      | A0 = "k0" { map PExpr = <[ 40 ]>; }
+      | A1 = "k1" { map PExpr = <[ 2 ]>; }
+    }
+  }
+}
+
+macro twice(e)
+{
+  <[ $e * 2 ]>
+}
+
+macro tripled(e)
+{
+  <[ host.Helper($e) ]>
+}
+
+internal Helper(x : int) : int { x * 3 }
+''')
+    run([T / 'ncc', lib / 'host.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'host.dll'), '-no-color',
+         '-r:' + str(T / 'Nemerle.Compiler.dll'), '-experimental-continuation'])
+    script = w / 'script'
+    script.mkdir()
+    shutil.copy2(lib / 'host.dll', script / 'host.dll')
+    (script / 'use.n').write_text('[assembly: DependsOn("host.dll")]\nusing host;\nSystem.Console.WriteLine(space Demo { k0 });\n'
+                                  'System.Console.WriteLine(twice(21));\nSystem.Console.WriteLine(tripled(14));\n')
+    started = time.time()
+    output = run([T / 'nscript', 'run', script / 'use.n', '--no-cache'], cwd=script).stdout.split()
+    elapsed = time.time() - started
+    if output != ['40', '42', '42']:
+        raise SystemExit('FAILED: script continuation printed %r' % output)
+    print('PASS: S a script depending on the host library uses its grammar, macros and internal helper (%.2fs)' % elapsed, flush=True)
 shutil.rmtree(w, ignore_errors=True)
