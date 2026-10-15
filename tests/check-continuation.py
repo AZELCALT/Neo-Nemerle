@@ -12,13 +12,16 @@ E3: a program that redefines the stored grammar gets an exact mark diff (changed
 E5: a host library's macros are indexed in its section (name, class, source span) and a program that continues
     from it uses them without -m.
 E6: a host macro that expands to an internal helper of its module works in a continued program (type subsection +
-    IgnoresAccessChecksTo); internals of modules without macros stay hidden."""
+    IgnoresAccessChecksTo); internals of modules without macros stay hidden.
+E4: redefining the stored 120-rule grammar with only alternative edits compiles a patch grammar of just those
+    alternatives over the stored image; other edits fall back to the full compile; results are identical."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
 
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
-p.add_argument('--stage', default='E6', help='run the stages up to and including this one')
+p.add_argument('--stage', default='E6',
+                help='run the stages up to and including this one')
 a = p.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 repo = here.parent
@@ -223,4 +226,38 @@ if a.stage >= 'E6':
         raise SystemExit('FAILED: E6 an internal of a module without macros must stay hidden\n' + r.stdout + r.stderr)
     print('PASS: E6 a host macro expanding to an internal helper works in a continued program (tripled(14) = 42); '
           'internals of modules without macros stay hidden', flush=True)
+
+if a.stage in ('E4', 'E6'):
+    import os
+    base = grammar_program(120)
+    def edited(name, text, expected):
+        root = w / ('e4-' + name)
+        root.mkdir()
+        (root / 'demo.n').write_text(text)
+        env = dict(os.environ, NEMERLE_CONTINUATION_DIFF='1')
+        started = time.time()
+        r = subprocess.run([str(T / 'ncc'), str(root / 'demo.n'), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
+                            '-no-color', '-experimental-continue:' + str(host120)], capture_output=True, text=True, env=env)
+        elapsed = time.time() - started
+        if r.returncode != 0:
+            raise SystemExit('FAILED: E4 %s\n%s%s' % (name, r.stdout, r.stderr))
+        shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'demo.runtimeconfig.json')
+        output = run(['dotnet', root / 'demo.exe'], cwd=root).stdout.strip()
+        if output != expected:
+            raise SystemExit('FAILED: E4 %s printed %r, expected %r' % (name, output, expected))
+        how = next((l.split(' ')[1] for l in r.stderr.splitlines() if l.startswith('continuation ') and not l.startswith('continuation diff')), '?')
+        return how, elapsed
+    cases = [
+        ('body', base.replace('<[ 3 ]>', '<[ 33 ]>').replace('space Demo { k119 }', 'space Demo { k3 }'), '33', 'patch'),
+        ('added', base.replace('      | A119 = "k119" { map PExpr = <[ 119 ]>; }', '      | A119 = "k119" { map PExpr = <[ 119 ]>; }\n      | A120 = "k120" { map PExpr = <[ 120 ]>; }').replace('space Demo { k119 }', 'space Demo { k120 }'), '120', 'patch'),
+        ('renamed', base.replace('| A3 = ', '| B3 = ').replace('space Demo { k119 }', 'space Demo { k3 }'), '3', 'patch'),
+        ('unchanged', base.replace('space Demo { k119 }', 'space Demo { k7 }'), '7', 'reuse'),
+        ('new-rule', base.replace('    [StartRule] syntax Input', '    regex Digits = [\'0\'..\'9\']+;\n    [StartRule] syntax Input'), '119', 'fallback'),
+    ]
+    for name, text, expected, way in cases:
+        how, elapsed = edited(name, text, expected)
+        print('  %-9s %-8s %.2fs (fresh 120-rule compile %.2fs)' % (name, how, elapsed, t_plain120), flush=True)
+        if how != way:
+            raise SystemExit('FAILED: E4 %s took the %s path, expected %s' % (name, how, way))
+    print('PASS: E4 alternative edits compile as patches over the stored grammar; other edits fall back; results identical', flush=True)
 shutil.rmtree(w, ignore_errors=True)

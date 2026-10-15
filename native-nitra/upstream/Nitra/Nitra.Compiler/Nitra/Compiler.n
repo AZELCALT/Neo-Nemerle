@@ -9935,6 +9935,8 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
   public GrammarAssembly : Assembly { get; private set; }
   /// EXPERIMENT (-experimental-continuation): the bytes of the compiled grammar image, kept for the continuation section.
   public Image : array[byte] { get; private set; }
+  /// EXPERIMENT: continued grammar images already loaded, with a file copy each, so that source grammars can extend them
+  continued : SCG.List[Assembly*string] = SCG.List();
   public Initialize(manager : ManagerClass, definitions : SCG.IEnumerable[NitraDocument]) : void
   {
     def inputs=SCG.List(definitions);
@@ -9947,7 +9949,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       def directory=Path.GetDirectoryName(typeof(NativeSourceHost).Assembly.Location);
       def options=CompilationOptions();
       // EXPERIMENT: the continuation section needs the image's bytes, so the grammar is compiled to a file then
-      def persist=manager.Options.ExperimentalContinuation;
+      def persist=manager.Options.ExperimentalContinuation || continued.Count>0;
       options.CompileToMemory = !persist; options.TargetIsLibrary=true; options.TargetIsSet=true;
       options.ProgressBar=false; options.ColorMessages=false; options.IgnoreConfusion=true;
       options.TargetReferenceDirectory=manager.Options.TargetReferenceDirectory;
@@ -9968,6 +9970,8 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
         _=refs.Add(Path.Combine(directory,name));
         _=shared.Add(Assembly.LoadFrom(Path.Combine(directory,name)));
       }
+      // a source grammar may extend a continued one: compile against, and later bind to, the very image already loaded
+      foreach((assembly,path) in continued) { _=shared.Add(assembly); _=refs.Add(path); }
       options.SharedAssemblies=SCG.List(shared).ToArray();
       options.ReferencedLibraries=refs.NToList();
       options.MacrosToLoad=[typeof(NativeSourceHost).Assembly.Location];
@@ -9982,6 +9986,9 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       {
         when(errors>0 || !File.Exists(options.OutputFileName)) throw ArgumentException("native grammar compilation failed:\n"+messages.ToString());
         Image=File.ReadAllBytes(options.OutputFileName);
+        // debugging aid: keep a copy of the compiled grammar image
+        def dump=Environment.GetEnvironmentVariable("NEMERLE_DUMP_GRAMMAR_IMAGE");
+        unless(String.IsNullOrEmpty(dump)) File.WriteAllBytes(dump,Image);
         GrammarAssembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(Image,options.SharedAssemblies,refs.NToList().ToArray());
       }
       else
@@ -9989,7 +9996,8 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
         when(errors>0 || compiler.GeneratedAssembly==null) throw ArgumentException("native grammar compilation failed:\n"+messages.ToString());
         GrammarAssembly=compiler.GeneratedAssembly;
       }
-      registry=SelectedRegistry(); AddBuiltins(registry); registry.Add(GrammarAssembly);
+      when(registry==null) { registry=SelectedRegistry(); AddBuiltins(registry); }
+      registry.Add(GrammarAssembly);
     }
     finally
     {
@@ -10015,8 +10023,31 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       _=shared.Add(Assembly.LoadFrom(Path.Combine(directory,name)));
     }
     def assembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(image,SCG.List(shared).ToArray(),refs.NToList().ToArray());
-    when(GrammarAssembly==null) GrammarAssembly=assembly;
+    def copy=Path.Combine(Path.GetTempPath(),"NativeGrammarRef_"+Guid.NewGuid().ToString("N"));
+    _=Directory.CreateDirectory(copy);
+    def file=Path.Combine(copy,assembly.GetName().Name+".dll");
+    File.WriteAllBytes(file,image);
+    continued.Add((assembly,file));
     registry.Add(assembly);
+  }
+  /// EXPERIMENT E4: drops alternatives of a loaded grammar's rule; a patch grammar compiled over it replaces them.
+  public RemoveAlternatives(owner : string, rule : string, names : array[string]) : void
+  {
+    mutable removed=0;
+    foreach(document in registry.Documents)
+      foreach(m when m.Name==owner in document.Modules)
+      {
+        // compiled recognition graphs keep each alternative as an extension rule (Base = the extensible rule)
+        removed+=m.Rules.RemoveAll(r => r.Base!=null && Array.IndexOf(names,r.Name)>=0
+                                        && (r.Base==rule || r.Base.EndsWith("."+rule,StringComparison.Ordinal)));
+        foreach(r when r.Name==rule || r.Name.EndsWith("."+rule,StringComparison.Ordinal) in m.Rules)
+          removed+=r.Alternatives.RemoveAll(a => Array.IndexOf(names,a.Name)>=0);
+      }
+    when(removed<names.Length && Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1")
+      foreach(document in registry.Documents)
+        foreach(m in document.Modules)
+          foreach(r in m.Rules)
+            Console.Error.WriteLine("continuation names: module="+m.Name+" rule="+r.Name+" alternatives="+String.Join(",",r.Alternatives.ConvertAll(a => a.Name).ToArray()));
   }
   static AddBuiltins(registry : SelectedRegistry) : void
   {

@@ -15,6 +15,12 @@ static class ContinuationChecks
         var image = File.ReadAllBytes(args[0]);
         var toolchain = args[1];
         var raw = Nemerle.Platform.ClrCompilerSection.ReadBytes(image);
+        if (args.Length > 2 && args[2] == "--extract-image")
+        {
+            File.WriteAllBytes(args[3], Store.FromImage(image).GrammarImage);
+            Console.WriteLine("wrote " + args[3]);
+            return 0;
+        }
         if (args.Length < 3)
         {
             Check(raw == null, "a compilation without -experimental-continuation must not write a .nemir section");

@@ -25,6 +25,8 @@ public sealed class ContinuationMark
   public mutable Own : ulong;
   /// Index of the enclosing declaration in the grammar's mark list, -1 at the top.
   public mutable Parent : int = -1;
+  /// The source declaration (only for marks made from source in this compilation; not stored).
+  public mutable Declaration : NitraDeclaration;
 }
 
 public sealed class ContinuationGrammar
@@ -129,7 +131,7 @@ public sealed class ContinuationStore
           def m = ContinuationMark();
           m.Kind = d.Kind ?? ""; m.Name = d.Name ?? ""; m.Scope = d.Scope ?? "";
           m.Start = d.Start + delta; m.End = d.End + delta; m.Hash = Hash(Normalize(text)); m.Own = Hash(Normalize(own.ToString()));
-          m.Parent = parent;
+          m.Parent = parent; m.Declaration = d;
           result.Add(m);
           walk(d.Children, result.Count - 1);
         }

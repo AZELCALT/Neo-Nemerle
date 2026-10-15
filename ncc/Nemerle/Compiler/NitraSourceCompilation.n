@@ -59,6 +59,8 @@ public interface INitraGrammarImageHost
   Image : array[byte] { get; }
   /// Adds a grammar image stored in a continuation section; no compilation.
   AddImage(manager : ManagerClass, image : array[byte]) : void;
+  /// Drops alternatives of a loaded grammar's rule, which a patch grammar replaces.
+  RemoveAlternatives(owner : string, rule : string, names : array[string]) : void;
 }
 internal sealed class NitraSourceZone
 {
@@ -87,6 +89,8 @@ internal sealed class NitraSourceSession
   zones : SCG.List[NitraSourceZone] = SCG.List();
   markSources : SCG.Dictionary[string,NitraDocument*int*int] = SCG.Dictionary();
   continuedNames : SCG.HashSet[string] = SCG.HashSet();
+  patchedNames : SCG.HashSet[string] = SCG.HashSet();
+  removals : SCG.List[string*string*array[string]] = SCG.List();
   /// EXPERIMENT E3: per redefined stored grammar, what changed against its stored marks.
   public ContinuationDiffs : SCG.Dictionary[string,Nemerle.Compiler.continuation.ContinuationDiff] = SCG.Dictionary();
   mutable nativeHost : INitraNativeSourceHost;
@@ -210,7 +214,15 @@ internal sealed class NitraSourceSession
     when(configuration.CreateContext==null)
       foreach(path in manager.Options.ContinueFrom)
       {
-        def store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
+        mutable store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
+        // a grammar image is bound to the compiler and Nitra build that made it: another build's images are not used
+        def version=typeof(ManagerClass).Assembly.GetName().Version.ToString();
+        when(store!=null && store.GrammarImage!=null && store.CompilerVersion!=version)
+        {
+          when(Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1")
+            Console.Error.WriteLine("continuation skipped "+path+": grammar image of compiler "+store.CompilerVersion+", this is "+version);
+          store=null;
+        }
         // E3: a stored grammar the source redefines is diffed against the stored marks (the compile still falls back
         // to compiling the grammar in full)
         when(store!=null)
@@ -221,13 +233,29 @@ internal sealed class NitraSourceSession
             current.Marks.AddRange(Nemerle.Compiler.continuation.ContinuationStore.Marks(marks,delta,bodyStart));
             def diff=Nemerle.Compiler.continuation.ContinuationStore.Diff(stored,current);
             ContinuationDiffs[stored.Name]=diff;
-            when(Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1")
-              Console.Error.WriteLine("continuation diff "+stored.Name+": "+diff.ToString());
+            def trace=Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1";
+            when(trace) Console.Error.WriteLine("continuation diff "+stored.Name+": "+diff.ToString());
+            // E4: when only alternatives of extensible rules changed, compile a patch grammar of just those over the
+            // stored image instead of the whole grammar
+            if(diff.IsClean)
+            {
+              // nothing that matters changed: the stored image serves the grammar as it is
+              _=definitions.Remove(stored.Name);
+              when(trace) Console.Error.WriteLine("continuation reuse "+stored.Name+": unchanged, stored image used");
+            }
+            else match(PatchGrammar(stored,current,diff))
+            {
+              | Some((patch,drop)) when store.GrammarImage!=null =>
+                def document=NitraDocument(); document.Source=patch; document.File=definitions[stored.Name].File;
+                definitions[stored.Name]=document; _=patchedNames.Add(stored.Name); removals.AddRange(drop);
+                when(trace) Console.Error.WriteLine("continuation patch "+stored.Name+": "+drop.Count.ToString()+" stale alternative(s) dropped, patch compiled alone");
+              | _ => when(trace) Console.Error.WriteLine("continuation fallback "+stored.Name+": full grammar compile");
+            }
           }
-        when(store!=null && store.GrammarImage!=null && !store.Grammars.Exists(g => definitions.ContainsKey(g.Name)))
+        when(store!=null && store.GrammarImage!=null && !store.Grammars.Exists(g => definitions.ContainsKey(g.Name) && !patchedNames.Contains(g.Name)))
         {
           continued.Add(store.GrammarImage);
-          foreach(g in store.Grammars)
+          foreach(g when !patchedNames.Contains(g.Name) in store.Grammars)
           {
             def placeholder=NitraDocument(); placeholder.File=g.Owner; placeholder.Source="";
             continuedNames.Add(g.Name); definitions.Add(g.Name,placeholder);
@@ -239,13 +267,17 @@ internal sealed class NitraSourceSession
     when(configuration.CreateContext==null && (definitions.Count>0 || zones.Count>0))
     {
       def inputs=sourceDefinitions;
+      // continued images are loaded first, so that source grammars compile against (and may extend) those copies
       nativeHost=if(configuration.ProvideHost!=null) configuration.ProvideHost.Invoke(manager,inputs)
-                 else if(inputs.Count==0 && continued.Count>0) CreateEmptyNativeHost()
+                 else if(continued.Count>0) CreateEmptyNativeHost()
                  else CreateNativeHost(manager,inputs);
       foreach(image in continued)
         match(nativeHost) { | host is INitraGrammarImageHost => host.AddImage(manager,image) | _ => throw ArgumentException("the native host cannot load continuation grammar images") }
+      foreach((owner,rule,names) in removals)
+        match(nativeHost) { | host is INitraGrammarImageHost => host.RemoveAlternatives(owner,rule,names) | _ => () }
+      when(configuration.ProvideHost==null && continued.Count>0 && inputs.Count>0) nativeHost.Initialize(manager,inputs);
       // EXPERIMENT: the compiled grammar image and the marks of every declaration go into the continuation section
-      when(manager.Options.ExperimentalContinuation && !IndexOnly)
+      when(manager.Options.ExperimentalContinuation && !IndexOnly && patchedNames.Count==0) // a patched compile does not store its grammar (experiment)
         match(nativeHost)
         {
           | host is INitraGrammarImageHost when host.Image!=null =>
@@ -299,6 +331,83 @@ internal sealed class NitraSourceSession
     {
       manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
       manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
+    }
+  }
+  /// EXPERIMENT E4: a patch grammar holding only the changed and added alternatives of a stored grammar, as
+  /// `extend syntax` blocks over the stored modules, and the stale stored alternatives to drop. None when the change is
+  /// anything else (a rule, a module, usings, a precedence group): then the grammar compiles in full.
+  static PatchGrammar(stored : Nemerle.Compiler.continuation.ContinuationGrammar, current : Nemerle.Compiler.continuation.ContinuationGrammar,
+                      diff : Nemerle.Compiler.continuation.ContinuationDiff) : option[string*SCG.List[string*string*array[string]]]
+  {
+    def marks(g : Nemerle.Compiler.continuation.ContinuationGrammar) { g.Marks }
+    // the alternative a mark belongs to, with its rule and module, when the rule is extensible and has no precedence groups
+    def place(g : Nemerle.Compiler.continuation.ContinuationGrammar, index : int) : option[int*int*int]
+    {
+      mutable i=index;
+      while(i>=0 && marks(g)[i].Kind!="alternative") i=marks(g)[i].Parent;
+      if(i<0) None()
+      else
+      {
+        def rule=marks(g)[i].Parent;
+        def moduleAt=if(rule<0) -1 else marks(g)[rule].Parent;
+        def precedences=marks(g).Exists(m => m.Kind=="precedence" && m.Parent==rule);
+        if(rule<0 || moduleAt<0 || marks(g)[rule].Kind!="syntax" || marks(g)[moduleAt].Kind!="module" || marks(g)[moduleAt].Parent>=0 || precedences) None()
+        else Some((i,rule,moduleAt))
+      }
+    }
+    if(diff.IsClean) None()
+    else
+    {
+      mutable ok=true;
+      def alternatives=SCG.List.[int*int*int]();   // in current: (alternative, rule, module)
+      def drop=SCG.Dictionary.[string,SCG.List[string]]();
+      def dropAt(g : Nemerle.Compiler.continuation.ContinuationGrammar, a : int, r : int, m : int) : void
+      {
+        def key=g.Name+"."+marks(g)[m].Name+"\n"+marks(g)[r].Name;
+        unless(drop.ContainsKey(key)) drop[key]=SCG.List();
+        unless(drop[key].Contains(marks(g)[a].Name)) drop[key].Add(marks(g)[a].Name);
+      }
+      def dirty=SCG.List(diff.Changed); dirty.AddRange(diff.Added);
+      foreach(mark in dirty)
+        match(place(current,current.Marks.IndexOf(mark)))
+        {
+          | Some((a,r,m)) => unless(alternatives.Exists((x,_,_) => x==a)) alternatives.Add((a,r,m));
+          | None => ok=false
+        }
+      foreach(mark in diff.Removed)
+        match(place(stored,stored.Marks.IndexOf(mark))) { | Some((a,r,m)) => dropAt(stored,a,r,m) | None => ok=false }
+      // a changed alternative replaces the stored one of the same name
+      foreach((a,r,m) in alternatives)
+        when(stored.Marks.Exists(s => s.Kind=="alternative" && s.Name==current.Marks[a].Name)) dropAt(current,a,r,m);
+      if(!ok || alternatives.Count==0 && drop.Count==0) None()
+      else
+      {
+        def text(i : int) { current.Marks[i].Declaration.Text }
+        def b=Text.StringBuilder("namespace "+current.Name+"\n{\n");
+        foreach(i in [0 .. current.Marks.Count-1]) when(current.Marks[i].Parent<0 && current.Marks[i].Kind=="using") _=b.Append(text(i)).Append("\n");
+        def modules=SCG.List.[int]();
+        foreach((_,_,m) in alternatives) unless(modules.Contains(m)) modules.Add(m);
+        foreach(m in modules)
+        {
+          def moduleName=current.Marks[m].Name;
+          _=b.Append("syntax module "+moduleName+"__Patch\n{\n");
+          foreach(i in [0 .. current.Marks.Count-1]) when(current.Marks[i].Parent==m && current.Marks[i].Kind=="using") _=b.Append(text(i)).Append("\n");
+          _=b.Append("using "+current.Name+"."+moduleName+";\n");
+          def rules=SCG.List.[int]();
+          foreach((_,r,mm) in alternatives) when(mm==m && !rules.Contains(r)) rules.Add(r);
+          foreach(r in rules)
+          {
+            _=b.Append("extend syntax "+current.Marks[r].Name+"\n{\n");
+            foreach((a,rr,_) in alternatives) when(rr==r) _=b.Append(text(a)).Append("\n");
+            _=b.Append("}\n");
+          }
+          _=b.Append("}\n");
+        }
+        _=b.Append("}\n");
+        def result=SCG.List();
+        foreach(pair in drop) { def parts=pair.Key.Split('\n'); result.Add((parts[0],parts[1],pair.Value.ToArray())); }
+        Some((b.ToString(),result))
+      }
     }
   }
   /// EXPERIMENT: the native host without compiled definitions (only continuation images are added to it).
