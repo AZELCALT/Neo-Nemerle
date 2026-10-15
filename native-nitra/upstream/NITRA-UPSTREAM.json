@@ -591,5 +591,5 @@
     "Common/AssemblyConstants.Common.n": "347b222f8d56c84a1d42f06954c6985ce5ec9627e9b3a7efcafb93105658a2c1",
     "License.txt": "67f33b1b6e54af490a30d4bff245c7ac14ea6083b06d4abe995dcd9790e7fc10"
   },
-  "modified": "Restructured locally as file modules (baseline/migrate-nitra.py): one module per (dll, namespace), partial types merged, the former native-nitra/integration sources and build-time patches folded in, moved names in native-nitra/NITRA-SYMBOLS.json. The hashes below describe the upstream files this tree was made from."
+  "modified": "Restructured locally as file modules (build/migrations/migrate-nitra.py): one module per (dll, namespace), partial types merged, the former native-nitra/integration sources and build-time patches folded in, moved names in native-nitra/NITRA-SYMBOLS.json. The hashes below describe the upstream files this tree was made from."
 }

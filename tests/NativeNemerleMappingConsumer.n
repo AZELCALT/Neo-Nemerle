@@ -1,0 +1,8 @@
+using System;
+using DirectOutput;
+Main() : void
+{
+  def value = SelectedExpression();
+  unless (value == 42) throw Exception("native mapping output changed");
+  Console.WriteLine("PASS: native recursive maps, aliases, parameters, patterns and extensions; Nemerle execution = " + value.ToString());
+}

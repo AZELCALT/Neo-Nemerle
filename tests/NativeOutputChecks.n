@@ -1,0 +1,122 @@
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.nitra_compilation;
+using Nemerle.Compiler.nitra_syntax;
+using Nemerle.Compiler.typer;
+using Nemerle.Compiler.Utility;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.NitraStructures;
+
+public macro EvaluateNative(text : string)
+{
+  def document=NitraSyntax.Read(@"syntax module Test {
+    using Nitra.Core;
+    [StartRule] syntax Start = Expr;
+    syntax Expr {
+      precedence Add:
+      | Add = Left=Expr ""+"" Right=Expr;
+      precedence Multiply:
+      | Multiply = Left=Expr ""*"" Right=Expr;
+      precedence 0:
+      | Number = Value=Digits;
+      | Group = ""("" Inner=Expr "")"";
+    }
+    regex Digits = ['0'..'9']+;
+  }","direct-output.nitra",true);
+  unless(document.Success) throw ArgumentException(document.ToJson());
+  def definitions=SCG.List(NitraSyntax.BaselineDefinitions(true)); definitions.Add(document);
+  def grammar=NitraSyntax.Prepare(definitions,array["Test"],true);
+  def ctx=Support.Context(Nemerle.Macros.ImplicitCTX(),"Test",LocationStack.Top());
+  def result=NitraCompilation.Compile(grammar,"Test.Start",text,ctx,null,true);
+  unless(result.Success) { Message.Error(String.Join(";",result.Diagnostics.ToArray())); throw ArgumentException("direct output failed"); }
+  result.Expression
+}
+public module Support
+{
+  public Context(typer : Typer, moduleName : string, location : Location) : NitraCompilationContext
+  {
+  def ctx=NitraCompilationContext(typer,null,location);
+  ctx.Mappings[moduleName+".Expr.Number"]=fun(c,n)
+  {
+    def value=int.Parse(n.Captures("Value")[0].Text);
+    Nemerle.Compiler.UtilMacros.locate(c.At(n),<[ $(value : int) ]>)
+  };
+  ctx.Mappings[moduleName+".Expr.Add"]=fun(c,n)
+  {
+    def left=c.Emit(n.Captures("Left")[0]); def right=c.Emit(n.Captures("Right")[0]);
+    Nemerle.Compiler.UtilMacros.locate(c.At(n),<[ $left + $right ]>)
+  };
+  ctx.Mappings[moduleName+".Expr.Multiply"]=fun(c,n)
+  {
+    def left=c.Emit(n.Captures("Left")[0]); def right=c.Emit(n.Captures("Right")[0]);
+    Nemerle.Compiler.UtilMacros.locate(c.At(n),<[ $left * $right ]>)
+  };
+  ctx.Mappings[moduleName+".Expr.Group"]=fun(c,n) { c.Emit(n.Captures("Inner")[0]) };
+  def symbol=NitraSemanticSymbol(); symbol.Name="probe"; symbol.Kind="variable";
+  def declarations=NitraSemanticProperty(); declarations.Name="declarations"; declarations.Stage=0;
+  declarations.Evaluate=fun(c)
+  {
+    symbol.Declarations.Add(c.ProbeRoot);
+    (c.Scope :> NitraTableScope).Define(symbol); symbol : object
+  };
+  def resolution=NitraSemanticProperty(); resolution.Name="resolution"; resolution.Stage=1;
+  resolution.Dependencies.Add("declarations");
+  resolution.Evaluate=fun(c)
+  {
+    unless(c.Resolve("probe",null,null) : object == symbol : object) throw ArgumentException("symbol identity was lost");
+    c.Get("declarations")
+  };
+  ctx.Properties.Add(resolution); ctx.Properties.Add(declarations);
+    ctx
+  }
+}
+
+public module VariableSupport
+{
+  public Context(typer : Typer, moduleName : string, location : Location) : NitraCompilationContext
+  {
+    def context=NitraCompilationContext(typer,null,location);
+    def names=SCG.Dictionary.[NitraSemanticSymbol,Name]();
+    def declarations=SCG.List.[NitraStructure]();
+    def symbols=SCG.Dictionary.[int,NitraSemanticSymbol]();
+    def collect=NitraSemanticProperty(); collect.Name="collect";
+    collect.Evaluate=fun(c)
+    {
+      def visit(n : NitraStructure) : void
+      {
+        when(n.Kind=="variant" && n.Label==moduleName+".Declaration") declarations.Add(n);
+        foreach(child in n.Children) visit(child);
+      }
+      visit(c.ProbeRoot);
+      foreach(d in declarations)
+      {
+        def symbol=NitraSemanticSymbol(); symbol.Name=d.Captures("Name")[0].Text.Trim(); symbol.Kind="local";
+        when(c.Scope.Lookup(symbol.Name).Count>0) throw ArgumentException("duplicate variable: "+symbol.Name);
+        symbol.Declarations.Add(d); names.Add(symbol,Macros.NewSymbol(symbol.Name));
+        symbols.Add(d.Id,symbol); (c.Scope :> NitraTableScope).Define(symbol);
+      }
+      null
+    };
+    context.Properties.Add(collect);
+    context.Mappings[moduleName+".Expr.Number"]=fun(c,n)
+    { def value=int.Parse(n.Captures("Value")[0].Text); Nemerle.Compiler.UtilMacros.locate(c.At(n),<[ $(value : int) ]>) };
+    context.Mappings[moduleName+".Expr.Variable"]=fun(c,n)
+    { def symbol=c.Resolve(n.Captures("Name")[0].Text.Trim(),null,null); Nemerle.Compiler.UtilMacros.locate(c.At(n),<[ $(names[symbol] : name) ]>) };
+    context.Mappings[moduleName+".Expr.Add"]=fun(c,n)
+    { def left=c.Emit(n.Captures("Left")[0]); def right=c.Emit(n.Captures("Right")[0]); Nemerle.Compiler.UtilMacros.locate(c.At(n),<[ $left + $right ]>) };
+    context.Mappings[moduleName+".Start"]=fun(c,n)
+    {
+      mutable body=c.Emit(n.Captures("Result")[0]);
+      for(mutable i=declarations.Count-1;i>=0;--i)
+      {
+        def d=declarations[i]; def value=c.Emit(d.Captures("Value")[0]); def name=names[symbols[d.Id]];
+        body=Nemerle.Compiler.UtilMacros.locate(c.At(d),<[ def $(name : name) = $value; $body ]>);
+      }
+      body
+    };
+    context
+  }
+}

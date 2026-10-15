@@ -1,0 +1,10 @@
+using alpha;
+
+class Node
+{
+  public this() {}
+  public Other() : alpha.Node { alpha.Node() }
+}
+
+Run() : int { math.Twice(20) + math.FromPrivate() + FromHidden() }
+MakePair() : Pair { Pair(2, 3) }

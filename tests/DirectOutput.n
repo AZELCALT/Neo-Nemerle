@@ -1,0 +1,28 @@
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using System;
+
+// Test-only input boundary: native factories consume settled fields. Neither
+// the native parser nor a manually registered mapping is invoked here.
+public macro SelectedExpression()
+{
+  def source = Nitra.Runtime.SourceSnapshot("42");
+  def span = Nitra.Runtime.NSpan(0,2);
+  def value = ExpressionsParseTree.Value.CreateRecognizedParseTree(source.File,span,span);
+  def root = ExpressionsParseTree.Start.CreateRecognizedParseTree(source.File,span,value);
+  mutable rejected = false;
+  try { _ = ExpressionsParseTree.Value.AmbiguousOrMissingNode(source.File,0).GetAst(); }
+  catch { | _ is InvalidOperationException => rejected = true }
+  unless (rejected) throw Exception("missing native syntax produced executable output");
+  rejected = false;
+  try { _ = ExpressionsParseTree.Value.AmbiguousOrMissingNode(array[value,value]).GetAst(); }
+  catch { | _ is InvalidOperationException => rejected = true }
+  unless (rejected) throw Exception("ambiguous native syntax produced executable output");
+  def number = ExpressionsParseTree.Expr.Number.CreateRecognizedParseTree(source.File,span,span);
+  unless (number.GetAst().ToString() == "7") throw Exception("native extension mapping failed");
+  def echo = ExpressionsParseTree.Echo.CreateRecognizedParseTree(source.File,span,span);
+  unless (echo.GetAst(<[ 11 ]>).ToString() == "11") throw Exception("native mapping parameter failed");
+  def matched = ExpressionsParseTree.Matched.CreateRecognizedParseTree(source.File,span,value);
+  unless (matched.GetAst().ToString() == "42") throw Exception("native pattern mapping failed");
+  root.GetAst()
+}

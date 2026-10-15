@@ -1,0 +1,28 @@
+using System;
+
+mask math
+{
+  Twice(value : int) : int { value * 2 }
+  private Secret() : int { 9 }
+  FromPrivate() : int { Secret() }
+}
+
+private mask hidden
+{
+  Value() : int { 7 }
+}
+
+private class HiddenType { public this() {} }
+
+class Node
+{
+  public this() {}
+  public Other() : beta.Node { beta.Node() }
+}
+
+FromHidden() : int { hidden.Value() }
+FromPrivateType() : object { HiddenType() }
+Length(value : string) : int { value.Length }
+
+[Record]
+class Pair { public Left : int; public Right : int; }

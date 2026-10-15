@@ -135,8 +135,8 @@ caching are described below. Physical unloading is not guaranteed.
 From the workspace root, with a working source-built CoreCLR toolchain:
 
 ```sh
-python3 baseline/build-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
-python3 baseline/check-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
+python3 build/build-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
+python3 tests/check-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
 ```
 
 The checks exercise embedded compilation/evaluation, source order, supplied-object
@@ -354,10 +354,10 @@ compilation configuration.
 ## Optional NuGet adapter build
 
 ```sh
-python3 baseline/build-scripting-nuget.py --toolchain toolchain/coreclr \
+python3 build/build-scripting-nuget.py --toolchain toolchain/coreclr \
   --references toolchain/coreclr/references \
   --nuget-libraries /usr/share/dotnet/sdk/10.0.112
-python3 baseline/check-scripting-nuget.py --toolchain toolchain/coreclr \
+python3 tests/check-scripting-nuget.py --toolchain toolchain/coreclr \
   --references toolchain/coreclr/references
 ```
 

@@ -1,0 +1,2 @@
+using System.Console;
+WriteLine("Nemerle executed inside a C# host");

@@ -20,10 +20,10 @@ Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`,
 ## Build and check
 
 ```sh
-python3 baseline/build-language-server.py --toolchain <stage with Integrated.* dlls> \
+python3 build/build-language-server.py --toolchain <stage with Integrated.* dlls> \
   --references <dotnet>/packs/Microsoft.NETCore.App.Ref/<v>/ref/net10.0 \
   [--nitra-compiler <Integrated.Nitra.Compiler.dll with NativeSourceHost.GrammarAssembly>] [--output out/language-server]
-python3 baseline/check-language-server.py --server out/language-server/nemerle-lsp
+python3 tests/check-language-server.py --server out/language-server/nemerle-lsp
 ```
 
 The server needs the toolchain next to it: it compiles each file's grammars in-process with Nitra's compiler.

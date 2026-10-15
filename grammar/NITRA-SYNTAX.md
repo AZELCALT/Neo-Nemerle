@@ -9,7 +9,7 @@ language, execute Nitra's compiler, or change ordinary Nemerle compilation.
 
 The baseline is Nitra commit `b287b8a42237fac4d993444e7e3af9240b601503`.
 `NITRA-BASELINE.json` records source hashes; `NITRA-NOTICES.txt` preserves the
-upstream BSD notice. `baseline/generate-nitra-bootstrap.py` embeds Core,
+upstream BSD notice. `build/generate-nitra-bootstrap.py` embeds Core,
 CStyleComments, NitraLiterals and NitraSyntax as declaration data. Upstream
 assemblies are neither loaded nor distributed as dependencies.
 
@@ -147,7 +147,7 @@ capability restrictions.
 ## Verification
 
 ```
-python baseline/check-nitra-syntax.py --toolchain toolchain/nitra-syntax-prototype \
+python tests/check-nitra-syntax.py --toolchain toolchain/nitra-syntax-prototype \
   --references /usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.12/ref/net10.0
 python baseline/build-nitra-inspector.py --toolchain toolchain/nitra-syntax-prototype \
   --references /usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.12/ref/net10.0
@@ -171,7 +171,7 @@ python3 baseline/check-nitra-discovery.py --toolchain /path/to/toolchain \
 
 These checks exercise shared opener/body prefixes, capture views, retained tail
 relationships, incomplete input, recursive closure, negative cycles and growing
-lists. See `baseline/nitra-comparison/README.md` for differential timing runs.
+lists. See `tests/nitra-comparison/README.md` for differential timing runs.
 
 
 ### Structural construction depth

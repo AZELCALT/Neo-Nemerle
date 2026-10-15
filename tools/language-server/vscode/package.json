@@ -14,7 +14,7 @@
     "configuration": {
       "title": "Nemerle",
       "properties": {
-        "nemerle.languageServer.path": { "type": "string", "default": "", "description": "Path to the nemerle-lsp launcher (built by baseline/build-language-server.py)." },
+        "nemerle.languageServer.path": { "type": "string", "default": "", "description": "Path to the nemerle-lsp launcher (built by build/build-language-server.py)." },
         "nemerle.languageServer.references": { "type": "string", "default": "", "description": "Optional .NET reference assembly directory passed as --references." },
         "nemerle.languageServer.log": { "type": "string", "default": "", "description": "Optional log file for the server." },
         "nemerle.languageServer.sourceRoot": { "type": "string", "default": "", "description": "Root directory for file module paths (default: the workspace folder)." },

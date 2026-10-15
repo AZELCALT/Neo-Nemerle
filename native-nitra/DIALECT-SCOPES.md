@@ -119,7 +119,7 @@ shared scopes.
 
 ## Verification and boundaries
 
-`baseline/check-native-source.py --checks NitraDialectChecks.cs` exercises calls,
+`tests/check-native-source.py --checks NitraDialectChecks.cs` exercises calls,
 method-group callbacks, CLR calls/type errors, automatic signatures, scope
 updates, custom types, contextual mappings, mapping-provided resolvers, file
 ownership, multiple dialects/files, diagnostics, and failure recovery.

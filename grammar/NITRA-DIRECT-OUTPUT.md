@@ -77,7 +77,7 @@ recognition retains its region/evaluation limits. No universal complexity claim 
 
 ## Checks and remaining work
 
-Run `baseline/check-nitra-structures.py` with `--toolchain
+Run `tests/check-nitra-structures.py` with `--toolchain
 toolchain/nitra-direct-output-prototype` and the .NET reference directory via
 `--references`. It compiles and executes arithmetic and variable dialects, tests
 staged symbols, hygienic bindings, ambiguity, capture ownership, shared bodies,
@@ -107,7 +107,7 @@ blanked before ordinary Nemerle parsing. Their bodies are not parsed as Nemerle 
 executed. `NitraSourceConfiguration.InactiveConstructs` exposes the collected source
 records. This does not enable any new runtime/compile behavior.
 
-`baseline/build-nitra-core.py` rebuilds upstream native support in an isolated
+`build/build-nitra-core.py` rebuilds upstream native support in an isolated
 bootstrap directory. Its parser is used for bootstrapping generated upstream
 support only. These artifacts are not an integrated replacement recognizer, and
 successful source builds do not mean automatic native semantic hosting is complete.

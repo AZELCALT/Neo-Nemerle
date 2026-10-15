@@ -1,0 +1,86 @@
+using Nemerle.Compiler.Parsetree;
+namespace Comparison
+{
+  syntax module Arithmetic
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = Expr { map PExpr { Expr } }
+    syntax Expr
+    {
+      map PExpr;
+      precedence Sum:
+      | Add = Left=Expr "+" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) + $(this.Right.GetAst()) ]>; }
+      | Subtract = Left=Expr "-" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) - $(this.Right.GetAst()) ]>; }
+      precedence Product:
+      | Multiply = Left=Expr "*" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) * $(this.Right.GetAst()) ]>; }
+      precedence 0:
+      | Number = "7" { map PExpr = <[ 7 ]>; }
+      | Group = "(" Expr ")" { map PExpr { Expr } }
+    }
+  }
+  syntax module RightAssociative
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = Expr { map PExpr { Expr } }
+    syntax Expr
+    {
+      map PExpr;
+      precedence Chain:
+      | Subtract = Left=Expr "-" Right=Expr right-associative { map PExpr = <[ $(this.Left.GetAst()) - $(this.Right.GetAst()) ]>; }
+      precedence 0:
+      | Number = "7" { map PExpr = <[ 7 ]>; }
+    }
+  }
+  syntax module Lists
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = "[" Prefix="tag"? Values=(Value; ",")* "]"
+    {
+      map PExpr = <[ $(this.Values.Item1.Count : int) ]>;
+    }
+    syntax Value = "x" Pair=("y" "z")?;
+  }
+  syntax module Sql
+  {
+    using Nitra.Core;
+    regex Letter = ['a'..'z'] | ['A'..'Z'];
+    token Name = Letter+;
+    [StartRule] syntax Start = "SELECT" Columns=(Name; ",")+ "FROM" Table=Name Filter=("WHERE" Name "=" Name)?
+    {
+      map PExpr = <[ $(this.Columns.Item1.Count : int) ]>;
+    }
+  }
+  syntax module Lookahead
+  {
+    using Nitra.Core;
+    regex Digit = ['0'..'9'];
+    regex NonZero = Digit - "0";
+    token Number = NonZero+;
+    [StartRule] syntax Start = &"begin" "begin" !"end" Value=Number "end"
+    {
+      map PExpr = <[ $(this.Value.Span.Length : int) ]>;
+    }
+  }
+  syntax module Overlap
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = Value "!" { map PExpr { Value } }
+    syntax Value
+    {
+      map PExpr;
+      | Short = "a" { map PExpr = <[ 1 ]>; }
+      | Long = "ab" { map PExpr = <[ 2 ]>; }
+    }
+  }
+  syntax module Ambiguity
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = Value { map PExpr { Value } }
+    syntax Value
+    {
+      map PExpr;
+      | A = "x" { map PExpr = <[ 1 ]>; }
+      | B = "x" { map PExpr = <[ 2 ]>; }
+    }
+  }
+}

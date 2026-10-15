@@ -1,0 +1,12 @@
+using System;
+using NativeOutputChecks;
+module Program
+{
+  Main() : void
+  {
+    def a=EvaluateNative("1 + 2 * (3 + 4)");
+    def b=EvaluateNative("(1 + 2) * 3");
+    unless(a==15 && b==9) throw Exception("incorrect native output");
+    Console.WriteLine("PASS: settled recognition, staged symbols, direct Nemerle nodes, execution = 15 and 9");
+  }
+}

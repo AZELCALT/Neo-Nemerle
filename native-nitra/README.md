@@ -44,7 +44,7 @@ retain priority. Output mappings do not implement
 an error instead of manufacturing an executable node. PExpr collection
 conversions are not connected yet.
 
-`baseline/check-native-output.py` builds a native definition fixture, constructs
+`tests/check-native-output.py` builds a native definition fixture, constructs
 its selected typed fields without parsing, runs two recursive native mappings,
 then compiles and executes their Nemerle output (`42`). The upstream parser is
 used only to bootstrap that fixture's definitions. This test does not establish
@@ -87,7 +87,7 @@ fields. Both the grammar-only compilation and the source-host tests disable
 external parsers. `RecognizedNemerleFile.ParseResult` and `ReParse` throw rather
 than entering the old parser.
 
-`baseline/check-native-source.py` verifies automatic definition compilation,
+`tests/check-native-source.py` verifies automatic definition compilation,
 recursive native mappings, SQL-like input, native precedence and both
 associativities, typed optional/list/tuple fields, ordinary-code isolation,
 failure recovery and two grammars in one file. Its source host supplies no
@@ -123,28 +123,28 @@ From the workspace root, set `COMPILER` to a modern source-built Nemerle toolcha
 and `REFS` to the .NET 10 reference-assembly directory. First run:
 
 ```sh
-python baseline/build-nitra-core.py --bootstrap "$COMPILER" --references "$REFS"
+python build/build-nitra-core.py --bootstrap "$COMPILER" --references "$REFS"
 ```
 
 Use the printed Boot2 output directory as `BOOT2`:
 
 ```sh
-python baseline/build-nitra-core.py --bootstrap "$COMPILER" --references "$REFS" \
+python build/build-nitra-core.py --bootstrap "$COMPILER" --references "$REFS" \
   --snapshot Nitra --native-bootstrap "$BOOT2"
 ```
 
 Use the second output directory as `NATIVE`:
 
 ```sh
-python baseline/check-nitra-core.py --toolchain "$COMPILER" \
+python tests/check-nitra-core.py --toolchain "$COMPILER" \
   --references "$REFS" --native-core "$NATIVE"
-python baseline/check-nitra-structures.py --toolchain "$COMPILER" --references "$REFS"
-python baseline/check-captured-delegate.py --toolchain "$COMPILER" --references "$REFS"
-python baseline/check-native-output.py --toolchain "$COMPILER" \
+python tests/check-nitra-structures.py --toolchain "$COMPILER" --references "$REFS"
+python tests/check-captured-delegate.py --toolchain "$COMPILER" --references "$REFS"
+python tests/check-native-output.py --toolchain "$COMPILER" \
   --references "$REFS" --native-core "$NATIVE"
-python baseline/check-native-source.py --toolchain "$COMPILER" \
+python tests/check-native-source.py --toolchain "$COMPILER" \
   --references "$REFS" --native-core "$NATIVE"
-python baseline/check-native-source.py --toolchain "$COMPILER" \
+python tests/check-native-source.py --toolchain "$COMPILER" \
   --references "$REFS" --native-core "$NATIVE" --checks NitraDialectChecks.cs
 ```
 
@@ -154,14 +154,14 @@ the native compiler as a replacement parser.
 
 ## Differential correctness and performance
 
-The [comparison harness](../../baseline/nitra-comparison/README.md) runs the native
+The [comparison harness](../../tests/nitra-comparison/README.md) runs the native
 and side recognizers against the same compiled grammars, forces typed fields,
 checks actual mapped AST execution, and records isolated timing/allocation samples.
 It retains failures and publishes ratios only for matching workloads. This bounded
 corpus does not establish full Nitra equivalence.
 
 
-The experimental package now includes the discovery-time shared-sample scheduler correction. See [comparison protocol and measured results](../../baseline/nitra-comparison/README.md#discovery-scheduler-correction-2026-10-11) and the packaged `DISCOVERY-INTEGRATION-STATUS.json` for historical discovery-stage provenance. The subsequent structural-depth correction removes that guard; that checkpoint is recorded in `STRUCTURE-INTEGRATION-STATUS.json`. See the comparison documentation for passing standard cases, the embedded compiler stack distinction, and remaining selection/SCC costs. Original Nitra remains faster on the measured workloads.
+The experimental package now includes the discovery-time shared-sample scheduler correction. See [comparison protocol and measured results](../../tests/nitra-comparison/README.md#discovery-scheduler-correction-2026-10-11) and the packaged `DISCOVERY-INTEGRATION-STATUS.json` for historical discovery-stage provenance. The subsequent structural-depth correction removes that guard; that checkpoint is recorded in `STRUCTURE-INTEGRATION-STATUS.json`. See the comparison documentation for passing standard cases, the embedded compiler stack distinction, and remaining selection/SCC costs. Original Nitra remains faster on the measured workloads.
 
 The subsequent retained-selection and lazy incremental-component correction is installed in the experimental package. Current artifact provenance is `RETENTION-INTEGRATION-STATUS.json`; see the comparison documentation for the final paired measurements, scaling tests and remaining embedded-backend stack limitation.
 

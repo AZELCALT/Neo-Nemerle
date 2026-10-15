@@ -1,0 +1,46 @@
+using Nemerle.Compiler.Parsetree;
+using OutputExpr = Nemerle.Compiler.Parsetree.PExpr;
+
+namespace DirectOutput
+{
+  syntax module Expressions
+  {
+    using Nitra.Core;
+
+    [StartRule]
+    syntax Start = Value
+    {
+      map Nemerle.Compiler.Parsetree.PExpr { Value }
+    }
+
+    syntax Value = "42"
+    {
+      map PExpr = <[ 42 ]>;
+    }
+
+    syntax Expr
+    {
+      | Number = "7";
+      map OutputExpr
+      {
+        | Number = <[ 7 ]>;
+      }
+    }
+
+    syntax Echo = "echo"
+    {
+      map(value : PExpr) OutputExpr { value }
+    }
+
+    syntax Matched = Value
+    {
+      map PExpr
+      {
+        match (Value)
+        {
+          | item -> item
+        }
+      }
+    }
+  }
+}

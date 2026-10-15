@@ -1,0 +1,28 @@
+using System;
+public class GenericTuple[T]
+{
+  public static Run(input : array[T]) : array[T] * bool { (input, true) }
+  public static Method[U](input : array[U]) : array[U] * bool { (input, true) }
+  public static Nested(input : array[array[T]]) : array[array[T]] * bool { (input, true) }
+}
+public module GenericEnum
+{
+  public Identity[T](value : T) : T where T : struct, System.Enum { value }
+}
+module ConstructorChecks
+{
+  Main() : void
+  {
+    def input=array[42];
+    def (actual,flag)=GenericTuple.[int].Run(input);
+    unless(Object.ReferenceEquals(actual,input) && flag) throw Exception("class generic tuple constructor failed");
+    def text=array["kept"];
+    def (method,methodFlag)=GenericTuple.[int].Method.[string](text);
+    unless(Object.ReferenceEquals(method,text) && methodFlag) throw Exception("method generic tuple constructor failed");
+    def nested=array[input];
+    def (result,nestedFlag)=GenericTuple.[int].Nested(nested);
+    unless(Object.ReferenceEquals(result,nested) && nestedFlag) throw Exception("nested generic array tuple constructor failed");
+    unless(GenericEnum.Identity(DayOfWeek.Monday)==DayOfWeek.Monday) throw Exception("enum generic constraints failed");
+    Console.WriteLine("PASS: generic class, method and nested-array tuple constructors execute");
+  }
+}

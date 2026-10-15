@@ -1,0 +1,6 @@
+using Nemerle.Compiler.Parsetree;
+// Test bridge: generate the mapping under the compiling caller's real context.
+public macro Replay(engine : string) : PExpr
+{
+  ComparisonBridge.Output(engine)
+}

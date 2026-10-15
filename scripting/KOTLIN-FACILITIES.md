@@ -50,8 +50,8 @@ From the workspace root:
 
 ```sh
 python3 baseline/check-kotlin-scripting-comparison.py
-python3 baseline/check-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
-python3 baseline/check-scripting-nuget.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
+python3 tests/check-scripting.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
+python3 tests/check-scripting-nuget.py --toolchain toolchain/coreclr --references toolchain/coreclr/references
 ```
 
 `HostChecks.kt` exercises Kotlin bindings, receivers, a named result, all three

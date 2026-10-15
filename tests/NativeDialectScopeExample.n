@@ -1,0 +1,26 @@
+// Grammar and space blocks need no option; the Integrated.* Nitra dlls must sit next to Nemerle.Compiler.dll.
+scope A;
+grammar Demo
+{
+  using Nemerle.Compiler.NitraDialectServices;
+  using Nemerle.Compiler.Parsetree;
+  syntax module Query
+  {
+    using Nitra.Core;
+    [StartRule] syntax Input = "answer"
+    {
+      map (context : NitraDialectContext) PExpr = {
+        context.Scope("A").Get("answer").Value :> PExpr
+      };
+    }
+  }
+}
+module Program
+{
+  Main() : void
+  {
+    scope.A.registery("answer", type("integer"));
+    scope.A.answer = 42;
+    System.Console.WriteLine(space Demo [A] { answer });
+  }
+}

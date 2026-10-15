@@ -34,7 +34,7 @@ constructs explicitly reports that normalization is not implemented. The install
 Build and verify from the workspace root:
 
 ```sh
-python baseline/build-coreclr-toolchain.py --bootstrap toolchain/coreclr \
+python build/build-coreclr-toolchain.py --bootstrap toolchain/coreclr \
   --references /usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.12/ref/net10.0
 python baseline/check-grammars.py /path/to/build/stage2/ncc.exe \
   --references /usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.12/ref/net10.0

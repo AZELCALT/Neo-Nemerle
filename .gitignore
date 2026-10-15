@@ -54,3 +54,7 @@ nemerle.pc
 *.Generated.cs
 **/.vs
 .ionide
+
+# revive build output
+/out/
+__pycache__/

@@ -51,7 +51,7 @@ The compiler is written this way too: `ncc/Nemerle/Compiler/typer.n` is the modu
 (source root `ncc`), holding the class `Typer`. Consumers import the modules whose names they use,
 `using Nemerle.Compiler.typer;` or in C# `using static Nemerle.Compiler.typer;`, and qualify a class through its
 module (`Nemerle.Compiler.manager_class.ManagerClass`). `ncc/Nemerle/Compiler/SYMBOLS.json` lists which module holds
-each name; `baseline/rename-compiler-references.py` and `rename-compiler-modules.py` move sources onto these paths.
+each name; `build/migrations/rename-compiler-references.py` and `rename-compiler-modules.py` move sources onto these paths.
 
 ## Nitra
 

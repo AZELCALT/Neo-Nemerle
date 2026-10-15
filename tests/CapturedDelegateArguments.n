@@ -1,0 +1,40 @@
+using System;
+
+// The closure initializers become part of the CLR delegate target expression.
+// Stage 4 must visit them to mark ref/out arguments as managed addresses.
+Set[T](value : out T, replacement : T) : bool
+{
+  value = replacement;
+  true
+}
+
+Increment(value : ref int) : bool
+{
+  value++;
+  true
+}
+
+Make() : Func[string]
+{
+  mutable text;
+  mutable number;
+  def textSet = Set(out text, "captured");
+  def numberSet = Set(out number, 41);
+  def incremented = Increment(ref number);
+  fun() {
+    def read() {
+      unless (textSet && numberSet && incremented)
+        throw Exception("delegate initialization failed");
+      text + ":" + number.ToString()
+    }
+    read()
+  }
+}
+
+Main() : void
+{
+  def read = Make();
+  unless (read.Invoke() == "captured:42")
+    throw Exception("captured ref/out values were lost");
+  Console.WriteLine("PASS: captured delegate ref/out arguments");
+}

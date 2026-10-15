@@ -1,0 +1,4 @@
+#!/bin/sh
+# Build the whole toolchain from the pinned compiler in boot/coreclr and run every test suite.
+# Options: --quick, --no-comparison, --update-boot, --output DIR (see build/bootstrap.py --help).
+exec python3 "$(dirname -- "$0")/build/bootstrap.py" "$@"
