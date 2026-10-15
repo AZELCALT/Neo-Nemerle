@@ -53,7 +53,7 @@ public interface INitraNativeSourceHost
   Prepare(modules : SCG.IEnumerable[string]) : NitraPreparedGrammar;
   Expand(rule : string, selected : NitraStructure, typer : Typer, location : Location, context : NitraDialectContext) : PExpr;
 }
-/// EXPERIMENT: a native host that kept the bytes of the grammar image it compiled (-experimental-continuation).
+/// A native host that keeps the bytes of the grammar image it compiled (for the continuation section).
 public interface INitraGrammarImageHost
 {
   Image : array[byte] { get; }
@@ -91,7 +91,7 @@ internal sealed class NitraSourceSession
   continuedNames : SCG.HashSet[string] = SCG.HashSet();
   patchedNames : SCG.HashSet[string] = SCG.HashSet();
   removals : SCG.List[string*string*array[string]] = SCG.List();
-  /// EXPERIMENT E3: per redefined stored grammar, what changed against its stored marks.
+  /// Per redefined stored grammar, what changed against its stored marks.
   public ContinuationDiffs : SCG.Dictionary[string,Nemerle.Compiler.continuation.ContinuationDiff] = SCG.Dictionary();
   mutable nativeHost : INitraNativeSourceHost;
   // grammar name, file index, block start (keyword), block end
@@ -168,9 +168,9 @@ internal sealed class NitraSourceSession
             record.Start=block.Start+1+c.Start-("namespace "+name+" {").Length;
             record.End=record.Start+c.End-c.Start; configuration.InactiveConstructs.Add(record);
           }
-          // EXPERIMENT: the continuation's mark trace needs every declaration's span, read textually (cheap) and
+          // the continuation's mark trace needs every declaration's span, read textually (cheap) and
           // moved from the wrapped grammar text to positions in the source file
-          when(manager.Options.ExperimentalContinuation || !manager.Options.ContinueFrom.IsEmpty)
+          when(manager.Options.ContinuationSection || !manager.ContinueFrom.IsEmpty)
             markSources[name]=(Nemerle.Compiler.NitraDeclarations.NitraDeclarationReader(nativeSource,file).Read(),block.Start+1-("namespace "+name+" {").Length,block.Start+1);
           definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
         }
@@ -208,11 +208,11 @@ internal sealed class NitraSourceSession
       }
       files.Add(source.FileIndex,string(chars));
     }
-    // EXPERIMENT: grammars stored in the continuation sections of -experimental-continue binaries. A grammar the
+    // grammars stored in the continuation sections of the binaries this compilation continues from. A grammar the
     // sources define themselves wins; its stored image is not used (E3 will diff the marks instead).
     def continued=SCG.List.[array[byte]]();
     when(configuration.CreateContext==null)
-      foreach(path in manager.Options.ContinueFrom)
+      foreach(path in manager.ContinueFrom)
       {
         mutable store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
         // a grammar image is bound to the compiler and Nitra build that made it: another build's images are not used
@@ -223,7 +223,7 @@ internal sealed class NitraSourceSession
             Console.Error.WriteLine("continuation skipped "+path+": grammar image of compiler "+store.CompilerVersion+", this is "+version);
           store=null;
         }
-        // E3: a stored grammar the source redefines is diffed against the stored marks (the compile still falls back
+        // a stored grammar the source redefines is diffed against the stored marks (the compile still falls back
         // to compiling the grammar in full)
         when(store!=null)
           foreach(stored when definitions.ContainsKey(stored.Name) && markSources.ContainsKey(stored.Name) in store.Grammars)
@@ -235,7 +235,7 @@ internal sealed class NitraSourceSession
             ContinuationDiffs[stored.Name]=diff;
             def trace=Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1";
             when(trace) Console.Error.WriteLine("continuation diff "+stored.Name+": "+diff.ToString());
-            // E4: when only alternatives of extensible rules changed, compile a patch grammar of just those over the
+            // when only alternatives of extensible rules changed, compile a patch grammar of just those over the
             // stored image instead of the whole grammar
             if(diff.IsClean)
             {
@@ -276,8 +276,8 @@ internal sealed class NitraSourceSession
       foreach((owner,rule,names) in removals)
         match(nativeHost) { | host is INitraGrammarImageHost => host.RemoveAlternatives(owner,rule,names) | _ => () }
       when(configuration.ProvideHost==null && continued.Count>0 && inputs.Count>0) nativeHost.Initialize(manager,inputs);
-      // EXPERIMENT: the compiled grammar image and the marks of every declaration go into the continuation section
-      when(manager.Options.ExperimentalContinuation && !IndexOnly && patchedNames.Count==0) // a patched compile does not store its grammar (experiment)
+      // the compiled grammar image and the marks of every declaration go into the continuation section
+      when(manager.Options.ContinuationSection && !IndexOnly && patchedNames.Count==0) // a patched compile does not store its grammar yet
         match(nativeHost)
         {
           | host is INitraGrammarImageHost when host.Image!=null =>
@@ -333,7 +333,7 @@ internal sealed class NitraSourceSession
       manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
     }
   }
-  /// EXPERIMENT E4: a patch grammar holding only the changed and added alternatives of a stored grammar, as
+  /// A patch grammar holding only the changed and added alternatives of a stored grammar, as
   /// `extend syntax` blocks over the stored modules, and the stale stored alternatives to drop. None when the change is
   /// anything else (a rule, a module, usings, a precedence group): then the grammar compiles in full.
   static PatchGrammar(stored : Nemerle.Compiler.continuation.ContinuationGrammar, current : Nemerle.Compiler.continuation.ContinuationGrammar,
@@ -410,7 +410,7 @@ internal sealed class NitraSourceSession
       }
     }
   }
-  /// EXPERIMENT: the native host without compiled definitions (only continuation images are added to it).
+  /// The native host without compiled definitions (only continuation images are added to it).
   static CreateEmptyNativeHost() : INitraNativeSourceHost
   {
     def directory=System.IO.Path.GetDirectoryName(typeof(ManagerClass).Assembly.Location);

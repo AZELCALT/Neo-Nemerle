@@ -23,16 +23,6 @@ using Nemerle.Scripting.facilities;
 public sealed class ScriptHost
 {
   static gate : object = object();
-  /// EXPERIMENT: a script continues from every referenced binary that carries a continuation section (its grammars,
-  /// macros and the members those macros use), see doc/CONTINUATION.md.
-  static Continuable(references : IEnumerable[string]) : list[string]
-  {
-    def result = List();
-    foreach (path in references)
-      try { when (File.Exists(path) && ClrCompilerSection.ReadBytes(path) != null) result.Add(path) }
-      catch { | _ => () }
-    NList.FromArray(result.ToArray())
-  }
   settings : ScriptHostOptions;
   public this() { settings = ScriptHostOptions(); }
   public this(options : ScriptHostOptions) { settings = options.Snapshot(); }
@@ -90,7 +80,6 @@ public sealed class ScriptHost
         options.IgnoreConfusion = true; options.ProgressBar = false; options.ColorMessages = false;
         options.TargetReferenceDirectory = definition.TargetReferenceDirectory; ScriptCompilerOptions.Apply(options, definition.CompilerOptions, source.Path);
         options.ReferencedLibraries = NList.FromArray(definition.References.ToArray());
-        options.ContinueFrom = Continuable(definition.References);
         def data = ScriptCompilationData(); data.TypeName = "__syntax"; data.FileName = "__syntax";
         data.Template = "public class __syntax { public this() { base(); } }";
         def defaultImports : List[string] = List();
@@ -492,7 +481,6 @@ public sealed class ScriptHost
         foreach (assembly in options.SharedAssemblies)
           when (assembly.Location != "" && !references.Contains(assembly.Location)) references.Add(assembly.Location);
         options.ReferencedLibraries = NList.FromArray(references.ToArray());
-        options.ContinueFrom = Continuable(references);
         options.Sources = NList.FromArray(array[StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), source.Text) : ISource]);
         def manager = ManagerClass(options);
         manager.InitOutput(StringWriter());

@@ -1,4 +1,4 @@
-// EXPERIMENT: reads a binary's continuation section (doc/CONTINUATION.md) and checks what it carries.
+// Reads a binary's continuation section (doc/CONTINUATION.md) and checks what it carries.
 //   ContinuationChecks.dll <binary> <toolchain> [expected grammar [source file expected alternatives]]
 using System;
 using System.IO;
@@ -23,8 +23,8 @@ static class ContinuationChecks
         }
         if (args.Length < 3)
         {
-            Check(raw == null, "a compilation without -experimental-continuation must not write a .nemir section");
-            Console.WriteLine("PASS: no continuation section without the flag");
+            Check(raw == null, "-no-continuation-section must not write a .nemir section");
+            Console.WriteLine("PASS: no continuation section with -no-continuation-section");
             return 0;
         }
         Check(raw != null, "missing .nemir section");

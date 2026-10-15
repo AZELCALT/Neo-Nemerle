@@ -78,8 +78,8 @@ using Nemerle.Compiler.Utility;
 
     public IsUserReference : bool { get; internal set; }
 
-    /// EXPERIMENT E6: non-public members ("Type::Member") that this library's continuation section makes visible to a
-    /// compilation continuing from it (-experimental-continue).
+    /// Non-public members ("Type::Member") that this library's continuation section makes visible to a compilation
+    /// continuing from it (the members its macros expand to).
     public ContinuationMembers : SCG.HashSet[string] = SCG.HashSet();
     public ContinuationAllows(member : SR.MemberInfo) : bool
     {
@@ -137,8 +137,7 @@ using Nemerle.Compiler.Utility;
                       ref SystemTypeCache.SQ_ExtensionAttributeAssembly);
 
       _isFriend = this.GetIsFriend();
-      // EXPERIMENT E6
-      foreach (path in Manager.Options.ContinueFrom)
+      foreach (path in Manager.ContinueFrom ?? [])
         when (!string.IsNullOrEmpty(assembly.Location)
               && string.Equals(Path.GetFullPath(path), Path.GetFullPath(assembly.Location), System.StringComparison.Ordinal))
         {

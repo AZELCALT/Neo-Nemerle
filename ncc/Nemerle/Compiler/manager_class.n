@@ -228,8 +228,10 @@ using Nemerle.Compiler.XmlDump;
 
     mutable _userData : SC.IDictionary;
 
-    /// EXPERIMENT: what this compilation writes into its continuation section (-experimental-continuation).
+    /// What this compilation writes into its continuation section.
     public Continuation : Nemerle.Compiler.continuation.ContinuationStore { get; private set; }
+    /// The binaries this compilation continues from: -continue entries and every reference with a continuation section.
+    public ContinueFrom : list[string] { get; private set; }
 
     public UserData : SC.IDictionary
     {
@@ -557,6 +559,15 @@ using Nemerle.Compiler.XmlDump;
 
       _userData = null;
       Continuation = Nemerle.Compiler.continuation.ContinuationStore();
+      def sources = System.Collections.Generic.List.[string]();
+      def add(path : string) : void
+      {
+        def full = IO.Path.GetFullPath(path);
+        unless (sources.Contains(full)) sources.Add(full);
+      }
+      foreach (path in Options.ContinueFrom) add(path);
+      foreach (path when IO.File.Exists(path) && Nemerle.Platform.ClrCompilerSection.HasSection(path) in Options.ReferencedLibraries) add(path);
+      ContinueFrom = NList.FromArray(sources.ToArray());
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)
@@ -644,8 +655,8 @@ using Nemerle.Compiler.XmlDump;
         foreach (file in Options.MacrosToLoad.Reverse())
           tryEx(() => LibrariesManager.LoadPluginsFrom(file, loadMacros = true, loadParsers = true));
 
-        // EXPERIMENT E5: a binary this compilation continues from lends it the macros its section indexes
-        foreach (path in Options.ContinueFrom)
+        // a binary this compilation continues from lends it the macros its section indexes
+        foreach (path in ContinueFrom)
           tryEx(() =>
           {
             def store = Nemerle.Compiler.continuation.ContinuationStore.FromImage(IO.File.ReadAllBytes(path));
@@ -793,10 +804,10 @@ using Nemerle.Compiler.XmlDump;
           ProgressBar (2);
 
           Hierarchy = TypesManager (this);
-          // EXPERIMENT E6: members a continued binary makes visible are also reachable at run time: CoreCLR skips access
-          // checks into an assembly named by IgnoresAccessChecksTo, an attribute type the calling assembly defines.
+          // members a continued binary makes visible are also reachable at run time: CoreCLR skips access checks into an
+          // assembly named by IgnoresAccessChecksTo, an attribute type the calling assembly defines (internal here)
           mutable accessType = null;
-          foreach (path in Options.ContinueFrom)
+          foreach (path in ContinueFrom)
           {
             def store = Nemerle.Compiler.continuation.ContinuationStore.FromImage(IO.File.ReadAllBytes(path));
             when (store != null && store.Types.Count > 0)
@@ -805,7 +816,7 @@ using Nemerle.Compiler.XmlDump;
               {
                 accessType = CoreEnv.EnterIntoNamespace(["System", "Runtime", "CompilerServices"]).Define(<[ decl:
                   [System.AttributeUsage(System.AttributeTargets.Assembly, AllowMultiple = true)]
-                  public sealed class IgnoresAccessChecksToAttribute : System.Attribute
+                  internal sealed class IgnoresAccessChecksToAttribute : System.Attribute
                   {
                     public this(assemblyName : string) { AssemblyName = assemblyName }
                     public AssemblyName : string { get; }

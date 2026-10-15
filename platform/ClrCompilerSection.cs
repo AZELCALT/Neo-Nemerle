@@ -68,6 +68,22 @@ namespace Nemerle.Platform
         }
         // ---- Continuation section (experimental): raw bytes in .nemir, added to a finished image. ----
 
+        /// True when an image file has a .nemir section (reads the PE headers only; false for non-PE files).
+        public static bool HasSection(string path)
+        {
+#if MODERN_CLR
+            try
+            {
+                using (var pe = new PEReader(File.OpenRead(path)))
+                    foreach (var section in pe.PEHeaders.SectionHeaders)
+                        if (section.Name == Name) return true;
+            }
+            catch (BadImageFormatException) { }
+            catch (IOException) { }
+#endif
+            return false;
+        }
+
         /// The raw .nemir payload of an image file, or null when it has none.
         public static byte[] ReadBytes(string path)
         {

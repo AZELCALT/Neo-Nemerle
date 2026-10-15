@@ -721,11 +721,11 @@ using Nemerle.Compiler.Utility;
         def (portableExecutableKind, imageFileMachine) = make_platform_flags (Manager.Options.Platform);
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
-        // EXPERIMENT: added last, because the metadata rewrite above would drop a custom section
-        when (Manager.Options.ExperimentalContinuation && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
+        // the continuation section is added last, because the metadata rewrite above would drop a custom section
+        when (Manager.Options.ContinuationSection && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
         {
           Manager.Continuation.CompilerVersion = typeof(ManagerClass).Assembly.GetName().Version.ToString();
-          // E6: members of the relevant modules that a referencing compilation cannot see (macros may expand to them)
+          // members of the relevant modules that a referencing compilation cannot see (macros may expand to them)
           foreach (owner in continuation_modules)
           {
             def t = Nemerle.Compiler.continuation.ContinuationType();
@@ -740,7 +740,8 @@ using Nemerle.Compiler.Utility;
                 t.Members.Add(member.Name);
             when (t.Members.Count > 0) Manager.Continuation.Types.Add(t);
           }
-          ClrEmitter.AppendCompilerSection(_OutputFileName, Manager.Continuation.Write());
+          try { ClrEmitter.AppendCompilerSection(_OutputFileName, Manager.Continuation.Write()) }
+          catch { | e is System.NotSupportedException => Message.Warning($"continuation section not written: $(e.Message)") }
         }
         //when (_debug_emit != null) _debug_emit.Close ();
       }
@@ -791,8 +792,8 @@ using Nemerle.Compiler.Utility;
           {
             def attr = Manager.AttributeCompiler.MakeEmittedAttribute (SystemTypeCache.ContainsMacroAttribute, ti.GetTypeBuilder ().FullName);
             ClrEmitter.SetAttribute(_assembly_builder, attr);
-            // EXPERIMENT E5: the continuation section indexes the macro with its source span
-            when (Manager.Options.ExperimentalContinuation && Manager.Continuation != null)
+            // the continuation section indexes the macro with its source span
+            when (Manager.Options.ContinuationSection && Manager.Continuation != null)
             {
               def m = Nemerle.Compiler.continuation.ContinuationMacro();
               m.Name = ti.Name; m.TypeName = ti.GetTypeBuilder().FullName;
@@ -804,7 +805,7 @@ using Nemerle.Compiler.Utility;
               m.Start = start; m.End = end;
               m.Hash = if (start >= 0 && end >= start) Nemerle.Compiler.continuation.ContinuationStore.Hash(Nemerle.Compiler.continuation.ContinuationStore.Normalize(text.Substring(start, end - start))) else 0UL;
               Manager.Continuation.Macros.Add(m);
-              // E6: the module defining the macro is in the relevant set
+              // the module defining the macro is in the relevant set
               match (ti.DeclaringType) { | owner is TypeBuilder => _ = continuation_modules.Add(owner) | _ => () }
             }
           }
@@ -925,7 +926,7 @@ using Nemerle.Compiler.Utility;
     /* -- PRIVATE FIELDS --------------------------------------------------- */
 
     private   mutable _assembly_session : Nemerle.Platform.ClrAssemblySession;
-    /// EXPERIMENT E6: modules that define macros (the relevant set of the continuation's type subsection).
+    /// Modules that define macros (the relevant set of the continuation's type subsection).
     private continuation_modules : SCG.HashSet[TypeBuilder] = SCG.HashSet();
     private   mutable _assembly_name              : System.Reflection.AssemblyName;
     private   mutable _assembly_builder           : Emit.AssemblyBuilder;

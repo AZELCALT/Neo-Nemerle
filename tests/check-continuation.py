@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""EXPERIMENT: the continuation section (doc/CONTINUATION.md), stage by stage.
+"""The continuation section (doc/CONTINUATION.md), stage by stage.
 
     check-continuation.py --toolchain DIR --references REFS [--stage E1]
 
-E1: -experimental-continuation writes a .nemir section with the grammar image and marks; the output still runs and
-    verifies when signed; without the flag nothing is written.
-E2: a program with only `space Demo { ... }` compiles with -experimental-continue:<host binary> against the host's
+E1: an output with a grammar carries a .nemir section with the grammar image and marks; it still runs and verifies
+    when signed; -no-continuation-section writes none.
+E2: a program with only `space Demo { ... }` compiles with -continue:<host binary> against the host's
     stored grammar (no grammar in its source, no nested grammar compile) and prints the same result.
 E3: a program that redefines the stored grammar gets an exact mark diff (changed / added / removed declarations);
     layout-only edits are clean. The grammar still compiles in full.
 E5: a host library's macros are indexed in its section (name, class, source span) and a program that continues
-    from it uses them without -m.
+    from it (a plain -r reference) uses them without -m.
 E6: a host macro that expands to an internal helper of its module works in a continued program (type subsection +
     IgnoresAccessChecksTo); internals of modules without macros stay hidden.
 S:  a script that depends on such a host library (DependsOn) continues from it by default: it uses the host's
@@ -98,17 +98,17 @@ def reader(*args):
     return run(['dotnet', w / 'Checks.dll', *args], cwd=w).stdout.strip()
 
 
-plain, t_plain = compile_program('plain', 10, [])
+plain, t_plain = compile_program('plain', 10, ['-no-continuation-section'])
 print(reader(plain, T), flush=True)
-unsigned, t_cont = compile_program('unsigned', 10, ['-experimental-continuation'])
+unsigned, t_cont = compile_program('unsigned', 10, [])
 print(reader(unsigned, T, 'Demo', unsigned.parent / 'demo.n', '10'), flush=True)
-signed, _ = compile_program('signed', 10, ['-experimental-continuation', '-keyfile:' + str(key)])
+signed, _ = compile_program('signed', 10, ['-keyfile:' + str(key)])
 print(reader(signed, T, 'Demo'), flush=True)
 verify = subprocess.run(['sn', '-vf', str(signed)], capture_output=True, text=True)
 if 'is strongnamed' not in verify.stdout:
     raise SystemExit('FAILED: signed output with a continuation section does not verify\n' + verify.stdout + verify.stderr)
 print('PASS: signed output with a continuation section verifies (sn -vf)', flush=True)
-print('E1 times (10 rules): plain compile %.2fs, with continuation %.2fs' % (t_plain, t_cont), flush=True)
+print('E1 times (10 rules): without section %.2fs, with section %.2fs' % (t_plain, t_cont), flush=True)
 print('PASS: E1 continuation section written, signed, readable', flush=True)
 
 
@@ -120,7 +120,7 @@ def space_program(name, expression, expected, host):
     source.write_text('module Program\n{\n  Main() : void { System.Console.WriteLine(space Demo { %s }); }\n}\n' % expression)
     started = time.time()
     run([T / 'ncc', source, '-source-root:' + str(root), '-out:' + str(root / 'use.exe'), '-no-color',
-         '-experimental-continue:' + str(host)])
+         '-continue:' + str(host)])
     elapsed = time.time() - started
     shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'use.runtimeconfig.json')
     output = run(['dotnet', root / 'use.exe'], cwd=root).stdout.strip()
@@ -131,9 +131,9 @@ def space_program(name, expression, expected, host):
 
 if a.stage >= 'E2':
     t10 = space_program('use10', 'k3', 3, unsigned)
-    host120, t_fresh120 = compile_program('host120', 120, ['-experimental-continuation'])
+    host120, t_fresh120 = compile_program('host120', 120, [])
     t120 = space_program('use120', 'k117', 117, host120)
-    t_plain120 = min(compile_program('fresh120-%d' % i, 120, [])[1] for i in range(2))
+    t_plain120 = min(compile_program('fresh120-%d' % i, 120, ['-no-continuation-section'])[1] for i in range(2))
     print('E2 times: 10-rule grammar fresh %.2fs, continued %.2fs; 120-rule grammar fresh %.2fs, continued %.2fs'
           % (t_cont, t10, t_plain120, t120), flush=True)
     print('PASS: E2 programs continue from a stored grammar without compiling it', flush=True)
@@ -148,7 +148,7 @@ def diff_of(name, text, expected_output):
     source.write_text(text)
     env = dict(os.environ, NEMERLE_CONTINUATION_DIFF='1')
     r = subprocess.run([str(T / 'ncc'), str(source), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
-                        '-no-color', '-experimental-continue:' + str(unsigned)], capture_output=True, text=True, env=env)
+                        '-no-color', '-continue:' + str(unsigned)], capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise SystemExit('FAILED: %s\n%s%s' % (name, r.stdout, r.stderr))
     shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'demo.runtimeconfig.json')
@@ -186,13 +186,13 @@ if a.stage >= 'E5':
     root.mkdir()
     (root / 'host.n').write_text('using Nemerle.Compiler;\n\nmacro twice(e)\n{\n  <[ $e * 2 ]>\n}\n\npublic Hello() : string { "host" }\n')
     run([T / 'ncc', root / 'host.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'), '-no-color',
-         '-r:' + str(T / 'Nemerle.Compiler.dll'), '-experimental-continuation'])
+         '-r:' + str(T / 'Nemerle.Compiler.dll')])
     print(reader(root / 'host.dll', T, '--macros', root / 'host.n'), flush=True)
     user = w / 'macrouser'
     user.mkdir()
     (user / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(twice(21)); }\n}\n')
     run([T / 'ncc', user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
-         '-r:' + str(root / 'host.dll'), '-experimental-continue:' + str(root / 'host.dll')])
+         '-r:' + str(root / 'host.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', user / 'use.runtimeconfig.json')
     shutil.copy2(root / 'host.dll', user / 'host.dll')
     output = run(['dotnet', user / 'use.exe'], cwd=user).stdout.strip()
@@ -206,13 +206,13 @@ if a.stage >= 'E6':
     (root / 'host.n').write_text('using Nemerle.Compiler;\n\nmacro tripled(e)\n{\n  <[ host.Helper($e) ]>\n}\n\ninternal Helper(x : int) : int { x * 3 }\n')
     (root / 'other.n').write_text('internal Secret() : int { 7 }\n')
     run([T / 'ncc', root / 'host.n', root / 'other.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'),
-         '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll'), '-experimental-continuation'])
+         '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll')])
     print(reader(root / 'host.dll', T, '--macros', root / 'host.n'), flush=True)
     user = w / 'scopeuser'
     user.mkdir()
     (user / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(tripled(14)); }\n}\n')
     run([T / 'ncc', user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
-         '-r:' + str(root / 'host.dll'), '-experimental-continue:' + str(root / 'host.dll')])
+         '-r:' + str(root / 'host.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', user / 'use.runtimeconfig.json')
     shutil.copy2(root / 'host.dll', user / 'host.dll')
     output = run(['dotnet', user / 'use.exe'], cwd=user).stdout.strip()
@@ -222,7 +222,7 @@ if a.stage >= 'E6':
     hidden.mkdir()
     (hidden / 'peek.n').write_text('module Program\n{\n  Main() : void { System.Console.WriteLine(other.Secret()); }\n}\n')
     r = subprocess.run([str(T / 'ncc'), str(hidden / 'peek.n'), '-source-root:' + str(hidden), '-out:' + str(hidden / 'peek.exe'),
-                        '-no-color', '-r:' + str(root / 'host.dll'), '-experimental-continue:' + str(root / 'host.dll')],
+                        '-no-color', '-r:' + str(root / 'host.dll')],
                        capture_output=True, text=True)
     if r.returncode == 0 or 'Secret' not in r.stdout + r.stderr:
         raise SystemExit('FAILED: E6 an internal of a module without macros must stay hidden\n' + r.stdout + r.stderr)
@@ -239,7 +239,7 @@ if a.stage in ('E4', 'E6'):
         env = dict(os.environ, NEMERLE_CONTINUATION_DIFF='1')
         started = time.time()
         r = subprocess.run([str(T / 'ncc'), str(root / 'demo.n'), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
-                            '-no-color', '-experimental-continue:' + str(host120)], capture_output=True, text=True, env=env)
+                            '-no-color', '-continue:' + str(host120)], capture_output=True, text=True, env=env)
         elapsed = time.time() - started
         if r.returncode != 0:
             raise SystemExit('FAILED: E4 %s\n%s%s' % (name, r.stdout, r.stderr))
@@ -297,7 +297,7 @@ macro tripled(e)
 internal Helper(x : int) : int { x * 3 }
 ''')
     run([T / 'ncc', lib / 'host.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'host.dll'), '-no-color',
-         '-r:' + str(T / 'Nemerle.Compiler.dll'), '-experimental-continuation'])
+         '-r:' + str(T / 'Nemerle.Compiler.dll')])
     script = w / 'script'
     script.mkdir()
     shutil.copy2(lib / 'host.dll', script / 'host.dll')
@@ -309,4 +309,22 @@ internal Helper(x : int) : int { x * 3 }
     if output != ['40', '42', '42']:
         raise SystemExit('FAILED: script continuation printed %r' % output)
     print('PASS: S a script depending on the host library uses its grammar, macros and internal helper (%.2fs)' % elapsed, flush=True)
+    # the same through ncc: a plain reference is continued from
+    prog = w / 'refprogram'
+    prog.mkdir()
+    (prog / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(space Demo { k1 } + twice(20)); }\n}\n')
+    run([T / 'ncc', prog / 'use.n', '-source-root:' + str(prog), '-out:' + str(prog / 'use.exe'), '-no-color', '-r:' + str(lib / 'host.dll')])
+    shutil.copy2(T / 'ncc.runtimeconfig.json', prog / 'use.runtimeconfig.json')
+    shutil.copy2(lib / 'host.dll', prog / 'host.dll')
+    if run(['dotnet', prog / 'use.exe'], cwd=prog).stdout.strip() != '42':
+        raise SystemExit('FAILED: an ncc program referencing the host library does not continue from it')
+    print('PASS: S an ncc program that references the host library (-r) uses its grammar and macro', flush=True)
+    # a compiled script with a grammar carries the section, so it can be continued from in turn
+    own = w / 'scriptgrammar'
+    own.mkdir()
+    (own / 'g.n').write_text(grammar_program(3).split('module Program')[0] + 'System.Console.WriteLine(space Demo { k2 });\n')
+    run([T / 'nscript', 'compile', own / 'g.n', own / 'g.dll', '--no-cache'], cwd=own)
+    if reader(own / 'g.dll', T, 'Demo').find('PASS') < 0:
+        raise SystemExit('FAILED: nscript compile output has no continuation section')
+    print('PASS: S nscript compile of a script with a grammar writes the continuation section', flush=True)
 shutil.rmtree(w, ignore_errors=True)

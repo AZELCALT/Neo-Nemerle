@@ -47,9 +47,11 @@ using Nemerle.Compiler.Utility;
     /// A source file is its namespace (root-relative path); `namespace` blocks are rejected. Script compilation
     /// has its own scope.
     public FileModules : bool { get { Script == null } }
-    /// EXPERIMENT -experimental-continuation: write the continuation section (.nemir) into the output.
-    public mutable ExperimentalContinuation : bool;
-    /// EXPERIMENT -experimental-continue:<dll>: binaries whose continuation section this compilation continues from.
+    /// Write the continuation section (.nemir, doc/CONTINUATION.md) into outputs that define grammars or macros;
+    /// -no-continuation-section turns it off.
+    public mutable ContinuationSection : bool = true;
+    /// -continue:<dll>: binaries to continue from besides the references, which are continued from when they carry a
+    /// continuation section.
     public mutable ContinueFrom : list[string] = [];
     /// -file-name-namespaces: a file's namespace is its file name only (no directory path); file names must be unique.
     public mutable FileNameNamespaces : bool;
@@ -423,14 +425,14 @@ using Nemerle.Compiler.Utility;
                        help = "Print the Nitra declarations of each source as JSON without executing or compiling them",
                        handler = fun () { this.InspectNitraSyntax = true; }),
 
-        Getopt.CliOption.Flag (name = "-experimental-continuation",
+        Getopt.CliOption.Flag (name = "-no-continuation-section",
                        aliases = [],
-                       help = "EXPERIMENT: write the continuation section (grammar image and marks) into the output",
-                       handler = fun () { this.ExperimentalContinuation = true; }),
+                       help = "Do not write the continuation section (grammar images, macro and type index) into the output",
+                       handler = fun () { this.ContinuationSection = false; }),
 
-        Getopt.CliOption.String (name = "-experimental-continue",
+        Getopt.CliOption.String (name = "-continue",
                        aliases = [],
-                       help = "EXPERIMENT: continue from the continuation section of the given binary",
+                       help = "Continue from the continuation section of a binary that is not referenced",
                        handler = fun (path) { this.ContinueFrom = this.ContinueFrom + [path]; }),
 
         Getopt.CliOption.Flag (name = "-file-name-namespaces",

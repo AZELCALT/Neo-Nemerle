@@ -9933,9 +9933,9 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
   mutable registry : SelectedRegistry;
   /// The grammar assembly Nitra's compiler generated for the initialized definitions (descriptors for ParseSession).
   public GrammarAssembly : Assembly { get; private set; }
-  /// EXPERIMENT (-experimental-continuation): the bytes of the compiled grammar image, kept for the continuation section.
+  /// The bytes of the compiled grammar image, kept for the continuation section.
   public Image : array[byte] { get; private set; }
-  /// EXPERIMENT: continued grammar images already loaded, with a file copy each, so that source grammars can extend them
+  /// Continued grammar images already loaded, with a file copy each, so that source grammars can extend them
   continued : SCG.List[Assembly*string] = SCG.List();
   public Initialize(manager : ManagerClass, definitions : SCG.IEnumerable[NitraDocument]) : void
   {
@@ -9948,8 +9948,8 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
     {
       def directory=Path.GetDirectoryName(typeof(NativeSourceHost).Assembly.Location);
       def options=CompilationOptions();
-      // EXPERIMENT: the continuation section needs the image's bytes, so the grammar is compiled to a file then
-      def persist=manager.Options.ExperimentalContinuation || continued.Count>0;
+      // the continuation section needs the image's bytes, so the grammar is compiled to a file
+      def persist=manager.Options.ContinuationSection || continued.Count>0;
       options.CompileToMemory = !persist; options.TargetIsLibrary=true; options.TargetIsSet=true;
       options.ProgressBar=false; options.ColorMessages=false; options.IgnoreConfusion=true;
       options.TargetReferenceDirectory=manager.Options.TargetReferenceDirectory;
@@ -10005,7 +10005,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       try { when(Directory.Exists(scratch)) Directory.Delete(scratch,true) } catch { | _ => () }
     }
   }
-  /// EXPERIMENT: add a grammar image stored in a continuation section, without compiling anything.
+  /// Adds a grammar image stored in a continuation section, without compiling anything.
   public AddImage(manager : ManagerClass, image : array[byte]) : void
   {
     when(registry==null) { registry=SelectedRegistry(); AddBuiltins(registry); }
@@ -10030,7 +10030,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
     continued.Add((assembly,file));
     registry.Add(assembly);
   }
-  /// EXPERIMENT E4: drops alternatives of a loaded grammar's rule; a patch grammar compiled over it replaces them.
+  /// Drops alternatives of a loaded grammar's rule; a patch grammar compiled over it replaces them.
   public RemoveAlternatives(owner : string, rule : string, names : array[string]) : void
   {
     mutable removed=0;

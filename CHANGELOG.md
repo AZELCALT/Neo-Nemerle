@@ -40,6 +40,13 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
   72-case differential.
 - Known gap: grammars are compiled with their program, and there is no reusable compiled-grammar artifact yet.
 
+### Continuation section
+- Every output that defines grammars or macros carries a `.nemir` section with its compiled Nitra grammar (plus a
+  per-declaration mark trace), a macro index, and the internal members its macros expand to. A compilation or script
+  that references the binary continues from it. It uses the stored grammar in `space` without compiling it (120-rule
+  grammar: 8.3 s to 1.5 s), recompiles only edited alternatives, and uses the binary's macros and their helpers. See
+  [doc/CONTINUATION.md](doc/CONTINUATION.md).
+
 ### Tools
 - **Scripting:** `nscript run`, `compile`, `run-compiled` and `repl`. Scripts can reference NuGet packages and run
   without the SDK installed.

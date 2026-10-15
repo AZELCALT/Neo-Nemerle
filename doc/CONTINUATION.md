@@ -1,33 +1,24 @@
-# Continuation section (experiment)
+# Continuation section
 
 A Nemerle binary can carry a compiler-owned section, `.nemir`. It holds what a later, late-bound compilation needs to
 continue from that binary: typically a script compiled by the embedded compiler inside a host application. It works
 like Objective-C's `__objc_*` sections: the compiler writes its own metadata into every binary it produces. The section
 is not a managed resource; the binary format is only the carrier.
 
-**Status: experimental and opt-in.** It is enabled with flags, checked by `tests/check-continuation.py`, and not part of
-`./bootstrap` yet.
+It is on by default. Every output that defines grammars or macros carries the section, and every compilation
+continues from the binaries it references that carry one. `tests/check-continuation.py` checks it as part of
+`./bootstrap`.
 
 ## Using it
 
 ```sh
-ncc host.n -experimental-continuation ...           # write the section into host.dll / host.exe
-ncc use.n  -experimental-continue:host.dll ...      # continue from it (repeatable)
+ncc host.n -target:library -out:host.dll ...   # host.dll carries the section (grammars, macros)
+ncc use.n -r:host.dll ...                      # continues from it: its grammars, macros, and their helpers
+ncc use.n -continue:host.exe ...               # continue from a binary without referencing it
+ncc lib.n -no-continuation-section ...         # write no section
 ```
 
-The embedded compiler uses `CompilationOptions.ExperimentalContinuation` and `CompilationOptions.ContinueFrom`.
-
-**Scripts** continue by default from every referenced binary that carries a section. Scripts can always declare their
-own `grammar` and use `space`. With `[assembly: DependsOn("host.dll")]` they also use the host library's grammars in
-`space`, its macros, and the internal helpers those macros expand to, without compiling the grammar again:
-
-```nemerle
-[assembly: DependsOn("host.dll")]
-using host;
-System.Console.WriteLine(space Demo { k0 });   // the host's grammar, no grammar compile in the script
-System.Console.WriteLine(twice(21));          // the host's macro
-System.Console.WriteLine(tripled(14));        // a host macro that expands to an internal helper
-```
+The compiler API has `CompilationOptions.ContinuationSection` and `CompilationOptions.ContinueFrom`.
 `NEMERLE_CONTINUATION_DIFF=1` prints what a continued compilation did with each stored grammar: `diff`, `patch`, `reuse`,
 `fallback` or `skipped`.
 
@@ -52,7 +43,8 @@ The payload of `.nemir` is a container (`ncc/Nemerle/Compiler/continuation.n`, `
 
 The section is appended to the finished image, after the Mono.Cecil metadata rewrite, which would drop it. The file is
 then strong-name signed again (`platform/ClrCompilerSection.cs`). The PE header must have room for one more section
-header. Cecil's output (`.text`, `.reloc`) has room; an image with a `.rsrc` section does not yet.
+header. Cecil's output (`.text`, `.reloc`) has room. An image with a `.rsrc` section does not yet; it gets a warning and
+no section.
 
 ## What a continued compilation does
 
@@ -90,7 +82,7 @@ adds no measurable time to a compile.
   would remove it.
 - **Patched results aren't stored:** a patched compilation does not write a grammar subsection of its own.
 - **Narrow patch scope:** changes inside precedence groups, to whole rules or to modules fall back to the full compile.
-- **Carrier:** only PE images, with header room for one more section.
+- **Carrier:** only PE images, with header room for one more section (otherwise a warning and no section).
 - **Trust:** loading a stored grammar image runs code from that binary, the same trust as referencing it.
 
 `NEMERLE_DUMP_GRAMMAR_IMAGE=<path>` writes the grammar image a compilation produces, for inspection.

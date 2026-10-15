@@ -1,6 +1,7 @@
-// EXPERIMENT (-experimental-continuation): the continuation section. A binary carries, in its .nemir section, what a
-// later late-bound compilation (a script compiled by the embedded compiler) needs to continue from it. Today: the
-// compiled Nitra grammar image plus a mark trace of every grammar declaration. See doc/CONTINUATION.md.
+// The continuation section. A binary carries, in its .nemir section, what a later late-bound compilation (a script
+// compiled by the embedded compiler, or any compilation referencing it) needs to continue from it: the compiled Nitra
+// grammar image with a mark trace of every grammar declaration, its macros, and the members those macros use.
+// See doc/CONTINUATION.md.
 using System;
 using System.IO;
 using System.Text;
