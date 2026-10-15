@@ -57,6 +57,6 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
   [legacy/NEWS](legacy/NEWS).
 
 ### License
-- The compiler, Nitra and the tools are GPL-2.0-or-later with the Nemerle Compiler Output Exception. Compiled programs are
-  not covered; compiled grammar images are. The standard library and macros stay BSD-3-Clause with their original
-  notices. See [NOTICE.md](NOTICE.md).
+- The compiler, standard macros, Nitra and the tools are GPL-2.0-or-later with the Nemerle Compiler Output Exception.
+  Compiled programs can be closed. Language extensions (macros and Nitra grammars, inline or as libraries) must be
+  published under the GPL. The standard library stays BSD-3-Clause with its original notice. See [NOTICE.md](NOTICE.md).

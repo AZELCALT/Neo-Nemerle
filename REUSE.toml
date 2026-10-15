@@ -2,7 +2,7 @@
 # Prose version: NOTICE.md. Original copyright headers inside files stay authoritative for those files.
 version = 1
 
-# Default: the compiler, Nitra (runtime, grammar, compiler, DotNetLang), scripting, language server, platform, build and tests.
+# Default: the compiler, standard macros, Nitra (runtime, grammar, compiler, DotNetLang), scripting, language server, platform, build and tests.
 [[annotations]]
 path = "**"
 precedence = "aggregate"
@@ -14,9 +14,9 @@ SPDX-FileCopyrightText = [
 ]
 SPDX-License-Identifier = "GPL-2.0-or-later AND LicenseRef-Nemerle-Output-Exception AND BSD-3-Clause"
 
-# The standard library and macros: BSD-3-Clause, not covered by the GPL.
+# The standard library ships inside users' programs: BSD-3-Clause, not covered by the GPL.
 [[annotations]]
-path = ["lib/**", "macros/**"]
+path = "lib/**"
 precedence = "aggregate"
 SPDX-FileCopyrightText = [
   "2003-2008 The University of Wroclaw",
