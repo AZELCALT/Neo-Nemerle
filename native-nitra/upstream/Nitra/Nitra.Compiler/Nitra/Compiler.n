@@ -9937,6 +9937,9 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
   {
     def inputs=SCG.List(definitions);
     def previous=ManagerClass.Instance;
+    def name="NativeGrammar_"+Guid.NewGuid().ToString("N");
+    // Nitra writes its .nitrametadata files next to the output; keep them out of the caller's directory.
+    def scratch=Path.Combine(Path.GetTempPath(),name);
     try
     {
       def directory=Path.GetDirectoryName(typeof(NativeSourceHost).Assembly.Location);
@@ -9944,8 +9947,8 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
       options.CompileToMemory=true; options.TargetIsLibrary=true; options.TargetIsSet=true;
       options.ProgressBar=false; options.ColorMessages=false; options.IgnoreConfusion=true;
       options.TargetReferenceDirectory=manager.Options.TargetReferenceDirectory;
-      def name="NativeGrammar_"+Guid.NewGuid().ToString("N");
-      options.OutputFileName=name+".dll";
+      _=Directory.CreateDirectory(scratch);
+      options.OutputFileName=Path.Combine(scratch,name+".dll");
       options.DisableExternalParsers=true;
       // The stub is the file module NativeGrammar_<guid> under the host's directory; it only carries the macro call.
       options.SourceRoot=directory;
@@ -9975,7 +9978,11 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
       GrammarAssembly=compiler.GeneratedAssembly;
       registry=SelectedRegistry(); AddBuiltins(registry); registry.Add(compiler.GeneratedAssembly);
     }
-    finally { ManagerClass.Instance=previous; }
+    finally
+    {
+      ManagerClass.Instance=previous;
+      try { when(Directory.Exists(scratch)) Directory.Delete(scratch,true) } catch { | _ => () }
+    }
   }
   static AddBuiltins(registry : SelectedRegistry) : void
   {
@@ -10011,7 +10018,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost
             Func(provider => registry.Create("NitraSyntax.Start",provider,selected.Root) :> NitraSyntaxParseTree.Start));
         }
       | _ =>
-        when(manager.Options.OutputFileName.StartsWith("NativeGrammar_",StringComparison.Ordinal))
+        when(Path.GetFileName(manager.Options.OutputFileName).StartsWith("NativeGrammar_",StringComparison.Ordinal))
           throw InvalidOperationException("native source inputs were not retained by the grammar compilation");
     }
   }
