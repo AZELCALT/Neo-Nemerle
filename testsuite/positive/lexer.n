@@ -14,8 +14,6 @@ class A {
   }
 }
   
-Main() : void
-{
     def @def = 3;
     System.Console.WriteLine (@def +-+ @def);
     System.Console.WriteLine (@"foo\nbar\\\\");
@@ -26,9 +24,6 @@ Main() : void
     _ = "bla bla $_sdff df"; // W: occurs
     _ = "bla bla \$dddf sd";
 
-    mutable x = "foo";
-    x = "bar";
-}
 
 /*
 
@@ -42,3 +37,7 @@ this Q char is f p aaaa rsa unicode
 single P char
 END-OUTPUT
 */
+
+    // important, test case when string literal is last in file
+    mutable x = "foo";
+    x = "bar";

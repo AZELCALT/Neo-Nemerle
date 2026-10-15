@@ -44,10 +44,7 @@ class Increment
   }
 }
 
-Main() : void
-{
-  Increment.Run();
-}
+Increment.Run();
 
 
 /*

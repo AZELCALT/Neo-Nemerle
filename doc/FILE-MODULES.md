@@ -21,6 +21,9 @@ mask helpers { public Two() : int { 2 } }   // a named group inside the file
   either: `util/other.n` reaches its sibling as `util.text`, never as `text`.
 - **No `namespace` blocks and no `partial`.** A type lives in exactly one file.
 - **Groups inside a file use `mask`.**
+- **Top-level statements are the file's `Main`.** Statements written at file level, in source order, become
+  `public Main() : void` of the module, as in classic Nemerle and C#. Members may sit between them; a statement's
+  `def`/`mutable` locals are locals of `Main`. `mutable x : T ...` is a field; `mutable x = ...` without a type is a local.
 - **No member has its file's name.** The file is a class, and as in C# (CS0542) a member cannot have the name
   of its enclosing type: `typer.n` may hold `class Typer`, but `Typer.n` may not.
 - **A file may not sit beside a directory of the same name** (`a.n` with `a/b.n`). The file would be a type and

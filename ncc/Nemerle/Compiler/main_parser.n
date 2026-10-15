@@ -386,6 +386,9 @@ using Nemerle.Compiler.Utility;
         def fileEnv = lex.Manager.FileModuleRegistry.Environment(lex.Location.FileIndex);
         def fileParser = MainParser(fileEnv);
         def members : SCG.List[ClassMember] = SCG.List();
+        // Top-level statements, in source order, become the module's Main (as in classic Nemerle and C#).
+        def statements : SCG.List[PExpr] = SCG.List();
+        mutable statementsLocation = Location.Default;
         while (topstream != null)
         {
           fileParser.eat_assembly_attributes(topstream);
@@ -394,14 +397,26 @@ using Nemerle.Compiler.Utility;
             | Token.Using(newEnv, _, _) => fileParser.env = newEnv;
             | Token.Namespace => () // already diagnosed by the preparser
             | null => ()
-            | _ =>
+            | token =>
               def next = topstream.Next;
               topstream.Next = null;
-              try { members.AddRange(fileParser.ParseClassMembers(topstream, "module")); }
+              try
+              {
+                if (IsMemberStart(token, false))
+                  members.AddRange(fileParser.ParseClassMembers(topstream, "module"));
+                else
+                {
+                  when (statements.Count == 0) statementsLocation = topstream.Location;
+                  statements.AddRange(fileParser.parse_expr_sequence(topstream));
+                }
+              }
               finally { topstream.Next = next; }
           }
           topstream = topstream.Next :> Token.LooseGroup;
         }
+        when (statements.Count > 0)
+          members.Add(Nemerle.Compiler.UtilMacros.locate(statementsLocation,
+            <[ decl: public Main() : void { ..$(statements.NToList()) } ]>));
         foreach (member when !(member is ClassMember.TypeDeclaration) in members)
           when (member.modifiers != null) member.modifiers.mods |= NemerleModifiers.Static;
         def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
@@ -455,6 +470,36 @@ using Nemerle.Compiler.Utility;
       res
     }
     
+    /// True when a top-level group starts a member declaration rather than a statement. In a script `mutable x = 1`
+    /// is a field; in a file module it is a statement of Main unless it names a type (`mutable x : int`).
+    static IsMemberStart(token : Token, script : bool) : bool
+    {
+      match (token)
+      {
+        | Token.Keyword("mutable") when !script =>
+          match (token.Next) { | Token.Identifier as name => name.Next is Token.Operator(":") | _ => false }
+        | Token.Keyword(key) =>
+          ["public", "private", "internal", "protected", "static", "mutable", "virtual", "override",
+           "class", "variant", "interface", "struct", "enum", "delegate", "mask", "macro", "module", "abstract", "sealed"].Contains(key);
+        | Token.SquareGroup => true;
+        | Token.Identifier("type") => true;
+        | Token.Identifier =>
+          match (token.Next)
+          {
+            | Token.Operator(":") => true;
+            | Token.RoundGroup as round => round.Next is Token.Operator(":") || round.Next is Token.BracesGroup;
+            | Token.SquareGroup as typeParameters =>
+              match (typeParameters.Next)
+              {
+                | Token.RoundGroup as round => round.Next is Token.Operator(":") || round.Next is Token.BracesGroup;
+                | _ => false;
+              }
+            | _ => false;
+          }
+        | _ => false;
+      }
+    }
+
     static ParseScript(lex : LexerBase, mutable groups : Token.LooseGroup) : list[TopDeclaration]
     {
       def manager = lex.Manager;
@@ -658,31 +703,6 @@ using Nemerle.Compiler.Utility;
           | _ => expressions.Add(expression);
         }
       }
-      def isMember(token : Token) : bool
-      {
-        match (token)
-        {
-          | Token.Keyword(key) =>
-            ["public", "private", "internal", "protected", "static", "mutable", "virtual", "override",
-             "class", "variant", "interface", "struct", "enum", "delegate", "mask", "macro", "module", "abstract", "sealed"].Contains(key);
-          | Token.SquareGroup => true;
-          | Token.Identifier("type") => true;
-          | Token.Identifier =>
-            match (token.Next)
-            {
-              | Token.Operator(":") => true;
-              | Token.RoundGroup as round => round.Next is Token.Operator(":") || round.Next is Token.BracesGroup;
-              | Token.SquareGroup as typeParameters =>
-                match (typeParameters.Next)
-                {
-                  | Token.RoundGroup as round => round.Next is Token.Operator(":") || round.Next is Token.BracesGroup;
-                  | _ => false;
-                }
-              | _ => false;
-            }
-          | _ => false;
-        }
-      }
       while (groups != null)
       {
         parser.eat_assembly_attributes(groups);
@@ -695,7 +715,7 @@ using Nemerle.Compiler.Utility;
             | Token.Using(newEnv, _, _) => parser.env = GlobalEnv(newEnv, ["mask"]);
             | Token.Namespace => Message.Error(groups.Location, "Namespaces are not allowed in scripts; use file qualification and masks");
             | null => ();
-            | token when isMember(token) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
+            | token when IsMemberStart(token, true) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
             | _ => foreach (expression in parser.parse_expr_sequence(groups)) addExpression(expression);
           }
         }
