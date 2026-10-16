@@ -34,6 +34,10 @@ public sealed class NitraSourceConfiguration
   /// Optional: supplies the native semantic host for a set of grammar definitions (an editor caches hosts by grammar
   /// text this way). Null: the host is loaded and initialized for every compilation (NitraSourceSession.CreateNativeHost).
   public mutable ProvideHost : Func[ManagerClass,SCG.List[NitraDocument],INitraNativeSourceHost];
+  /// Optional, for embedding hosts: an assignable Nemerle expression (such as a static field) that receives the value
+  /// of each top-level space instead of discarding it. A program reads a space through scopes and dials; a host that
+  /// tests a grammar's mapping reads the value here.
+  public mutable SpaceValueTarget : string;
   public this() { CreateContext=null; }
   public this(createContext : Func[Typer,string,NitraCompilationContext])
   {
@@ -188,6 +192,15 @@ internal sealed class NitraSourceSession
         }
         else if(!t.Quoted && previous!="." && t.Text=="space" && IsBlockHeader(text,file,t.Start,"space"))
         {
+          // a space is a top-level declaration of the file: it talks to the program through scopes and dials, not as
+          // a value inside a function, type or expression
+          unless(depth==0 && (previous=="" || previous==";" || previous=="}" || previous=="]" || previous=="grammar"
+                              || previous=="scope" || previous=="space" || previous=="runtime" || previous=="compile"))
+          {
+            r.Pos=t.Start; r.Reset();
+            r.Fail(if(depth>0) "a space must be at the top level of the file, not inside a function or type; use scope bindings and dials to communicate with it"
+                   else "a space is a top-level declaration, not an expression; read its results through scope bindings and dials");
+          }
           def z=NitraSourceZone(); z.Id=zones.Count; z.File=source.FileIndex; z.Start=t.Start; z.Source=text;
           if(r.Eat("(")) { z.Names.Add(r.Name()); while(r.Eat(",")) z.Names.Add(r.Name()); r.Need(")"); }
           else unless(r.Is("{") || r.Is("[")) z.Names.Add(r.Name());
@@ -195,7 +208,7 @@ internal sealed class NitraSourceSession
           when(r.Eat("[")) { z.Scopes.Add(r.Name()); while(r.Eat(",")) z.Scopes.Add(r.Name()); r.Need("]"); }
           z.FileOwner=FileOwner(source.FileIndex);
           def block=r.Block(); z.Body=block.Start+1; z.End=block.End-1; zones.Add(z);
-          Blank(chars,t.Start,block.End); Insert(chars,t.Start,block.End,array["__g","(",z.Id.ToString(),")"]);
+          Blank(chars,t.Start,block.End); Insert(chars,t.Start,block.End,array["__g","(",z.Id.ToString(),")",";"]);
         }
         else if(!t.Quoted && previous!="." && t.Text=="scope" && depth==0 && !r.Is("."))
         {
@@ -215,6 +228,17 @@ internal sealed class NitraSourceSession
       foreach(path in manager.ContinueFrom)
       {
         mutable store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
+        // shared scopes come first: they are plain bindings, valid whatever compiler wrote them
+        when(store!=null)
+          foreach(scope in store.Scopes)
+          {
+            def shared=configuration.Dialects.RegisterScope(scope.Name);
+            foreach(binding in scope.Bindings)
+            {
+              def bound=shared.Register(binding.Name,NitraDialectType(binding.Type),Location.Default);
+              when(binding.Value!=null) bound.Value=Nemerle.Compiler.main_parser.MainParser.ParseExpr(manager.CoreEnv,binding.Value,Location.Default,false);
+            }
+          }
         // a grammar image is bound to the compiler and Nitra build that made it: another build's images are not used
         def version=typeof(ManagerClass).Assembly.GetName().Version.ToString();
         when(store!=null && store.GrammarImage!=null && store.CompilerVersion!=version)
@@ -298,20 +322,41 @@ internal sealed class NitraSourceSession
     }
     foreach(z in zones)
     {
-      def selected=SCG.List.[string]();
+      def documents=SCG.List(NitraSyntax.BaselineDefinitions()); foreach(d in definitions.Values) documents.Add(d);
+      // the modules of the selected grammars and the start rules among them
+      def prepare(names : SCG.List[string]) : SCG.List[string]*NitraPreparedGrammar*SCG.List[string]
+      {
+        def modules=SCG.List.[string]();
+        foreach(name in names)
+        {
+          unless(definitions.ContainsKey(name)) throw ArgumentException("unknown source grammar: "+name);
+          if(nativeHost!=null) modules.AddRange(nativeHost.Modules(name));
+          else foreach(m in definitions[name].Modules) modules.Add(m.Name);
+        }
+        def grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules);
+        def starts=SCG.List.[string]();
+        foreach(rule in grammar.StartRules) foreach(mod in modules)
+          when(rule.StartsWith(mod+".",StringComparison.Ordinal) && !starts.Contains(rule)) starts.Add(rule);
+        (modules,grammar,starts)
+      }
+      mutable selected=SCG.List.[string]();
       if(z.Names.Count==0) foreach(pair in owners) when(pair.Value==z.File) selected.Add(pair.Key);
       else selected.AddRange(z.Names);
-      when(selected.Count==0) throw ArgumentException("space has no selected source grammars");
-      def documents=SCG.List(NitraSyntax.BaselineDefinitions()); foreach(d in definitions.Values) documents.Add(d);
-      def modules=SCG.List.[string]();
-      foreach(name in selected)
+      mutable prepared=if(selected.Count==0) (SCG.List(),null,SCG.List()) else prepare(selected);
+      // a plain space looks across grammars: when the file's own grammars give no single start rule, it uses every
+      // grammar it can see (other files, continued binaries), so their rules combine in one space
+      when(z.Names.Count==0)
       {
-        unless(definitions.ContainsKey(name)) throw ArgumentException("unknown source grammar: "+name);
-        // Cross-file grammar visibility must be explicitly selected.
-        if(nativeHost!=null) modules.AddRange(nativeHost.Modules(name));
-        else foreach(m in definitions[name].Modules) modules.Add(m.Name);
+        def (_,_,starts)=prepared;
+        unless(starts.Count==1)
+        {
+          def all=SCG.List(definitions.Keys);
+          when(all.Count>selected.Count) { selected=all; prepared=prepare(all); }
+        }
       }
-      z.Grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules);
+      when(selected.Count==0) throw ArgumentException("space has no selected source grammars");
+      def (modules,grammar,starts)=prepared;
+      z.Grammar=grammar;
       z.Owner=String.Join(",",selected.ToArray()); z.Dialect=selected[0];
       foreach(dialect in selected)
       {
@@ -319,10 +364,10 @@ internal sealed class NitraSourceSession
         configuration.Dialects.AddSpace(space);
         when(z.Alias!=null) configuration.Dialects.AddAlias(dialect,z.FileOwner+"."+z.Alias,space);
       }
-      def starts=SCG.List.[string]();
-      foreach(rule in z.Grammar.StartRules) foreach(mod in modules)
-        when(rule.StartsWith(mod+".",StringComparison.Ordinal) && !starts.Contains(rule)) starts.Add(rule);
-      unless(starts.Count==1) throw ArgumentException("source space requires exactly one selected StartRule");
+      _=modules;
+      unless(starts.Count==1)
+        throw ArgumentException(if(starts.Count==0) "source space requires exactly one selected StartRule"
+                                else "source space requires exactly one selected StartRule; found "+String.Join(", ",starts.ToArray())+" (name one: space G { ... })");
       z.Rule=starts[0];
     }
     when(configuration.ConfigureDialects!=null) configuration.ConfigureDialects.Invoke(configuration.Dialects);
@@ -448,7 +493,8 @@ internal sealed class NitraSourceSession
       def context=NitraDialectContext(configuration.Dialects,configuration.Dialects.Space(z.Dialect,z.FileOwner),typer,location);
       foreach(name in z.Scopes) _=context.Scope(name);
       def previous=NitraDialectContext.Active;
-      try { NitraDialectContext.Active=context; return nativeHost.Expand(z.Rule,selected.Root,typer,location,context); }
+      // a space stands as a top-level statement: its own value is discarded
+      try { NitraDialectContext.Active=context; return Statement(typer,nativeHost.Expand(z.Rule,selected.Root,typer,location,context),location); }
       finally { NitraDialectContext.Active=previous; }
     }
     def context=configuration.CreateContext.Invoke(typer,z.Owner);
@@ -456,7 +502,12 @@ internal sealed class NitraSourceSession
     context.Location=location;
     def compiled=NitraCompilation.Compile(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),context,configuration.ResolveStructure);
     unless(compiled.Success) { foreach(message in compiled.Diagnostics) Message.Error(context.Location,message); return PExpr.Error(context.Location); }
-    compiled.Expression
+    Statement(typer,compiled.Expression,context.Location)
+  }
+  private Statement(typer : Typer, value : PExpr, location : Location) : PExpr
+  {
+    if(value is PExpr.Error || String.IsNullOrEmpty(configuration.SpaceValueTarget)) <[ _ = $value ]>
+    else { def target=Nemerle.Compiler.main_parser.MainParser.ParseExpr(typer.Env,configuration.SpaceValueTarget,location,false); <[ $target = $value ]> }
   }
 
   // ---- merged from parsing/NitraSourceBoundaries.n ----
@@ -529,7 +580,9 @@ internal sealed class NitraSourceSession
           if(boundary.Kind=="set")
           {
             def end=EndOfValue(text,r.File,r.Pos);
-            edits.Add(NitraBoundaryEdit(t.Start,r.Pos,"__b("+id.ToString()+","));
+            // the closing `)` is inserted after the value: the prefix keeps one character free for it, so later
+            // positions (diagnostics, editor tokens) stay where they are in the source
+            def prefix=NitraBoundaryEdit(t.Start,r.Pos,"__b("+id.ToString()+","); prefix.Reserve=1; edits.Add(prefix);
             edits.Add(NitraBoundaryEdit(end,end,")"));
           }
           else
@@ -550,7 +603,7 @@ internal sealed class NitraSourceSession
       def original=text.Substring(edit.Start,edit.End-edit.Start);
       mutable replacement=edit.Text;
       foreach(c in original) when(c=='\n' || c=='\r') replacement=replacement+c.ToString();
-      when(replacement.Length<original.Length) replacement=replacement+string(' ',original.Length-replacement.Length);
+      when(replacement.Length<original.Length-edit.Reserve) replacement=replacement+string(' ',original.Length-edit.Reserve-replacement.Length);
       result=result.Substring(0,edit.Start)+replacement+result.Substring(edit.End);
     }
     result

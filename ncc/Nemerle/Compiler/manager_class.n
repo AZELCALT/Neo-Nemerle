@@ -232,6 +232,9 @@ using Nemerle.Compiler.XmlDump;
     public Continuation : Nemerle.Compiler.continuation.ContinuationStore { get; private set; }
     /// The binaries this compilation continues from: -continue entries and every reference with a continuation section.
     public ContinueFrom : list[string] { get; private set; }
+    /// Whether a binary continued from carries grammars or shared scopes: a source that only uses scopes or dials
+    /// (a plugin script) then takes the Nitra path although it has no grammar or space block of its own.
+    public ContinuesSpaces : bool { get; private set; }
 
     public UserData : SC.IDictionary
     {
@@ -568,6 +571,7 @@ using Nemerle.Compiler.XmlDump;
       foreach (path in Options.ContinueFrom) add(path);
       foreach (path when IO.File.Exists(path) && Nemerle.Platform.ClrCompilerSection.HasSection(path) in Options.ReferencedLibraries) add(path);
       ContinueFrom = NList.FromArray(sources.ToArray());
+      ContinuesSpaces = false;
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)
@@ -662,6 +666,8 @@ using Nemerle.Compiler.XmlDump;
             def store = Nemerle.Compiler.continuation.ContinuationStore.FromImage(IO.File.ReadAllBytes(path));
             when (store != null && store.Macros.Count > 0)
               LibrariesManager.LoadPluginsFrom(IO.Path.GetFullPath(path), loadMacros = true, loadParsers = false);
+            when (store != null && (store.GrammarImage != null || store.Grammars.Count > 0 || store.Scopes.Count > 0))
+              ContinuesSpaces = true;
           });
 
         tryEx(() =>

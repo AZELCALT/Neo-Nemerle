@@ -83,6 +83,8 @@ public sealed class NitraSharedScope : NitraSemanticScope
   public Get(name : string) : NitraScopeBinding
   { unless(bindings.ContainsKey(name)) throw ArgumentException("unknown scope binding: scope."+Name+"."+name); bindings[name] }
   public Set(name : string, value : object) : void { Get(name).Value=value; }
+  /// The bindings in registration order (the continuation section stores them).
+  public Bindings : SCG.IEnumerable[NitraScopeBinding] { get { bindings.Values } }
   public override Lookup(name : string) : SCG.List[NitraSemanticSymbol]
   {
     def result=SCG.List.[NitraSemanticSymbol]();
@@ -130,6 +132,8 @@ public sealed class NitraDialectRegistry
   { unless(scopes.ContainsKey(name)) scopes.Add(name,NitraSharedScope(name)); scopes[name] }
   public Scope(name : string) : NitraSharedScope
   { unless(scopes.ContainsKey(name)) throw ArgumentException("unknown shared scope: "+name); scopes[name] }
+  /// Every shared scope of the compilation (the continuation section stores them).
+  public Scopes : SCG.IEnumerable[NitraSharedScope] { get { scopes.Values } }
 }
 /// Current is dynamically scoped to a mapping/resolver invocation, not a global registry.
 public sealed class NitraDialectContext

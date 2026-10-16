@@ -27,8 +27,8 @@ hello, grace
 
 Arguments after `--` reach the script as `args`.
 
-A script is a file like any other: it can declare functions, classes, `grammar`s and `space`s. Its top-level code is
-what runs.
+A script is a file like any other: it can declare functions, classes, `grammar`s and `space`s. Its top-level code,
+spaces included, is what runs.
 
 ## Declaring dependencies
 
@@ -61,7 +61,7 @@ grammar Words
   syntax module W
   {
     using Nitra.Core;
-    [StartRule] syntax Start = "answer" { map PExpr = <[ 42 ]>; }
+    [StartRule] syntax Start = "answer" { map PExpr = <[ System.Console.WriteLine(42) ]>; }
   }
 }
 ```
@@ -70,11 +70,92 @@ grammar Words
 [assembly: DependsOn("tools.dll")]
 using tools;
 System.Console.WriteLine(twice(20));
-System.Console.WriteLine(space Words { answer })
+space Words { answer }
 ```
 
 ```text
 40
+42
+```
+
+## Scripts as plugins
+
+An application that runs scripts can give them its own languages. Its grammars and its scopes are stored in its
+section, so a script that depends on it gets both with no grammar or `scope` declaration of its own. The script reads
+the application's scope bindings and calls into its space through a dial. A file that uses only scopes or dials,
+with no space at all, is looked up the same way.
+
+The dial's resolver is a library of its own, as in [Grammars and spaces](10-grammars.md):
+
+```nemerle,lib=appres
+// ncc: -r:{toolchain}/Nemerle.Compiler.dll
+// file: appres.n
+using System;
+using Nemerle.Compiler.NitraDialectServices;
+using Nemerle.Compiler.Parsetree;
+
+public class Resolver : INitraDialectResolver
+{
+  public ResolveType(name : string, _context : NitraDialectContext) : NitraDialectType
+  {
+    if (name == "number") NitraDialectType(name) else null
+  }
+  public Resolve(request : NitraDialectRequest) : NitraDialectResolution
+  {
+    if (request.Name != "twice") null
+    else
+    {
+      def answer = NitraDialectResolution();
+      answer.Signatures.Add(NitraDialectSignature("twice", NitraDialectType("number"), array[NitraDialectType("number")]));
+      answer.Lower = Func(r => <[ $(r.Arguments[0]) * 2 ]>);
+      answer
+    }
+  }
+}
+
+public Create() : INitraDialectResolver { Resolver() }
+```
+
+The application defines the grammar and the scope, with a value for its plugins:
+
+```nemerle,lib=app
+// ncc: -r:{chapter}/appres.dll -r:{toolchain}/Nemerle.Compiler.dll
+// file: app.n
+scope A;
+grammar G
+{
+  using Nemerle.Compiler.NitraDialectServices;
+  using Nemerle.Compiler.Parsetree;
+  syntax module M
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = "go"
+    {
+      map PExpr = {
+        def c = NitraDialectContext.Current;
+        when (c.Space.Resolver == null) c.RegisterResolver(appres.Create());
+        <[ () ]>
+      };
+    }
+  }
+}
+
+scope.A.registery("value", type("number"));
+scope.A.value = 21;
+```
+
+A plugin script:
+
+```nemerle,script
+[assembly: DependsOn("app.dll")]
+[assembly: DependsOn("appres.dll")]
+space G as Plugin [A] { go }
+System.Console.WriteLine(scope.A.value);
+System.Console.WriteLine(G:.main.Plugin::twice(scope.A.value));
+```
+
+```text
+21
 42
 ```
 

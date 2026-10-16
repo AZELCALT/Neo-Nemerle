@@ -21,9 +21,9 @@ static class NitraAutomaticSourceChecks
                 CompileToMemory = true, TargetIsLibrary = true, TargetIsSet = true,
                 ProgressBar = false, ColorMessages = false, IgnoreConfusion = true,
                 OutputFileName = name + ".dll", TargetReferenceDirectory = references,
-                NitraSources = new NitraSourceConfiguration(true), DisableExternalParsers = true
+                NitraSources = new NitraSourceConfiguration(true) { SpaceValueTarget = TopLevelSpaces.Target }, DisableExternalParsers = true
             };
-            var code = grammar + "\npublic class Example { public static Run() : int { " + body + " } }";
+            var code = TopLevelSpaces.Lift(grammar + "\npublic class Example { public static Run() : int { " + body + " } }");
             options.Sources = NList.FromArray<ISource>(new ISource[] {
                 new StringSource(Location.GetFileIndex(Path.Combine(root, name + ".n")), code)
             });
@@ -34,6 +34,7 @@ static class NitraAutomaticSourceChecks
             Check((errors == 0) == expected.HasValue, name + ": " + messages);
             if (expected.HasValue)
             {
+                TopLevelSpaces.RunFile(compiler.GeneratedAssembly, name);
                 var method = compiler.GeneratedAssembly.GetTypes().Single(t => t.Name == "Example").GetMethod("Run");
                 Check((int)method.Invoke(null, null) == expected.Value, name + ": wrong result");
             }

@@ -40,6 +40,10 @@ The payload of `.nemir` is a container (`ncc/Nemerle/Compiler/continuation.n`, `
   2. **macro:** for every macro the binary defines, its name, its CLR class and the source span of its definition.
   3. **type:** for the *relevant set* only, meaning modules that define macros: the members that CLR visibility hides
      from a referencing compilation (internal ones). Everything else comes from ordinary .NET metadata.
+  4. **scope:** the binary's shared scopes (`scope A;`), stored next to its grammars. For each binding: its name, its
+     dial type token, and its value as Nemerle expression text (or none). A binding holding a dial reference points
+     into the binary's own spaces and is not stored. Scopes are plain data, so they are read whatever compiler wrote
+     them.
 
 The section is appended to the finished image, after the Mono.Cecil metadata rewrite, which would drop it. The file is
 then strong-name signed again (`platform/ClrCompilerSection.cs`). The PE header must have room for one more section
@@ -51,6 +55,9 @@ no section.
 | Situation | Result |
 |---|---|
 | A `space` uses a stored grammar that the source does not define | The stored image is loaded and no grammar is compiled. |
+| The binary stores scopes | They are registered with their bindings and values before the source's spaces are read, so `scope.A.x` and `space G [A]` work with no `scope` declaration. |
+| A source has no space but uses `scope.` or a dial (`G:.file.space::m`), and a binary stores grammars or scopes | The source still takes the grammar path, so a plugin script reaches the host's scopes. |
+| A plain `space { ... }` in a file without its own grammars | It selects every visible grammar, the stored ones included. |
 | The source redefines a stored grammar, unchanged up to layout | `reuse`: the stored image is used as is. |
 | Only alternatives of extensible rules changed, were added or removed | `patch`: just those alternatives are compiled, as `extend syntax` blocks of a patch module over the stored module, and the stale stored alternatives are dropped. |
 | Anything else (a rule, a module, `using`s, a precedence group) | `fallback`: the grammar is compiled in full. |

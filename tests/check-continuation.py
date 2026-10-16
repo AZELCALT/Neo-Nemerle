@@ -16,7 +16,10 @@ E6: a host macro that expands to an internal helper of its module works in a con
 S:  a script that depends on such a host library (DependsOn) continues from it by default: it uses the host's
     grammar in `space`, its macros and the internal helper a macro expands to, with no grammar compile of its own.
 E4: redefining the stored 120-rule grammar with only alternative edits compiles a patch grammar of just those
-    alternatives over the stored image; other edits fall back to the full compile; results are identical."""
+    alternatives over the stored image; other edits fall back to the full compile; results are identical.
+P:  spaces are top-level logical files reached through scopes and dials: a host's scope bindings travel in the section
+    (scope subsection), a plugin script with no grammar (or no space at all) uses them and the host's grammar, a plain
+    space looks across the visible grammars, and a space inside a function or used as an expression is rejected."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
 
 p = argparse.ArgumentParser()
@@ -35,7 +38,7 @@ key = repo / 'misc/keys/Nemerle.snk'
 
 
 def grammar_program(rules):
-    """A grammar with `rules` alternatives of one extensible rule, and a Main that expands the last one."""
+    """A grammar with `rules` alternatives of one extensible rule, and a top-level space that prints the last one."""
     alternatives = '\n'.join('      | A%d = "k%d" { map PExpr = <[ %d ]>; }' % (i, i, i) for i in range(rules))
     return '''grammar Demo
 {
@@ -43,7 +46,7 @@ def grammar_program(rules):
   syntax module Query
   {
     using Nitra.Core;
-    [StartRule] syntax Input = Item { map PExpr { Item } }
+    [StartRule] syntax Input = Item { map PExpr = <[ System.Console.WriteLine($(this.Item.GetAst())) ]>; }
     syntax Item
     {
       map PExpr;
@@ -51,11 +54,65 @@ def grammar_program(rules):
     }
   }
 }
-module Program
-{
-  Main() : void { System.Console.WriteLine(space Demo { k%d }); }
-}
+space Demo { k%d }
 ''' % (alternatives, rules - 1)
+
+
+RESOLVER = """using System;
+using Nemerle.Compiler.NitraDialectServices;
+using Nemerle.Compiler.Parsetree;
+
+public class Resolver : INitraDialectResolver
+{
+  public ResolveType(name : string, _context : NitraDialectContext) : NitraDialectType
+  {
+    if (name == "number") NitraDialectType(name) else null
+  }
+  public Resolve(request : NitraDialectRequest) : NitraDialectResolution
+  {
+    match (request.Name)
+    {
+      | "twice" =>
+        def answer = NitraDialectResolution();
+        answer.Signatures.Add(NitraDialectSignature("twice", NitraDialectType("number"), array[NitraDialectType("number")]));
+        answer.Lower = Func(r => <[ $(r.Arguments[0]) * 2 ]>);
+        answer
+      | "shared" =>
+        def answer = NitraDialectResolution();
+        answer.Signatures.Add(NitraDialectSignature("shared", NitraDialectType("number"), array[]));
+        answer.Lower = Func(r => r.Context.Scope("A").Get("value").Value :> PExpr);
+        answer
+      | _ => null
+    }
+  }
+}
+
+public Create() : INitraDialectResolver { Resolver() }
+"""
+
+SPACE_HOST = """scope A;
+grammar G
+{
+  using Nemerle.Compiler.NitraDialectServices;
+  using Nemerle.Compiler.Parsetree;
+  syntax module M
+  {
+    using Nitra.Core;
+    [StartRule] syntax Start = "go"
+    {
+      map PExpr = {
+        def c = NitraDialectContext.Current;
+        when (c.Space.Resolver == null) c.RegisterResolver(res.Create());
+        <[ () ]>
+      };
+    }
+  }
+}
+
+scope.A.registery("value", type("number"));
+scope.A.value = 21;
+space G [A] { go }
+"""
 
 
 def run(command, **kw):
@@ -117,7 +174,7 @@ def space_program(name, expression, expected, host):
     root = w / name
     root.mkdir()
     source = root / 'use.n'
-    source.write_text('module Program\n{\n  Main() : void { System.Console.WriteLine(space Demo { %s }); }\n}\n' % expression)
+    source.write_text('space Demo { %s }\n' % expression)
     started = time.time()
     run([T / 'ncc', source, '-source-root:' + str(root), '-out:' + str(root / 'use.exe'), '-no-color',
          '-continue:' + str(host)])
@@ -274,7 +331,7 @@ grammar Demo
   syntax module Query
   {
     using Nitra.Core;
-    [StartRule] syntax Input = Item { map PExpr { Item } }
+    [StartRule] syntax Input = Item { map PExpr = <[ System.Console.WriteLine($(this.Item.GetAst())) ]>; }
     syntax Item
     {
       map PExpr;
@@ -301,7 +358,7 @@ internal Helper(x : int) : int { x * 3 }
     script = w / 'script'
     script.mkdir()
     shutil.copy2(lib / 'host.dll', script / 'host.dll')
-    (script / 'use.n').write_text('[assembly: DependsOn("host.dll")]\nusing host;\nSystem.Console.WriteLine(space Demo { k0 });\n'
+    (script / 'use.n').write_text('[assembly: DependsOn("host.dll")]\nusing host;\nspace Demo { k0 }\n'
                                   'System.Console.WriteLine(twice(21));\nSystem.Console.WriteLine(tripled(14));\n')
     started = time.time()
     output = run([T / 'nscript', 'run', script / 'use.n', '--no-cache'], cwd=script).stdout.split()
@@ -312,19 +369,71 @@ internal Helper(x : int) : int { x * 3 }
     # the same through ncc: a plain reference is continued from
     prog = w / 'refprogram'
     prog.mkdir()
-    (prog / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(space Demo { k1 } + twice(20)); }\n}\n')
+    (prog / 'use.n').write_text('using host;\n\nspace Demo { k1 }\nSystem.Console.WriteLine(twice(20));\n')
     run([T / 'ncc', prog / 'use.n', '-source-root:' + str(prog), '-out:' + str(prog / 'use.exe'), '-no-color', '-r:' + str(lib / 'host.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', prog / 'use.runtimeconfig.json')
     shutil.copy2(lib / 'host.dll', prog / 'host.dll')
-    if run(['dotnet', prog / 'use.exe'], cwd=prog).stdout.strip() != '42':
+    if run(['dotnet', prog / 'use.exe'], cwd=prog).stdout.split() != ['2', '40']:
         raise SystemExit('FAILED: an ncc program referencing the host library does not continue from it')
     print('PASS: S an ncc program that references the host library (-r) uses its grammar and macro', flush=True)
     # a compiled script with a grammar carries the section, so it can be continued from in turn
     own = w / 'scriptgrammar'
     own.mkdir()
-    (own / 'g.n').write_text(grammar_program(3).split('module Program')[0] + 'System.Console.WriteLine(space Demo { k2 });\n')
+    (own / 'g.n').write_text(grammar_program(3))
     run([T / 'nscript', 'compile', own / 'g.n', own / 'g.dll', '--no-cache'], cwd=own)
     if reader(own / 'g.dll', T, 'Demo').find('PASS') < 0:
         raise SystemExit('FAILED: nscript compile output has no continuation section')
     print('PASS: S nscript compile of a script with a grammar writes the continuation section', flush=True)
+
+if a.stage == 'E6':
+    # spaces are top-level logical files; scopes (shared memory) and dials (calls) connect them to the program, and the
+    # scopes travel in the section next to the grammars. A resolver lives in its own library: the grammar's nested
+    # compile sees only referenced binaries.
+    res = w / 'res'
+    res.mkdir()
+    (res / 'res.n').write_text(RESOLVER)
+    run([T / 'ncc', res / 'res.n', '-source-root:' + str(res), '-target:library', '-out:' + str(res / 'res.dll'), '-no-color',
+         '-r:' + str(T / 'Nemerle.Compiler.dll')])
+    shost = w / 'spacehost'
+    shost.mkdir()
+    shutil.copy2(res / 'res.dll', shost / 'res.dll')
+    (shost / 'host.n').write_text(SPACE_HOST)
+    run([T / 'ncc', shost / 'host.n', '-source-root:' + str(shost), '-target:library', '-out:' + str(shost / 'host.dll'),
+         '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(shost / 'res.dll')])
+    def plugin(name, text, expected):
+        d = w / name
+        d.mkdir()
+        for f in ('host.dll', 'res.dll'):
+            shutil.copy2(shost / f, d / f)
+        (d / 'use.n').write_text('[assembly: DependsOn("host.dll")]\n[assembly: DependsOn("res.dll")]\n' + text)
+        output = run([T / 'nscript', 'run', d / 'use.n', '--no-cache'], cwd=d).stdout.split()
+        if output != expected:
+            raise SystemExit('FAILED: %s printed %r, expected %r' % (name, output, expected))
+    plugin('scope-only', 'System.Console.WriteLine(scope.A.value);\n', ['21'])
+    print('PASS: P a script with no space reads a host scope binding from the section (scope subsection, deeper lookup)', flush=True)
+    plugin('plugin-space', 'space G [A] { go }\nSystem.Console.WriteLine(G:.use::twice(scope.A.value));\n'
+                           'System.Console.WriteLine(G:.use::shared());\n', ['42', '21'])
+    plugin('plugin-alias', 'space G as Named [A] { go }\nSystem.Console.WriteLine(G:.use.Named::twice(5));\n', ['10'])
+    print('PASS: P a plugin script with no grammar uses the host grammar through space G [A] / as Name, dials and scopes', flush=True)
+    plain = w / 'plainspace'
+    plain.mkdir()
+    for f in ('host.dll', 'res.dll'):
+        shutil.copy2(shost / f, plain / f)
+    (plain / 'prog.n').write_text('space { go }\nSystem.Console.WriteLine(G:.prog::twice(4));\n')
+    run([T / 'ncc', plain / 'prog.n', '-source-root:' + str(plain), '-out:' + str(plain / 'prog.exe'), '-no-color',
+         '-r:' + str(plain / 'host.dll'), '-r:' + str(plain / 'res.dll')])
+    shutil.copy2(T / 'ncc.runtimeconfig.json', plain / 'prog.runtimeconfig.json')
+    if run(['dotnet', plain / 'prog.exe'], cwd=plain).stdout.split() != ['8']:
+        raise SystemExit('FAILED: a plain space does not look across grammars')
+    print('PASS: P a plain space with no grammar in its file selects the visible grammars (cross-grammar lookup)', flush=True)
+    for name, text in (('in-function', 'f() : void { space G { go } }\n'), ('expression', 'def x = space G { go };\n')):
+        d = w / ('reject-' + name)
+        d.mkdir()
+        shutil.copy2(shost / 'host.dll', d / 'host.dll')
+        (d / 'bad.n').write_text(text)
+        r = subprocess.run([str(T / 'ncc'), str(d / 'bad.n'), '-source-root:' + str(d), '-out:' + str(d / 'bad.exe'),
+                            '-no-color', '-r:' + str(d / 'host.dll')], capture_output=True, text=True)
+        if r.returncode == 0 or 'top-level' not in r.stdout + r.stderr and 'top level' not in r.stdout + r.stderr:
+            raise SystemExit('FAILED: a space %s is not rejected\n%s%s' % (name, r.stdout, r.stderr))
+    print('PASS: P a space inside a function or as an expression is rejected (spaces are top level)', flush=True)
 shutil.rmtree(w, ignore_errors=True)

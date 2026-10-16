@@ -212,6 +212,13 @@ public module NitraSourceScan
           }
           when(reader.Peek().Text.Length>0 && char.IsLetter(reader.Peek().Text[0]))
           { _=reader.Name(); found=reader.Is("{"); }
+          // `space G as Name [A] { ... }`: an alias and attached scopes may stand before the body
+          when(token.Text=="space" && reader.Eat("as")) { _=reader.Name(); found=reader.Is("{"); }
+          when(token.Text=="space" && reader.Is("["))
+          {
+            while(!reader.Is("]") && !reader.Is("<eof>")) _=reader.Take();
+            _=reader.Eat("]"); found=reader.Is("{");
+          }
           when(found)
           {
             mutable line=1; mutable column=1;

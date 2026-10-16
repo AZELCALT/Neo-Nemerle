@@ -38,8 +38,8 @@ grammar Steps
     syntax Item
     {
       map PExpr;
-      | Copy = "copy" { map PExpr = <[ "copying files" ]>; }
-      | Pack = "pack" { map PExpr = <[ "packing" ]>; }
+      | Copy = "copy" { map PExpr = <[ System.Console.WriteLine("copying files") ]>; }
+      | Pack = "pack" { map PExpr = <[ System.Console.WriteLine("packing") ]>; }
     }
   }
 }
@@ -72,7 +72,7 @@ lib.mkdir()
 (lib / 'buildkind.n').write_text(KIND)
 run([T / 'ncc', lib / 'buildkind.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'buildkind.dll'), '-no-color',
      '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll')])
-SCRIPT = 'Log("target " + Target);\nWriteLine(twice(21));\nWriteLine(space Steps { copy });\n'
+SCRIPT = 'Log("target " + Target);\nWriteLine(twice(21));\nspace Steps { copy }\n'
 EXPECTED = ['[build] target release', '42', 'copying files']
 
 # 1. the kind library next to the script

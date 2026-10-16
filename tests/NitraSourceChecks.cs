@@ -43,6 +43,7 @@ public static class NitraSourceChecks
     static void Compile(string root,string references,string name,string code,bool success,int expected=0,Action<NitraCompilationContext> setup=null,bool variables=false,bool inspect=false)
     {
         var previous=ManagerClass.Instance;
+        code=TopLevelSpaces.Lift(code);
         try
         {
             var options=new CompilationOptions {
@@ -56,6 +57,7 @@ public static class NitraSourceChecks
                 var ctx=variables ? VariableSupport.Context(typer,owner+".Test",Location.Default) : Support.Context(typer,owner+".Test",Location.Default);
                 setup?.Invoke(ctx); return ctx;
             },true);
+            options.NitraSources.SpaceValueTarget=TopLevelSpaces.Target;
             string path=Path.Combine(root,name+".n");
             options.Sources=NList.FromArray<ISource>(new ISource[]{new StringSource(Location.GetFileIndex(path),code)});
             var compiler=new ManagerClass(options); var messages=new StringWriter();compiler.InitOutput(messages);
@@ -70,6 +72,7 @@ public static class NitraSourceChecks
             Check((errors==0)==success,messages.ToString());
             if(success) {
                 Check(compiler.GeneratedAssembly!=null,"generated assembly");
+                TopLevelSpaces.RunFile(compiler.GeneratedAssembly,name);
                 var result=(int)compiler.GeneratedAssembly.GetTypes().Single(t=>t.Name=="Example").GetMethod("Run").Invoke(null,null);
                 Check(result==expected,"execution result");Check(calls>0,"source mapping context invoked");
             } else {

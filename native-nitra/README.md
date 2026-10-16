@@ -50,8 +50,8 @@ then compiles and executes their Nemerle output (`42`). The upstream parser is
 used only to bootstrap that fixture's definitions. This test does not establish
 automatic grammar/space hosting.
 
-See [dialect references and shared scopes](DIALECT-SCOPES.md) for the experimental
-compiler-session registry, programmable resolution, and scope API.
+See [dials and shared scopes](DIALECT-SCOPES.md) for top-level spaces, the
+compiler-session registry, programmable resolution, and the scope API.
 
 ## Automatic source hosting
 

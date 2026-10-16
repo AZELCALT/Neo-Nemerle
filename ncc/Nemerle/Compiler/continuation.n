@@ -58,6 +58,23 @@ public sealed class ContinuationType
   public Members : SCG.List[string] = SCG.List();
 }
 
+/// A shared scope (`scope A;` and its `scope.A.registery` bindings), stored next to the grammars so that a continuing
+/// compilation or script starts with the same bindings.
+public sealed class ContinuationScope
+{
+  public mutable Name : string = "";
+  public Bindings : SCG.List[ContinuationBinding] = SCG.List();
+}
+
+/// A scope binding: its name, its dial type token (resolved by the consuming dial, so it is program-wide rather than a
+/// CLR type), and its value as Nemerle expression text (null when it has none yet).
+public sealed class ContinuationBinding
+{
+  public mutable Name : string = "";
+  public mutable Type : string = "";
+  public mutable Value : string;
+}
+
 public sealed class ContinuationDiff
 {
   public Changed : SCG.List[ContinuationMark] = SCG.List();
@@ -79,6 +96,7 @@ public sealed class ContinuationStore
   static GrammarKind : byte = 1;
   static MacroKind : byte = 2;
   static TypeKind : byte = 3;
+  static ScopeKind : byte = 4;
 
   public mutable CompilerVersion : string = "";
   /// The compiled grammar image (one assembly for all grammars of the binary), uncompressed; null when none.
@@ -86,8 +104,9 @@ public sealed class ContinuationStore
   public Grammars : SCG.List[ContinuationGrammar] = SCG.List();
   public Macros : SCG.List[ContinuationMacro] = SCG.List();
   public Types : SCG.List[ContinuationType] = SCG.List();
+  public Scopes : SCG.List[ContinuationScope] = SCG.List();
 
-  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 } }
+  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 && Scopes.Count == 0 } }
 
   /// Offsets in the source text of a location (lines and columns are 1-based), or (-1, -1) when unknown.
   public static Span(text : string, location : Nemerle.Compiler.AST.Location) : int * int
@@ -278,13 +297,28 @@ public sealed class ContinuationStore
         foreach (m in t.Members) WriteInt(types, str(m));
       }
     }
+    def scopes = MemoryStream();
+    when (Scopes.Count > 0)
+    {
+      WriteInt(scopes, Scopes.Count);
+      foreach (s in Scopes)
+      {
+        WriteInt(scopes, str(s.Name)); WriteInt(scopes, s.Bindings.Count);
+        foreach (b in s.Bindings)
+        {
+          WriteInt(scopes, str(b.Name)); WriteInt(scopes, str(b.Type));
+          if (b.Value == null) WriteInt(scopes, 0) else { WriteInt(scopes, 1); WriteInt(scopes, str(b.Value)) }
+        }
+      }
+    }
     def output = MemoryStream();
     output.Write(Magic, 0, Magic.Length);
     WriteInt(output, FormatVersion);
     WriteString(output, CompilerVersion);
     WriteInt(output, strings.Count);
     foreach (s in strings) WriteString(output, s);
-    def subsections = (if (grammar.Length > 0) 1 else 0) + (if (macros.Length > 0) 1 else 0) + (if (types.Length > 0) 1 else 0);
+    def subsections = (if (grammar.Length > 0) 1 else 0) + (if (macros.Length > 0) 1 else 0) + (if (types.Length > 0) 1 else 0)
+                      + (if (scopes.Length > 0) 1 else 0);
     WriteInt(output, subsections);
     when (grammar.Length > 0)
     {
@@ -300,6 +334,11 @@ public sealed class ContinuationStore
     {
       output.WriteByte(TypeKind);
       WriteBlob(output, types.ToArray());
+    }
+    when (scopes.Length > 0)
+    {
+      output.WriteByte(ScopeKind);
+      WriteBlob(output, scopes.ToArray());
     }
     output.ToArray()
   }
@@ -357,6 +396,20 @@ public sealed class ContinuationStore
           t.TypeName = strings[payload.Int()];
           repeat (payload.Int()) t.Members.Add(strings[payload.Int()]);
           store.Types.Add(t);
+        }
+      when (kind == ScopeKind)
+        repeat (payload.Int())
+        {
+          def s = ContinuationScope();
+          s.Name = strings[payload.Int()];
+          repeat (payload.Int())
+          {
+            def b = ContinuationBinding();
+            b.Name = strings[payload.Int()]; b.Type = strings[payload.Int()];
+            b.Value = if (payload.Int() == 1) strings[payload.Int()] else null;
+            s.Bindings.Add(b);
+          }
+          store.Scopes.Add(s);
         }
       // unknown subsection kinds are skipped: newer writers may add them
     }

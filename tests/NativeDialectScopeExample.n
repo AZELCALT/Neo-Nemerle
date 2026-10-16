@@ -1,4 +1,5 @@
-// Grammar and space blocks need no option; the Integrated.* Nitra dlls must sit next to Nemerle.Compiler.dll.
+// A space is a logical file inside this file. The program and the space share scope A: the program writes `answer`,
+// the space's mapping reads it and writes `doubled` back, and the program reads that.
 scope A;
 grammar Demo
 {
@@ -10,17 +11,17 @@ grammar Demo
     [StartRule] syntax Input = "answer"
     {
       map (context : NitraDialectContext) PExpr = {
-        context.Scope("A").Get("answer").Value :> PExpr
+        def shared = context.Scope("A");
+        shared.Set("doubled", <[ $(shared.Get("answer").Value :> PExpr) * 2 ]>);
+        <[ () ]>
       };
     }
   }
 }
-module Program
-{
-  Main() : void
-  {
-    scope.A.registery("answer", type("integer"));
-    scope.A.answer = 42;
-    System.Console.WriteLine(space Demo [A] { answer });
-  }
-}
+
+scope.A.registery("answer", type("integer"));
+scope.A.registery("doubled", type("integer"));
+scope.A.answer = 21;
+space Demo [A] { answer }
+def doubled = scope.A.doubled;
+System.Console.WriteLine(doubled);

@@ -23,6 +23,8 @@ internal sealed class NitraBoundary
 internal sealed class NitraBoundaryEdit
 {
   public Start : int; public End : int; public Text : string;
+  /// Characters this edit leaves for a later insertion, so the rewritten text keeps the original length.
+  public mutable Reserve : int;
   public this(start : int, end : int, text : string) { Start=start; End=end; Text=text; }
 }
 

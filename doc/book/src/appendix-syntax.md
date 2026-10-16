@@ -17,6 +17,8 @@
 | `mask m { ... }` | named group inside a file |
 | `macro m(a) { ... }` | macro |
 | `grammar G { ... }` | Nitra grammar |
+| `space G { ... }` | top-level code in a grammar's language (a logical file) |
+| `scope A;` | a scope shared by the program and its spaces (`scope.A.x` reads a binding) |
 | `[Attr] ...` | attribute or attribute macro |
 | `using a.b;` / `using X = a.b;` | open a module or namespace / alias it |
 
@@ -38,7 +40,7 @@
 | `array[a, b]`, `array(n)` | arrays |
 | `$"text $x $(e)"` | string interpolation |
 | `<[ code ]>`, `$e` | quotation and splice (in macros) |
-| `space G { ... }` | code in a grammar's language |
+| `dial:.file.space::member(...)` | a dial: a call into a space of `file` (`G:.main.Tools::twice(2)`) |
 | `_ = e` | discard a value |
 
 ## Patterns

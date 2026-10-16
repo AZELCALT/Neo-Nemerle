@@ -39,10 +39,16 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 - New structural recognizer (flat region engine with a fast hybrid first pass), checked against upstream Nitra by a
   72-case differential.
 - Known gap: grammars are compiled with their program, and there is no reusable compiled-grammar artifact yet.
+- A `space` is a top-level logical file in a grammar's language. A space inside a function or a type, or used as an
+  expression, is an error. The program talks to its spaces through **scopes** (shared bindings, read and written by
+  both sides) and **dials** (`dial:.file.space::member(...)` calls lowered by a resolver). A plain `space { }` looks across
+  grammars: its file's own, or every visible one (other files, referenced libraries) when those don't give one start
+  rule. `NitraSourceConfiguration.SpaceValueTarget` lets an embedding host collect a space's value.
 
 ### Continuation section
 - Every output that defines grammars or macros carries a `.nemir` section with its compiled Nitra grammar (plus a
-  per-declaration mark trace), a macro index, and the internal members its macros expand to. A compilation or script
+  per-declaration mark trace), its shared scopes with their bindings, a macro index, and the internal members its
+  macros expand to. A compilation or script
   that references the binary continues from it. It uses the stored grammar in `space` without compiling it (120-rule
   grammar: 8.3 s to 1.5 s), recompiles only edited alternatives, and uses the binary's macros and their helpers. See
   [doc/CONTINUATION.md](doc/CONTINUATION.md).

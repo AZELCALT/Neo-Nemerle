@@ -67,7 +67,10 @@ public static class NitraDialectChecks
                 SourceRoot=root,
                 ReferencedLibraries=NList.FromArray(new[]{typeof(NitraDialectChecks).Assembly.Location})
             };
-            var code=grammar+"\npublic class Example { public static Run() : int { "+body+" } }";
+            // the body is the file's top-level code (a space is top level); a final expression is the result
+            int last=body.LastIndexOf(';'); string tail=body.Substring(last+1).Trim();
+            string top=tail.StartsWith("space") || tail.Length==0 ? body : body.Substring(0,last+1)+" Example.Result = "+tail+";";
+            var code=grammar+"\npublic class Example { public static mutable Result : int; public static Run() : int { Result } }\n"+top;
             var sources=new System.Collections.Generic.List<ISource>{new StringSource(Location.GetFileIndex(Path.Combine(root,name+".n")),code)};
             if(extraSources!=null) foreach(var source in extraSources) sources.Add(new StringSource(Location.GetFileIndex(Path.Combine(root,source.name+".n")),source.code));
             options.Sources=NList.FromArray(sources.ToArray());
@@ -77,6 +80,7 @@ public static class NitraDialectChecks
             Check((errors==0)==expected.HasValue,name+": "+messages);
             if(failure!=null) Check(messages.ToString().Contains(failure),name+": missing diagnostic "+failure+": "+messages);
             if(expected.HasValue) {
+                TopLevelSpaces.RunFile(compiler.GeneratedAssembly,name);
                 var method=compiler.GeneratedAssembly.GetTypes().Single(t=>t.Name=="Example").GetMethod("Run");
                 Check((int)method.Invoke(null,null)==expected.Value,name+": wrong result");
             }
@@ -111,17 +115,18 @@ public static class NitraDialectChecks
         Compile(root,refs,"NoResolver",Grammar,"space G {42}; G:.NoResolver::value()",null,configure:false,failure:"space has no dialect resolver");
         Compile(root,refs,"AfterFailure",Grammar,"space G {42}; G:.AfterFailure::value(42)",42);
         // A native parameterless mapping sees the same scoped services without changing Nitra notation.
-        var contextual=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; c.Scope(\"A\").Get(\"name\").Value :> PExpr };");
-        Compile(root,refs,"MappingScope",contextual,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}",42,configure:false);
-        var explicitContext=Grammar.Replace("map PExpr = <[ 42 ]>;","map (context : NitraDialectContext) PExpr = { context.Scope(\"A\").Get(\"name\").Value :> PExpr };");
-        Compile(root,refs,"ExplicitContext",explicitContext,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}",42,configure:false);
+        // The scope is the shared memory of the program and its spaces: the mapping reads `name` and writes `out` back.
+        var contextual=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; def s=c.Scope(\"A\"); s.Set(\"out\",s.Get(\"name\").Value); <[ () ]> };");
+        Compile(root,refs,"MappingScope",contextual,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.registery(\"out\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
+        var explicitContext=Grammar.Replace("map PExpr = <[ 42 ]>;","map (context : NitraDialectContext) PExpr = { def s=context.Scope(\"A\"); s.Set(\"out\",s.Get(\"name\").Value); <[ () ]> };");
+        Compile(root,refs,"ExplicitContext",explicitContext,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.registery(\"out\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
         var selfRegistering=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; when(c.Space.Resolver==null) c.RegisterResolver(NitraDialectChecks.CreateResolver()); <[ 42 ]> };");
         Compile(root,refs,"MappingResolver",selfRegistering,"def x=G:.MappingResolver::value(42); space G {42}; x",42,configure:false);
         Compile(root,refs,"TwoDialects",Grammar+Grammar.Replace("grammar G", "grammar H"),"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; space H [A] {42}; H:.TwoDialects::shared()",42,
             setup:r=>{r.RegisterResolver("G","TwoDialects",new Resolver()); r.RegisterResolver("H","TwoDialects",new Resolver());});
         Compile(root,refs,"CrossFile","scope A; "+Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; G:.Other::shared()",42,
             setup:r=>{r.RegisterResolver("G","CrossFile",new Resolver()); r.RegisterResolver("G","Other",new Resolver());},
-            extraSources:new[]{("Other","public class OtherExample { public static Run() : int { space G [A] {42} } }")});
+            extraSources:new[]{("Other","space G [A] {42}")});
         Compile(root,refs,"ScopeDeclaration","scope A; "+Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; G:.ScopeDeclaration::shared()",42);
         Compile(root,refs,"ScopeBlock","scope A {} "+Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; G:.ScopeBlock::shared()",42);
         Compile(root,refs,"NoScopeLeak",Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; name",null,failure:"unbound");

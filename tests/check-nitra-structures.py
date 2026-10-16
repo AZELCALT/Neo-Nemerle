@@ -22,6 +22,6 @@ subprocess.run(common+[str(here/'NativeOutputChecks.n'),'-target:library','-out:
 subprocess.run(common+[str(here/'NitraDirectOutputConsumer.n'),'-out:'+str(w/'Consumer.exe'),'-r:'+str(w/'NativeOutput.dll')],check=True,timeout=180)
 shutil.copy2(w/'ncc.runtimeconfig.json',w/'Consumer.runtimeconfig.json')
 subprocess.run(['dotnet',str(w/'Consumer.exe')],check=True,timeout=30)
-rsp=w/'source.rsp';rsp.write_text('\n'.join(['-nologo','-nostdlib+','-target:exe','-out:"'+str(w/'SourceChecks.dll')+'"']+['-r:"'+str(f.resolve())+'"' for f in a.references.glob('*.dll')]+['-r:"'+str(w/f)+'"' for f in ['Nemerle.dll','Nemerle.Compiler.dll','NativeOutput.dll']]+['"'+str(here/'NitraSourceChecks.cs')+'"']))
+rsp=w/'source.rsp';rsp.write_text('\n'.join(['-nologo','-nostdlib+','-target:exe','-out:"'+str(w/'SourceChecks.dll')+'"']+['-r:"'+str(f.resolve())+'"' for f in a.references.glob('*.dll')]+['-r:"'+str(w/f)+'"' for f in ['Nemerle.dll','Nemerle.Compiler.dll','NativeOutput.dll']]+['"'+str(here/'NitraSourceChecks.cs')+'"','"'+str(here/'TopLevelSpaces.cs')+'"']))
 subprocess.run(['dotnet',str(csc),'@'+str(rsp)],check=True);shutil.copy2(w/'ncc.runtimeconfig.json',w/'SourceChecks.runtimeconfig.json')
 subprocess.run(['dotnet',str(w/'SourceChecks.dll'),str(w),str(a.references.resolve())],cwd=w,check=True,timeout=180)
