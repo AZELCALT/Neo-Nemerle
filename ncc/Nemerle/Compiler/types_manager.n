@@ -722,14 +722,14 @@ using Nemerle.Compiler.Utility;
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
         // shared scopes go next to the grammars, as their storage layout (slot names and types; the values live in
-        // the storage when the program runs); a binding holding a dial reference is not stored
+        // the storage when the program runs); a slot holding a dial reference is a slot of the member's value there
         when (Manager.Options.ContinuationSection && Manager.Continuation != null && Manager.Options.NitraSources != null
               && Manager.Options.NitraSources.Dialects != null)
           foreach (scope in Manager.Options.NitraSources.Dialects.Scopes)
           {
             def stored = Nemerle.Compiler.continuation.ContinuationScope();
             stored.Name = scope.Name;
-            foreach (binding when binding.Reference == null in scope.Bindings)
+            foreach (binding in scope.Bindings)
             {
               def b = Nemerle.Compiler.continuation.ContinuationBinding();
               b.Name = binding.Name; b.Type = binding.Type.Name; b.Clr = scope.SlotType(binding.Name);

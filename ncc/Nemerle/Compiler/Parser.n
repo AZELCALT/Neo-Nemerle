@@ -134,7 +134,11 @@ public sealed class DefaultParser : IParser
         def lexer=LexerFile(manager,source.FileIndex,text,manager.Options.LexerStoreComments);
         return DefaultParseResult(MainParser.Parse(lexer),lexer);
       }
-      catch { | e is ArgumentException => Message.Error(Location(source.FileIndex,1,1),e.Message); return ParseResult([]); }
+      catch
+      {
+        | e is NitraSourceException => Message.Error(e.Location,e.Message); return ParseResult([]);
+        | e is ArgumentException => Message.Error(Location(source.FileIndex,1,1),e.Message); return ParseResult([]);
+      }
     }
     def lexer = LexerFile(manager, source.FileIndex, source.GetText(), manager.Options.LexerStoreComments);
     when(manager.Options.IndentationSyntax)

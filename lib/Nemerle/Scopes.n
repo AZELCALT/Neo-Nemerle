@@ -30,22 +30,22 @@ public sealed class Scope
     lock (slots) unless (slots.ContainsKey(name)) slots[name] = initial;
   }
 
-  public Get(name : string) : object
+  /// The value of slot `name`, or `fallback` while no code has registered or written it (the storage is global
+  /// memory: a reader does not depend on the order in which the binaries of the process set it up).
+  public Get(name : string, fallback : object) : object
   {
     lock (slots)
     {
       mutable value;
-      if (slots.TryGetValue(name, out value)) value
-      else throw KeyNotFoundException("scope slot " + name + " is not registered")
+      if (slots.TryGetValue(name, out value)) value else fallback
     }
   }
 
+  public Get(name : string) : object { Get(name, null) }
+
+  /// Writes slot `name` (a slot that is not there yet is added).
   public Set(name : string, value : object) : void
   {
-    lock (slots)
-    {
-      unless (slots.ContainsKey(name)) throw KeyNotFoundException("scope slot " + name + " is not registered");
-      slots[name] = value
-    }
+    lock (slots) slots[name] = value
   }
 }

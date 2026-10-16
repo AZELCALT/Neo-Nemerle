@@ -59,8 +59,9 @@ surrounding globals or publish the space's internal declarations. Mappings and
 resolvers access attached scopes through `context.Scope("A")`: `Read("x")`,
 `Write("x", value)` and `RegisterCode("x")` give the code that reads, writes and
 appends a slot, for the space's own output (`Get("x").Value` is the read code too).
-A slot can also hold a dial reference (`scope.A.registery("f", dial:.file.G::m)`);
-calling `scope.A.f(...)` resolves through that dial.
+A slot can also hold a dial member (`scope.A.registery("f", dial:.file.G::m)`):
+the storage keeps its value, so code elsewhere (a plugin) calls `scope.A.f(...)` as
+a function value, while calls in the same compilation resolve through the dial.
 
 ## Dials: addressing a space
 
@@ -165,6 +166,7 @@ plain space's cross-grammar lookup, and the top-level rule.
 
 A scope travels in output assemblies as its layout (slot names, type tokens and
 types) with the binary's spaces; the values stay in the running program's storage.
-Slots holding dial references are not stored. Alternate
-`runtime`/`compile`/form/semantic-kind notation remains inactive. Native shorthand
+A slot holding a dial member stores the member's value (a function value when its
+one signature's types are given by the grammar). Custom form and semantic-kind
+notation inside a grammar remains inactive. Native shorthand
 for list/optional PExpr output containers remains a separate unfinished feature.

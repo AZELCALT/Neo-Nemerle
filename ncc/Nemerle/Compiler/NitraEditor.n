@@ -5,6 +5,7 @@ using Nemerle.Compiler.nitra_inactive_syntax;
 using Nemerle.Compiler.NitraSourceCompilation;
 using Nemerle.Compiler.NitraSyntaxModel;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.NitraShared;
 
 /// A `space` block found by the source index: offsets into the original file text.
 public sealed class NitraEditorZone
@@ -40,6 +41,8 @@ public sealed class NitraEditorIndex
   public mutable NativeHost : INitraNativeSourceHost;
   /// Set when indexing failed (a malformed block, an unknown grammar, a failed grammar compilation).
   public mutable Error : string;
+  /// Where the error is in its file's text (-1: no position).
+  public mutable ErrorOffset : int = -1;
   texts : SCG.Dictionary[int,string] = SCG.Dictionary();
   /// Nemerle text of a source after indexing; the original text when indexing failed.
   public Text(file : int) : string { if(texts.ContainsKey(file)) texts[file] else null }
@@ -62,7 +65,11 @@ public sealed class NitraEditorIndex
         session.Index();
         foreach(source in manager.Options.Sources) index.texts[source.FileIndex]=session.Text(source.FileIndex);
       }
-      catch { | e is ArgumentException => index.Error=e.Message; }
+      catch
+      {
+        | e is NitraSourceException => index.Error=e.Message; index.ErrorOffset=e.Offset;
+        | e is ArgumentException => index.Error=e.Message;
+      }
       // A later failure (grammar compilation, start rules) still leaves the blocks blanked for the Nemerle parser.
       foreach(source in manager.Options.Sources)
         unless(index.texts.ContainsKey(source.FileIndex)) index.texts[source.FileIndex]=session.Text(source.FileIndex) ?? source.GetText();

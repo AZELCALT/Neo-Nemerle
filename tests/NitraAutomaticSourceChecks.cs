@@ -112,7 +112,22 @@ static class NitraAutomaticSourceChecks
         Compile(args[0],args[1],"NativePrecedence",arithmetic,"space G { 7 - 7 * 7 }",-42);
         Compile(args[0],args[1],"NativeRightAssociativity",arithmetic.Replace("Left=Expr \"-\" Right=Expr {", "Left=Expr \"-\" Right=Expr right-associative {"),"space G { 7 - 7 - 7 }",7);
         Compile(args[0],args[1],"TwoDefinitions",direct+sql,"space G { 42 } + space Sql { SELECT 42 }",84);
-        Compile(args[0],args[1],"InactiveBlocks","runtime Draft { not executable; } compile (G) { also inactive; }"+direct,"space G { 42 }",42);
+        // runtime/compile blocks are not part of the language
+        Compile(args[0],args[1],"NoRuntimeBlock","runtime Draft { not executable; }"+direct,"space G { 42 }",null);
+        // grammar (A, B) handles how A and B work together; space (A, B) uses it, whatever the order
+        const string handler = """
+        grammar (Sql, G) {
+          using Nemerle.Compiler.Parsetree;
+          syntax module Bridge {
+            using Nitra.Core;
+            using G.Test;
+            using Sql.Query;
+            [StartRule] syntax Both = Select "+" Value { map PExpr = <[ $(this.Select.GetAst()) + $(this.Value.GetAst()) ]>; }
+          }
+        }
+        """;
+        Compile(args[0],args[1],"GrammarHandler",direct+sql+handler,"space (G, Sql) { SELECT 42 + 42 }",84);
+        Compile(args[0],args[1],"MixWithoutHandler",direct+sql,"space (G, Sql) { SELECT 42 }",null);
         Compile(args[0],args[1],"InactiveGrammar",direct.Replace("syntax module Test", "statement Envelope form { \"start\" ...Operand... \"end\" } semantic kind Operand = \"unused\"; syntax module Test"),"space G { 42 }",42);
         Console.WriteLine("PASS: " + count + " automatic native source checks");
     }

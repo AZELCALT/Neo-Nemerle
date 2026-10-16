@@ -246,11 +246,61 @@ Calls are checked against the resolver's signatures, and a dial may stand before
 ## Which grammars a space uses
 
 - **`space G { ... }`** uses grammar `G`.
-- **`space (A, B) { ... }`** mixes grammars `A` and `B`: their rules combine, and together they must have one start
-  rule. It is a space of its own, next to the file's `space A` and `space B`.
+- **`space (A, B) { ... }`** mixes grammars `A` and `B`: their rules combine. It is a space of its own, next to the
+  file's `space A` and `space B`, and the order of the grammars does not matter.
 - **`space { ... }`** is a plain space, over full Nitra and across grammars. It uses the grammars of its own file;
   when those do not give exactly one start rule (or there are none), it uses every grammar the file can see: those of
   the other files and of referenced libraries.
+
+Two languages used together often need more than the syntax of each, as Objective-C++ needs more than C++ and
+Objective-C side by side. **`grammar (A, B) { ... }`** holds that: Nitra rules about how `A` and `B` work together,
+which apply in `space (A, B)`. Its rules can use those of both grammars, and when it has a start rule, the mixed space
+begins there:
+
+```nemerle
+grammar Words
+{
+  using Nemerle.Compiler.Parsetree;
+  syntax module W
+  {
+    using Nitra.Core;
+    [StartRule] syntax Word = "seven" { map PExpr = <[ 7 ]>; }
+  }
+}
+
+grammar Digits
+{
+  using Nemerle.Compiler.Parsetree;
+  syntax module D
+  {
+    using Nitra.Core;
+    [StartRule] syntax Digit = "6" { map PExpr = <[ 6 ]>; }
+  }
+}
+
+grammar (Words, Digits)
+{
+  using Nemerle.Compiler.Parsetree;
+  syntax module Together
+  {
+    using Nitra.Core;
+    using Words.W;
+    using Digits.D;
+    [StartRule] syntax Product = Word "times" Digit
+    {
+      map PExpr = <[ System.Console.WriteLine($(this.Word.GetAst()) * $(this.Digit.GetAst())) ]>;
+    }
+  }
+}
+
+space (Digits, Words) { seven times 6 }
+```
+
+```text
+42
+```
+
+Without the `grammar (Words, Digits)` handler, the space would have two start rules and no way to choose.
 
 ## One space per grammar per file
 

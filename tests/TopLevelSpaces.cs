@@ -15,7 +15,7 @@ public static class TopLevelSpaces
     const string Head = "public static Run() : int { ";
     const string Fields = "public static Values : System.Collections.Generic.List[int] = System.Collections.Generic.List(); "
                         + "public static Value : int { set { Values.Add(value) } } ";
-    static readonly Regex Space = new(@"(?<![\w.])space\b(?=\s*(?:[A-Za-z_][\w.]*)?\s*(?:as\s+\w+\s*)?(?:\[[^\]]*\]\s*)?\{)");
+    static readonly Regex Space = new(@"(?<![\w.])space\b(?=\s*(?:[A-Za-z_][\w.]*|\([^)]*\))?\s*(?:as\s+\w+\s*)?(?:\[[^\]]*\]\s*)?\{)");
 
     static int Close(string text, int open)
     {

@@ -171,7 +171,7 @@ public sealed class Analyzer
       // The compiler's own indexing error: shown unless Nitra already located the problem in a grammar block.
       when (index.Error != null)
       {
-        def d = IndexDiagnostic(index.Error, text);
+        def d = IndexDiagnostic(index.Error, index.ErrorOffset, text);
         def located = result.Diagnostics.Exists(x => x.Source == "nitra" && x.Severity == Severity.Error);
         unless (located && d.Start == 0)
         {
@@ -292,13 +292,9 @@ public sealed class Analyzer
     }
   }
 
-  IndexDiagnostic(error : string, text : string) : Diagnostic
+  IndexDiagnostic(error : string, offset : int, text : string) : Diagnostic
   {
-    // GReader messages look like "file@offset: message"; others carry no position.
-    def at = error.IndexOf('@'); def colon = if (at >= 0) error.IndexOf(": ", at) else -1;
-    mutable position = 0;
-    if (at >= 0 && colon > at && int.TryParse(error.Substring(at + 1, colon - at - 1), out position))
-      Diagnostic(Math.Min(position, text.Length), Math.Min(position + 1, text.Length), Severity.Error, error.Substring(colon + 2), "grammar")
+    if (offset >= 0) Diagnostic(Math.Min(offset, text.Length), Math.Min(offset + 1, text.Length), Severity.Error, error, "grammar")
     else Diagnostic(0, 1, Severity.Error, error, "grammar")
   }
 

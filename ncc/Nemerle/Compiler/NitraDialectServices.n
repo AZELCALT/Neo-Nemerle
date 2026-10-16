@@ -113,6 +113,7 @@ public sealed class NitraSharedScope : NitraSemanticScope
   {
     def binding=Get(name);
     if(binding.SlotType!=null) binding.SlotType
+    else if(binding.Reference!=null) { binding.SlotType=ReferenceType(binding.Reference,typer); binding.SlotType }
     else
     {
       def token=binding.Type.Name;
@@ -133,6 +134,34 @@ public sealed class NitraSharedScope : NitraSemanticScope
       // made with every chance, is kept
       when(clr!=null || typer!=null) binding.SlotType=clr ?? "object";
       clr ?? "object"
+    }
+  }
+  /// A slot holding a dial member is a function value: with one signature whose types the grammar gives, of that
+  /// function type, else `object`.
+  ReferenceType(reference : NitraDialectReference, typer : Typer) : string
+  {
+    def signatures=if(reference.Resolution!=null) reference.Resolution.Signatures else SCG.List();
+    def space=if(Registry!=null) try { Registry.Space(reference.Owner) } catch { | _ is ArgumentException => null } else null;
+    def clr(type : NitraDialectType) : string
+    {
+      if(type==null) null
+      else if(type.Clr!=null) type.Clr
+      else
+      {
+        def resolved=if(space!=null && space.Resolver!=null)
+                       try { space.Resolver.ResolveType(type.Name,NitraDialectContext(Registry,space,typer,Location.Default)) }
+                       catch { | _ is ArgumentException => null }
+                     else null;
+        if(resolved!=null && resolved.Clr!=null) resolved.Clr else if(NamesType(type.Name)) type.Name else null
+      }
+    }
+    if(signatures.Count!=1) "object"
+    else
+    {
+      def s=signatures[0]; def result=clr(s.Result); def types=SCG.List.[string]();
+      foreach(p in s.Parameters) types.Add(clr(p));
+      if(result==null || types.Contains(null)) "object"
+      else "("+(if(types.Count==0) "void" else String.Join(" * ",types.ToArray()))+" -> "+result+")"
     }
   }
   static NamesType(token : string) : bool
@@ -158,8 +187,8 @@ public sealed class NitraSharedScope : NitraSemanticScope
   public Read(name : string, typer : Typer) : PExpr
   {
     _=Get(name); def type=SlotType(name,typer);
-    if(type=="object") <[ $(storage()).Get($(name : string)) ]>
-    else <[ ($(storage()).Get($(name : string)) :> $(typeExpr(type))) ]>
+    if(type=="object") <[ $(storage()).Get($(name : string), null) ]>
+    else <[ ($(storage()).Get($(name : string), Nemerle.Scopes.Scope.Default(typeof($(typeExpr(type))))) :> $(typeExpr(type))) ]>
   }
   /// The code that writes `value` into slot `name` (as the slot's type).
   public Write(name : string, value : PExpr) : PExpr { Write(name,value,null) }

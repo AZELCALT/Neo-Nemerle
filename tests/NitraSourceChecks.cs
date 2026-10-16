@@ -118,7 +118,7 @@ public static class NitraSourceChecks
         Compile(args[0],args[1],"ModeConflict",Grammar+"public class Example { public static Run() : int { space G { 1 } } }",false,inspect:true);
         Compile(args[0],args[1],"OrdinarySpaceName",Grammar+"public class Example { public static space() : int { 1 } public static Run() : int { Example.space() + space G { 41 } } }",true,42);
         Compile(args[0],args[1],"Overflow",Grammar+"public class Example { public static Run() : int { space G { 99999999999999999999 } } }",false);
-        Compile(args[0],args[1],"InactiveBlocks", "runtime Draft { this is not Nemerle; } compile (G) { also inactive; } grammar (G, Other) { deferred interaction; }"+Grammar+"public class Example { public static Run() : int { space G { 40 + 2 } } }",true,42);
+        Compile(args[0],args[1],"NoRuntimeBlock", "runtime Draft { this is not Nemerle; }"+Grammar+"public class Example { public static Run() : int { space G { 40 + 2 } } }",false);
         Compile(args[0],args[1],"InactiveGrammar",Grammar.Replace("syntax module Test", "statement Envelope form { \"begin\" ...Operand... \"end\" } semantic kind Operand = \"unused\"; syntax module Test")+"public class Example { public static Run() : int { space G { 40 + 2 } } }",true,42);
         Compile(args[0],args[1],"NoActivationLeak",Grammar+"public class Example { public static Run() : int { var x = 1; x } }",false);
         Compile(args[0],args[1],"OrdinaryPlaceholderNames",Grammar+"public class Example { public static runtime() : int { 1 } public static compile() : int { 1 } public static Run() : int { runtime() + compile() + space G { 40 } } }",true,42);

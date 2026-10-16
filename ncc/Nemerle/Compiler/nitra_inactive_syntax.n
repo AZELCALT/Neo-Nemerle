@@ -66,18 +66,6 @@ internal module NitraInactiveSyntax
         { _=r.Take(); r.Need("kind"); kind="extend semantic kind"; }
         when(t.Text=="form") kind="form binding";
         when(t.Text=="grammar" && r.Is("(")) kind="grammar interaction";
-        when(t.Text=="runtime" || t.Text=="compile")
-        {
-          def saved=r.Peek().Start;
-          try
-          {
-            unless(r.Is("{") || r.Is("(")) _=r.Name();
-            when(r.Is("(")) Group(r,"(",")");
-            when(r.Is("{")) kind=t.Text;
-          }
-          catch { | _ is ArgumentException => () }
-          when(kind==null) Restore(r,saved);
-        }
       }
       if(kind!=null)
       {

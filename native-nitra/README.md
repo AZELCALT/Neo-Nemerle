@@ -10,8 +10,9 @@ Only the runtime, DotNet support, grammar model and semantic compiler are copied
 
 The approved source boundary is native definitions inside `grammar` and custom
 syntax use inside `space`. Native Nitra `syntax module` stays active. Custom
-forms, semantic kinds, runtime/compile blocks and grammar-interaction blocks
-remain recognized inactive records while the native infrastructure is connected.
+forms and semantic kinds inside a grammar remain recognized inactive records.
+The old `runtime`/`compile` blocks are not part of the language (Nitra covers
+them); `grammar (A, B)` is the handler of grammars used together in `space (A, B)`.
 No grammar activation extends into ordinary Nemerle.
 
 ## What is connected

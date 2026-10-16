@@ -75,7 +75,7 @@ public class Resolver : INitraDialectResolver
       | "twice" =>
         def answer = NitraDialectResolution();
         answer.Signatures.Add(NitraDialectSignature("twice", NitraDialectType("number"), array[NitraDialectType("number")]));
-        answer.Lower = Func(r => <[ $(r.Arguments[0]) * 2 ]>);
+        answer.Lower = Func(r => if (r.IsCall) <[ $(r.Arguments[0]) * 2 ]> else <[ fun (x : int) { x * 2 } ]>);
         answer
       | "shared" =>
         def answer = NitraDialectResolution();
@@ -116,6 +116,8 @@ space G [A] { go }
 
 # a host application: it sets its scope, runs plugin scripts in its own process, then reads what they wrote
 APP = SPACE_HOST + """
+// a slot can hold anything, a dial's member too: plugins get it as a function value from the storage
+scope.A.registery("f", dial:.app.G::twice);
 def run(file : string) : void
 {
   def host = Nemerle.Scripting.host.ScriptHost();
@@ -432,18 +434,19 @@ if a.stage == 'E6':
                    'System.Console.WriteLine(dial:.user.G::shared());\n'),
         ('named.n', 'space G as Named [A] { go }\nSystem.Console.WriteLine(dial:.named.Named::twice(5));\n'),
         ('caller.n', 'System.Console.WriteLine(dial:.app.G::twice(2));\nSystem.Console.WriteLine(dial:.app.G::shared());\n'),
+        ('function.n', 'System.Console.WriteLine(scope.A.f(8));\n'),
         ('writer.n', 'scope.A.value = scope.A.value + 29;\n'),
     ]
     for name, text in plugins:
         (shost / name).write_text(text)
     output = run(['dotnet', shost / 'app.exe', T / 'references', *[shost / n for n, _ in plugins]], cwd=shost).stdout.split('\n')
     output = [l for l in output if l.strip()]
-    expected = ['21', '42', '21', '10', '4', '21', 'host 50']
+    expected = ['21', '42', '21', '10', '4', '21', '16', 'host 50']
     if output != expected:
         raise SystemExit('FAILED: the host application and its plugins printed %r, expected %r' % (output, expected))
     print('PASS: P plugins run in the host application read its scope storage (a plugin with no space as well), use '
-          'its grammar (space G [A] / as Name), dial into their own spaces and into the host\'s, and write the storage '
-          'back to the host', flush=True)
+          'its grammar (space G [A] / as Name), dial into their own spaces and into the host\'s, call a dial member '
+          'the host stored in a slot, and write the storage back to the host', flush=True)
     plain = w / 'plainspace'
     plain.mkdir()
     for f in ('app.exe', 'res.dll'):
@@ -455,7 +458,8 @@ if a.stage == 'E6':
     if run(['dotnet', plain / 'prog.exe'], cwd=plain).stdout.split() != ['8']:
         raise SystemExit('FAILED: a plain space does not look across grammars')
     print('PASS: P a plain space with no grammar in its file selects the visible grammars (cross-grammar lookup)', flush=True)
-    for name, text in (('in-function', 'f() : void { space G { go } }\n'), ('expression', 'def x = space G { go };\n')):
+    for name, text, where in (('in-function', 'f() : void { space G { go } }\n', 'bad.n:1:14:'),
+                              ('expression', 'def x = space G { go };\n', 'bad.n:1:9:')):
         d = w / ('reject-' + name)
         d.mkdir()
         shutil.copy2(shost / 'app.exe', d / 'app.exe')
@@ -464,5 +468,7 @@ if a.stage == 'E6':
                             '-no-color', '-r:' + str(d / 'app.exe')], capture_output=True, text=True)
         if r.returncode == 0 or 'top-level' not in r.stdout + r.stderr and 'top level' not in r.stdout + r.stderr:
             raise SystemExit('FAILED: a space %s is not rejected\n%s%s' % (name, r.stdout, r.stderr))
-    print('PASS: P a space inside a function or as an expression is rejected (spaces are top level)', flush=True)
+        if where not in r.stdout + r.stderr:
+            raise SystemExit('FAILED: the error for a space %s is not at %s\n%s%s' % (name, where, r.stdout, r.stderr))
+    print('PASS: P a space inside a function or as an expression is rejected at its line and column (spaces are top level)', flush=True)
 shutil.rmtree(w, ignore_errors=True)

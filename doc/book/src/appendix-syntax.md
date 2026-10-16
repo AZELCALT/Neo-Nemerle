@@ -17,6 +17,7 @@
 | `mask m { ... }` | named group inside a file |
 | `macro m(a) { ... }` | macro |
 | `grammar G { ... }` | Nitra grammar |
+| `grammar (A, B) { ... }` | how grammars `A` and `B` work together, for `space (A, B)` |
 | `space G { ... }` | top-level code in a grammar's language (a logical file) |
 | `scope A;` | a scope shared by the program and its spaces (`scope.A.x` reads a binding) |
 | `[Attr] ...` | attribute or attribute macro |

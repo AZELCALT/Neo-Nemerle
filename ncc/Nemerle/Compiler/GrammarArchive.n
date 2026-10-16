@@ -88,7 +88,7 @@ public module GrammarArchives
     }
     result
   }
-  private IsKind(s : string) : bool { s=="runtime" || s=="compile" || s=="grammar" || s=="space" }
+  private IsKind(s : string) : bool { s=="grammar" || s=="space" }
   private Identifier(t : GLexeme) : bool
   { !t.Quoted && t.Text.Length>0 && (char.IsLetter(t.Text[0]) || t.Text[0]=='_') }
   private ReadName(r : GReader) : string

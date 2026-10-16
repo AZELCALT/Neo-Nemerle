@@ -28,6 +28,21 @@ internal sealed class GLexeme
   public mutable End : int;
   public mutable Quoted : bool;
 }
+/// An error in grammar/space source, at a position of a file: reported at its line and column.
+public sealed class NitraSourceException : ArgumentException
+{
+  public mutable Location : Location;
+  /// The offset in the file's text.
+  public Offset : int;
+  public this(file : string, text : string, offset : int, message : string)
+  {
+    base(message);
+    mutable line=1; mutable column=1;
+    for(mutable i=0;i<offset && i<text.Length;++i) if(text[i]=='\n') { ++line; column=1; } else ++column;
+    Location=Nemerle.Compiler.AST.Location(Nemerle.Compiler.AST.Location.GetFileIndex(file),line,column); Offset=offset;
+  }
+}
+
 internal sealed class GReader
 {
   public mutable Text : string;
@@ -39,7 +54,7 @@ internal sealed class GReader
   public this(text : string, file : string, start : int, end : int)
   { Text=text; File=file; Pos=start; Limit=end; }
   public Reset() : void { cached=null; }
-  public Fail(message : string) : void { throw ArgumentException(File + "@" + Pos.ToString() + ": " + message); }
+  public Fail(message : string) : void { throw NitraSourceException(File, Text, Pos, message); }
   public Skip() : void
   {
     mutable again=true;
@@ -188,7 +203,7 @@ internal module GrammarJson
     _=b.Append("],\"ruleEvaluations\":"+r.RuleEvaluations.ToString()+",\"memoHits\":"+r.MemoHits.ToString()+"}"); b.ToString()
   }
 }
-/// Finds the first grammar/space/runtime/compile block of a source file (envelope pre-scan only).
+/// Finds the first grammar/space block, scope declaration or dial of a source file (envelope pre-scan only).
 public module NitraSourceScan
 {
   internal FindConstruct(source : ISource) : Location { FindConstruct(source,false) }
@@ -197,8 +212,7 @@ public module NitraSourceScan
   internal FindConstruct(source : ISource, scopeUses : bool) : Location
   {
     def text=source.GetText();
-    unless(text.Contains("grammar") || text.Contains("space") || text.Contains("runtime") || text.Contains("compile")
-           || text.Contains("scope") || text.Contains(":.")) return Location.Default;
+    unless(text.Contains("grammar") || text.Contains("space") || text.Contains("scope") || text.Contains(":.")) return Location.Default;
     def at(start : int) : Location
     {
       mutable line=1; mutable column=1;
@@ -222,7 +236,7 @@ public module NitraSourceScan
         }
         when(!token.Quoted && after!="." && token.Text=="dial" && reader.Is(":"))
         { _=reader.Take(); when(reader.Is(".")) return at(token.Start); }
-        when(!token.Quoted && (token.Text=="grammar" || token.Text=="space" || token.Text=="runtime" || token.Text=="compile"))
+        when(!token.Quoted && (token.Text=="grammar" || token.Text=="space"))
         {
           mutable found=reader.Is("{");
           when(reader.Is("("))
