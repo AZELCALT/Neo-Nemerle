@@ -9,8 +9,11 @@ must equal it. Tags after a comma change that:
     nemerle,fail        must not compile; the following `text` block is a substring of the diagnostics
     nemerle,script      run with `nscript run`
     nemerle,lib=NAME    compiled as library NAME.dll; later blocks of the same chapter may reference it
+    nemerle,app         an application that embeds the compiler: it runs with the toolchain next to it
+                        (and `references/`)
 Inside a block, `// file: path.n` starts another file, and a line `// ncc: ARGS` adds compiler arguments, where
-{toolchain} is replaced by the toolchain directory. Each chapter runs in a folder of its own."""
+{toolchain} is replaced by the toolchain directory. A file that does not end in `.n` is data the program reads, not
+compiled. Each chapter runs in a folder of its own."""
 import argparse, pathlib, re, shutil, subprocess, sys, tempfile
 
 p = argparse.ArgumentParser()
@@ -60,7 +63,8 @@ def check(chapter, line, tags, code, expected, folder):
         return r.returncode == 0 and (expected is None or r.stdout.strip() == expected.strip()), r.stdout + r.stderr
     library = kind.startswith('lib=')
     output = folder / (kind[4:] + '.dll') if library else root / 'main.exe'
-    command = [str(T / 'ncc'), *map(str, paths), '-source-root:' + str(root), '-out:' + str(output), '-no-color', *extra]
+    sources = [p for p in paths if p.suffix == '.n']
+    command = [str(T / 'ncc'), *map(str, sources), '-source-root:' + str(root), '-out:' + str(output), '-no-color', *extra]
     if library: command.insert(-len(extra) if extra else len(command), '-target:library')
     r = subprocess.run(command, cwd=root, capture_output=True, text=True)
     diagnostics = r.stdout + r.stderr
@@ -72,6 +76,11 @@ def check(chapter, line, tags, code, expected, folder):
         return True, ''
     for dll in list(T.glob('Nemerle.dll')) + list(folder.glob('*.dll')):
         shutil.copy2(dll, root / dll.name)
+    if kind == 'app':
+        for f in T.iterdir():
+            if f.is_file() and f.suffix in {'.dll', '.json', '.nitrametadata'} and not (root / f.name).exists():
+                shutil.copy2(f, root / f.name)
+        (root / 'references').symlink_to(T / 'references', target_is_directory=True)
     shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'main.runtimeconfig.json')
     r = subprocess.run(['dotnet', str(output)], cwd=root, capture_output=True, text=True, timeout=60)
     ok = r.returncode == 0 and (expected is None or r.stdout.rstrip() == expected.rstrip())

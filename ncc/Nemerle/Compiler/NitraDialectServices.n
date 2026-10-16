@@ -7,12 +7,15 @@ using Nemerle.Compiler.AST;
 using Nemerle.Compiler.nitra_compilation;
 using Nemerle.Compiler.typer;
 
-/// A dialect-owned type token; it need not have a CLR representation yet.
+/// A dialect-owned type token; it need not have a CLR representation yet. `Clr`, when the grammar gives it, is the
+/// Nemerle type the token stands for (a scope slot of this type reads as that type).
 public sealed class NitraDialectType
 {
   public Name : string;
+  public mutable Clr : string;
   public mutable Metadata : object;
   public this(name : string) { when(String.IsNullOrEmpty(name)) throw ArgumentException("empty dialect type"); Name=name; }
+  public this(name : string, clr : string) { this(name); Clr=clr; }
 }
 public sealed class NitraDialectSignature
 {
@@ -53,37 +56,119 @@ public sealed class NitraDialectReference
   public this(dialect : string, owner : string, name : string, resolution : NitraDialectResolution)
   { Dialect=dialect; Owner=owner; Name=name; Resolution=resolution; }
 }
+/// A binding of a scope: a storage slot (its value lives in the scope's storage when the program runs, see
+/// Nemerle.Scopes.Scope), or a dial reference registered under a name.
 public sealed class NitraScopeBinding
 {
   public Name : string;
   public Type : NitraDialectType;
   public mutable Location : Location;
-  public mutable Value : object;
+  /// A dial reference's target; null for a storage slot.
+  public mutable Reference : NitraDialectReference;
   public mutable Metadata : object;
+  /// The Nemerle type of a slot (null: not known yet, `object` when nothing gives one).
+  public mutable SlotType : string;
+  internal mutable Scope : NitraSharedScope;
+  /// From a continued binary's layout: registering it again (a plugin appending the same slot) is not a duplicate.
+  public mutable Continued : bool;
   public this(name : string, type : NitraDialectType, location : Location)
   { Name=name; Type=type; Location=location; }
+  /// A reference's target, or for a slot the code that reads it (for mappings and resolvers).
+  public Value : object { get { if(Reference!=null) Reference else Scope.Read(Name) } }
 }
+/// A scope: a dedicated global storage that the program and its spaces share. Here, at compile time, it is the
+/// layout (its slots and their types); the values live in Nemerle.Scopes.Scope when the program runs.
 public sealed class NitraSharedScope : NitraSemanticScope
 {
   public Name : string;
   bindings : SCG.Dictionary[string,NitraScopeBinding] = SCG.Dictionary();
+  internal mutable Registry : NitraDialectRegistry;
   public this(name : string) { Name=name; }
   public Register(name : string, type : NitraDialectType, location : Location) : NitraScopeBinding
   {
     when(String.IsNullOrEmpty(name) || type==null) throw ArgumentException("scope registration requires a name and type");
-    when(bindings.ContainsKey(name)) throw ArgumentException("duplicate scope binding: scope."+Name+"."+name);
-    def binding=NitraScopeBinding(name,type,location); bindings.Add(name,binding); binding
+    if(bindings.ContainsKey(name) && bindings[name].Continued) { def known=bindings[name]; known.Continued=false; known.Location=location; known }
+    else
+    {
+      when(bindings.ContainsKey(name)) throw ArgumentException("duplicate scope binding: scope."+Name+"."+name);
+      def binding=NitraScopeBinding(name,type,location); binding.Scope=this; bindings.Add(name,binding); binding
+    }
   }
   public Register(name : string, reference : NitraDialectReference, location : Location) : NitraScopeBinding
   {
     when(reference==null) throw ArgumentNullException("reference");
     def binding=Register(name,NitraDialectType("dialect reference"),location);
-    binding.Value=reference; binding.Metadata=reference.Resolution; binding
+    binding.Reference=reference; binding.Metadata=reference.Resolution; binding
   }
   public Get(name : string) : NitraScopeBinding
   { unless(bindings.ContainsKey(name)) throw ArgumentException("unknown scope binding: scope."+Name+"."+name); bindings[name] }
-  public Set(name : string, value : object) : void { Get(name).Value=value; }
   public Contains(name : string) : bool { bindings.ContainsKey(name) }
+  /// The Nemerle type of slot `name`, as text: the grammar's (`NitraDialectType.Clr`, from the resolver of a space
+  /// that attaches this scope), or the token itself when it names a type, or `object`. Anything fits a slot; the
+  /// code that uses it is type-checked as usual.
+  public SlotType(name : string) : string { SlotType(name,null) }
+  /// With `typer`, a space that attaches this scope and has no resolver yet runs its mapping first (as a dial into
+  /// it does), so the grammar can give the type.
+  public SlotType(name : string, typer : Typer) : string
+  {
+    def binding=Get(name);
+    if(binding.SlotType!=null) binding.SlotType
+    else
+    {
+      def token=binding.Type.Name;
+      mutable clr=binding.Type.Clr;
+      when(clr==null && Registry!=null)
+        foreach(space when Array.IndexOf(space.Scopes,Name)>=0 in Registry.AllSpaces)
+          when(clr==null)
+          {
+            when(space.Resolver==null && typer!=null && Registry.PrepareSpace!=null) Registry.PrepareSpace.Invoke(space,typer);
+            when(space.Resolver!=null)
+            {
+              def resolved=try { space.Resolver.ResolveType(token,NitraDialectContext(Registry,space,typer,binding.Location)) } catch { | _ is ArgumentException => null };
+              when(resolved!=null) clr=resolved.Clr;
+            }
+          }
+      when(clr==null && NamesType(token)) clr=token;
+      // a type the grammar has not given yet may still come once a space is prepared: only a typed answer, or one
+      // made with every chance, is kept
+      when(clr!=null || typer!=null) binding.SlotType=clr ?? "object";
+      clr ?? "object"
+    }
+  }
+  static NamesType(token : string) : bool
+  {
+    def aliases=["object","string","int","uint","long","ulong","short","ushort","byte","sbyte","char","bool","float","double","decimal"];
+    aliases.Contains(token)
+    || Nemerle.Compiler.manager_class.ManagerClass.Instance!=null && token.Length>0 && char.IsLetter(token[0]) && !token.Contains(" ")
+       && Nemerle.Compiler.manager_class.ManagerClass.Instance.CoreEnv.LookupType(NList.FromArray(token.Split('.'))).IsSome
+  }
+  storage() : PExpr { <[ Nemerle.Scopes.Scope.Of($(Name : string)) ]> }
+  static typeExpr(type : string) : PExpr
+  { Nemerle.Compiler.main_parser.MainParser.ParseExpr(Nemerle.Compiler.manager_class.ManagerClass.Instance.CoreEnv,type,Location.Default,false) }
+  /// The code that appends slot `name` to the storage (with its type's default value).
+  public RegisterCode(name : string) : PExpr { RegisterCode(name,null) }
+  public RegisterCode(name : string, typer : Typer) : PExpr
+  {
+    def type=SlotType(name,typer);
+    if(type=="object") <[ $(storage()).Register($(name : string), null) ]>
+    else <[ $(storage()).Register($(name : string), Nemerle.Scopes.Scope.Default(typeof($(typeExpr(type))))) ]>
+  }
+  /// The code that reads slot `name`, as its type.
+  public Read(name : string) : PExpr { Read(name,null) }
+  public Read(name : string, typer : Typer) : PExpr
+  {
+    _=Get(name); def type=SlotType(name,typer);
+    if(type=="object") <[ $(storage()).Get($(name : string)) ]>
+    else <[ ($(storage()).Get($(name : string)) :> $(typeExpr(type))) ]>
+  }
+  /// The code that writes `value` into slot `name` (as the slot's type).
+  public Write(name : string, value : PExpr) : PExpr { Write(name,value,null) }
+  public Write(name : string, value : PExpr, typer : Typer) : PExpr
+  {
+    _=Get(name); def type=SlotType(name,typer);
+    if(type=="object") <[ $(storage()).Set($(name : string), $value) ]>
+    else <[ $(storage()).Set($(name : string), ($value : $(typeExpr(type)))) ]>
+  }
   /// The bindings in registration order (the continuation section stores them).
   public Bindings : SCG.IEnumerable[NitraScopeBinding] { get { bindings.Values } }
   public override Lookup(name : string) : SCG.List[NitraSemanticSymbol]
@@ -117,6 +202,8 @@ public sealed class NitraDialectSpace
 public sealed class NitraDialectRegistry
 {
   spaces : SCG.Dictionary[string,NitraDialectSpace] = SCG.Dictionary();
+  /// Runs a space's mapping so that it registers its resolver (set by the compilation that owns the spaces).
+  public mutable PrepareSpace : Action[NitraDialectSpace,Typer];
   scopes : SCG.Dictionary[string,NitraSharedScope] = SCG.Dictionary();
   public Trace : SCG.List[string] = SCG.List();
   /// A space's path is where it stands: `file` for the file's plain `space { }`, `file.G` for its `space G { }`,
@@ -152,7 +239,10 @@ public sealed class NitraDialectRegistry
     space.Resolver=resolver;
   }
   public RegisterScope(name : string) : NitraSharedScope
-  { unless(scopes.ContainsKey(name)) scopes.Add(name,NitraSharedScope(name)); scopes[name] }
+  {
+    unless(scopes.ContainsKey(name)) { def scope=NitraSharedScope(name); scope.Registry=this; scopes.Add(name,scope); }
+    scopes[name]
+  }
   public Scope(name : string) : NitraSharedScope
   { unless(scopes.ContainsKey(name)) throw ArgumentException("unknown shared scope: "+name); scopes[name] }
   /// Every space of the compilation, once each (a mixing space or an `as` name registers one space more than once).

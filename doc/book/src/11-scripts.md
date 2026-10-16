@@ -80,10 +80,11 @@ space Words { answer }
 
 ## Scripts as plugins
 
-An application that runs scripts can give them its own languages. Its grammars and its scopes are stored in its
-section, so a script that depends on it gets both with no grammar or `scope` declaration of its own. The script reads
-the application's scope bindings and calls into its space through a dial. A file that uses only scopes or dials,
-with no space at all, is looked up the same way.
+An application that runs scripts can give them its own languages. Its grammars, its scopes and its spaces are stored in
+its section, so a script it runs gets them with no grammar or `scope` declaration of its own. Scope storage belongs
+to the process, so the application and its scripts share the values: the script reads what the application wrote,
+and the application sees what the script writes. A script can also dial into the application's spaces. A file that
+uses only scopes or dials, with no space at all, is looked up the same way.
 
 The dial's resolver is a library of its own, as in [Grammars and spaces](10-grammars.md):
 
@@ -98,7 +99,7 @@ public class Resolver : INitraDialectResolver
 {
   public ResolveType(name : string, _context : NitraDialectContext) : NitraDialectType
   {
-    if (name == "number") NitraDialectType(name) else null
+    if (name == "number") NitraDialectType(name, "int") else null
   }
   public Resolve(request : NitraDialectRequest) : NitraDialectResolution
   {
@@ -116,11 +117,12 @@ public class Resolver : INitraDialectResolver
 public Create() : INitraDialectResolver { Resolver() }
 ```
 
-The application defines the grammar and the scope, with a value for its plugins:
+The application defines the grammar and the scope, then runs a plugin in its own process with the scripting API
+(see below):
 
-```nemerle,lib=app
-// ncc: -r:{chapter}/appres.dll -r:{toolchain}/Nemerle.Compiler.dll
-// file: app.n
+```nemerle,app
+// ncc: -r:{chapter}/appres.dll -r:{toolchain}/Nemerle.Compiler.dll -r:{toolchain}/Nemerle.Scripting.dll
+// file: main.n
 scope A;
 grammar G
 {
@@ -142,22 +144,30 @@ grammar G
 
 scope.A.registery("value", type("number"));
 scope.A.value = 21;
-```
 
-A plugin script:
-
-```nemerle,script
-[assembly: DependsOn("app.dll")]
-[assembly: DependsOn("appres.dll")]
+def host = Nemerle.Scripting.host.ScriptHost();
+def definition = Nemerle.Scripting.contracts.ScriptDefinition();
+definition.TargetReferenceDirectory = System.IO.Path.Combine(System.AppContext.BaseDirectory, "references");
+definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);
+definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "appres.dll"));
+def plugin = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText("plugin.txt"), "plugin.n"), definition);
+if (plugin.Success) _ = host.Evaluate(plugin.Script, Nemerle.Scripting.contracts.ScriptInputs());
+else foreach (d in plugin.Diagnostics) System.Console.WriteLine(d.Message);
+System.Console.WriteLine($"the application sees $(scope.A.value)");
+// file: plugin.txt
 space G [A] { go }
 System.Console.WriteLine(scope.A.value);
-System.Console.WriteLine(dial:.main.G::twice(scope.A.value));
+System.Console.WriteLine(dial:.plugin.G::twice(scope.A.value));
+scope.A.value = 50;
 ```
 
 ```text
 21
 42
+the application sees 50
 ```
+
+The plugin is `plugin.n` to the compiler, so its space is `dial:.plugin.G`.
 
 ## Script kinds
 

@@ -721,24 +721,20 @@ using Nemerle.Compiler.Utility;
         def (portableExecutableKind, imageFileMachine) = make_platform_flags (Manager.Options.Platform);
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
-        // shared scopes go next to the grammars: a dial binding with an expression value keeps it as source text; a
-        // binding holding a dial reference points at this compilation's space and is not stored
+        // shared scopes go next to the grammars, as their storage layout (slot names and types; the values live in
+        // the storage when the program runs); a binding holding a dial reference is not stored
         when (Manager.Options.ContinuationSection && Manager.Continuation != null && Manager.Options.NitraSources != null
               && Manager.Options.NitraSources.Dialects != null)
           foreach (scope in Manager.Options.NitraSources.Dialects.Scopes)
           {
             def stored = Nemerle.Compiler.continuation.ContinuationScope();
             stored.Name = scope.Name;
-            foreach (binding in scope.Bindings)
-              match (binding.Value)
-              {
-                | _ is Nemerle.Compiler.NitraDialectServices.NitraDialectReference => ()
-                | value =>
-                  def b = Nemerle.Compiler.continuation.ContinuationBinding();
-                  b.Name = binding.Name; b.Type = binding.Type.Name;
-                  b.Value = match (value) { | e is Nemerle.Compiler.Parsetree.PExpr => e.ToString() | _ => null };
-                  stored.Bindings.Add(b);
-              }
+            foreach (binding when binding.Reference == null in scope.Bindings)
+            {
+              def b = Nemerle.Compiler.continuation.ContinuationBinding();
+              b.Name = binding.Name; b.Type = binding.Type.Name; b.Clr = scope.SlotType(binding.Name);
+              stored.Bindings.Add(b);
+            }
             Manager.Continuation.Scopes.Add(stored);
           }
         // the spaces go with the scopes, so that a continuing compilation (a plugin script) can dial into them;

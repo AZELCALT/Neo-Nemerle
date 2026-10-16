@@ -1,5 +1,5 @@
-// A space is a logical file inside this file. The program and the space share scope A: the program writes `answer`,
-// the space's mapping reads it and writes `doubled` back, and the program reads that.
+// A space is a logical file inside this file. Scope A is storage the program and the space share: the program writes
+// `answer`, the space's code reads it and writes `doubled`, and the program reads that.
 scope A;
 grammar Demo
 {
@@ -12,15 +12,14 @@ grammar Demo
     {
       map (context : NitraDialectContext) PExpr = {
         def shared = context.Scope("A");
-        shared.Set("doubled", <[ $(shared.Get("answer").Value :> PExpr) * 2 ]>);
-        <[ () ]>
+        shared.Write("doubled", <[ $(shared.Read("answer")) * 2 ]>)
       };
     }
   }
 }
 
-scope.A.registery("answer", type("integer"));
-scope.A.registery("doubled", type("integer"));
+scope.A.registery("answer", type("int"));
+scope.A.registery("doubled", type("int"));
 scope.A.answer = 21;
 space Demo [A] { answer }
 def doubled = scope.A.doubled;

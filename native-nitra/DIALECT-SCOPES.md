@@ -22,40 +22,45 @@ grammar Demo {
     [StartRule] syntax Input = "answer" {
       map (context : NitraDialectContext) PExpr = {
         def shared = context.Scope("A");
-        shared.Set("doubled", <[ $(shared.Get("answer").Value :> PExpr) * 2 ]>);
-        <[ () ]>
+        shared.Write("doubled", <[ $(shared.Read("answer")) * 2 ]>)
       };
     }
   }
 }
 
-scope.A.registery("answer", type("integer"));
-scope.A.registery("doubled", type("integer"));
+scope.A.registery("answer", type("int"));
+scope.A.registery("doubled", type("int"));
 scope.A.answer = 21;
 space Demo [A] { answer }
 System.Console.WriteLine(scope.A.doubled);   // 42
 ```
 
 The space's mapped code takes its place among the file's top-level statements, and its own value is discarded.
-Results come back through a scope binding (as `doubled` above) or a dial. An embedding host that tests a mapping can
+Results come back through a scope slot (as `doubled` above) or a dial. An embedding host that tests a mapping can
 collect the value instead with `NitraSourceConfiguration.SpaceValueTarget`, an assignable expression such as a static
 field.
 
-`scope A;` and `scope A {}` declare an empty shared scope. The first `registery`
-operation can also create its scope. Registration declares a binding and its
-custom type token; assignment updates an existing binding. Duplicate bindings,
-missing bindings, and reading a binding before it has a value are errors.
-Assignments record Nemerle expression AST in the compiler scope, rather than
-executing the expression during compilation. Its runtime behavior is determined
-when a mapping inserts that expression into the output. Ordinary CLR type
-checking still applies to the generated expression.
+A scope is a dedicated global storage that the program and its spaces share.
+`scope A;` (or `scope A {}`) declares it at the top level of a file; the first
+`registery` can also create it. `scope.A.registery("x", type("t"))` appends a slot,
+`scope.A.x = e` writes it and `scope.A.x` reads it, anywhere and when the program
+runs. The values live in `Nemerle.Scopes.Scope` (the language runtime), which the
+whole process shares, so a host application and the plugin scripts it runs see
+the same storage. Anything fits a slot: its Nemerle type is the grammar's
+(`NitraDialectType.Clr` from the resolver of a space that attaches the scope), or
+the token itself when it names a Nemerle type, or `object`; the code that uses the
+slot is type-checked as usual. A slot starts with its type's default. Registering
+a slot twice in one compilation, and using a slot or scope that does not exist,
+are errors. Registrations with literal arguments join the layout when the
+sources are read, so every use sees the slot whatever order code is typed in.
 
 `[A]` attaches a shared scope to a space. It does not import
 surrounding globals or publish the space's internal declarations. Mappings and
-resolvers access attached scopes through `context.Scope("A")`. Register shared
-bindings before the space that consumes them; top-level statements, spaces
-included, are handled in source order. A custom type token is resolved by the consuming
-dial's `ResolveType`, so it does not need to be a CLR type upfront.
+resolvers access attached scopes through `context.Scope("A")`: `Read("x")`,
+`Write("x", value)` and `RegisterCode("x")` give the code that reads, writes and
+appends a slot, for the space's own output (`Get("x").Value` is the read code too).
+A slot can also hold a dial reference (`scope.A.registery("f", dial:.file.G::m)`);
+calling `scope.A.f(...)` resolves through that dial.
 
 ## Dials: addressing a space
 
@@ -158,8 +163,8 @@ plain space's cross-grammar lookup, and the top-level rule.
 
 ## Boundaries
 
-Scope bindings with expression values are stored in output assemblies as
-expression text; bindings holding dial references are not stored. Scopes are not
-a runtime scripting session, and alternate
+A scope travels in output assemblies as its layout (slot names, type tokens and
+types) with the binary's spaces; the values stay in the running program's storage.
+Slots holding dial references are not stored. Alternate
 `runtime`/`compile`/form/semantic-kind notation remains inactive. Native shorthand
 for list/optional PExpr output containers remains a separate unfinished feature.

@@ -148,6 +148,7 @@ internal sealed class NitraSourceSession
   {
     configuration.InactiveConstructs.Clear();
     configuration.Dialects=NitraDialectRegistry();
+    configuration.Dialects.PrepareSpace=(space,typer) => when(space.Resolver==null && !preparing.Contains(space.Zone)) _=Context(space,typer,space.Location);
     foreach(source in manager.Options.Sources)
     {
       def text=source.GetText(); def chars=text.ToCharArray(); def file=Location.GetFileName(source.FileIndex);
@@ -242,8 +243,12 @@ internal sealed class NitraSourceSession
             def shared=configuration.Dialects.RegisterScope(scope.Name);
             foreach(binding when !shared.Contains(binding.Name) in scope.Bindings)
             {
-              def bound=shared.Register(binding.Name,NitraDialectType(binding.Type),Location.Default);
-              when(binding.Value!=null) bound.Value=Nemerle.Compiler.main_parser.MainParser.ParseExpr(manager.CoreEnv,binding.Value,Location.Default,false);
+              // the layout only: the values are in the storage when the program runs
+              // a typed slot keeps its type; an untyped one may still get one from a space here
+              def clr=if(binding.Clr!="object") binding.Clr else null;
+              def bound=shared.Register(binding.Name,NitraDialectType(binding.Type,clr),Location.Default);
+              bound.SlotType=clr;
+              bound.Continued=true;
             }
           }
         // a grammar image is bound to the compiler and Nitra build that made it: another build's images are not used
@@ -574,11 +579,29 @@ internal sealed class NitraSourceSession
   }
   private RewriteBoundaries(text : string, file : int) : string
   {
-    def edits=SCG.List.[NitraBoundaryEdit](); def r=GReader(text,Location.GetFileName(file),0,text.Length);
+    def edits=SCG.List.[NitraBoundaryEdit]();
+    // scans [from, to) of the text; the splices `$(...)` of a `$"..."` string are scanned too
+    def scan(from : int, to : int) : void
+    {
+    def r=GReader(text,Location.GetFileName(file),from,to);
     mutable previous="";
     while(!r.Is("<eof>"))
     {
       def t=r.Take();
+      when(t.Quoted && t.Start>0 && text[t.Start-1]=='$')
+      {
+        mutable i=t.Start+1;
+        while(i<t.End-1)
+        {
+          if(text[i]=='$' && text[i+1]=='(')
+          {
+            mutable depth=0; mutable j=i+1; mutable close = -1;
+            while(j<t.End-1 && close<0) { when(text[j]=='(') ++depth; when(text[j]==')') { --depth; when(depth==0) close=j; } ++j; }
+            if(close>0) { scan(i+2,close); i=close+1; } else i=t.End;
+          }
+          else ++i;
+        }
+      }
       when(!t.Quoted && previous!="." && t.Text.Length>0 && (char.IsLetter(t.Text[0]) || t.Text[0]=='_'))
       {
         mutable boundary : NitraBoundary=null;
@@ -587,7 +610,36 @@ internal sealed class NitraSourceSession
           def scope=r.Take(); r.Need("."); def member=r.Take();
           boundary=NitraBoundary(); boundary.Owner=scope.Text; boundary.Member=member.Text;
           boundary.Kind=if(member.Text=="registery") "register" else "scope";
-          when(r.Eat("=")) boundary.Kind="set";
+          // `scope.A.x = e` writes the slot (`==` is a comparison)
+          when(r.Is("=") && { def at=r.Peek().Start; at+1>=text.Length || text[at+1]!='=' }) { _=r.Take(); boundary.Kind="set"; }
+          // a slot registered with literal arguments joins the scope's layout now, so every use of it in the
+          // compilation sees its type, whatever order the code is typed in
+          when(boundary.Kind=="register")
+          {
+            def literal() : option[string*string]
+            {
+              // from the next token (the reader may have looked past it already)
+              def probe=GReader(text,r.File,r.Peek().Start,text.Length);
+              try
+              {
+                if(!probe.Eat("(")) None()
+                else
+                {
+                  def name=probe.Take();
+                  if(!(name.Quoted && probe.Eat(",") && probe.Take().Text=="type" && probe.Eat("("))) None()
+                  else { def type=probe.Take(); if(type.Quoted && probe.Eat(")") && probe.Is(")")) Some((name.Value,type.Value)) else None() }
+                }
+              }
+              catch { | _ is ArgumentException => None() }
+            }
+            match(literal())
+            {
+              | Some((name,type)) =>
+                _=configuration.Dialects.RegisterScope(scope.Text).Register(name,NitraDialectType(type),At(file,t.Start));
+                boundary.Registered=true;
+              | None => ()
+            }
+          }
         }
         else
         {
@@ -630,6 +682,8 @@ internal sealed class NitraSourceSession
       }
       previous=t.Text;
     }
+    }
+    scan(0,text.Length);
     // Keep every original newline, including multiline qualified prefixes.
     edits.Sort((a,b) => b.Start.CompareTo(a.Start)); mutable result=text;
     foreach(edit in edits)
@@ -683,32 +737,43 @@ internal sealed class NitraSourceSession
       match(args)
       {
         | [PExpr.Literal(Literal.String(name)), PExpr.Call(PExpr.Ref(typeName), [PExpr.Literal(Literal.String(type))])] when(typeName.ToString()=="type") =>
-          _=configuration.Dialects.RegisterScope(b.Owner).Register(name,NitraDialectType(type),b.Location); <[ () ]>
+          def scope=configuration.Dialects.RegisterScope(b.Owner);
+          unless(b.Registered) { _=scope.Register(name,NitraDialectType(type),b.Location); b.Registered=true; }
+          scope.RegisterCode(name,typer)
         | [PExpr.Literal(Literal.String(name)), PExpr.Call(PExpr.Ref(macroName), [PExpr.Literal(Literal.Integer(value,false,_))])] when(macroName.ToString()=="__b" && value<int.MaxValue :> ulong) =>
           def reference=boundaries[value :> int];
           unless(reference.Kind=="dialect" && !reference.IsCall) throw ArgumentException("scope registration requires a dialect member reference");
           def resolved=ResolveBoundary(reference,typer,array[]);
-          _=configuration.Dialects.RegisterScope(b.Owner).Register(name,NitraDialectReference(reference.Dialect,reference.Owner,reference.Member,resolved),b.Location); <[ () ]>
+          unless(b.Registered)
+          {
+            _=configuration.Dialects.RegisterScope(b.Owner).Register(name,NitraDialectReference(reference.Dialect,reference.Owner,reference.Member,resolved),b.Location);
+            b.Registered=true;
+          }
+          <[ () ]>
         | _ => throw ArgumentException("expected scope.A.registery(\"name\", type(\"type\")) or a dialect member reference");
       }
     }
     else if(b.Kind=="set")
     {
       match(args)
-      { | [value] => configuration.Dialects.Scope(b.Owner).Set(b.Member,value); <[ () ]>
+      { | [value] =>
+          def scope=configuration.Dialects.Scope(b.Owner);
+          when(scope.Get(b.Member).Reference!=null) throw ArgumentException("scope."+b.Owner+"."+b.Member+" is a dial reference, not a storage slot");
+          scope.Write(b.Member,value,typer)
         | _ => throw ArgumentException("scope assignment requires one value"); }
     }
     else
     {
-      def binding=configuration.Dialects.Scope(b.Owner).Get(b.Member);
-      match(binding.Value)
+      def scope=configuration.Dialects.Scope(b.Owner);
+      def binding=scope.Get(b.Member);
+      match(if(binding.Reference!=null) binding.Reference : object else scope.Read(b.Member,typer))
       {
         | reference is NitraDialectReference =>
           def call=NitraBoundary(); call.Kind="dialect"; call.Dialect=reference.Dialect; call.Owner=reference.Owner;
           call.Member=reference.Name; call.IsCall=b.IsCall; call.Location=b.Location;
           def slot=boundaries.Count; boundaries.Add(call); Boundary(typer,slot,args)
         | expression is PExpr => if(b.IsCall) PExpr.Call(expression,args) else expression
-        | _ => throw ArgumentException("scope binding has no expression value: scope."+b.Owner+"."+b.Member);
+        | _ => throw ArgumentException("scope binding cannot be read: scope."+b.Owner+"."+b.Member);
       }
     }
   }

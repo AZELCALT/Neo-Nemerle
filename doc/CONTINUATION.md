@@ -40,11 +40,12 @@ The payload of `.nemir` is a container (`ncc/Nemerle/Compiler/continuation.n`, `
   2. **macro:** for every macro the binary defines, its name, its CLR class and the source span of its definition.
   3. **type:** for the *relevant set* only, meaning modules that define macros: the members that CLR visibility hides
      from a referencing compilation (internal ones). Everything else comes from ordinary .NET metadata.
-  4. **scope:** the binary's shared scopes (`scope A;`), stored next to its grammars. For each binding: its name, its
-     dial type token, and its value as Nemerle expression text (or none). A binding holding a dial reference is not
-     stored. With the scopes come the binary's spaces: for each, the grammars it uses, its path (`file`,
-     `file.G` or `file.(A,B)`), its file, its `as` name, the scopes it attaches, and its body. Scopes are plain data, so they are read whatever compiler wrote
-     them.
+  4. **scope:** the binary's shared scopes (`scope A;`), stored next to its grammars as their storage layout. For
+     each slot: its name, its type token, and the Nemerle type it reads as (`object` when nothing gave one). The values
+     are not stored: they live in the storage of the running program (`Nemerle.Scopes.Scope`, shared by the whole
+     process). A slot holding a dial reference is not stored. With the scopes come the binary's spaces: for each, the
+     grammars it uses, its path (`file`, `file.G` or `file.(A,B)`), its file, its `as` name, the scopes it attaches,
+     and its body. Scopes are plain data, so they are read whatever compiler wrote them.
 
 The section is appended to the finished image, after the Mono.Cecil metadata rewrite, which would drop it. The file is
 then strong-name signed again (`platform/ClrCompilerSection.cs`). The PE header must have room for one more section
@@ -56,7 +57,7 @@ no section.
 | Situation | Result |
 |---|---|
 | A `space` uses a stored grammar that the source does not define | The stored image is loaded and no grammar is compiled. |
-| The binary stores scopes | They are registered with their bindings and values before the source's spaces are read, so `scope.A.x` and `space G [A]` work with no `scope` declaration. |
+| The binary stores scopes | Their layouts are registered before the source's spaces are read, so `scope.A.x` and `space G [A]` work with no `scope` declaration, and reach the same storage when they run in the binary's process. |
 | The binary stores spaces | Each is indexed as a space of its file there, with its attached scopes; a dial into it re-runs its mapping in this compilation (to register its resolver), and nothing of it is emitted. A space whose grammar image cannot be used here is left out. |
 | A source has no space but uses `scope.` or a dial (`dial:.file.G::m`) | It takes the grammar path like a file with a space, so a plugin script reaches the host's scopes. |
 | A plain `space { ... }` in a file without its own grammars | It selects every visible grammar, the stored ones included. |

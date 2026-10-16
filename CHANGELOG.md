@@ -39,6 +39,9 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 - New structural recognizer (flat region engine with a fast hybrid first pass), checked against upstream Nitra by a
   72-case differential.
 - Known gap: grammars are compiled with their program, and there is no reusable compiled-grammar artifact yet.
+- A `scope` is a dedicated global storage shared by the program and its spaces (and by a host application and the
+  plugin scripts it runs): `scope.A.registery(...)` appends a slot, typed by the grammar or as `object`, and
+  `scope.A.x` reads and writes it when the program runs. The runtime part is `Nemerle.Scopes.Scope` in `Nemerle.dll`.
 - A `space` is a top-level logical file in a grammar's language. A space inside a function or a type, or used as an
   expression, is an error. The program talks to its spaces through **scopes** (shared bindings, read and written by
   both sides) and **dials** (`dial:.file.G::member(...)`; `dial:.file.(A, B)::` for a mixing space, `dial:.file::` for the plain one;

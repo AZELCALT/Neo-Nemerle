@@ -66,13 +66,13 @@ public sealed class ContinuationScope
   public Bindings : SCG.List[ContinuationBinding] = SCG.List();
 }
 
-/// A scope binding: its name, its dial type token (resolved by the consuming dial, so it is program-wide rather than a
-/// CLR type), and its value as Nemerle expression text (null when it has none yet).
+/// A slot of a scope's storage layout: its name, its type token, and the Nemerle type it reads as. The value itself
+/// lives in the storage when the program runs.
 public sealed class ContinuationBinding
 {
   public mutable Name : string = "";
   public mutable Type : string = "";
-  public mutable Value : string;
+  public mutable Clr : string = "object";
 }
 
 /// A space stored with the scopes: enough to rebuild it in a continuing compilation, so a dial
@@ -326,7 +326,7 @@ public sealed class ContinuationStore
         foreach (b in s.Bindings)
         {
           WriteInt(scopes, str(b.Name)); WriteInt(scopes, str(b.Type));
-          if (b.Value == null) WriteInt(scopes, 0) else { WriteInt(scopes, 1); WriteInt(scopes, str(b.Value)) }
+          WriteInt(scopes, str(b.Clr));
         }
       }
       WriteInt(scopes, Spaces.Count);
@@ -434,7 +434,7 @@ public sealed class ContinuationStore
           {
             def b = ContinuationBinding();
             b.Name = strings[payload.Int()]; b.Type = strings[payload.Int()];
-            b.Value = if (payload.Int() == 1) strings[payload.Int()] else null;
+            b.Clr = strings[payload.Int()];
             s.Bindings.Add(b);
           }
           store.Scopes.Add(s);

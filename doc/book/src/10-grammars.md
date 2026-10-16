@@ -98,15 +98,18 @@ space Calc { 2 + 3 * (width - 1) }
 The space above compiles to exactly `System.Console.WriteLine(2 + 3 * (width - 1))`. No parsing happens when the
 program runs.
 
-## Scopes: shared memory
+## Scopes: shared storage
 
-A scope is a named set of bindings that the program and its spaces share:
+A scope is a dedicated global storage that the program and its spaces share, like global variables of their own:
 
-- `scope A;` declares a scope.
-- `scope.A.registery("name", type("t"))` adds a binding. The type is a token that the space's dial gives meaning to.
-- `scope.A.name = e` gives a binding its value, and `scope.A.name` reads it.
-- `space G [A] { ... }` attaches the scope to a space. A mapping reaches it through its `NitraDialectContext`, with
-  `Get` and `Set`.
+- `scope A;` declares a scope, at the top level of a file.
+- `scope.A.registery("name", type("t"))` appends a slot to the storage. Anything fits a slot. Its type is the
+  grammar's: the space's resolver says which Nemerle type the token `"t"` stands for. A token that names a Nemerle type
+  (`type("int")`) is that type, and any other token reads as `object`. The code that uses a slot is type-checked as
+  usual.
+- `scope.A.name = e` writes a slot, and `scope.A.name` reads it, anywhere in the program, when it runs.
+- `space G [A, B] { ... }` attaches scopes to a space. Its mappings reach a scope through their `NitraDialectContext`:
+  `Read("name")` and `Write("name", value)` give the code that reads and writes a slot, for the space's own code.
 
 ```nemerle
 scope A;
@@ -121,15 +124,14 @@ grammar Demo
     {
       map (context : NitraDialectContext) PExpr = {
         def shared = context.Scope("A");
-        shared.Set("doubled", <[ $(shared.Get("answer").Value :> PExpr) * 2 ]>);
-        <[ () ]>
+        shared.Write("doubled", <[ $(shared.Read("answer")) * 2 ]>)
       };
     }
   }
 }
 
-scope.A.registery("answer", type("integer"));
-scope.A.registery("doubled", type("integer"));
+scope.A.registery("answer", type("int"));
+scope.A.registery("doubled", type("int"));
 scope.A.answer = 21;
 space Demo [A] { answer }
 System.Console.WriteLine(scope.A.doubled);
@@ -139,9 +141,11 @@ System.Console.WriteLine(scope.A.doubled);
 42
 ```
 
-The program writes `answer`, the space reads it and writes `doubled`, and the program reads that. A binding holds
-code, not a run-time value: `scope.A.doubled` is replaced by `21 * 2`. A space that is not attached to a scope cannot
-see it.
+The program writes `answer`, the space's code reads it and writes `doubled`, and the program reads that. The values
+live in the storage while the program runs; a space that is not attached to a scope cannot use it.
+
+The storage is the process's, so an application and the plugin scripts it runs share the same values (see
+[Scripts as plugins](11-scripts.md)).
 
 ## Dials: calling into a space
 
@@ -175,7 +179,7 @@ public class Resolver : INitraDialectResolver
 {
   public ResolveType(name : string, _context : NitraDialectContext) : NitraDialectType
   {
-    if (name == "number") NitraDialectType(name) else null
+    if (name == "number") NitraDialectType(name, "int") else null
   }
   public Resolve(request : NitraDialectRequest) : NitraDialectResolution
   {
@@ -189,7 +193,7 @@ public class Resolver : INitraDialectResolver
       | "shared" =>
         def answer = NitraDialectResolution();
         answer.Signatures.Add(NitraDialectSignature("shared", NitraDialectType("number"), array[]));
-        answer.Lower = Func(r => r.Context.Scope("A").Get("value").Value :> PExpr);
+        answer.Lower = Func(r => r.Context.Scope("A").Read("value"));
         answer
       | _ => null
     }
@@ -302,8 +306,8 @@ Results come back through a scope or a dial instead.
 ## Sharing grammars
 
 A grammar compiled into a library travels with it. The library's continuation section (see `doc/CONTINUATION.md`)
-stores the compiled grammar and, next to it, the library's scopes with their bindings. A program that references the
-library uses the grammar in a space without compiling it again, and starts with the library's scope bindings:
+stores the compiled grammar and, next to it, the library's scopes with their slots. A program that references the
+library uses the grammar in a space without compiling it again, and knows the library's scopes:
 
 ```nemerle,lib=calclib
 // file: calclib.n
@@ -339,8 +343,9 @@ space Units { 3 km }
 
 The program has no grammar of its own, so a plain `space { 3 km }` would find `Units` as well.
 
-A binding whose value is code is stored as that code's text. A binding that holds a dial reference
-(`scope.A.f = dial:.file.G::member`) is not stored; the space it points to is (see below).
+A scope travels as its layout, its slots and their types; the values stay in the storage of the running program. A
+slot that holds a dial reference (`scope.A.registery("f", dial:.file.G::member)`) is not stored; the space it points to
+is (see below).
 
 When a program redefines a stored grammar and only some alternatives changed, the compiler recompiles just those
 alternatives.

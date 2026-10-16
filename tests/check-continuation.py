@@ -66,7 +66,7 @@ public class Resolver : INitraDialectResolver
 {
   public ResolveType(name : string, _context : NitraDialectContext) : NitraDialectType
   {
-    if (name == "number") NitraDialectType(name) else null
+    if (name == "number") NitraDialectType(name, "int") else null
   }
   public Resolve(request : NitraDialectRequest) : NitraDialectResolution
   {
@@ -80,7 +80,7 @@ public class Resolver : INitraDialectResolver
       | "shared" =>
         def answer = NitraDialectResolution();
         answer.Signatures.Add(NitraDialectSignature("shared", NitraDialectType("number"), array[]));
-        answer.Lower = Func(r => r.Context.Scope("A").Get("value").Value :> PExpr);
+        answer.Lower = Func(r => r.Context.Scope("A").Read("value"));
         answer
       | _ => null
     }
@@ -112,6 +112,28 @@ grammar G
 scope.A.registery("value", type("number"));
 scope.A.value = 21;
 space G [A] { go }
+"""
+
+# a host application: it sets its scope, runs plugin scripts in its own process, then reads what they wrote
+APP = SPACE_HOST + """
+def run(file : string) : void
+{
+  def host = Nemerle.Scripting.host.ScriptHost();
+  def definition = Nemerle.Scripting.contracts.ScriptDefinition();
+  definition.TargetReferenceDirectory = System.Environment.GetCommandLineArgs()[1];
+  definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);
+  definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "res.dll"));
+  def compiled = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText(file), file), definition);
+  if (!compiled.Success) foreach (d in compiled.Diagnostics) System.Console.WriteLine("error " + d.Message)
+  else
+  {
+    def result = host.Evaluate(compiled.Script, Nemerle.Scripting.contracts.ScriptInputs());
+    when (result.Error != null) System.Console.WriteLine("error " + result.Error.ToString());
+  }
+}
+def args = System.Environment.GetCommandLineArgs();
+for (mutable i = 2; i < args.Length; i++) run(args[i]);
+System.Console.WriteLine("host " + scope.A.value.ToString());
 """
 
 
@@ -394,36 +416,41 @@ if a.stage == 'E6':
     (res / 'res.n').write_text(RESOLVER)
     run([T / 'ncc', res / 'res.n', '-source-root:' + str(res), '-target:library', '-out:' + str(res / 'res.dll'), '-no-color',
          '-r:' + str(T / 'Nemerle.Compiler.dll')])
-    shost = w / 'spacehost'
+    shost = w / 'app'
     shost.mkdir()
+    for f in T.iterdir():
+        if f.is_file() and f.suffix in {'.dll', '.exe', '.json', '.nitrametadata'}:
+            shutil.copy2(f, shost / f.name)
     shutil.copy2(res / 'res.dll', shost / 'res.dll')
-    (shost / 'host.n').write_text(SPACE_HOST)
-    run([T / 'ncc', shost / 'host.n', '-source-root:' + str(shost), '-target:library', '-out:' + str(shost / 'host.dll'),
-         '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(shost / 'res.dll')])
-    def plugin(name, text, expected):
-        d = w / name
-        d.mkdir()
-        for f in ('host.dll', 'res.dll'):
-            shutil.copy2(shost / f, d / f)
-        (d / 'use.n').write_text('[assembly: DependsOn("host.dll")]\n[assembly: DependsOn("res.dll")]\n' + text)
-        output = run([T / 'nscript', 'run', d / 'use.n', '--no-cache'], cwd=d).stdout.split()
-        if output != expected:
-            raise SystemExit('FAILED: %s printed %r, expected %r' % (name, output, expected))
-    plugin('scope-only', 'System.Console.WriteLine(scope.A.value);\n', ['21'])
-    print('PASS: P a script with no space reads a host scope binding from the section (scope subsection, deeper lookup)', flush=True)
-    plugin('plugin-space', 'space G [A] { go }\nSystem.Console.WriteLine(dial:.use.G::twice(scope.A.value));\n'
-                           'System.Console.WriteLine(dial:.use.G::shared());\n', ['42', '21'])
-    plugin('plugin-named', 'space G as Named [A] { go }\nSystem.Console.WriteLine(dial:.use.Named::twice(5));\n', ['10'])
-    print('PASS: P a plugin script with no grammar uses the host grammar through space G [A] / as Name, dials and scopes', flush=True)
-    plugin('host-dial', 'System.Console.WriteLine(dial:.host.G::twice(2));\nSystem.Console.WriteLine(dial:.host.G::shared());\n', ['4', '21'])
-    print('PASS: P a plugin script dials into the host library\'s own space (spaces stored with the scopes)', flush=True)
+    (shost / 'app.n').write_text(APP)
+    run([T / 'ncc', shost / 'app.n', '-source-root:' + str(shost), '-out:' + str(shost / 'app.exe'), '-no-color',
+         '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll'), '-r:' + str(shost / 'res.dll')])
+    shutil.copy2(T / 'ncc.runtimeconfig.json', shost / 'app.runtimeconfig.json')
+    plugins = [
+        ('reader.n', 'System.Console.WriteLine(scope.A.value);\n'),
+        ('user.n', 'space G [A] { go }\nSystem.Console.WriteLine(dial:.user.G::twice(scope.A.value));\n'
+                   'System.Console.WriteLine(dial:.user.G::shared());\n'),
+        ('named.n', 'space G as Named [A] { go }\nSystem.Console.WriteLine(dial:.named.Named::twice(5));\n'),
+        ('caller.n', 'System.Console.WriteLine(dial:.app.G::twice(2));\nSystem.Console.WriteLine(dial:.app.G::shared());\n'),
+        ('writer.n', 'scope.A.value = scope.A.value + 29;\n'),
+    ]
+    for name, text in plugins:
+        (shost / name).write_text(text)
+    output = run(['dotnet', shost / 'app.exe', T / 'references', *[shost / n for n, _ in plugins]], cwd=shost).stdout.split('\n')
+    output = [l for l in output if l.strip()]
+    expected = ['21', '42', '21', '10', '4', '21', 'host 50']
+    if output != expected:
+        raise SystemExit('FAILED: the host application and its plugins printed %r, expected %r' % (output, expected))
+    print('PASS: P plugins run in the host application read its scope storage (a plugin with no space as well), use '
+          'its grammar (space G [A] / as Name), dial into their own spaces and into the host\'s, and write the storage '
+          'back to the host', flush=True)
     plain = w / 'plainspace'
     plain.mkdir()
-    for f in ('host.dll', 'res.dll'):
+    for f in ('app.exe', 'res.dll'):
         shutil.copy2(shost / f, plain / f)
     (plain / 'prog.n').write_text('space { go }\nSystem.Console.WriteLine(dial:.prog::twice(4));\n')
     run([T / 'ncc', plain / 'prog.n', '-source-root:' + str(plain), '-out:' + str(plain / 'prog.exe'), '-no-color',
-         '-r:' + str(plain / 'host.dll'), '-r:' + str(plain / 'res.dll')])
+         '-r:' + str(plain / 'app.exe'), '-r:' + str(plain / 'res.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', plain / 'prog.runtimeconfig.json')
     if run(['dotnet', plain / 'prog.exe'], cwd=plain).stdout.split() != ['8']:
         raise SystemExit('FAILED: a plain space does not look across grammars')
@@ -431,10 +458,10 @@ if a.stage == 'E6':
     for name, text in (('in-function', 'f() : void { space G { go } }\n'), ('expression', 'def x = space G { go };\n')):
         d = w / ('reject-' + name)
         d.mkdir()
-        shutil.copy2(shost / 'host.dll', d / 'host.dll')
+        shutil.copy2(shost / 'app.exe', d / 'app.exe')
         (d / 'bad.n').write_text(text)
         r = subprocess.run([str(T / 'ncc'), str(d / 'bad.n'), '-source-root:' + str(d), '-out:' + str(d / 'bad.exe'),
-                            '-no-color', '-r:' + str(d / 'host.dll')], capture_output=True, text=True)
+                            '-no-color', '-r:' + str(d / 'app.exe')], capture_output=True, text=True)
         if r.returncode == 0 or 'top-level' not in r.stdout + r.stderr and 'top level' not in r.stdout + r.stderr:
             raise SystemExit('FAILED: a space %s is not rejected\n%s%s' % (name, r.stdout, r.stderr))
     print('PASS: P a space inside a function or as an expression is rejected (spaces are top level)', flush=True)

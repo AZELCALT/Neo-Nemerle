@@ -17,7 +17,7 @@ public static class NitraDialectChecks
     static void Check(bool ok, string message) { if (!ok) throw new Exception(message); count++; }
     public sealed class Resolver : INitraDialectResolver
     {
-        public NitraDialectType ResolveType(string name, NitraDialectContext context) => name == "custom_int" ? new(name) : null;
+        public NitraDialectType ResolveType(string name, NitraDialectContext context) => name == "custom_int" ? new(name, "int") : null;
         public NitraDialectResolution Resolve(NitraDialectRequest request)
         {
             if (request.Name != "value" && request.Name != "abs" && request.Name != "shared") return null;
@@ -111,7 +111,9 @@ public static class NitraDialectChecks
         Compile(root,refs,"DuplicateBinding",Grammar,"scope.A.registery(\"x\",type(\"custom_int\")); scope.A.registery(\"x\",type(\"custom_int\")); space G {42}",null,failure:"duplicate scope binding");
         Compile(root,refs,"MissingBinding",Grammar,"scope.A.x=42; space G {42}",null,failure:"unknown shared scope");
         Compile(root,refs,"Unattached",Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G {42}; dial:.Unattached.G::shared()",null,failure:"scope is not attached");
-        Compile(root,refs,"Uninitialized",Grammar,"scope.A.registery(\"x\",type(\"custom_int\")); space G [A] {42}; scope.A.x",null,failure:"no expression value");
+        // a slot starts with its type's default; its type comes from the grammar (the resolver maps custom_int to int)
+        Compile(root,refs,"DefaultSlot",Grammar,"scope.A.registery(\"x\",type(\"custom_int\")); space G [A] {42}; scope.A.x",0,configure:false,
+            setup:r=>r.RegisterResolver("DefaultSlot.G",new Resolver()));
         Compile(root,refs,"NoResolver",Grammar,"space G {42}; dial:.NoResolver.G::value()",null,configure:false,failure:"space has no dialect resolver");
         // a file has one space per grammar; a mixing space (A, B) is a space of its own whatever the order, reached
         // as dial:.file.(A, B)::member through any of its grammars
@@ -125,11 +127,15 @@ public static class NitraDialectChecks
         Compile(root,refs,"GrammarFirstForm",Grammar,"space G {42}; G:.GrammarFirstForm::value(42)",null);
         Compile(root,refs,"AfterFailure",Grammar,"space G {42}; dial:.AfterFailure.G::value(42)",42);
         // A native parameterless mapping sees the same scoped services without changing Nitra notation.
-        // The scope is the shared memory of the program and its spaces: the mapping reads `name` and writes `out` back.
-        var contextual=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; def s=c.Scope(\"A\"); s.Set(\"out\",s.Get(\"name\").Value); <[ () ]> };");
-        Compile(root,refs,"MappingScope",contextual,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.registery(\"out\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
-        var explicitContext=Grammar.Replace("map PExpr = <[ 42 ]>;","map (context : NitraDialectContext) PExpr = { def s=context.Scope(\"A\"); s.Set(\"out\",s.Get(\"name\").Value); <[ () ]> };");
-        Compile(root,refs,"ExplicitContext",explicitContext,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.registery(\"out\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
+        // The scope is the storage the program and its spaces share: the space's code reads `name` and writes `out`.
+        var contextual=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; def s=c.Scope(\"A\"); s.Write(\"out\",s.Read(\"name\")) };");
+        Compile(root,refs,"MappingScope",contextual,"scope.A.registery(\"name\",type(\"int\")); scope.A.registery(\"out\",type(\"int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
+        var explicitContext=Grammar.Replace("map PExpr = <[ 42 ]>;","map (context : NitraDialectContext) PExpr = { def s=context.Scope(\"A\"); s.Write(\"out\",s.Read(\"name\")) };");
+        Compile(root,refs,"ExplicitContext",explicitContext,"scope.A.registery(\"name\",type(\"int\")); scope.A.registery(\"out\",type(\"int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
+        // anything fits a slot; the code using it is type-checked: a slot of an unknown type reads as object
+        Compile(root,refs,"AnySlot",Grammar,"scope.A.registery(\"thing\",type(\"whatever\")); scope.A.thing=\"text\"; space G [A] {42}; (scope.A.thing :> string).Length + 38",42,configure:false);
+        Compile(root,refs,"ReadAnywhere",Grammar,"scope.A.registery(\"n\",type(\"int\")); scope.A.n=40; space G [A] {42}; Reader.Helper.Get()",42,configure:false,
+            extraSources:new[]{("Reader","public static class Helper { public static Get() : int { scope.A.n + 2 } }")});
         var selfRegistering=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; when(c.Space.Resolver==null) c.RegisterResolver(NitraDialectChecks.CreateResolver()); <[ 42 ]> };");
         Compile(root,refs,"MappingResolver",selfRegistering,"def x=dial:.MappingResolver.G::value(42); space G {42}; x",42,configure:false);
         Compile(root,refs,"TwoDialects",Grammar+Grammar.Replace("grammar G", "grammar H"),"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; space H [A] {42}; dial:.TwoDialects.H::shared()",42,

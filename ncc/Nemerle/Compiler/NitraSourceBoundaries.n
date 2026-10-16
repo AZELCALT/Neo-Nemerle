@@ -19,6 +19,8 @@ internal sealed class NitraBoundary
   public mutable Member : string;
   public mutable IsCall : bool;
   public mutable Location : Location;
+  /// A `registery` of a slot that the index already added to the scope's layout.
+  public mutable Registered : bool;
 }
 internal sealed class NitraBoundaryEdit
 {
