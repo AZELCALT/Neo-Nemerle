@@ -86,10 +86,13 @@ System.Console.WriteLine(vault.Combination())
 Combination
 ```
 
-## Top-level statements
+## Top-level code
 
-Statements written at the top of a file, in source order, are the file's `Main`, as in classic Nemerle and C#. Members
-may sit between them. In a statement, `mutable x = ...` is a local; `mutable x : T` declares a field of the module:
+Statements written at the top of a file, in source order, are the file's top-level code. Members may sit between
+them. In a statement, `mutable x = ...` is a top-level value; `mutable x : T` declares a field of the module.
+
+The program starts at `main.n`: its top-level code is the program's `Main`, as in classic Nemerle and C#. A program
+with a single source file starts there whatever it is called, and `-main:file` names another file to start at.
 
 ```nemerle
 using System.Console;
@@ -104,7 +107,38 @@ WriteLine(counter + twice)
 42
 ```
 
-Only one file of a program can have top-level statements, because a program has one `Main`.
+Any other file's top-level code runs where a file imports it: `using lib.config;` runs `lib/config.n`'s top-level
+code first, once for the whole program, as Python runs a module on import. A file without top-level code costs
+nothing. The order of `using`s is the order in which top-level code runs, so code that depends on another file's
+top-level state imports it first.
+
+A file's top-level `def` and `mutable` are its state, kept for the program's whole run, so the file's functions can
+use them. They are private to the file; `public def` lets a file that imports it read the value, always written in
+full, `lib.config.name`, never as a bare `name`:
+
+```nemerle
+// file: lib/config.n
+public def name = "config";
+mutable count = 0;
+System.Console.WriteLine("config is set up");
+public Next() : int { count++; count }
+
+// file: main.n
+using lib.config;
+System.Console.WriteLine("main starts");
+System.Console.WriteLine(lib.config.name);
+System.Console.WriteLine(lib.config.Next() + lib.config.Next())
+```
+
+```text
+config is set up
+main starts
+config
+3
+```
+
+A library's files work the same way: a program that imports a library's file runs its top-level code, so a library
+can set up its state (and its scopes, see [Grammars and spaces](10-grammars.md)). Code in C# does not run it.
 
 ## The rules
 

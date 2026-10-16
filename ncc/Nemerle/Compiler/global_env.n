@@ -517,7 +517,7 @@ public class GlobalEnv
       else
       {
         def members = if (ti.LookupMemberAvailable)
-                        ti.LookupMember(the_name, for_completion)
+                        ti.LookupMember(the_name, for_completion).Filter(m => Manager.FileModuleRegistry == null || Manager.FileModuleRegistry.StateVisible(m, parent, !type_part.IsEmpty))
                       else
                         [];
         visited = (pt, ti) :: visited;
@@ -643,7 +643,7 @@ public class GlobalEnv
       when (visited.Contains((pt, ti))) return;
       
       def members = if (ti.LookupMemberAvailable)
-                        ti.LookupMember(the_name, for_completion)
+                        ti.LookupMember(the_name, for_completion).Filter(m => Manager.FileModuleRegistry == null || Manager.FileModuleRegistry.StateVisible(m, parent, !type_part.IsEmpty))
                       else
                         [];
       visited.Add((pt, ti));

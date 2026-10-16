@@ -288,6 +288,46 @@ if ran.stdout.split('\n')[:3] != ['caught boom', 'finally', 'big']:
     raise RuntimeError('multi-line top-level statements: ' + ran.stdout)
 print('PASS: top-level try/catch/finally and if/else continue across lines', flush=True)
 
+# A file's top-level code runs once, where a file imports it (`using`), before the importer's own top-level code, as
+# Python runs a module on import. Its `def`/`mutable` are the module's state: private, `public def` is reached as
+# file.x by a file that imports it. The program starts at main.n (or the file -main: names).
+init = work / 'init'
+source('init/lib/config.n', """public def name = "config";
+def secret = 42;
+mutable count = 0;
+System.Console.WriteLine("config runs");
+public Next() : int { count++; count + secret - 42 }""")
+source('init/helper.n', """using lib.config;
+public Hello() : string { "hello from " + lib.config.name }""")
+source('init/main.n', """using lib.config;
+using helper;
+System.Console.WriteLine("main");
+System.Console.WriteLine(lib.config.name);
+System.Console.WriteLine(helper.Hello());
+System.Console.WriteLine(lib.config.Next() + lib.config.Next());""")
+init_sources = [init / 'main.n', init / 'helper.n', init / 'lib/config.n']
+run([runtime, compiler, *init_sources, '-source-root:' + str(init), '-out:' + str(work / 'init.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init.runtimeconfig.json')
+ran = run([runtime, work / 'init.exe'])
+if ran.stdout.split() != ['config', 'runs', 'main', 'config', 'hello', 'from', 'config', '3']:
+    raise RuntimeError('top-level code at using: ' + ran.stdout)
+for name, text, diagnostic in (('bare', 'using lib.config;\nSystem.Console.WriteLine(name);', 'unbound name'),
+                               ('unimported', 'System.Console.WriteLine(lib.config.name);', 'unbound name'),
+                               ('private', 'using lib.config;\nSystem.Console.WriteLine(lib.config.secret);', 'cannot access')):
+    source('init/main.n', text)
+    run([runtime, compiler, init / 'main.n', init / 'lib/config.n', '-source-root:' + str(init), '-out:' + str(work / ('init-' + name + '.exe')),
+         '-no-color', *modern_references], False, diagnostic)
+source('init/main.n', 'System.Console.WriteLine("main");')
+source('init/other.n', 'System.Console.WriteLine("other");')
+run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.n', '-source-root:' + str(init), '-out:' + str(work / 'init-nostart.exe'),
+     '-no-color', *modern_references], False, 'a program starts at main.n')
+run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.n', '-main:other', '-source-root:' + str(init), '-out:' + str(work / 'init-other.exe'),
+     '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-other.runtimeconfig.json')
+if run([runtime, work / 'init-other.exe']).stdout.split() != ['other']: raise RuntimeError('-main:other')
+print('PASS: top-level code runs once at its using; top-level values are private state, public def is file.x after using; '
+      'a program starts at main.n or -main:', flush=True)
+
 # File modules are the only layout: a namespace block is an error, and the removed switches are unknown options.
 plain = source('plain.n', 'public Run() : int { 1 }')
 run([runtime, compiler, plain, '-source-root:' + str(work), '-target:library', '-out:' + str(work / 'default.dll'), '-no-color', *modern_references])

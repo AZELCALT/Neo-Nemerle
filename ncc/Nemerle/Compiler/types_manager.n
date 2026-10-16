@@ -711,7 +711,9 @@ using Nemerle.Compiler.Utility;
         | (true, Some (entry_point_method_info)) =>
           _assembly_session.SetEntryPoint(entry_point_method_info, Manager.Options.TargetIsWinexe)
         | (true, None) =>
-          Message.Error ("no suitable entry point (Main function) found")
+          Message.Error (if (Manager.Options.FileModules && Manager.FileModuleRegistry.TopLevel.Count > 0)
+                           "no suitable entry point (Main function) found: a program starts at main.n, or at the file -main:file names"
+                         else "no suitable entry point (Main function) found")
         | _ => ()
       }
 
@@ -748,6 +750,24 @@ using Nemerle.Compiler.Utility;
             stored.Scopes.AddRange(space.Scopes); stored.Body = space.Body;
             Manager.Continuation.Spaces.Add(stored);
           }
+        // the file modules' top-level code: which run it at a `using`, which start the program, what each imports
+        when (Manager.Options.ContinuationSection && Manager.Continuation != null && Manager.Options.FileModules)
+        {
+          def registry = Manager.FileModuleRegistry;
+          foreach (pair in registry.Usings)
+          {
+            def m = Nemerle.Compiler.continuation.ContinuationModule();
+            m.Module = pair.Key; m.Usings.AddRange(pair.Value);
+            foreach (key when key.StartsWith(pair.Key + ".", System.StringComparison.Ordinal) && key.IndexOf('.', pair.Key.Length + 1) < 0 in registry.State)
+              m.State.Add(key.Substring(pair.Key.Length + 1));
+            when (registry.TopLevel.Contains(pair.Key))
+            {
+              def r = registry.TopLevel[pair.Key];
+              m.Kind = r.Kind; m.File = System.IO.Path.GetFileName(r.File); m.Start = r.Start; m.End = r.End; m.Hash = r.Hash;
+            }
+            Manager.Continuation.Modules.Add(m);
+          }
+        }
         // the continuation section is added last, because the metadata rewrite above would drop a custom section
         when (Manager.Options.ContinuationSection && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
         {
@@ -870,6 +890,16 @@ using Nemerle.Compiler.Utility;
         Iter(ti => when (ti.FullName == Manager.Options.Script.TypeName)
           foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
             constructor.RunBodyTyper());
+      // a file module's top-level bindings infer from their initializers the same way: type its top-level code
+      // (the static constructor, or the start file's Main) before the field declarations are emitted
+      when (!aux_phase && Manager.ModuleBindings.Count > 0)
+        Iter(ti =>
+          when ({ mutable has = false; foreach (k in Manager.ModuleBindings.Keys) when (k.StartsWith(ti.FullName + ".", System.StringComparison.Ordinal)) has = true; has })
+          {
+            foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+              constructor.RunBodyTyper();
+            foreach (main is MethodBuilder in ti.LookupMember("Main")) main.RunBodyTyper();
+          });
 
       when (!aux_phase)
         _cgil_phase = 2;

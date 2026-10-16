@@ -383,21 +383,80 @@ using Nemerle.Compiler.Utility;
 
       when (lex.Manager.FileModuleRegistry.IsModule(lex.Location.FileIndex))
       {
-        def fileEnv = lex.Manager.FileModuleRegistry.Environment(lex.Location.FileIndex);
+        def registry = lex.Manager.FileModuleRegistry;
+        def fileIndex = lex.Location.FileIndex;
+        def moduleName = registry.Name(fileIndex);
+        def fileEnv = registry.Environment(fileIndex);
         def fileParser = MainParser(fileEnv);
         def members : SCG.List[ClassMember] = SCG.List();
-        // Top-level statements, in source order, become the module's Main (as in classic Nemerle and C#).
+        // Top-level statements, in source order, are the file's top-level code: the program's Main in the file that
+        // starts it, else the module's initializer, which a `using` of the file runs once (as Python runs a module
+        // on import). Top-level `def`/`mutable` are the module's state: private, or `public def` for `file.x`.
         def statements : SCG.List[PExpr] = SCG.List();
+        def collected : SCG.List[PExpr * bool] = SCG.List();
+        def bindings : SCG.Dictionary[string, int] = SCG.Dictionary();
+        def boundOnce(name : string) : bool { bindings.ContainsKey(name) && bindings[name] == 1 }
+        def usings : SCG.List[string] = SCG.List();
         mutable statementsLocation = Location.Default;
+        mutable statementsEnd = Location.Default;
+        def state(expression : PExpr, isPublic : bool) : void
+        {
+          def field(name : Name, ty : PExpr, mutableBinding : bool, location : Location) : void
+          {
+            // a `def` stays read-only: only the top-level code assigns it
+            def mods = AttributesAndModifiers(NemerleModifiers.Static
+              | (if (isPublic) NemerleModifiers.Public else NemerleModifiers.Private)
+              | (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.CompilerMutable), []);
+            members.Add(ClassMember.Field(location, Splicable.Name(name), mods, ty, null));
+            _ = registry.State.Add(moduleName + "." + name.Id);
+          }
+          def binding(pattern : PExpr, value : PExpr, mutableBinding : bool) : void
+          {
+            mutable ty = <[ _ ]>;
+            mutable identifier = pattern;
+            match (pattern) { | PExpr.TypeEnforcement(name, annotation) => identifier = name; ty = annotation; | _ => () }
+            match (identifier)
+            {
+              | PExpr.Ref(name) when value != null && boundOnce(name.Id) =>
+                def key = moduleName + "." + name.Id;
+                field(name, ty, mutableBinding, expression.Location);
+                if (ty is <[ _ ]>)
+                {
+                  // the field's type is the initializer's, typed once and reused here (as for script bindings)
+                  lex.Manager.ModuleBindings[key] = value;
+                  statements.Add(<[ Nemerle.Compiler.__module_binding_value($(key : string)) ]>);
+                }
+                else statements.Add(<[ _N_skip_write_check($(identifier)) = $value ]>);
+              | PExpr.Ref(name) when isPublic => Message.Error(expression.Location, $"public top-level value `$(name.Id)' is bound more than once"); statements.Add(expression)
+              | _ => statements.Add(expression)
+            }
+          }
+          match (expression)
+          {
+            | PExpr.Define(pattern, value) => binding(pattern, value, false)
+            | PExpr.DefMutable(name, value) => binding(name, value, true)
+            | _ => statements.Add(expression)
+          }
+        }
         while (topstream != null)
         {
           fileParser.eat_assembly_attributes(topstream);
+          // `public def x = ...` is public state
+          def publicState = match (topstream.Child)
+            {
+              | Token.Keyword("public") as pub =>
+                match (pub.Next) { | Token.Keyword("def") => true | Token.Keyword("mutable") as m => !IsMemberStart(m, false) | _ => false }
+              | _ => false
+            };
+          when (publicState) topstream.Child = topstream.Child.Next;
           match (topstream.Child)
           {
-            | Token.Using(newEnv, _, _) => fileParser.env = newEnv;
+            | Token.Using(newEnv, _, _) =>
+              match (UsingTarget(fileParser.env, newEnv)) { | null => () | name => usings.Add(name) }
+              fileParser.env = newEnv;
             | Token.Namespace => () // already diagnosed by the preparser
             | null => ()
-            | token when IsMemberStart(token, false) =>
+            | token when !publicState && IsMemberStart(token, false) =>
               def next = topstream.Next;
               topstream.Next = null;
               try members.AddRange(fileParser.ParseClassMembers(topstream, "module"))
@@ -411,26 +470,52 @@ using Nemerle.Compiler.Utility;
                 match (group.Child)
                 {
                   | null | Token.Using | Token.Namespace => false
+                  | Token.Keyword("public") as pub when pub.Next is Token.Keyword("def") => false
                   | token => !IsMemberStart(token, false)
                 }
               }
-              while (last.Next is Token.LooseGroup && continues(last.Next :> Token.LooseGroup))
+              while (!publicState && last.Next is Token.LooseGroup && continues(last.Next :> Token.LooseGroup))
                 last = last.Next :> Token.LooseGroup;
               def after = last.Next;
               last.Next = null;
               try
               {
                 when (statements.Count == 0) statementsLocation = topstream.Location;
-                statements.AddRange(fileParser.parse_expr_sequence(topstream));
+                statementsEnd = last.Location;
+                foreach (expression in fileParser.parse_expr_sequence(topstream)) collected.Add((expression, publicState));
               }
               finally { last.Next = after; }
               topstream = last;
           }
           topstream = topstream.Next :> Token.LooseGroup;
         }
+        // a name bound once at the top level is the module's state; one bound again keeps classic shadowing, a local
+        foreach ((expression, _) in collected)
+          match (expression)
+          {
+            | PExpr.Define(PExpr.Ref(name), _) | PExpr.Define(PExpr.TypeEnforcement(PExpr.Ref(name), _), _)
+            | PExpr.DefMutable(PExpr.Ref(name), _) | PExpr.DefMutable(PExpr.TypeEnforcement(PExpr.Ref(name), _), _) =>
+              bindings[name.Id] = if (bindings.ContainsKey(name.Id)) bindings[name.Id] + 1 else 1
+            | _ => ()
+          }
+        foreach ((expression, isPublic) in collected) state(expression, isPublic);
+        registry.Usings[moduleName] = usings.NToList();
         when (statements.Count > 0)
+        {
+          def start = registry.IsStart(fileIndex);
+          def record = TopLevelRecord();
+          record.Module = moduleName; record.Kind = if (start) "start" else "initializer";
+          record.File = Location.GetFileName(fileIndex); record.Usings = usings.NToList();
+          record.Start = statementsLocation.Line; record.End = statementsEnd.EndLine;
+          record.Hash = ModuleInitMacro.Fingerprint(statements);
+          registry.TopLevel[moduleName] = record;
+          ModuleInitMacro.Register(lex.Manager);
+          // the imported modules' top-level code runs first, at the `using`s
+          def imports = <[ Nemerle.Compiler.__module_init($(moduleName : string), ..$(usings.NToList().Map(u => <[ $(u : string) ]>))) ]>;
+          def body = imports :: statements.NToList();
           members.Add(Nemerle.Compiler.UtilMacros.locate(statementsLocation,
-            <[ decl: public Main() : void { ..$(statements.NToList()) } ]>));
+            if (start) <[ decl: public Main() : void { ..$body } ]> else <[ decl: static this() { ..$body } ]>));
+        }
         foreach (member when !(member is ClassMember.TypeDeclaration) in members)
           when (member.modifiers != null) member.modifiers.mods |= NemerleModifiers.Static;
         def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
@@ -484,6 +569,14 @@ using Nemerle.Compiler.Utility;
       res
     }
     
+    /// The module a `using a.b;` (or `using X = a.b;`) imports: what it adds to the environment.
+    static UsingTarget(before : GlobalEnv, after : GlobalEnv) : string
+    {
+      if (after.OpenNamespaces.Length > before.OpenNamespaces.Length) after.OpenNamespaces.Head.GetDisplayName()
+      else if (after.NamespaceAliases.Length > before.NamespaceAliases.Length) after.NamespaceAliases.Head[1]
+      else null
+    }
+
     /// True when a top-level group starts a member declaration rather than a statement. In a script `mutable x = 1`
     /// is a field; in a file module it is a statement of Main unless it names a type (`mutable x : int`).
     static IsMemberStart(token : Token, script : bool) : bool
@@ -540,6 +633,7 @@ using Nemerle.Compiler.Utility;
       def parser = MainParser(scriptEnv);
       def members : SCG.List[ClassMember] = SCG.List();
       def expressions : SCG.List[PExpr] = SCG.List();
+      def scriptUsings : SCG.List[string] = SCG.List();
       def backingFields : SCG.List[ClassMember] = SCG.List();
       def scopes : SCG.Dictionary[ClassMember, string] = SCG.Dictionary();
       def sourceNames : SCG.Dictionary[ClassMember, string] = SCG.Dictionary();
@@ -726,7 +820,9 @@ using Nemerle.Compiler.Utility;
         {
           match (groups.Child)
           {
-            | Token.Using(newEnv, _, _) => parser.env = GlobalEnv(newEnv, ["mask"]);
+            | Token.Using(newEnv, _, _) =>
+              match (UsingTarget(parser.env, newEnv)) { | null => () | name => scriptUsings.Add(name); manager.FileModuleRegistry.ScriptUsings.Add(name) }
+              parser.env = GlobalEnv(newEnv, ["mask"]);
             | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
             | token when IsMemberStart(token, true) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
@@ -735,6 +831,12 @@ using Nemerle.Compiler.Utility;
         }
         finally { groups.Next = next; }
         groups = next;
+      }
+      // the files the script imports run their top-level code first, at its start
+      when (scriptUsings.Count > 0)
+      {
+        ModuleInitMacro.Register(manager);
+        expressions.Insert(0, <[ Nemerle.Compiler.__module_init($(data.TypeName : string), ..$(scriptUsings.NToList().Map(u => <[ $(u : string) ]>))) ]>);
       }
       // Only compiler-generated scaffolding is parsed from text. User source is
       // parsed once above and retained as AST nodes with its original locations.

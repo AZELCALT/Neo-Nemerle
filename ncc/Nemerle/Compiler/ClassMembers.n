@@ -548,11 +548,13 @@ public class FieldBuilder : MemberBuilder, IField
     match (fieldAst.ty) {
       | <[ _ ]> when par.Manager.Options.Script != null
           && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name) => ()
+      | <[ _ ]> when par.Manager.ModuleBindings.ContainsKey(par.FullName + "." + fieldAst.Name) => ()
       | <[ _ ]> => Message.Error ("type inference for fields is available only when assigning literal value to them")
       | _ => ()
     }
 
-    ty = if (par.Manager.Options.Script != null && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name))
+    ty = if (par.Manager.Options.Script != null && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name)
+             || par.Manager.ModuleBindings.ContainsKey(par.FullName + "." + fieldAst.Name))
       par.Manager.InternalType.Object else par.BindFixedType (fieldAst.ty);
 
     when (ty.Equals (InternalType.Void))
@@ -563,6 +565,31 @@ public class FieldBuilder : MemberBuilder, IField
 
   internal InferScriptType(typer : Typer) : void
   {
+    // a file module's top-level binding: its type is its initializer's
+    def manager = DeclaringType.Manager;
+    def key = DeclaringType.FullName + "." + Name;
+    when (manager.ModuleBindings.ContainsKey(key) && !manager.ModuleTypedBindings.ContainsKey(key))
+    {
+      when (scriptInferring) Nemerle.Compiler.MessageMacros.FatalError(Ast.Location, "Recursive top-level binding needs a type annotation: " + Name);
+      scriptInferring = true;
+      try
+      {
+        def typed = typer.TypeExpr(manager.ModuleBindings[key]);
+        ty = typed.Type.DeepFix();
+        ExprWalker().Walk(typed, info =>
+        {
+          match (info.Node)
+          {
+            | e is TExpr => when (e.ty != null) e.Type = e.Type.DeepFix();
+            | _ => ()
+          }
+        });
+        manager.ModuleTypedBindings[key] = typed;
+        Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
+        when (ty.Equals(manager.InternalType.Void)) Message.Error(Ast.Location, "A top-level binding cannot have void type");
+      }
+      finally { scriptInferring = false; }
+    }
     def script = DeclaringType.Manager.Options.Script;
     when (script != null && DeclaringType.FullName == script.TypeName && script.InferredInitializers.ContainsKey(Name) && !script.TypedInitializers.ContainsKey(Name))
     {

@@ -535,6 +535,15 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             script.TypedInitializers.Clear();
             foreach (field is FieldBuilder in CurrentType.GetFields()) field.InferScriptType(this);
           }
+          // a file module's top-level code: each binding's type comes from its initializer, typed where the top-level
+          // code assigns it (so the values and functions above it are in scope); a new typing attempt starts afresh
+          when (Manager.ModuleBindings.Count > 0 && CurrentFunction.decl == null && CurrentMethodBuilder.IsStatic
+                && (CurrentMethodBuilder.Name == ".cctor" || CurrentMethodBuilder.Name == "Main"))
+          {
+            def prefix = CurrentType.FullName + ".";
+            foreach (key when key.StartsWith(prefix, System.StringComparison.Ordinal) in Manager.ModuleTypedBindings.Keys.NToList())
+              _ = Manager.ModuleTypedBindings.Remove(key);
+          }
         
           def skip_n_return =
             match (parent_typer)
@@ -948,6 +957,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         | TExpr.StaticRef (_, f is IField, _) =>
           f.IsMutable || (current_fun.Name == ".cctor" &&
                            f.DeclaringType.Equals (current_type))
+          || e.SkipWriteCheck && f.Attributes %&& NemerleModifiers.CompilerMutable
         | TExpr.StaticRef (_, p is IProperty, _) when !need_ref => p.IsMutable
         | TExpr.StaticPropertyRef (_, p) when !need_ref => p.IsMutable
         | TExpr.FieldMember (TExpr.This, fld) when is_instance_ctor && fld.DeclaringType.Equals (current_type) => true

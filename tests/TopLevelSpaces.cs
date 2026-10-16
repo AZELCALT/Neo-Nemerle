@@ -50,12 +50,15 @@ public static class TopLevelSpaces
         return lifted + "\n" + string.Join("\n", spaces) + "\n";
     }
 
-    /// Runs the top-level statements of the file `name` (its spaces), as the program's Main would.
+    /// Runs the top-level code of the file `name` (its spaces): in a library it is the file module's static
+    /// constructor, which a `using` of the file runs; in a program it is Main.
     public static void RunFile(Assembly assembly, string name)
     {
-        var main = assembly.GetTypes().Where(t => t.Name == name)
-                           .Select(t => t.GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, Type.EmptyTypes))
-                           .FirstOrDefault(m => m != null);
-        main?.Invoke(null, null);
+        foreach (var type in assembly.GetTypes().Where(t => t.Name == name))
+        {
+            var main = type.GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, Type.EmptyTypes);
+            if (main != null) main.Invoke(null, null);
+            else System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(type.TypeHandle);
+        }
     }
 }

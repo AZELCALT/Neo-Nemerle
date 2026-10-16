@@ -17,7 +17,11 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 ### Language: a file is its namespace
 - Every `.n` file is a module named by its path under the source root (`src/util/text.n` is `util.text`).
   `namespace` declarations are an error; members inside a file are grouped with `mask`.
-- Top-level statements of a file, in source order, are its `Main` (as in classic Nemerle and C#).
+- Top-level code: the program starts at `main.n` (or the file `-main:` names; a single-file program at its file),
+  whose top-level code is `Main`. Any other file's top-level code runs once where a file imports it (`using`), as
+  Python runs a module on import; its top-level `def`/`mutable` are the module's state, private, or `public def`
+  reached as `file.x` by an importer. The continuation section records every module's top-level code (kind, lines,
+  fingerprint, imports, state), so Nemerle binaries know each other's modules.
 - Rules aligned with C#, so the result is clean to use from C#:
   - a file may not sit beside a directory of the same name (CS0434);
   - no member may have its file's name (CS0542);

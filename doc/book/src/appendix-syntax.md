@@ -71,6 +71,7 @@ compound `+= -= *= /=`, increment `++ --`, `::` for list cons. `@+` declares the
 | Option | Meaning |
 |---|---|
 | `-out:FILE` | output file (`.exe` or `.dll`) |
+| `-main:file` | start the program at `file` instead of `main.n` |
 | `-target:library` | build a library |
 | `-r:LIB.dll` | reference a library (and continue from its section) |
 | `-source-root:DIR` | the root that module paths are relative to |

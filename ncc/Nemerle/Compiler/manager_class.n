@@ -235,6 +235,9 @@ using Nemerle.Compiler.XmlDump;
     /// Whether a binary continued from stores shared scopes: `scope.A.x` in a source then reads them, although
     /// `scope` is an ordinary name elsewhere.
     public ContinuesScopes : bool { get; private set; }
+    /// Top-level `def`/`mutable` of file modules (`module.name`) whose field type is their initializer's.
+    public ModuleBindings : System.Collections.Generic.Dictionary[string, Nemerle.Compiler.Parsetree.PExpr] = System.Collections.Generic.Dictionary();
+    public ModuleTypedBindings : System.Collections.Generic.Dictionary[string, Nemerle.Compiler.Typedtree.TExpr] = System.Collections.Generic.Dictionary();
 
     public UserData : SC.IDictionary
     {
@@ -572,6 +575,7 @@ using Nemerle.Compiler.XmlDump;
       foreach (path when IO.File.Exists(path) && Nemerle.Platform.ClrCompilerSection.HasSection(path) in Options.ReferencedLibraries) add(path);
       ContinueFrom = NList.FromArray(sources.ToArray());
       ContinuesScopes = false;
+      ModuleBindings.Clear(); ModuleTypedBindings.Clear();
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)
@@ -667,6 +671,15 @@ using Nemerle.Compiler.XmlDump;
             when (store != null && store.Macros.Count > 0)
               LibrariesManager.LoadPluginsFrom(IO.Path.GetFullPath(path), loadMacros = true, loadParsers = false);
             when (store != null && store.Scopes.Count > 0) ContinuesScopes = true;
+            // the binary's file modules: which run top-level code at a `using`, and what each imports
+            when (store != null)
+              foreach (m in store.Modules)
+              {
+                def r = Nemerle.Compiler.file_module_registry.TopLevelRecord();
+                r.Module = m.Module; r.Kind = m.Kind; r.File = m.File; r.Start = m.Start; r.End = m.End; r.Hash = m.Hash;
+                r.Usings = NList.FromArray(m.Usings.ToArray()); r.State = NList.FromArray(m.State.ToArray());
+                FileModuleRegistry.External[m.Module] = r;
+              }
           });
 
         tryEx(() =>

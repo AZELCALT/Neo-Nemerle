@@ -12,6 +12,13 @@ using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.namespace_tree;
 using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Utility;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.Lexer;
+using Nemerle.Compiler.MacroClassGen;
+using Nemerle.Compiler.syntax_definition;
+using Nemerle.Compiler.typer;
+using Nemerle.Compiler.type_info;
 
 /// Compilation-local file ownership. Index before parsing ordinary imports.
 public sealed class FileModuleRegistry
@@ -86,6 +93,75 @@ public sealed class FileModuleRegistry
 
   /// True when the source was indexed as a file module (generated or synthetic sources are not).
   public IsModule(fileIndex : int) : bool { manager.Options.FileModules && paths.Contains(fileIndex) }
+
+  /// The module's full name (`dir.file`).
+  public Name(fileIndex : int) : string { String.Join(".", paths[fileIndex].ToArray()) }
+
+  /// Whether the file starts the program: the file `-main:` names, else `main.n` (at the source root), else the
+  /// only source file. A library has no start.
+  public IsStart(fileIndex : int) : bool
+  {
+    def options = manager.Options;
+    if (options.TargetIsLibrary || options.Script != null) false
+    else if (options.MainClass != null) Name(fileIndex) == options.MainClass
+    else if (paths.Values.Exists(p => p is ["main"])) paths[fileIndex] is ["main"]
+    else paths.Count == 1
+  }
+
+  /// Every module's `using`s, in order (the files it imports).
+  public Usings : Hashtable[string, list[string]] = Hashtable();
+  /// The modules of this compilation with top-level code, and those of continued binaries (from their sections).
+  public TopLevel : Hashtable[string, TopLevelRecord] = Hashtable();
+  public External : Hashtable[string, TopLevelRecord] = Hashtable();
+
+  /// The top-level state of the modules (`module.name`), and the files a script imports.
+  public State : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+  public ScriptUsings : System.Collections.Generic.List[string] = System.Collections.Generic.List();
+
+  /// Whether `member` may be reached from code in `parent`: a module's top-level state is reached bare only in its
+  /// own file, and from another file only as `file.x`, by a file that imports it (`using file;`).
+  public StateVisible(member : IMember, parent : TypeBuilder, qualified : bool) : bool
+  {
+    match (member)
+    {
+      | field is IField when parent != null && field.DeclaringType != null =>
+        def owner = field.DeclaringType.FullName;
+        def key = owner + "." + field.Name;
+        def isState = State.Contains(key) || External.Contains(owner) && External[owner].State.Contains(field.Name);
+        if (!isState) true
+        else
+        {
+          def file = parent.Location.FileIndex;
+          def here = if (IsModule(file)) Name(file) else null;
+          def imports = if (here != null) (if (Usings.Contains(here)) Usings[here] else []) else ScriptUsings.NToList();
+          here == owner || qualified && imports.Contains(owner)
+        }
+      | _ => true
+    }
+  }
+
+  /// The modules whose top-level code a file importing `modules` runs first, in order: each imported module with
+  /// top-level code, and through an imported module without any, the modules it imports.
+  public Initializers(modules : list[string], self : string) : list[string]
+  {
+    def result = System.Collections.Generic.List.[string]();
+    def seen = System.Collections.Generic.HashSet.[string]();
+    def visit(name : string) : void
+    {
+      when (seen.Add(name) && name != self)
+      {
+        def record = if (TopLevel.Contains(name)) TopLevel[name] else if (External.Contains(name)) External[name] else null;
+        if (record != null && record.Kind == "initializer") result.Add(name)
+        else
+        {
+          def usings = if (record != null) record.Usings else if (Usings.Contains(name)) Usings[name] else [];
+          foreach (u in usings) visit(u);
+        }
+      }
+    }
+    foreach (name in modules) visit(name);
+    result.NToList()
+  }
 
   public ModulePrefix(name : list[string]) : string
   {
@@ -165,13 +241,105 @@ public sealed class FileModuleRegistry
   {
     foreach (member when member.modifiers != null in members)
     {
-      when ((member.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
+      // a static constructor (a file's top-level code) takes no access modifier
+      def staticConstructor = member is ClassMember.Function && (member.Name == ".ctor" || member.Name == "this" || member.Name == ".cctor")
+                              && (member.modifiers.mods & NemerleModifiers.Static) != NemerleModifiers.None;
+      when (!staticConstructor && (member.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
         member.modifiers.mods |= NemerleModifiers.Public;
       match (member)
       {
         | ClassMember.TypeDeclaration(td) => td.modifiers.mods = member.modifiers.mods;
         | _ => member.modifiers.mods |= NemerleModifiers.Static;
       }
+    }
+  }
+}
+
+/// A module's top-level code, as the continuation section records it: a fingerprint by which Nemerle binaries know
+/// each other's modules. Kind is "initializer" (run by `using`), "start" (the program's Main) or "none".
+public sealed class TopLevelRecord
+{
+  public mutable Module : string = "";
+  public mutable Kind : string = "none";
+  public mutable File : string = "";
+  public mutable Start : int;
+  public mutable End : int;
+  /// A hash of the top-level code's text.
+  public mutable Hash : long;
+  public mutable Usings : list[string] = [];
+  /// The names of the module's top-level state.
+  public mutable State : list[string] = [];
+}
+
+/// `__module_init(self, imports...)` starts a file's top-level code: it runs the top-level code of the files it
+/// imports (each module's static constructor, once), in `using` order.
+internal sealed class ModuleInitMacro : IMacro
+{
+  public GetName() : string { "__module_init" }
+  public GetNamespace() : string { "Nemerle.Compiler" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null, null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    def names = args.Map(fun (a) { | SyntaxElement.Expression(PExpr.Literal(Literal.String(s))) => s | _ => "" });
+    match (names)
+    {
+      | self :: imports =>
+        def calls = ctx.Manager.FileModuleRegistry.Initializers(imports, self).Map(name =>
+        {
+          def type = Nemerle.Compiler.main_parser.MainParser.ParseExpr(ctx.Env, name);
+          <[ System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof($type).TypeHandle) ]>
+        });
+        if (calls.IsEmpty) <[ () ]> else <[ { ..$calls } ]>
+      | [] => <[ () ]>
+    }
+  }
+
+  /// Registers the top-level code macros once per compiler instance.
+  public static Register(manager : ManagerClass) : void
+  {
+    def ns = manager.NameTree.ExactPath(["Nemerle", "Compiler"]);
+    when (ns.LookupMacro(["__module_init"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleInitMacro());
+    when (ns.LookupMacro(["__module_binding_value"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleBindingMacro());
+  }
+
+  /// A fingerprint of top-level code (FNV-1a of its text), recorded in the continuation section.
+  public static Fingerprint(statements : System.Collections.Generic.IEnumerable[PExpr]) : long
+  {
+    mutable hash = 0xcbf29ce484222325UL;
+    foreach (statement in statements)
+      foreach (c in statement.ToString()) { hash = unchecked((hash ^ (c :> ulong)) * 0x100000001b3UL); }
+    unchecked(hash :> long)
+  }
+}
+
+/// `__module_binding_value("module.name")`: the top-level code's assignment of a binding. Its initializer is typed here,
+/// in the flow of the top-level code, which gives the field its type before the assignment is typed.
+internal sealed class ModuleBindingMacro : IMacro
+{
+  public GetName() : string { "__module_binding_value" }
+  public GetNamespace() : string { "Nemerle.Compiler" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null, null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    match (args)
+    {
+      | [SyntaxElement.Expression(PExpr.Literal(Literal.String(key)))] =>
+        def name = key.Substring(key.LastIndexOf('.') + 1);
+        foreach (field is FieldBuilder in ctx.CurrentType.LookupMember(name)) field.InferScriptType(ctx);
+        <[ _N_skip_write_check($(name : dyn)) = $(ctx.Manager.ModuleTypedBindings[key] : typed) ]>
+      | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal top-level binding"); null
     }
   }
 }

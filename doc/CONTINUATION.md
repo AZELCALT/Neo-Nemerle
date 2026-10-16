@@ -46,6 +46,11 @@ The payload of `.nemir` is a container (`ncc/Nemerle/Compiler/continuation.n`, `
      process). A slot holding a dial reference is not stored. With the scopes come the binary's spaces: for each, the
      grammars it uses, its path (`file`, `file.G` or `file.(A,B)`), its file, its `as` name, the scopes it attaches,
      and its body. Scopes are plain data, so they are read whatever compiler wrote them.
+  5. **module:** every file module of the binary and its top-level code: whether it runs at a `using` (an
+     initializer) or starts the program, the lines of its top-level code, a hash of it, the modules it imports, and
+     the names of its top-level state. It is the fingerprint by which Nemerle binaries know each other's modules: a
+     continuing compilation runs the top-level code of the binary's modules it imports, through modules without any,
+     and keeps the binary's top-level state reachable only as `file.x`.
 
 The section is appended to the finished image, after the Mono.Cecil metadata rewrite, which would drop it. The file is
 then strong-name signed again (`platform/ClrCompilerSection.cs`). The PE header must have room for one more section
