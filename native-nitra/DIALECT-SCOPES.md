@@ -7,7 +7,7 @@ compiler session, not to a runtime dictionary.
 A space is a logical file in a grammar's language inside a Nemerle file. It is always at the top level of its file:
 a space inside a function or a type, or used as an expression, is an error. The program and its spaces communicate
 two ways: **scopes**, a shared memory zone of bindings that both sides read and write, and **dials**, direct calls
-into a space (`dial:.file.space::member(...)`). A dial names the file because each file has its own spaces.
+into a space (`dial:.file.G::member(...)`). A dial names the file because each file has its own spaces.
 
 ## Source interface
 
@@ -59,25 +59,33 @@ dial's `ResolveType`, so it does not need to be a CLR type upfront.
 
 ## Dials: addressing a space
 
-The form is `dial:.file.space::member`:
+A dial is `dial:.path::member`, where the path is where the space stands:
 
 ```nemerle
-space Demo as Query [A] { answer }
-Demo:.demo.Query::answer()
-Demo:.demo.Query::answer             // reference; no invocation yet
-scope.A.registery("f", Demo:.demo.Query::answer);
+space Demo [A] { answer }
+dial:.demo.Demo::answer()
+dial:.demo.Demo::answer             // reference; no invocation yet
+scope.A.registery("f", dial:.demo.Demo::answer);
 scope.A.f()
+
+space (Demo, Extra) { answer }
+dial:.demo.(Demo, Extra)::answer()
+dial:.demo.(Extra, Demo)::answer()  // the same space: order does not matter
+
+space { answer }                    // the plain space
+dial:.demo::answer()
 ```
 
-`Demo` is the dial (the grammar the space is written in). `demo` is the file
-module that owns the space, relative to the source root (with
-`-file-name-namespaces`, the file name). `Query` is the space, named with
-`space Demo as Query`. Qualified grammar names and nested file modules are
-supported.
+`demo` is the file module that owns the space, relative to the source root
+(with `-file-name-namespaces`, the file name). Qualified grammar names and
+nested file modules are supported (`dial:.a.b.Q.G::m`); a file cannot sit beside
+a directory of its name, so the path is never ambiguous.
 
-Each file may contain one space per grammar. Different grammars may coexist in
-the file. The compiler also accepts `Demo:.demo::answer()` without the space
-segment for a space that has no `as` name.
+Each file has one space per grammar, one per mix of grammars (in any order), and
+one plain space. `space Demo as Query` gives a space a second name,
+`dial:.demo.Query::`; it does not create another space. Host configuration
+registers resolvers by the same paths (`registry.RegisterResolver("demo.Demo",
+resolver)`, or `"demo.(Demo, Extra)"`, or `"demo"`).
 
 The registry finds the owning space first. Its resolver receives only the member
 request for that space; it does not search neighboring spaces. The resolver
@@ -106,7 +114,7 @@ Register a resolver through host configuration:
 ```csharp
 var configuration = new NitraSourceConfiguration();
 configuration.ConfigureDialects = registry =>
-    registry.RegisterResolver("Demo", "demo", new MyResolver());
+    registry.RegisterResolver("demo.Demo", new MyResolver());
 options.NitraSources = configuration;
 ```
 

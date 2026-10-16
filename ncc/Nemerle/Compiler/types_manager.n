@@ -741,6 +741,17 @@ using Nemerle.Compiler.Utility;
               }
             Manager.Continuation.Scopes.Add(stored);
           }
+        // the spaces go with the scopes, so that a continuing compilation (a plugin script) can dial into them;
+        // a space this compilation itself continued from belongs to that other binary
+        when (Manager.Options.ContinuationSection && Manager.Continuation != null && Manager.Options.NitraSources != null
+              && Manager.Options.NitraSources.Dialects != null)
+          foreach (space when !space.Continued && space.Names != null in Manager.Options.NitraSources.Dialects.AllSpaces)
+          {
+            def stored = Nemerle.Compiler.continuation.ContinuationSpace();
+            stored.Names.AddRange(space.Names); stored.Path = space.Owner; stored.File = space.File; stored.Alias = space.Alias;
+            stored.Scopes.AddRange(space.Scopes); stored.Body = space.Body;
+            Manager.Continuation.Spaces.Add(stored);
+          }
         // the continuation section is added last, because the metadata rewrite above would drop a custom section
         when (Manager.Options.ContinuationSection && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
         {

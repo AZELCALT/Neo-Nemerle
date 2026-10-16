@@ -41,8 +41,9 @@ The payload of `.nemir` is a container (`ncc/Nemerle/Compiler/continuation.n`, `
   3. **type:** for the *relevant set* only, meaning modules that define macros: the members that CLR visibility hides
      from a referencing compilation (internal ones). Everything else comes from ordinary .NET metadata.
   4. **scope:** the binary's shared scopes (`scope A;`), stored next to its grammars. For each binding: its name, its
-     dial type token, and its value as Nemerle expression text (or none). A binding holding a dial reference points
-     into the binary's own spaces and is not stored. Scopes are plain data, so they are read whatever compiler wrote
+     dial type token, and its value as Nemerle expression text (or none). A binding holding a dial reference is not
+     stored. With the scopes come the binary's spaces: for each, the grammars it uses, its path (`file`,
+     `file.G` or `file.(A,B)`), its file, its `as` name, the scopes it attaches, and its body. Scopes are plain data, so they are read whatever compiler wrote
      them.
 
 The section is appended to the finished image, after the Mono.Cecil metadata rewrite, which would drop it. The file is
@@ -56,7 +57,8 @@ no section.
 |---|---|
 | A `space` uses a stored grammar that the source does not define | The stored image is loaded and no grammar is compiled. |
 | The binary stores scopes | They are registered with their bindings and values before the source's spaces are read, so `scope.A.x` and `space G [A]` work with no `scope` declaration. |
-| A source has no space but uses `scope.` or a dial (`G:.file.space::m`), and a binary stores grammars or scopes | The source still takes the grammar path, so a plugin script reaches the host's scopes. |
+| The binary stores spaces | Each is indexed as a space of its file there, with its attached scopes; a dial into it re-runs its mapping in this compilation (to register its resolver), and nothing of it is emitted. A space whose grammar image cannot be used here is left out. |
+| A source has no space but uses `scope.` or a dial (`dial:.file.G::m`) | It takes the grammar path like a file with a space, so a plugin script reaches the host's scopes. |
 | A plain `space { ... }` in a file without its own grammars | It selects every visible grammar, the stored ones included. |
 | The source redefines a stored grammar, unchanged up to layout | `reuse`: the stored image is used as is. |
 | Only alternatives of extensible rules changed, were added or removed | `patch`: just those alternatives are compiled, as `extend syntax` blocks of a patch module over the stored module, and the stale stored alternatives are dropped. |

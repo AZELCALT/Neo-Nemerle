@@ -75,6 +75,22 @@ public sealed class ContinuationBinding
   public mutable Value : string;
 }
 
+/// A space stored with the scopes: enough to rebuild it in a continuing compilation, so a dial
+/// (dial:.file::member) reaches it and its mapping can register the space's resolver again.
+public sealed class ContinuationSpace
+{
+  /// The grammars the space uses (for a plain space, those it selected).
+  public Names : SCG.List[string] = SCG.List();
+  /// Where the space stands: `file`, `file.G` or `file.(A,B)` (dial:.path::member).
+  public mutable Path : string = "";
+  public mutable File : string = "";
+  /// The `as` name, or null.
+  public mutable Alias : string;
+  public Scopes : SCG.List[string] = SCG.List();
+  /// The space's body, as written.
+  public mutable Body : string = "";
+}
+
 public sealed class ContinuationDiff
 {
   public Changed : SCG.List[ContinuationMark] = SCG.List();
@@ -105,8 +121,11 @@ public sealed class ContinuationStore
   public Macros : SCG.List[ContinuationMacro] = SCG.List();
   public Types : SCG.List[ContinuationType] = SCG.List();
   public Scopes : SCG.List[ContinuationScope] = SCG.List();
+  /// The spaces, stored next to the scopes they use.
+  public Spaces : SCG.List[ContinuationSpace] = SCG.List();
 
-  public IsEmpty : bool { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 && Scopes.Count == 0 } }
+  public IsEmpty : bool
+  { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 && Scopes.Count == 0 && Spaces.Count == 0 } }
 
   /// Offsets in the source text of a location (lines and columns are 1-based), or (-1, -1) when unknown.
   public static Span(text : string, location : Nemerle.Compiler.AST.Location) : int * int
@@ -298,7 +317,7 @@ public sealed class ContinuationStore
       }
     }
     def scopes = MemoryStream();
-    when (Scopes.Count > 0)
+    when (Scopes.Count > 0 || Spaces.Count > 0)
     {
       WriteInt(scopes, Scopes.Count);
       foreach (s in Scopes)
@@ -309,6 +328,14 @@ public sealed class ContinuationStore
           WriteInt(scopes, str(b.Name)); WriteInt(scopes, str(b.Type));
           if (b.Value == null) WriteInt(scopes, 0) else { WriteInt(scopes, 1); WriteInt(scopes, str(b.Value)) }
         }
+      }
+      WriteInt(scopes, Spaces.Count);
+      foreach (s in Spaces)
+      {
+        WriteInt(scopes, s.Names.Count); foreach (n in s.Names) WriteInt(scopes, str(n));
+        WriteInt(scopes, str(s.Path)); WriteInt(scopes, str(s.File)); WriteInt(scopes, str(s.Alias ?? ""));
+        WriteInt(scopes, s.Scopes.Count); foreach (n in s.Scopes) WriteInt(scopes, str(n));
+        WriteInt(scopes, str(s.Body));
       }
     }
     def output = MemoryStream();
@@ -398,6 +425,7 @@ public sealed class ContinuationStore
           store.Types.Add(t);
         }
       when (kind == ScopeKind)
+      {
         repeat (payload.Int())
         {
           def s = ContinuationScope();
@@ -411,6 +439,17 @@ public sealed class ContinuationStore
           }
           store.Scopes.Add(s);
         }
+        repeat (payload.Int())
+        {
+          def s = ContinuationSpace();
+          repeat (payload.Int()) s.Names.Add(strings[payload.Int()]);
+          s.Path = strings[payload.Int()]; s.File = strings[payload.Int()];
+          def alias = strings[payload.Int()]; s.Alias = if (alias.Length > 0) alias else null;
+          repeat (payload.Int()) s.Scopes.Add(strings[payload.Int()]);
+          s.Body = strings[payload.Int()];
+          store.Spaces.Add(s);
+        }
+      }
       // unknown subsection kinds are skipped: newer writers may add them
     }
     store

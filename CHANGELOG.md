@@ -41,9 +41,12 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 - Known gap: grammars are compiled with their program, and there is no reusable compiled-grammar artifact yet.
 - A `space` is a top-level logical file in a grammar's language. A space inside a function or a type, or used as an
   expression, is an error. The program talks to its spaces through **scopes** (shared bindings, read and written by
-  both sides) and **dials** (`dial:.file.space::member(...)` calls lowered by a resolver). A plain `space { }` looks across
+  both sides) and **dials** (`dial:.file.G::member(...)`; `dial:.file.(A, B)::` for a mixing space, `dial:.file::` for the plain one;
+  lowered by a resolver). A plain `space { }` looks across
   grammars: its file's own, or every visible one (other files, referenced libraries) when those don't give one start
-  rule. `NitraSourceConfiguration.SpaceValueTarget` lets an embedding host collect a space's value.
+  rule. A file has one space per grammar, one per mix of grammars (in any order) and one plain space. A
+  library's section stores its spaces with its scopes, so a program or plugin script can dial into them.
+  `NitraSourceConfiguration.SpaceValueTarget` lets an embedding host collect a space's value.
 
 ### Continuation section
 - Every output that defines grammars or macros carries a `.nemir` section with its compiled Nitra grammar (plus a

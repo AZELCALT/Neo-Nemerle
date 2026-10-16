@@ -80,6 +80,11 @@ internal sealed class NitraSourceZone
   public mutable Owner : string;
   public mutable FileOwner : string;
   public mutable Alias : string;
+  public mutable Space : NitraDialectSpace;
+  /// A space of a continued binary: indexed for its dials and resolver, never placed in a source.
+  public mutable Continued : bool;
+  /// A continued space's stored path (its grammars are in Names).
+  public mutable Path : string;
   public Scopes : SCG.List[string] = SCG.List();
   public mutable Dialect : string;
 }
@@ -116,7 +121,7 @@ internal sealed class NitraSourceSession
       def reader=GReader(text,file,start,text.Length); reader.Need(keyword);
       if(reader.Eat("("))
       { _=reader.Name(); while(reader.Eat(",")) _=reader.Name(); reader.Need(")"); }
-      else unless(reader.Is("{") || reader.Is("[")) _=reader.Name();
+      else unless(reader.Is("{") || reader.Is("[") || reader.Is("as")) _=reader.Name();
       when(reader.Eat("as")) _=reader.Name();
       when(reader.Eat("[")) { _=reader.Name(); while(reader.Eat(",")) _=reader.Name(); reader.Need("]"); }
       reader.Is("{")
@@ -203,7 +208,7 @@ internal sealed class NitraSourceSession
           }
           def z=NitraSourceZone(); z.Id=zones.Count; z.File=source.FileIndex; z.Start=t.Start; z.Source=text;
           if(r.Eat("(")) { z.Names.Add(r.Name()); while(r.Eat(",")) z.Names.Add(r.Name()); r.Need(")"); }
-          else unless(r.Is("{") || r.Is("[")) z.Names.Add(r.Name());
+          else unless(r.Is("{") || r.Is("[") || r.Is("as")) z.Names.Add(r.Name());
           when(r.Eat("as")) z.Alias=r.Name();
           when(r.Eat("[")) { z.Scopes.Add(r.Name()); while(r.Eat(",")) z.Scopes.Add(r.Name()); r.Need("]"); }
           z.FileOwner=FileOwner(source.FileIndex);
@@ -224,16 +229,18 @@ internal sealed class NitraSourceSession
     // grammars stored in the continuation sections of the binaries this compilation continues from. A grammar the
     // sources define themselves wins; its stored image is not used (E3 will diff the marks instead).
     def continued=SCG.List.[array[byte]]();
+    def storedSpaces=SCG.List.[string*SCG.List[Nemerle.Compiler.continuation.ContinuationSpace]]();
     when(configuration.CreateContext==null)
       foreach(path in manager.ContinueFrom)
       {
         mutable store=Nemerle.Compiler.continuation.ContinuationStore.FromImage(System.IO.File.ReadAllBytes(path));
         // shared scopes come first: they are plain bindings, valid whatever compiler wrote them
+        when(store!=null) storedSpaces.Add((path,store.Spaces));
         when(store!=null)
           foreach(scope in store.Scopes)
           {
             def shared=configuration.Dialects.RegisterScope(scope.Name);
-            foreach(binding in scope.Bindings)
+            foreach(binding when !shared.Contains(binding.Name) in scope.Bindings)
             {
               def bound=shared.Register(binding.Name,NitraDialectType(binding.Type),Location.Default);
               when(binding.Value!=null) bound.Value=Nemerle.Compiler.main_parser.MainParser.ParseExpr(manager.CoreEnv,binding.Value,Location.Default,false);
@@ -285,6 +292,20 @@ internal sealed class NitraSourceSession
             continuedNames.Add(g.Name); definitions.Add(g.Name,placeholder);
           }
         }
+      }
+    // the continued binaries' spaces come with their scopes: each is indexed as a space of its file there (never
+    // placed in this source), so dials reach it and its mapping can register its resolver again. A space whose
+    // grammar is not available here (another compiler build's image) is left out.
+    // a file this compilation compiles is that file itself, newer than the continued build: its old spaces are not
+    // loaded (dial paths are unique, since the file is the namespace)
+    def compiled=SCG.HashSet.[string](); foreach(source in manager.Options.Sources) _=compiled.Add(FileOwner(source.FileIndex));
+    foreach((path,spaces) in storedSpaces)
+      foreach(stored when !compiled.Contains(stored.File) && stored.Names.TrueForAll(n => definitions.ContainsKey(n)) in spaces)
+      {
+        def z=NitraSourceZone(); z.Id=zones.Count; z.Continued=true; z.File=Location.GetFileIndex(path);
+        z.Source=stored.Body; z.Start=0; z.Body=0; z.End=stored.Body.Length; z.FileOwner=stored.File; z.Alias=stored.Alias;
+        z.Names.AddRange(stored.Names); z.Path=stored.Path;
+        z.Scopes.AddRange(stored.Scopes); zones.Add(z);
       }
     def sourceDefinitions=SCG.List.[NitraDocument]();
     foreach(pair when !continuedNames.Contains(pair.Key) in definitions) sourceDefinitions.Add(pair.Value);
@@ -358,12 +379,17 @@ internal sealed class NitraSourceSession
       def (modules,grammar,starts)=prepared;
       z.Grammar=grammar;
       z.Owner=String.Join(",",selected.ToArray()); z.Dialect=selected[0];
-      foreach(dialect in selected)
-      {
-        def space=NitraDialectSpace(dialect,z.FileOwner,At(z.File,z.Start),z.Scopes.ToArray(),z.Id);
-        configuration.Dialects.AddSpace(space);
-        when(z.Alias!=null) configuration.Dialects.AddAlias(dialect,z.FileOwner+"."+z.Alias,space);
-      }
+      // a space's path: the file's plain space is `file`, `space G` is `file.G`, the mixing `space (A, B)` is
+      // `file.(A,B)` in any order; each exists once per file, and `as Name` adds `file.Name` (dial:.path::member)
+      def owner=if(z.Path!=null) z.Path
+                else if(z.Names.Count==0) z.FileOwner
+                else if(z.Names.Count==1) z.FileOwner+"."+z.Names[0]
+                else NitraDialectRegistry.Canonical(z.FileOwner+".("+String.Join(",",z.Names.ToArray())+")");
+      z.Space=NitraDialectSpace(z.Dialect,owner,if(z.Continued) Location(z.File,1,1) else At(z.File,z.Start),z.Scopes.ToArray(),z.Id);
+      z.Space.Names=selected.ToArray(); z.Space.File=z.FileOwner; z.Space.Alias=z.Alias; z.Space.Continued=z.Continued;
+      z.Space.Body=z.Source.Substring(z.Body,z.End-z.Body);
+      configuration.Dialects.AddSpace(z.Space);
+      when(z.Alias!=null) configuration.Dialects.AddPath(z.FileOwner+"."+z.Alias,z.Space);
       _=modules;
       unless(starts.Count==1)
         throw ArgumentException(if(starts.Count==0) "source space requires exactly one selected StartRule"
@@ -490,7 +516,7 @@ internal sealed class NitraSourceSession
       def selected=NitraSyntax.StructureCompact(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),configuration.ResolveStructure);
       unless(selected.Success)
       { foreach(message in selected.Diagnostics) Message.Error(location,message); return PExpr.Error(location); }
-      def context=NitraDialectContext(configuration.Dialects,configuration.Dialects.Space(z.Dialect,z.FileOwner),typer,location);
+      def context=NitraDialectContext(configuration.Dialects,z.Space,typer,location);
       foreach(name in z.Scopes) _=context.Scope(name);
       def previous=NitraDialectContext.Active;
       // a space stands as a top-level statement: its own value is discarded
@@ -565,12 +591,20 @@ internal sealed class NitraSourceSession
         }
         else
         {
-          // Only the reserved :.<owner>:: form is a dialect reference.
-          def probe=GReader(text,r.File,t.Start,text.Length); def dialect=probe.Name();
-          when(probe.Eat(":") && probe.Eat("."))
+          // only `dial:.path::member` is a dial: dial:.file (the plain space), dial:.file.G, dial:.file.(A, B)
+          def probe=GReader(text,r.File,t.Start,text.Length);
+          when(t.Text=="dial" && { _=probe.Take(); probe.Eat(":") } && probe.Eat("."))
           {
-            boundary=NitraBoundary(); boundary.Kind="dialect"; boundary.Dialect=dialect;
-            boundary.Owner=probe.Name(); probe.Need(":"); probe.Need(":"); boundary.Member=probe.Take().Text;
+            boundary=NitraBoundary(); boundary.Kind="dialect"; boundary.Dialect="dial";
+            mutable owner=probe.Take().Text;
+            while(probe.Eat("."))
+              if(probe.Eat("("))
+              {
+                def names=SCG.List.[string](); names.Add(probe.Name()); while(probe.Eat(",")) names.Add(probe.Name()); probe.Need(")");
+                owner=NitraDialectRegistry.Canonical(owner+".("+String.Join(",",names.ToArray())+")");
+              }
+              else owner=owner+"."+probe.Take().Text;
+            boundary.Owner=owner; probe.Need(":"); probe.Need(":"); boundary.Member=probe.Take().Text;
             r.Pos=probe.Pos; r.Reset();
           }
         }
@@ -612,14 +646,14 @@ internal sealed class NitraSourceSession
   {
     when(space.Resolver==null)
     {
-      unless(preparing.Add(space.Zone)) throw ArgumentException("recursive dialect resolver initialization: "+space.Dialect+":"+space.Owner);
+      unless(preparing.Add(space.Zone)) throw ArgumentException("recursive dialect resolver initialization: dial:."+space.Owner);
       try { _=Expand(typer,space.Zone); } finally { _=preparing.Remove(space.Zone); }
     }
     NitraDialectContext(configuration.Dialects,space,typer,location)
   }
   private ResolveBoundary(boundary : NitraBoundary, typer : Typer, args : array[PExpr]) : NitraDialectResolution
   {
-    def space=configuration.Dialects.Space(boundary.Dialect,boundary.Owner);
+    def space=configuration.Dialects.Space(boundary.Owner);
     def context=Context(space,typer,boundary.Location); def previous=NitraDialectContext.Active;
     try { NitraDialectContext.Active=context; context.Resolve(boundary.Member,args,boundary.IsCall) }
     finally { NitraDialectContext.Active=previous; }
@@ -632,7 +666,7 @@ internal sealed class NitraSourceSession
     def b=boundaries[id];
     if(b.Kind=="dialect")
     {
-      def space=configuration.Dialects.Space(b.Dialect,b.Owner); def context=Context(space,typer,b.Location);
+      def space=configuration.Dialects.Space(b.Owner); def context=Context(space,typer,b.Location);
       def previous=NitraDialectContext.Active;
       try
       {

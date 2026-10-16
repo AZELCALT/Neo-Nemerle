@@ -149,9 +149,9 @@ A plugin script:
 ```nemerle,script
 [assembly: DependsOn("app.dll")]
 [assembly: DependsOn("appres.dll")]
-space G as Plugin [A] { go }
+space G [A] { go }
 System.Console.WriteLine(scope.A.value);
-System.Console.WriteLine(G:.main.Plugin::twice(scope.A.value));
+System.Console.WriteLine(dial:.main.G::twice(scope.A.value));
 ```
 
 ```text

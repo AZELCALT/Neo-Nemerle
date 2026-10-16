@@ -40,7 +40,9 @@
 | `array[a, b]`, `array(n)` | arrays |
 | `$"text $x $(e)"` | string interpolation |
 | `<[ code ]>`, `$e` | quotation and splice (in macros) |
-| `dial:.file.space::member(...)` | a dial: a call into a space of `file` (`G:.main.Tools::twice(2)`) |
+| `dial:.file.G::member(...)` | a dial: a call into `space G` of `file` (`dial:.main.G::twice(2)`) |
+| `dial:.file.(A, B)::member(...)` | a dial into the mixing space `space (A, B)` (any order) |
+| `dial:.file::member(...)` | a dial into the plain `space { }` of `file` |
 | `_ = e` | discard a value |
 
 ## Patterns

@@ -83,6 +83,7 @@ public sealed class NitraSharedScope : NitraSemanticScope
   public Get(name : string) : NitraScopeBinding
   { unless(bindings.ContainsKey(name)) throw ArgumentException("unknown scope binding: scope."+Name+"."+name); bindings[name] }
   public Set(name : string, value : object) : void { Get(name).Value=value; }
+  public Contains(name : string) : bool { bindings.ContainsKey(name) }
   /// The bindings in registration order (the continuation section stores them).
   public Bindings : SCG.IEnumerable[NitraScopeBinding] { get { bindings.Values } }
   public override Lookup(name : string) : SCG.List[NitraSemanticSymbol]
@@ -103,6 +104,13 @@ public sealed class NitraDialectSpace
   public Resolver : INitraDialectResolver
   { get { resolver :> INitraDialectResolver } set { resolver=value; } }
   internal Zone : int;
+  /// What the continuation section stores of the space: its grammars, file, `as` name and body.
+  public mutable Names : array[string];
+  public mutable File : string;
+  public mutable Alias : string;
+  public mutable Body : string;
+  /// Rebuilt from a continued binary's section (it is that binary's space, not this compilation's).
+  public mutable Continued : bool;
   public this(dialect : string, owner : string, location : Location, scopes : array[string], zone : int)
   { Dialect=dialect; Owner=owner; Location=location; Scopes=scopes; Zone=zone; }
 }
@@ -111,27 +119,51 @@ public sealed class NitraDialectRegistry
   spaces : SCG.Dictionary[string,NitraDialectSpace] = SCG.Dictionary();
   scopes : SCG.Dictionary[string,NitraSharedScope] = SCG.Dictionary();
   public Trace : SCG.List[string] = SCG.List();
-  private Key(dialect : string, owner : string) : string { dialect+":"+owner }
-  internal AddSpace(space : NitraDialectSpace) : void
+  /// A space's path is where it stands: `file` for the file's plain `space { }`, `file.G` for its `space G { }`,
+  /// `file.(A,B)` for the mixing `space (A, B) { }` (the order of the grammars does not matter), and `file.Name`
+  /// for a second name given with `as Name`. A dial `dial:.path::member` reaches the space at that path.
+  public static Canonical(path : string) : string
   {
-    def key=Key(space.Dialect,space.Owner);
-    when(spaces.ContainsKey(key)) throw ArgumentException("duplicate dialect space: "+key+"; first registered at "+spaces[key].Location.ToString());
+    def open=path.IndexOf(".(",StringComparison.Ordinal);
+    if(open<0 || !path.EndsWith(")",StringComparison.Ordinal)) path
+    else
+    {
+      def names=path.Substring(open+2,path.Length-open-3).Split(',');
+      for(mutable i=0;i<names.Length;++i) names[i]=names[i].Trim();
+      Array.Sort(names,StringComparer.Ordinal);
+      path.Substring(0,open)+".("+String.Join(",",names)+")"
+    }
+  }
+  internal AddSpace(space : NitraDialectSpace) : void { AddPath(space.Owner,space) }
+  /// Registers `space` at `path` as well (its `as` name).
+  internal AddPath(path : string, space : NitraDialectSpace) : void
+  {
+    def key=Canonical(path);
+    when(spaces.ContainsKey(key)) throw ArgumentException("duplicate space: "+key+"; first registered at "+spaces[key].Location.ToString());
     spaces.Add(key,space); Trace.Add("register "+key+" at "+space.Location.ToString());
   }
-  internal AddAlias(dialect : string, alias : string, space : NitraDialectSpace) : void
-  { def key=Key(dialect,alias); when(spaces.ContainsKey(key)) throw ArgumentException("duplicate dialect space alias: "+key); spaces.Add(key,space); }
-  public Space(dialect : string, owner : string) : NitraDialectSpace
-  { def key=Key(dialect,owner); unless(spaces.ContainsKey(key)) throw ArgumentException("unknown dialect space: "+key); spaces[key] }
-  public RegisterResolver(dialect : string, owner : string, resolver : INitraDialectResolver) : void
+  /// The space at `path` (see Canonical).
+  public Space(path : string) : NitraDialectSpace
+  { def key=Canonical(path); unless(spaces.ContainsKey(key)) throw ArgumentException("unknown space: dial:."+key); spaces[key] }
+  public RegisterResolver(path : string, resolver : INitraDialectResolver) : void
   {
-    when(resolver==null) throw ArgumentNullException("resolver"); def space=Space(dialect,owner);
-    when(space.Resolver!=null && space.Resolver : object != resolver : object) throw ArgumentException("resolver already registered for "+dialect+":"+owner);
+    when(resolver==null) throw ArgumentNullException("resolver"); def space=Space(path);
+    when(space.Resolver!=null && space.Resolver : object != resolver : object) throw ArgumentException("resolver already registered for "+path);
     space.Resolver=resolver;
   }
   public RegisterScope(name : string) : NitraSharedScope
   { unless(scopes.ContainsKey(name)) scopes.Add(name,NitraSharedScope(name)); scopes[name] }
   public Scope(name : string) : NitraSharedScope
   { unless(scopes.ContainsKey(name)) throw ArgumentException("unknown shared scope: "+name); scopes[name] }
+  /// Every space of the compilation, once each (a mixing space or an `as` name registers one space more than once).
+  public AllSpaces : SCG.IEnumerable[NitraDialectSpace]
+  {
+    get
+    {
+      def seen=SCG.HashSet.[NitraDialectSpace]();
+      foreach(space in spaces.Values) when(seen.Add(space)) yield space;
+    }
+  }
   /// Every shared scope of the compilation (the continuation section stores them).
   public Scopes : SCG.IEnumerable[NitraSharedScope] { get { scopes.Values } }
 }
@@ -148,7 +180,7 @@ public sealed class NitraDialectContext
   public this(registry : NitraDialectRegistry, space : NitraDialectSpace, typer : Typer, location : Location)
   { Registry=registry; Space=space; Typer=typer; Location=location; }
   public RegisterResolver(resolver : INitraDialectResolver) : void
-  { Registry.RegisterResolver(Space.Dialect,Space.Owner,resolver); }
+  { Registry.RegisterResolver(Space.Owner,resolver); }
   public Scope(name : string) : NitraSharedScope
   {
     unless(Array.IndexOf(Space.Scopes,name)>=0) throw ArgumentException("scope is not attached to this space: "+name);
@@ -164,8 +196,8 @@ public sealed class NitraDialectContext
   }
   public Resolve(name : string, args : array[PExpr], isCall : bool) : NitraDialectResolution
   {
-    when(Space.Resolver==null) throw ArgumentException("space has no dialect resolver: "+Space.Dialect+":"+Space.Owner);
-    Registry.Trace.Add("resolve "+Space.Dialect+":"+Space.Owner+"::"+name+" at "+this.Location.ToString());
+    when(Space.Resolver==null) throw ArgumentException("space has no dialect resolver: dial:."+Space.Owner);
+    Registry.Trace.Add("resolve dial:."+Space.Owner+"::"+name+" at "+this.Location.ToString());
     def answer=Space.Resolver.Resolve(NitraDialectRequest(this,name,args,isCall));
     when(answer==null) throw ArgumentException("unreachable dialect member: "+name);
     answer

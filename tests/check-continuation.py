@@ -411,15 +411,17 @@ if a.stage == 'E6':
             raise SystemExit('FAILED: %s printed %r, expected %r' % (name, output, expected))
     plugin('scope-only', 'System.Console.WriteLine(scope.A.value);\n', ['21'])
     print('PASS: P a script with no space reads a host scope binding from the section (scope subsection, deeper lookup)', flush=True)
-    plugin('plugin-space', 'space G [A] { go }\nSystem.Console.WriteLine(G:.use::twice(scope.A.value));\n'
-                           'System.Console.WriteLine(G:.use::shared());\n', ['42', '21'])
-    plugin('plugin-alias', 'space G as Named [A] { go }\nSystem.Console.WriteLine(G:.use.Named::twice(5));\n', ['10'])
+    plugin('plugin-space', 'space G [A] { go }\nSystem.Console.WriteLine(dial:.use.G::twice(scope.A.value));\n'
+                           'System.Console.WriteLine(dial:.use.G::shared());\n', ['42', '21'])
+    plugin('plugin-named', 'space G as Named [A] { go }\nSystem.Console.WriteLine(dial:.use.Named::twice(5));\n', ['10'])
     print('PASS: P a plugin script with no grammar uses the host grammar through space G [A] / as Name, dials and scopes', flush=True)
+    plugin('host-dial', 'System.Console.WriteLine(dial:.host.G::twice(2));\nSystem.Console.WriteLine(dial:.host.G::shared());\n', ['4', '21'])
+    print('PASS: P a plugin script dials into the host library\'s own space (spaces stored with the scopes)', flush=True)
     plain = w / 'plainspace'
     plain.mkdir()
     for f in ('host.dll', 'res.dll'):
         shutil.copy2(shost / f, plain / f)
-    (plain / 'prog.n').write_text('space { go }\nSystem.Console.WriteLine(G:.prog::twice(4));\n')
+    (plain / 'prog.n').write_text('space { go }\nSystem.Console.WriteLine(dial:.prog::twice(4));\n')
     run([T / 'ncc', plain / 'prog.n', '-source-root:' + str(plain), '-out:' + str(plain / 'prog.exe'), '-no-color',
          '-r:' + str(plain / 'host.dll'), '-r:' + str(plain / 'res.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', plain / 'prog.runtimeconfig.json')

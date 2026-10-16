@@ -10,7 +10,7 @@ inside a function or type. The program and its spaces communicate in two ways:
 
 - **scopes**, a shared memory zone. The program puts bindings in a scope, a space reads them, and a space can write
   bindings back for the program to read;
-- **dials**, direct calls into a space: `dial:.file.space::member(...)` reaches a member of one space of one file.
+- **dials**, direct calls into a space: `dial:.file.G::member(...)` reaches a member of the `space G` of a file.
 
 ## A first grammar
 
@@ -145,13 +145,18 @@ see it.
 
 ## Dials: calling into a space
 
-A dial is a direct call into a space: `dial:.file.space::member(arguments)`, or `dial:.file.space::member` for the
-member as a function value.
+A dial is a direct call into a space: `dial:.file.G::member(arguments)`, or `dial:.file.G::member` for the member as
+a function value. `file` is the file module that holds the space (`main` for `main.n`), and the part after it says
+which of the file's spaces:
 
-- `dial` is the grammar the space is written in (`G`);
-- `file` is the file module that holds the space (`main` for `main.n`);
-- `space` is the space's name, given with `space G as Name { ... }`;
-- `member` is what the call reaches in that space.
+| Space | Dial |
+|---|---|
+| `space G { ... }` | `dial:.file.G::member` |
+| `space (A, B) { ... }` | `dial:.file.(A, B)::member`, in any order: `(B, A)` is the same space |
+| `space { ... }` (plain) | `dial:.file::member` |
+
+Each of these exists once per file, so the path is enough to find it. `space G as Name` gives a space a second name,
+`dial:.file.Name::member`.
 
 The grammar has no Nemerle members of its own. A **resolver** answers for it:
 it says which members exist, with which signatures, and what code a call becomes.
@@ -219,10 +224,10 @@ grammar G
 
 scope.A.registery("value", type("number"));
 scope.A.value = 21;
-space G as Tools [A] { go }
-System.Console.WriteLine(G:.main.Tools::twice(21));
-System.Console.WriteLine(G:.main.Tools::shared());
-def f = G:.main.Tools::twice;
+space G [A] { go }
+System.Console.WriteLine(dial:.main.G::twice(21));
+System.Console.WriteLine(dial:.main.G::shared());
+def f = dial:.main.G::twice;
 System.Console.WriteLine(f(5));
 ```
 
@@ -238,7 +243,7 @@ Calls are checked against the resolver's signatures, and a dial may stand before
 
 - **`space G { ... }`** uses grammar `G`.
 - **`space (A, B) { ... }`** mixes grammars `A` and `B`: their rules combine, and together they must have one start
-  rule.
+  rule. It is a space of its own, next to the file's `space A` and `space B`.
 - **`space { ... }`** is a plain space, over full Nitra and across grammars. It uses the grammars of its own file;
   when those do not give exactly one start rule (or there are none), it uses every grammar the file can see: those of
   the other files and of referenced libraries.
@@ -263,10 +268,12 @@ space Small { one }
 ```
 
 ```text
-duplicate dialect space
+duplicate space
 ```
 
-When a file really needs a second one, give it a name of its own with `space Small as Other { ... }`.
+`space Small as Other { ... }` gives the space a second name, which a dial can use (`dial:.file.Other::member`). It
+is still the file's one `Small` space. A mixing space `space (Small, Big) { ... }` and the plain `space { ... }` are
+different spaces, so they can stand next to `space Small` in the same file.
 
 ## Spaces are top level
 
@@ -333,10 +340,13 @@ space Units { 3 km }
 The program has no grammar of its own, so a plain `space { 3 km }` would find `Units` as well.
 
 A binding whose value is code is stored as that code's text. A binding that holds a dial reference
-(`scope.A.f = G:.file.space::member`) points into the library's own spaces and is not stored.
+(`scope.A.f = dial:.file.G::member`) is not stored; the space it points to is (see below).
 
 When a program redefines a stored grammar and only some alternatives changed, the compiler recompiles just those
 alternatives.
+
+The section also stores the library's spaces, together with the scopes they use. A program that references the library
+can dial into them, `dial:.file.G::member` with the library's file, as it dials into its own.
 
 Scripts continue from libraries the same way, which makes a script a plugin of the application that hosts it. A
 script can use the host's grammars, scopes and dials without defining any of them (see [Scripts](11-scripts.md)).

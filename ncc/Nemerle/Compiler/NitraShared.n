@@ -191,16 +191,37 @@ internal module GrammarJson
 /// Finds the first grammar/space/runtime/compile block of a source file (envelope pre-scan only).
 public module NitraSourceScan
 {
-  internal FindConstruct(source : ISource) : Location
+  internal FindConstruct(source : ISource) : Location { FindConstruct(source,false) }
+  /// `scopeUses`: also count `scope.A.x`. `scope` is an ordinary name in files without spaces, so that use counts
+  /// only when a referenced binary stores scopes; `scope A;` and a dial `dial:.` are never ordinary Nemerle.
+  internal FindConstruct(source : ISource, scopeUses : bool) : Location
   {
     def text=source.GetText();
-    unless(text.Contains("grammar") || text.Contains("space") || text.Contains("runtime") || text.Contains("compile")) return Location.Default;
+    unless(text.Contains("grammar") || text.Contains("space") || text.Contains("runtime") || text.Contains("compile")
+           || text.Contains("scope") || text.Contains(":.")) return Location.Default;
+    def at(start : int) : Location
+    {
+      mutable line=1; mutable column=1;
+      for(mutable i=0;i<start;++i) if(text[i]=='\n') { ++line; column=1; } else ++column;
+      Location(source.FileIndex,line,column)
+    }
     def reader=GReader(text,Location.GetFileName(source.FileIndex),0,text.Length);
     try
     {
+      mutable previous="";
       while(!reader.Is("<eof>"))
       {
         def token=reader.Take();
+        def after=previous; previous=token.Text;
+        // scopes and dials belong to the grammar path too: `scope A;`, `scope.A.x`, `dial:.file::member`
+        when(!token.Quoted && after!="." && token.Text=="scope")
+        {
+          when(scopeUses && reader.Is(".")) return at(token.Start);
+          when(reader.Peek().Text.Length>0 && char.IsLetter(reader.Peek().Text[0]))
+          { _=reader.Name(); when(reader.Is(";") || reader.Is("{")) return at(token.Start); }
+        }
+        when(!token.Quoted && after!="." && token.Text=="dial" && reader.Is(":"))
+        { _=reader.Take(); when(reader.Is(".")) return at(token.Start); }
         when(!token.Quoted && (token.Text=="grammar" || token.Text=="space" || token.Text=="runtime" || token.Text=="compile"))
         {
           mutable found=reader.Is("{");
@@ -210,7 +231,7 @@ public module NitraSourceScan
             while(!reader.Is(")") && !reader.Is("<eof>")) _=reader.Take();
             _=reader.Eat(")"); found=reader.Is("{");
           }
-          when(reader.Peek().Text.Length>0 && char.IsLetter(reader.Peek().Text[0]))
+          when(reader.Peek().Text.Length>0 && char.IsLetter(reader.Peek().Text[0]) && !(token.Text=="space" && reader.Is("as")))
           { _=reader.Name(); found=reader.Is("{"); }
           // `space G as Name [A] { ... }`: an alias and attached scopes may stand before the body
           when(token.Text=="space" && reader.Eat("as")) { _=reader.Name(); found=reader.Is("{"); }
@@ -219,12 +240,7 @@ public module NitraSourceScan
             while(!reader.Is("]") && !reader.Is("<eof>")) _=reader.Take();
             _=reader.Eat("]"); found=reader.Is("{");
           }
-          when(found)
-          {
-            mutable line=1; mutable column=1;
-            for(mutable i=0;i<token.Start;++i) if(text[i]=='\n') { ++line; column=1; } else ++column;
-            return Location(source.FileIndex,line,column);
-          }
+          when(found) return at(token.Start);
         }
       }
     }

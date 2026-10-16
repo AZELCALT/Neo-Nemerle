@@ -120,9 +120,8 @@ public sealed class DefaultParser : IParser
   {
     // Grammar and space blocks are part of the language: a file containing one switches the compilation to the
     // Nitra source path (all sources are indexed once); files without them are parsed as before.
-    // A source using only scopes or dials of a continued binary's spaces (a plugin script) takes the same path.
-    when(manager.Options.NitraSources!=null || NitraSourceScan.FindConstruct(source).FileIndex!=0
-         || manager.ContinuesSpaces && { def text=source.GetText(); text.Contains("scope") || text.Contains(":.") })
+    // Scopes and dials count too, so a source using only those (a plugin script of a host's spaces) takes the path.
+    when(manager.Options.NitraSources!=null || NitraSourceScan.FindConstruct(source,manager.ContinuesScopes).FileIndex!=0)
     {
       try
       {
