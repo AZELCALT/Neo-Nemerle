@@ -127,7 +127,39 @@ static class NitraAutomaticSourceChecks
         }
         """;
         Compile(args[0],args[1],"GrammarHandler",direct+sql+handler,"space (G, Sql) { SELECT 42 + 42 }",84);
-        Compile(args[0],args[1],"MixWithoutHandler",direct+sql,"space (G, Sql) { SELECT 42 }",null);
+        // without a handler, a mixed space starts at the first grammar in sorted order that has a start rule
+        Compile(args[0],args[1],"MixWithoutHandler",direct+sql,"space (Sql, G) { 42 }",42);
+        // the joint set: a handler applies, as extensions of its grammars, in every space that has all of them
+        const string layered = """
+        grammar G {
+          using Nemerle.Compiler.Parsetree;
+          syntax module Test {
+            using Nitra.Core;
+            [StartRule] syntax Start = Item { map PExpr { Item } }
+            syntax Item { map PExpr; | One = "1" { map PExpr = <[ 1 ]>; } }
+          }
+        }
+        grammar S {
+          using Nemerle.Compiler.Parsetree;
+          syntax module Words { using Nitra.Core; syntax Two = "two" { map PExpr = <[ 2 ]>; } }
+        }
+        grammar X {
+          using Nemerle.Compiler.Parsetree;
+          syntax module Other { using Nitra.Core; syntax Unused = "x" { map PExpr = <[ 0 ]>; } }
+        }
+        grammar (S, G) {
+          using Nemerle.Compiler.Parsetree;
+          syntax module Bridge {
+            using Nitra.Core;
+            using G.Test;
+            using S.Words;
+            extend syntax Item { | FromS = Two { map PExpr { Two } } }
+          }
+        }
+        """;
+        Compile(args[0],args[1],"JointHandler",layered,"space (X, S, G) { two }",2);
+        Compile(args[0],args[1],"ExclusiveHandler",layered,"space (G, S) { two }",2);
+        Compile(args[0],args[1],"HandlerNeedsItsGrammars",layered,"space G { two }",null);
         Compile(args[0],args[1],"InactiveGrammar",direct.Replace("syntax module Test", "statement Envelope form { \"start\" ...Operand... \"end\" } semantic kind Operand = \"unused\"; syntax module Test"),"space G { 42 }",42);
         Console.WriteLine("PASS: " + count + " automatic native source checks");
     }

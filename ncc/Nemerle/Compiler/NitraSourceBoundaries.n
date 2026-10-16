@@ -17,6 +17,8 @@ internal sealed class NitraBoundary
   public mutable Dialect : string;
   public mutable Owner : string;
   public mutable Member : string;
+  /// The file the boundary is in (a scope path is resolved from there).
+  public mutable File : int;
   public mutable IsCall : bool;
   public mutable Location : Location;
   /// A `registery` of a slot that the index already added to the scope's layout.

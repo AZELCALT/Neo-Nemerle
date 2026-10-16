@@ -155,6 +155,7 @@ if (plugin.Success) _ = host.Evaluate(plugin.Script, Nemerle.Scripting.contracts
 else foreach (d in plugin.Diagnostics) System.Console.WriteLine(d.Message);
 System.Console.WriteLine($"the application sees $(scope.A.value)");
 // file: plugin.txt
+using main;
 space G [A] { go }
 System.Console.WriteLine(scope.A.value);
 System.Console.WriteLine(dial:.plugin.G::twice(scope.A.value));
@@ -167,7 +168,8 @@ scope.A.value = 50;
 the application sees 50
 ```
 
-The plugin is `plugin.n` to the compiler, so its space is `dial:.plugin.G`.
+The plugin is `plugin.n` to the compiler, so its space is `dial:.plugin.G`. `using main;` imports the application's
+file, which is what makes its scope `A` (`main.A`) the plugin's `scope.A`.
 
 ## Script kinds
 

@@ -84,7 +84,7 @@ public static class NitraDialectChecks
                 var method=compiler.GeneratedAssembly.GetTypes().Single(t=>t.Name=="Example").GetMethod("Run");
                 Check((int)method.Invoke(null,null)==expected.Value,name+": wrong result");
             }
-            if(name=="Reference" && expected.HasValue) Check(((NitraDialectResolution)config.Dialects.Scope("A").Get("f").Metadata).Signatures.Count==2,"reference signatures inferred");
+            if(name=="Reference" && expected.HasValue) Check(((NitraDialectResolution)config.Dialects.Scope("Reference.A").Get("f").Metadata).Signatures.Count==2,"reference signatures inferred");
             if(configure && expected.HasValue) Check(config.Dialects.Trace.Any(t=>t.StartsWith("resolve ")),"trace missing");
             Console.WriteLine("PASS: "+name);
         } finally { ManagerClass.Instance=previous; }
@@ -132,17 +132,18 @@ public static class NitraDialectChecks
         Compile(root,refs,"MappingScope",contextual,"scope.A.registery(\"name\",type(\"int\")); scope.A.registery(\"out\",type(\"int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
         var explicitContext=Grammar.Replace("map PExpr = <[ 42 ]>;","map (context : NitraDialectContext) PExpr = { def s=context.Scope(\"A\"); s.Write(\"out\",s.Read(\"name\")) };");
         Compile(root,refs,"ExplicitContext",explicitContext,"scope.A.registery(\"name\",type(\"int\")); scope.A.registery(\"out\",type(\"int\")); scope.A.name=42; space G [A] {42}; scope.A.out",42,configure:false);
-        // anything fits a slot; the code using it is type-checked: a slot of an unknown type reads as object
-        Compile(root,refs,"AnySlot",Grammar,"scope.A.registery(\"thing\",type(\"whatever\")); scope.A.thing=\"text\"; space G [A] {42}; (scope.A.thing :> string).Length + 38",42,configure:false);
+        // anything fits a slot: a slot of no fixed type holds a Content (the value and the type it currently is)
+        Compile(root,refs,"AnySlot",Grammar,"scope.A.registery(\"thing\",type(\"whatever\")); scope.A.thing=\"text\"; space G [A] {42}; scope.A.thing.As.[string]().Length + 38",42,configure:false);
+        Compile(root,refs,"ContentChecksType",Grammar,"scope.A.registery(\"thing\",type(\"whatever\")); scope.A.thing=7; space G [A] {42}; if (scope.A.thing.Is.[string]()) 0 else scope.A.thing.As.[int]() * 6",42,configure:false);
         Compile(root,refs,"ReadAnywhere",Grammar,"scope.A.registery(\"n\",type(\"int\")); scope.A.n=40; space G [A] {42}; Reader.Helper.Get()",42,configure:false,
-            extraSources:new[]{("Reader","public static class Helper { public static Get() : int { scope.A.n + 2 } }")});
+            extraSources:new[]{("Reader","using ReadAnywhere;\npublic static class Helper { public static Get() : int { scope.A.n + 2 } }")});
         var selfRegistering=Grammar.Replace("map PExpr = <[ 42 ]>;","map PExpr = { def c=NitraDialectContext.Current; when(c.Space.Resolver==null) c.RegisterResolver(NitraDialectChecks.CreateResolver()); <[ 42 ]> };");
         Compile(root,refs,"MappingResolver",selfRegistering,"def x=dial:.MappingResolver.G::value(42); space G {42}; x",42,configure:false);
         Compile(root,refs,"TwoDialects",Grammar+Grammar.Replace("grammar G", "grammar H"),"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; space H [A] {42}; dial:.TwoDialects.H::shared()",42,
             setup:r=>{r.RegisterResolver("TwoDialects.G",new Resolver()); r.RegisterResolver("TwoDialects.H",new Resolver());});
         Compile(root,refs,"CrossFile","scope A; "+Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; dial:.Other.G::shared()",42,
             setup:r=>{r.RegisterResolver("CrossFile.G",new Resolver()); r.RegisterResolver("Other.G",new Resolver());},
-            extraSources:new[]{("Other","space G [A] {42}")});
+            extraSources:new[]{("Other","using CrossFile;\nspace G [A] {42}")});
         Compile(root,refs,"ScopeDeclaration","scope A; "+Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; dial:.ScopeDeclaration.G::shared()",42);
         Compile(root,refs,"ScopeBlock","scope A {} "+Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; dial:.ScopeBlock.G::shared()",42);
         Compile(root,refs,"NoScopeLeak",Grammar,"scope.A.registery(\"name\",type(\"custom_int\")); scope.A.name=42; space G [A] {42}; name",null,failure:"unbound");

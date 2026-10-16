@@ -41,9 +41,13 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 - Known gap: grammars are compiled with their program, and there is no reusable compiled-grammar artifact yet.
 - A `scope` is a dedicated global storage shared by the program and its spaces (and by a host application and the
   plugin scripts it runs): `scope.A.registery(...)` appends a slot, typed by the grammar or as `object`, and
-  `scope.A.x` reads and writes it when the program runs; a slot may hold a dial member, stored as a function value. The runtime part is `Nemerle.Scopes.Scope` in `Nemerle.dll`.
+  `scope.A.x` reads and writes it when the program runs. A scope belongs to its file (`app.A`) and is reached
+  through `using`. A slot of no fixed type holds a `Content` (value plus its current type, checked on use); a slot
+  may hold a dial member, stored as a function value, or as a Content of its forms when it has several. The runtime part is `Nemerle.Scopes.Scope` in `Nemerle.dll`.
 - `grammar (A, B) { ... }` holds how grammars `A` and `B` work together (as Objective-C++ needs more than C++ and
-  Objective-C side by side); `space (A, B)` uses its rules and starts at its start rule. The old `runtime`/`compile`
+  Objective-C side by side). A mixing space is its grammars in sorted order, then every handler whose grammars are
+  all present (extensions under that condition), then the handler of exactly its set; it starts at that handler's
+  start rule, else at the first grammar's. The old `runtime`/`compile`
   blocks are removed: Nitra covers them.
 - Errors in grammar/space source (a misplaced space, a duplicate slot) are reported at their line and column.
 - A `space` is a top-level logical file in a grammar's language. A space inside a function or a type, or used as an

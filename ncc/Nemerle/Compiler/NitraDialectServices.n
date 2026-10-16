@@ -136,8 +136,34 @@ public sealed class NitraSharedScope : NitraSemanticScope
       clr ?? "object"
     }
   }
+  /// The Nemerle types (parameters, then result) of each signature of a dial member whose types the grammar gives.
+  public ReferenceForms(reference : NitraDialectReference, typer : Typer) : SCG.List[SCG.List[string]]
+  {
+    def forms=SCG.List();
+    def space=if(Registry!=null) try { Registry.Space(reference.Owner) } catch { | _ is ArgumentException => null } else null;
+    def clr(type : NitraDialectType) : string
+    {
+      if(type==null) null
+      else if(type.Clr!=null) type.Clr
+      else
+      {
+        def resolved=if(space!=null && space.Resolver!=null)
+                       try { space.Resolver.ResolveType(type.Name,NitraDialectContext(Registry,space,typer,Location.Default)) }
+                       catch { | _ is ArgumentException => null }
+                     else null;
+        if(resolved!=null && resolved.Clr!=null) resolved.Clr else if(NamesType(type.Name)) type.Name else null
+      }
+    }
+    when(reference.Resolution!=null)
+      foreach(s in reference.Resolution.Signatures)
+      {
+        def types=SCG.List.[string](); foreach(p in s.Parameters) types.Add(clr(p)); types.Add(clr(s.Result));
+        unless(types.Contains(null)) forms.Add(types);
+      }
+    forms
+  }
   /// A slot holding a dial member is a function value: with one signature whose types the grammar gives, of that
-  /// function type, else `object`.
+  /// function type, else a Content holding every form.
   ReferenceType(reference : NitraDialectReference, typer : Typer) : string
   {
     def signatures=if(reference.Resolution!=null) reference.Resolution.Signatures else SCG.List();
@@ -187,15 +213,16 @@ public sealed class NitraSharedScope : NitraSemanticScope
   public Read(name : string, typer : Typer) : PExpr
   {
     _=Get(name); def type=SlotType(name,typer);
-    if(type=="object") <[ $(storage()).Get($(name : string), null) ]>
-    else <[ ($(storage()).Get($(name : string), Nemerle.Scopes.Scope.Default(typeof($(typeExpr(type))))) :> $(typeExpr(type))) ]>
+    // a slot of no fixed type holds a Content: its value and the type it currently is
+    if(type=="object") <[ Nemerle.Scopes.Content.Of($(storage()).Get($(name : string), null)) ]>
+    else <[ $(storage()).Read.[$(typeExpr(type))]($(name : string)) ]>
   }
   /// The code that writes `value` into slot `name` (as the slot's type).
   public Write(name : string, value : PExpr) : PExpr { Write(name,value,null) }
   public Write(name : string, value : PExpr, typer : Typer) : PExpr
   {
     _=Get(name); def type=SlotType(name,typer);
-    if(type=="object") <[ $(storage()).Set($(name : string), $value) ]>
+    if(type=="object") <[ $(storage()).Set($(name : string), Nemerle.Scopes.Content.Of($value)) ]>
     else <[ $(storage()).Set($(name : string), ($value : $(typeExpr(type)))) ]>
   }
   /// The bindings in registration order (the continuation section stores them).
@@ -213,7 +240,8 @@ public sealed class NitraDialectSpace
   public Dialect : string;
   public Owner : string;
   public mutable Location : Location;
-  public Scopes : array[string];
+  /// The scopes attached to the space (their full names, `file.A`).
+  public mutable Scopes : array[string];
   mutable resolver : object;
   public Resolver : INitraDialectResolver
   { get { resolver :> INitraDialectResolver } set { resolver=value; } }
@@ -274,6 +302,8 @@ public sealed class NitraDialectRegistry
   }
   public Scope(name : string) : NitraSharedScope
   { unless(scopes.ContainsKey(name)) throw ArgumentException("unknown shared scope: "+name); scopes[name] }
+  /// Whether scope `name` (its full name, `file.A`) exists.
+  public HasScope(name : string) : bool { scopes.ContainsKey(name) }
   /// Every space of the compilation, once each (a mixing space or an `as` name registers one space more than once).
   public AllSpaces : SCG.IEnumerable[NitraDialectSpace]
   {
@@ -300,10 +330,14 @@ public sealed class NitraDialectContext
   { Registry=registry; Space=space; Typer=typer; Location=location; }
   public RegisterResolver(resolver : INitraDialectResolver) : void
   { Registry.RegisterResolver(Space.Owner,resolver); }
+  /// An attached scope, by its name as the space attaches it (`A`) or its full name (`file.A`).
   public Scope(name : string) : NitraSharedScope
   {
-    unless(Array.IndexOf(Space.Scopes,name)>=0) throw ArgumentException("scope is not attached to this space: "+name);
-    Registry.Scope(name)
+    def found=SCG.List.[string]();
+    foreach(key in Space.Scopes) when(key==name || key.EndsWith("."+name,StringComparison.Ordinal)) found.Add(key);
+    when(found.Count==0) throw ArgumentException("scope is not attached to this space: "+name);
+    when(found.Count>1) throw ArgumentException("scope "+name+" is ambiguous here: "+String.Join(", ",found.ToArray()));
+    Registry.Scope(found[0])
   }
   public Reference(name : string) : NitraDialectReference
   { NitraDialectReference(Space.Dialect,Space.Owner,name,Resolve(name,array[],false)) }

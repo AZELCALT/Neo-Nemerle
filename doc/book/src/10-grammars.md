@@ -102,11 +102,14 @@ program runs.
 
 A scope is a dedicated global storage that the program and its spaces share, like global variables of their own:
 
-- `scope A;` declares a scope, at the top level of a file.
+- `scope A;` declares a scope, at the top level of a file. The scope belongs to that file: in `app.n` it is
+  `app.A`. A file that imports `app` (`using app;`) reaches it as `scope.A` too, and `scope.app.A` names it in full.
+  Scopes of different files never mix, even with the same name.
 - `scope.A.registery("name", type("t"))` appends a slot to the storage. Anything fits a slot. Its type is the
-  grammar's: the space's resolver says which Nemerle type the token `"t"` stands for. A token that names a Nemerle type
-  (`type("int")`) is that type, and any other token reads as `object`. The code that uses a slot is type-checked as
-  usual.
+  grammar's: the space's resolver says which Nemerle type the token `"t"` stands for, and a token that names a Nemerle
+  type (`type("int")`) is that type. The code that uses a slot is type-checked as usual.
+- A slot with no fixed type holds a `Content`: the value and the type it currently is. `scope.A.x.Is.[string]()`
+  tests it, and `scope.A.x.As.[string]()` reads it as that type, or reports which type it really holds.
 - `scope.A.name = e` writes a slot, and `scope.A.name` reads it, anywhere in the program, when it runs.
 - `space G [A, B] { ... }` attaches scopes to a space. Its mappings reach a scope through their `NitraDialectContext`:
   `Read("name")` and `Write("name", value)` give the code that reads and writes a slot, for the space's own code.
@@ -145,7 +148,9 @@ The program writes `answer`, the space's code reads it and writes `doubled`, and
 live in the storage while the program runs; a space that is not attached to a scope cannot use it.
 
 The storage is the process's, so an application and the plugin scripts it runs share the same values (see
-[Scripts as plugins](11-scripts.md)).
+[Scripts as plugins](11-scripts.md)). A slot can also hold a dial member, `scope.A.registery("f", dial:.file.G::m)`.
+It is stored as a function value; a member with several forms is stored as a `Content` of all of them, and a call
+runs the form whose parameters fit the arguments.
 
 ## Dials: calling into a space
 
@@ -254,8 +259,15 @@ Calls are checked against the resolver's signatures, and a dial may stand before
 
 Two languages used together often need more than the syntax of each, as Objective-C++ needs more than C++ and
 Objective-C side by side. **`grammar (A, B) { ... }`** holds that: Nitra rules about how `A` and `B` work together,
-which apply in `space (A, B)`. Its rules can use those of both grammars, and when it has a start rule, the mixed space
-begins there:
+written with the rules of both. A mixing space is built in layers:
+
+1. its grammars, in sorted order;
+2. the joint set: every `grammar (...)` whose grammars are all in the space, as extensions under that condition
+   (`grammar (A, B)` applies in `space (A, B, C)` too);
+3. the exclusive grammar: the `grammar (...)` of exactly the space's grammars, if there is one.
+
+The space starts at the exclusive grammar's start rule, or else at that of the first grammar in sorted order that has
+one:
 
 ```nemerle
 grammar Words
@@ -300,7 +312,7 @@ space (Digits, Words) { seven times 6 }
 42
 ```
 
-Without the `grammar (Words, Digits)` handler, the space would have two start rules and no way to choose.
+Without `grammar (Words, Digits)`, the space would start at `Digits`' start rule, the first in sorted order.
 
 ## One space per grammar per file
 

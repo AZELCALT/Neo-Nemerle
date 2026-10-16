@@ -43,9 +43,68 @@ public sealed class Scope
 
   public Get(name : string) : object { Get(name, null) }
 
+  /// Slot `name` as a `T`: its default while nothing is there, and a Content (from code that knew no type for the
+  /// slot) checked for that type.
+  public Read[T](name : string) : T
+  {
+    match (Get(name, null))
+    {
+      | null => Default(typeof(T)) :> T
+      | content is Content => content.As.[T]()
+      | value => value :> T
+    }
+  }
+
   /// Writes slot `name` (a slot that is not there yet is added).
   public Set(name : string, value : object) : void
   {
     lock (slots) slots[name] = value
   }
+}
+
+/// What a slot of no fixed type holds: the content and the type it currently is. Reading it asks for a type, which
+/// is checked, so a wrong guess is reported as such instead of failing as a bad cast somewhere else. A dial member
+/// with several forms is held the same way: `Call` runs the form whose parameters fit the arguments.
+public sealed class Content
+{
+  public Value : object;
+  /// The type the content currently is (null when there is none).
+  public Type : Type;
+  public this(value : object) { Value = value; Type = if (value == null) null else value.GetType(); }
+
+  /// `value` as a content (a content stays itself).
+  public static Of(value : object) : Content
+  {
+    match (value) { | content is Content => content | _ => Content(value) }
+  }
+
+  public Is[T]() : bool { typeof(T).IsInstanceOfType(Value) }
+
+  public As[T]() : T
+  {
+    unless (typeof(T).IsInstanceOfType(Value) || Value == null && !typeof(T).IsValueType)
+      throw InvalidCastException("the slot holds " + (if (Type == null) "nothing" else Type.ToString()) + ", not " + typeof(T).ToString());
+    Value :> T
+  }
+
+  /// Calls the content: a function value, or the form of a dial member whose parameters fit `arguments`.
+  public Call(params arguments : array[object]) : Content
+  {
+    def fits(form : Delegate) : bool
+    {
+      def parameters = form.GetType().GetMethod("Invoke").GetParameters();
+      mutable ok = parameters.Length == arguments.Length;
+      for (mutable i = 0; ok && i < parameters.Length; i++)
+        ok = if (arguments[i] == null) !parameters[i].ParameterType.IsValueType else parameters[i].ParameterType.IsInstanceOfType(arguments[i]);
+      ok
+    }
+    def forms = match (Value) { | many is array[Delegate] => many | one is Delegate => array[one] | _ => array(0) };
+    mutable chosen : Delegate = null;
+    foreach (form in forms) when (chosen == null && fits(form)) chosen = form;
+    when (chosen == null)
+      throw InvalidOperationException("no form of the slot takes " + arguments.Length.ToString() + " argument(s) of these types");
+    Content.Of(chosen.DynamicInvoke(arguments))
+  }
+
+  public override ToString() : string { if (Value == null) "" else Value.ToString() }
 }

@@ -42,14 +42,18 @@ field.
 
 A scope is a dedicated global storage that the program and its spaces share.
 `scope A;` (or `scope A {}`) declares it at the top level of a file; the first
-`registery` can also create it. `scope.A.registery("x", type("t"))` appends a slot,
+`registery` can also create it. It belongs to that file (`app.A` for `app.n`):
+`scope.A` finds the file's own scope, else one of a file it imports (`using app;`),
+and `scope.app.A` is the full name. `scope.A.registery("x", type("t"))` appends a slot,
 `scope.A.x = e` writes it and `scope.A.x` reads it, anywhere and when the program
 runs. The values live in `Nemerle.Scopes.Scope` (the language runtime), which the
 whole process shares, so a host application and the plugin scripts it runs see
 the same storage. Anything fits a slot: its Nemerle type is the grammar's
 (`NitraDialectType.Clr` from the resolver of a space that attaches the scope), or
-the token itself when it names a Nemerle type, or `object`; the code that uses the
-slot is type-checked as usual. A slot starts with its type's default. Registering
+the token itself when it names a Nemerle type; the code that uses the slot is
+type-checked as usual. A slot of no fixed type holds a `Nemerle.Scopes.Content`
+(the value and the type it currently is: `Is.[T]()`, `As.[T]()`, `Call(...)`), and
+a typed read of a Content checks it for that type. A slot starts with its type's default. Registering
 a slot twice in one compilation, and using a slot or scope that does not exist,
 are errors. Registrations with literal arguments join the layout when the
 sources are read, so every use sees the slot whatever order code is typed in.
@@ -157,7 +161,10 @@ plain space's cross-grammar lookup, and the top-level rule.
 
 ## Space modes
 
-- `space G { ... }` uses grammar `G`; `space (A, B) { ... }` mixes `A` and `B`.
+- `space G { ... }` uses grammar `G`; `space (A, B) { ... }` mixes `A` and `B`: its
+  grammars in sorted order, then every `grammar (...)` handler whose grammars are all
+  present (extensions under that condition), then the handler of exactly its set.
+  It starts at that exclusive handler's start rule, else at the first grammar's.
 - `space { ... }` is the plain space, over full Nitra and across grammars: its
   file's grammars, or, when those do not give exactly one start rule, every
   visible grammar (other files and continued binaries).
@@ -166,7 +173,7 @@ plain space's cross-grammar lookup, and the top-level rule.
 
 A scope travels in output assemblies as its layout (slot names, type tokens and
 types) with the binary's spaces; the values stay in the running program's storage.
-A slot holding a dial member stores the member's value (a function value when its
-one signature's types are given by the grammar). Custom form and semantic-kind
+A slot holding a dial member stores the member's value: a function value for one
+signature, a Content of every form (one delegate per signature) for several. Custom form and semantic-kind
 notation inside a grammar remains inactive. Native shorthand
 for list/optional PExpr output containers remains a separate unfinished feature.

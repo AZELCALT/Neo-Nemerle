@@ -77,6 +77,13 @@ public class Resolver : INitraDialectResolver
         answer.Signatures.Add(NitraDialectSignature("twice", NitraDialectType("number"), array[NitraDialectType("number")]));
         answer.Lower = Func(r => if (r.IsCall) <[ $(r.Arguments[0]) * 2 ]> else <[ fun (x : int) { x * 2 } ]>);
         answer
+      | "both" =>
+        // two forms: both(n) and both()
+        def answer = NitraDialectResolution();
+        answer.Signatures.Add(NitraDialectSignature("both", NitraDialectType("number"), array[NitraDialectType("number")]));
+        answer.Signatures.Add(NitraDialectSignature("both", NitraDialectType("number"), array[]));
+        answer.Lower = Func(r => if (r.Arguments.Length == 1) <[ $(r.Arguments[0]) + 1 ]> else <[ 100 ]>);
+        answer
       | "shared" =>
         def answer = NitraDialectResolution();
         answer.Signatures.Add(NitraDialectSignature("shared", NitraDialectType("number"), array[]));
@@ -118,6 +125,8 @@ space G [A] { go }
 APP = SPACE_HOST + """
 // a slot can hold anything, a dial's member too: plugins get it as a function value from the storage
 scope.A.registery("f", dial:.app.G::twice);
+// a member with two forms is held as a Content of both: a plugin's call runs the form that fits
+scope.A.registery("g", dial:.app.G::both);
 def run(file : string) : void
 {
   def host = Nemerle.Scripting.host.ScriptHost();
@@ -429,19 +438,20 @@ if a.stage == 'E6':
          '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll'), '-r:' + str(shost / 'res.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', shost / 'app.runtimeconfig.json')
     plugins = [
-        ('reader.n', 'System.Console.WriteLine(scope.A.value);\n'),
-        ('user.n', 'space G [A] { go }\nSystem.Console.WriteLine(dial:.user.G::twice(scope.A.value));\n'
+        ('reader.n', 'using app;\nSystem.Console.WriteLine(scope.A.value);\n'),
+        ('user.n', 'using app;\nspace G [A] { go }\nSystem.Console.WriteLine(dial:.user.G::twice(scope.A.value));\n'
                    'System.Console.WriteLine(dial:.user.G::shared());\n'),
-        ('named.n', 'space G as Named [A] { go }\nSystem.Console.WriteLine(dial:.named.Named::twice(5));\n'),
-        ('caller.n', 'System.Console.WriteLine(dial:.app.G::twice(2));\nSystem.Console.WriteLine(dial:.app.G::shared());\n'),
-        ('function.n', 'System.Console.WriteLine(scope.A.f(8));\n'),
-        ('writer.n', 'scope.A.value = scope.A.value + 29;\n'),
+        ('named.n', 'using app;\nspace G as Named [A] { go }\nSystem.Console.WriteLine(dial:.named.Named::twice(5));\n'),
+        ('caller.n', 'using app;\nSystem.Console.WriteLine(dial:.app.G::twice(2));\nSystem.Console.WriteLine(dial:.app.G::shared());\n'),
+        ('function.n', 'using app;\nSystem.Console.WriteLine(scope.A.f(8));\n'),
+        ('overloads.n', 'using app;\nSystem.Console.WriteLine(scope.A.g(1));\nSystem.Console.WriteLine(scope.A.g());\n'),
+        ('writer.n', 'using app;\nscope.A.value = scope.A.value + 29;\n'),
     ]
     for name, text in plugins:
         (shost / name).write_text(text)
     output = run(['dotnet', shost / 'app.exe', T / 'references', *[shost / n for n, _ in plugins]], cwd=shost).stdout.split('\n')
     output = [l for l in output if l.strip()]
-    expected = ['21', '42', '21', '10', '4', '21', '16', 'host 50']
+    expected = ['21', '42', '21', '10', '4', '21', '16', '2', '100', 'host 50']
     if output != expected:
         raise SystemExit('FAILED: the host application and its plugins printed %r, expected %r' % (output, expected))
     print('PASS: P plugins run in the host application read its scope storage (a plugin with no space as well), use '

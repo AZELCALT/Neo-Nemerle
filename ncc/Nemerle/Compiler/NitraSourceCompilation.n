@@ -114,6 +114,41 @@ internal sealed class NitraSourceSession
   internal Text(file : int) : string { if(files.ContainsKey(file)) files[file] else null }
   public this(manager : ManagerClass)
   { this.manager=manager; configuration=manager.Options.NitraSources; }
+  handlers : SCG.Dictionary[string,SCG.List[string]] = SCG.Dictionary();
+  importsOf : SCG.Dictionary[int,SCG.List[string]] = SCG.Dictionary();
+  imports(file : int) : SCG.List[string]
+  { unless(importsOf.ContainsKey(file)) importsOf[file]=SCG.List(); importsOf[file] }
+  /// The full name (`file.A`) of the scope that `path` names in `file`: the file's own scope, else one of the files
+  /// it imports (`using`), or `path` itself when it is a full name. With `create`, a scope nothing names yet is the
+  /// file's own (the first `registery` creates it).
+  internal ScopeKey(file : int, path : string, create : bool) : string
+  {
+    def dialects=configuration.Dialects;
+    def local=FileOwner(file)+"."+path;
+    if(dialects.HasScope(local)) local
+    else if(path.Contains(".") && dialects.HasScope(path)) path
+    else
+    {
+      def found=SCG.List.[string]();
+      foreach(name in imports(file)) when(dialects.HasScope(name+"."+path) && !found.Contains(name+"."+path)) found.Add(name+"."+path);
+      if(found.Count==1) found[0]
+      else if(found.Count>1) throw ArgumentException("scope "+path+" is declared in "+String.Join(" and ",found.ToArray())+"; name one, as scope."+found[0]+".x")
+      else if(create) { _=dialects.RegisterScope(local); local }
+      else throw ArgumentException("unknown shared scope: "+path)
+    }
+  }
+  /// The grammars a handler `grammar (A, B)` brings together, or null when `name` is not a handler (a continued
+  /// binary's handler is known by its name, the sorted grammars joined by `__`).
+  HandlerMembers(name : string) : SCG.List[string]
+  {
+    if(handlers.ContainsKey(name)) handlers[name]
+    else if(name.Contains("__"))
+    {
+      def parts=SCG.List(name.Split(array["__"],StringSplitOptions.None));
+      if(parts.Count>1 && parts.TrueForAll(p => definitions.ContainsKey(p))) parts else null
+    }
+    else null
+  }
   /// The grammar name of `grammar (A, B)`: the grammars, sorted, so the order does not matter.
   internal static HandlerName(names : SCG.IEnumerable[string]) : string
   {
@@ -170,7 +205,7 @@ internal sealed class NitraSourceSession
                    {
                      def names=SCG.List.[string](); names.Add(r.Name()); while(r.Eat(",")) names.Add(r.Name()); r.Need(")");
                      when(names.Count<2) r.Fail("grammar (...) names the two or more grammars it brings together");
-                     HandlerName(names)
+                     handlers[HandlerName(names)]=names; HandlerName(names)
                    }
                    else r.Name();
           when(definitions.ContainsKey(name)) throw ArgumentException("duplicate source grammar: "+name);
@@ -220,11 +255,21 @@ internal sealed class NitraSourceSession
         }
         else if(!t.Quoted && previous!="." && t.Text=="scope" && depth==0 && !r.Is("."))
         {
-          def name=r.Name(); _=configuration.Dialects.RegisterScope(name);
+          def name=r.Name(); _=configuration.Dialects.RegisterScope(FileOwner(source.FileIndex)+"."+name);
           def end=if(r.Eat(";")) r.Pos else { def block=r.Block(); when(block.End-block.Start>2 && !String.IsNullOrWhiteSpace(text.Substring(block.Start+1,block.End-block.Start-2))) r.Fail("scope declarations must be empty; use scope.name.registery to add bindings"); block.End };
           Blank(chars,t.Start,end);
         }
-        else unless(t.Quoted) { when(t.Text=="{") ++depth; when(t.Text=="}") --depth; }
+        else
+        {
+          // a file's `using`s: the scopes of the files it imports are reachable by their short names
+          when(!t.Quoted && previous!="." && t.Text=="using" && depth==0)
+          {
+            def probe=GReader(text,file,r.Peek().Start,text.Length);
+            try { def name=probe.Name(); when(probe.Is(";")) imports(source.FileIndex).Add(name); }
+            catch { | _ is ArgumentException => () }
+          }
+          unless(t.Quoted) { when(t.Text=="{") ++depth; when(t.Text=="}") --depth; }
+        }
         previous=t.Text;
       }
       files.Add(source.FileIndex,string(chars));
@@ -356,45 +401,70 @@ internal sealed class NitraSourceSession
     {
       current=z;
       def documents=SCG.List(NitraSyntax.BaselineDefinitions()); foreach(d in definitions.Values) documents.Add(d);
-      // the modules of the selected grammars and the start rules among them
-      def prepare(names : SCG.List[string]) : SCG.List[string]*NitraPreparedGrammar*SCG.List[string]
+      def modulesOf(name : string) : SCG.List[string]
       {
+        unless(definitions.ContainsKey(name)) throw ArgumentException("unknown source grammar: "+name);
         def modules=SCG.List.[string]();
-        foreach(name in names)
-        {
-          unless(definitions.ContainsKey(name)) throw ArgumentException("unknown source grammar: "+name);
-          if(nativeHost!=null) modules.AddRange(nativeHost.Modules(name));
-          else foreach(m in definitions[name].Modules) modules.Add(m.Name);
-        }
-        def grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules);
-        def starts=SCG.List.[string]();
-        foreach(rule in grammar.StartRules) foreach(mod in modules)
-          when(rule.StartsWith(mod+".",StringComparison.Ordinal) && !starts.Contains(rule)) starts.Add(rule);
-        (modules,grammar,starts)
+        if(nativeHost!=null) modules.AddRange(nativeHost.Modules(name)) else foreach(m in definitions[name].Modules) modules.Add(m.Name);
+        modules
       }
+      // the space's grammars, in sorted order: those it names, or for the plain space those of its file
       mutable selected=SCG.List.[string]();
-      if(z.Names.Count==0) foreach(pair in owners) when(pair.Value==z.File) selected.Add(pair.Key);
+      if(z.Names.Count==0) foreach(pair in owners) when(pair.Value==z.File && HandlerMembers(pair.Key)==null) selected.Add(pair.Key);
       else selected.AddRange(z.Names);
-      // a mixing space uses the handler of its grammars, `grammar (A, B)`, when there is one
-      def handler=if(z.Names.Count>1) HandlerName(z.Names) else null;
-      when(handler!=null && definitions.ContainsKey(handler) && !selected.Contains(handler)) selected.Add(handler);
+      selected.Sort(StringComparer.Ordinal);
+      // the layers: the grammars, then the joint set (every handler `grammar (A, B)` whose grammars are all here, as
+      // extensions under that condition), then the exclusive grammar (the handler of exactly this set)
+      def layers(grammars : SCG.List[string]) : SCG.List[string]*string
+      {
+        def names=SCG.List(grammars);
+        def exclusive=if(grammars.Count>1 && definitions.ContainsKey(HandlerName(grammars))) HandlerName(grammars) else null;
+        def joint=SCG.List.[string]();
+        foreach(name in definitions.Keys)
+          match(HandlerMembers(name))
+          {
+            | null => ()
+            | members => when(name!=exclusive && members.TrueForAll(m => grammars.Contains(m))) joint.Add(name)
+          }
+        joint.Sort(StringComparer.Ordinal); names.AddRange(joint); when(exclusive!=null) names.Add(exclusive);
+        (names,exclusive)
+      }
+      // where the space starts: the exclusive grammar's start rule, else the first grammar in sorted order with one
+      def startOf(grammar : NitraPreparedGrammar, grammars : SCG.List[string], exclusive : string) : SCG.List[string]
+      {
+        def startsIn(name : string) : SCG.List[string]
+        {
+          def found=SCG.List.[string]();
+          foreach(rule in grammar.StartRules) foreach(mod in modulesOf(name))
+            when(rule.StartsWith(mod+".",StringComparison.Ordinal) && !found.Contains(rule)) found.Add(rule);
+          found
+        }
+        mutable result=if(exclusive!=null) startsIn(exclusive) else SCG.List();
+        foreach(name in grammars) when(result.Count==0) result=startsIn(name);
+        result
+      }
+      def prepare(grammars : SCG.List[string]) : SCG.List[string]*NitraPreparedGrammar*SCG.List[string]
+      {
+        def (names,exclusive)=layers(grammars);
+        def modules=SCG.List.[string](); foreach(name in names) modules.AddRange(modulesOf(name));
+        def grammar=if(nativeHost!=null) nativeHost.Prepare(modules) else NitraSyntax.Prepare(documents,modules);
+        (names,grammar,startOf(grammar,grammars,exclusive))
+      }
       mutable prepared=if(selected.Count==0) (SCG.List(),null,SCG.List()) else prepare(selected);
-      // a plain space looks across grammars: when the file's own grammars give no single start rule, it uses every
-      // grammar it can see (other files, continued binaries), so their rules combine in one space
+      // a plain space looks across grammars: when its file's grammars give it no start rule, it uses every grammar
+      // it can see (other files, continued binaries)
       when(z.Names.Count==0)
       {
-        def (_,_,starts)=prepared;
-        unless(starts.Count==1)
+        def (_,_,found)=prepared;
+        when(found.Count==0)
         {
-          def all=SCG.List(definitions.Keys);
+          def all=SCG.List.[string](); foreach(name when HandlerMembers(name)==null in definitions.Keys) all.Add(name);
+          all.Sort(StringComparer.Ordinal);
           when(all.Count>selected.Count) { selected=all; prepared=prepare(all); }
         }
       }
       when(selected.Count==0) throw ArgumentException("space has no selected source grammars");
-      def (modules,grammar,allStarts)=prepared;
-      // the handler's start rule, when it has one, is where the mixed space begins
-      def handlerStarts=if(handler==null) SCG.List() else allStarts.FindAll(s => s.StartsWith(handler+".",StringComparison.Ordinal));
-      def starts=if(handlerStarts.Count>0) handlerStarts else allStarts;
+      def (modules,grammar,starts)=prepared;
       z.Grammar=grammar;
       z.Owner=String.Join(",",selected.ToArray()); z.Dialect=selected[0];
       // a space's path: the file's plain space is `file`, `space G` is `file.G`, the mixing `space (A, B)` is
@@ -410,8 +480,8 @@ internal sealed class NitraSourceSession
       when(z.Alias!=null) configuration.Dialects.AddPath(z.FileOwner+"."+z.Alias,z.Space);
       _=modules;
       unless(starts.Count==1)
-        throw ArgumentException(if(starts.Count==0) "source space requires exactly one selected StartRule"
-                                else "source space requires exactly one selected StartRule; found "+String.Join(", ",starts.ToArray())+" (name one: space G { ... })");
+        throw ArgumentException(if(starts.Count==0) "the space's grammars have no start rule"
+                                else "a grammar of the space has several start rules: "+String.Join(", ",starts.ToArray()));
       z.Rule=starts[0];
     }
     }
@@ -422,6 +492,10 @@ internal sealed class NitraSourceSession
     }
     when(configuration.ConfigureDialects!=null) configuration.ConfigureDialects.Invoke(configuration.Dialects);
     foreach(source in manager.Options.Sources) files[source.FileIndex]=RewriteBoundaries(files[source.FileIndex],source.FileIndex);
+    // a space's `[A]` names scopes as its file sees them: their full names are known once every scope is
+    foreach(z when !z.Continued && z.Space!=null in zones)
+      try { z.Space.Scopes=z.Scopes.ConvertAll(name => ScopeKey(z.File,name,false)).ToArray(); }
+      catch { | e is ArgumentException when !(e is NitraSourceException) => throw NitraSourceException(Location.GetFileName(z.File),z.Source,z.Start,e.Message) }
     unless(IndexOnly)
     {
       manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
@@ -541,7 +615,7 @@ internal sealed class NitraSourceSession
       unless(selected.Success)
       { foreach(message in selected.Diagnostics) Message.Error(location,message); return PExpr.Error(location); }
       def context=NitraDialectContext(configuration.Dialects,z.Space,typer,location);
-      foreach(name in z.Scopes) _=context.Scope(name);
+      foreach(name in z.Space.Scopes) _=context.Scope(name);
       def previous=NitraDialectContext.Active;
       // a space stands as a top-level statement: its own value is discarded
       try { NitraDialectContext.Active=context; return Statement(typer,nativeHost.Expand(z.Rule,selected.Root,typer,location,context),location); }
@@ -626,8 +700,26 @@ internal sealed class NitraSourceSession
         mutable boundary : NitraBoundary=null;
         if(t.Text=="scope" && r.Eat("."))
         {
-          def scope=r.Take(); r.Need("."); def member=r.Take();
-          boundary=NitraBoundary(); boundary.Owner=scope.Text; boundary.Member=member.Text;
+          // scope.A.x, or scope.file.A.x with the full name of a scope; what follows the slot is the value's own
+          def chain=SCG.List.[GLexeme](); chain.Add(r.Take());
+          mutable more=true;
+          while(more && r.Is("."))
+          {
+            def dot=r.Peek().Start; _=r.Take();
+            if(r.Peek().Text.Length>0 && (char.IsLetter(r.Peek().Text[0]) || r.Peek().Text[0]=='_')) chain.Add(r.Take())
+            else { r.Pos=dot; r.Reset(); more=false; }
+          }
+          mutable split=1;
+          for(mutable k=2;k<chain.Count;++k)
+          {
+            def names=SCG.List.[string](); for(mutable i=0;i<k;++i) names.Add(chain[i].Text);
+            when(configuration.Dialects.HasScope(String.Join(".",names.ToArray()))) split=k;
+          }
+          when(chain.Count<2) r.Fail("expected scope.A.name");
+          def path=SCG.List.[string](); for(mutable i=0;i<split;++i) path.Add(chain[i].Text);
+          def member=chain[split]; r.Pos=member.End; r.Reset();
+          def scope=GLexeme(); scope.Text=String.Join(".",path.ToArray());
+          boundary=NitraBoundary(); boundary.Owner=scope.Text; boundary.Member=member.Text; boundary.File=file;
           boundary.Kind=if(member.Text=="registery") "register" else "scope";
           // `scope.A.x = e` writes the slot (`==` is a comparison)
           when(r.Is("=") && { def at=r.Peek().Start; at+1>=text.Length || text[at+1]!='=' }) { _=r.Take(); boundary.Kind="set"; }
@@ -654,7 +746,7 @@ internal sealed class NitraSourceSession
             match(literal())
             {
               | Some((name,type)) =>
-                try { _=configuration.Dialects.RegisterScope(scope.Text).Register(name,NitraDialectType(type),At(file,t.Start)); }
+                try { _=configuration.Dialects.Scope(ScopeKey(file,scope.Text,true)).Register(name,NitraDialectType(type),At(file,t.Start)); }
                 catch { | e is ArgumentException when !(e is NitraSourceException) => throw NitraSourceException(r.File,text,t.Start,e.Message) }
                 boundary.Registered=true;
               | None => ()
@@ -757,14 +849,14 @@ internal sealed class NitraSourceSession
       match(args)
       {
         | [PExpr.Literal(Literal.String(name)), PExpr.Call(PExpr.Ref(typeName), [PExpr.Literal(Literal.String(type))])] when(typeName.ToString()=="type") =>
-          def scope=configuration.Dialects.RegisterScope(b.Owner);
+          def scope=configuration.Dialects.Scope(ScopeKey(b.File,b.Owner,true));
           unless(b.Registered) { _=scope.Register(name,NitraDialectType(type),b.Location); b.Registered=true; }
           scope.RegisterCode(name,typer)
         | [PExpr.Literal(Literal.String(name)), PExpr.Call(PExpr.Ref(macroName), [PExpr.Literal(Literal.Integer(value,false,_))])] when(macroName.ToString()=="__b" && value<int.MaxValue :> ulong) =>
           def reference=boundaries[value :> int];
           unless(reference.Kind=="dialect" && !reference.IsCall) throw ArgumentException("scope registration requires a dialect member reference");
           def resolved=ResolveBoundary(reference,typer,array[]);
-          def scope=configuration.Dialects.RegisterScope(b.Owner);
+          def scope=configuration.Dialects.Scope(ScopeKey(b.File,b.Owner,true));
           unless(b.Registered)
           {
             _=scope.Register(name,NitraDialectReference(reference.Dialect,reference.Owner,reference.Member,resolved),b.Location);
@@ -772,10 +864,33 @@ internal sealed class NitraSourceSession
           }
           // the slot also holds the member's value in the storage, for code that reaches the scope from elsewhere
           // (a plugin); calls here still resolve through the dial
-          def value=NitraBoundary(); value.Kind="dialect"; value.Dialect=reference.Dialect; value.Owner=reference.Owner;
-          value.Member=reference.Member; value.IsCall=false; value.Location=b.Location;
-          def slot=boundaries.Count; boundaries.Add(value);
-          scope.Write(name,Boundary(typer,slot,[]),typer)
+          def member(isCall : bool, args : list[PExpr]) : PExpr
+          {
+            def call=NitraBoundary(); call.Kind="dialect"; call.Dialect=reference.Dialect; call.Owner=reference.Owner;
+            call.Member=reference.Member; call.IsCall=isCall; call.Location=b.Location;
+            def slot=boundaries.Count; boundaries.Add(call); Boundary(typer,slot,args)
+          }
+          if(scope.SlotType(name,typer)!="object") scope.Write(name,member(false,[]),typer)
+          else
+          {
+            // several forms: each becomes a delegate of its signature, and the slot's Content calls the one that fits
+            def typeOf(text : string) : PExpr { Nemerle.Compiler.main_parser.MainParser.ParseExpr(manager.CoreEnv,text,b.Location,false) }
+            mutable forms=[];
+            foreach(types in scope.ReferenceForms(scope.Get(name).Reference,typer))
+            {
+              def result=typeOf(types[types.Count-1]);
+              mutable parameters=[]; mutable arguments=[]; mutable delegateTypes=[result];
+              for(mutable i=types.Count-2;i>=0;--i)
+              {
+                def argument=Util.tmpname("argument"); def type=typeOf(types[i]);
+                parameters = <[ parameter: $(argument : dyn) : $type ]> :: parameters;
+                arguments = <[ $(argument : dyn) ]> :: arguments; delegateTypes=type :: delegateTypes;
+              }
+              def body=member(true,arguments);
+              forms = <[ (System.Func.[..$delegateTypes](fun (..$parameters) : $result { $body }) : System.Delegate) ]> :: forms;
+            }
+            <[ $(scope.RegisterCode(name,typer)); Nemerle.Scopes.Scope.Of($(scope.Name : string)).Set($(name : string), Nemerle.Scopes.Content(array[..$(forms.Rev())] : array[System.Delegate])) ]>
+          }
         | _ => throw ArgumentException("expected scope.A.registery(\"name\", type(\"type\")) or a dialect member reference");
       }
     }
@@ -783,14 +898,14 @@ internal sealed class NitraSourceSession
     {
       match(args)
       { | [value] =>
-          def scope=configuration.Dialects.Scope(b.Owner);
+          def scope=configuration.Dialects.Scope(ScopeKey(b.File,b.Owner,false));
           when(scope.Get(b.Member).Reference!=null) throw ArgumentException("scope."+b.Owner+"."+b.Member+" is a dial reference, not a storage slot");
           scope.Write(b.Member,value,typer)
         | _ => throw ArgumentException("scope assignment requires one value"); }
     }
     else
     {
-      def scope=configuration.Dialects.Scope(b.Owner);
+      def scope=configuration.Dialects.Scope(ScopeKey(b.File,b.Owner,false));
       def binding=scope.Get(b.Member);
       match(if(binding.Reference!=null) binding.Reference : object else scope.Read(b.Member,typer))
       {
@@ -798,6 +913,7 @@ internal sealed class NitraSourceSession
           def call=NitraBoundary(); call.Kind="dialect"; call.Dialect=reference.Dialect; call.Owner=reference.Owner;
           call.Member=reference.Name; call.IsCall=b.IsCall; call.Location=b.Location;
           def slot=boundaries.Count; boundaries.Add(call); Boundary(typer,slot,args)
+        | expression is PExpr when b.IsCall && scope.SlotType(b.Member,typer)=="object" => <[ $expression.Call(..$args) ]>
         | expression is PExpr => if(b.IsCall) PExpr.Call(expression,args) else expression
         | _ => throw ArgumentException("scope binding cannot be read: scope."+b.Owner+"."+b.Member);
       }
