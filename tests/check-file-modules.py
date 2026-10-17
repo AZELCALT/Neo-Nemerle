@@ -313,7 +313,8 @@ if ran.stdout.split() != ['config', 'runs', 'main', 'config', 'hello', 'from', '
     raise RuntimeError('top-level code at using: ' + ran.stdout)
 for name, text, diagnostic in (('bare', 'using lib.config;\nSystem.Console.WriteLine(name);', 'unbound name'),
                                ('unimported', 'System.Console.WriteLine(lib.config.name);', 'unbound name'),
-                               ('private', 'using lib.config;\nSystem.Console.WriteLine(lib.config.secret);', 'cannot access')):
+                               ('private', 'using lib.config;\nSystem.Console.WriteLine(lib.config.secret);', 'cannot access'),
+                               ('early', 'System.Console.WriteLine(x);\ndef x = 42;', 'is used before its top-level binding')):
     source('init/main.n', text)
     run([runtime, compiler, init / 'main.n', init / 'lib/config.n', '-source-root:' + str(init), '-out:' + str(work / ('init-' + name + '.exe')),
          '-no-color', *modern_references], False, diagnostic)
@@ -325,6 +326,10 @@ run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.
      '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-other.runtimeconfig.json')
 if run([runtime, work / 'init-other.exe']).stdout.split() != ['other']: raise RuntimeError('-main:other')
+source('init/main.n', 'def x : int = 42;\ndef show() { System.Console.WriteLine(x) }\nshow();')
+run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'init-typed.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-typed.runtimeconfig.json')
+if run([runtime, work / 'init-typed.exe']).stdout.split() != ['42']: raise RuntimeError('typed top-level value')
 print('PASS: top-level code runs once at its using; top-level values are private state, public def is file.x after using; '
       'a program starts at main.n or -main:', flush=True)
 

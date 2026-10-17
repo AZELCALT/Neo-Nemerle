@@ -498,6 +498,29 @@ using Nemerle.Compiler.Utility;
               bindings[name.Id] = if (bindings.ContainsKey(name.Id)) bindings[name.Id] + 1 else 1
             | _ => ()
           }
+        // a top-level value whose type comes from its initializer can only be used after its binding, as a local
+        // can only be used after its `def` (with a type, `def x : T = ...`, it can be used earlier)
+        for (mutable i = 0; i < collected.Count; i++)
+          match (collected[i][0])
+          {
+            | PExpr.Define(PExpr.Ref(name) as at, _) | PExpr.DefMutable(PExpr.Ref(name) as at, _) =>
+              // (a guard after `|` patterns would apply to the last one only)
+              when (boundOnce(name.Id))
+              for (mutable j = 0; j < i; j++)
+                _ = Macros.TraverseExpr(None(), collected[j][0], false, (_, after, e) =>
+                {
+                  when (!after)
+                    match (e)
+                    {
+                      | PExpr.Ref(used) when used.Id == name.Id =>
+                        Message.Error(e.Location, $"`$(name.Id)' is used before its top-level binding (line $(at.Location.Line)); "
+                                                  "move the binding above, or give it a type: def $(name.Id) : T = ...")
+                      | _ => ()
+                    }
+                  e
+                })
+            | _ => ()
+          }
         foreach ((expression, isPublic) in collected) state(expression, isPublic);
         registry.Usings[moduleName] = usings.NToList();
         when (statements.Count > 0)
