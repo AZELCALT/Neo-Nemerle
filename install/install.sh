@@ -31,7 +31,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-extension_dirs() { printf '%s\n' "$HOME/.vscode/extensions/nemerle.nemerle-nitra-0.1.0" "$HOME/.vscode-oss/extensions/nemerle.nemerle-nitra-0.1.0"; }
+# the extension's folder (and the one of its first version, removed on install and uninstall)
+extension=neo-nemerle.nemerle-0.2.0
+extension_dirs() {
+  for root in "$HOME/.vscode/extensions" "$HOME/.vscode-oss/extensions"; do
+    printf '%s\n' "$root/$extension" "$root/nemerle.nemerle-nitra-0.1.0"
+  done
+}
 
 if [ $uninstall = 1 ]; then
   rm -rf "$prefix"
@@ -86,11 +92,12 @@ launcher nscript nscript.exe ""
 # --- the editor extension ---
 install_extension() {  # $1 = editor command, $2 = its extensions directory
   command -v npm >/dev/null 2>&1 || { say "Skipping the $1 extension: npm is needed to install its one dependency."; return; }
-  dir="$2/nemerle.nemerle-nitra-0.1.0"
-  rm -rf "$dir"
+  dir="$2/$extension"
+  rm -rf "$dir" "$2/nemerle.nemerle-nitra-0.1.0"
   mkdir -p "$dir"
   cp "$repo/tools/language-server/vscode/package.json" "$repo/tools/language-server/vscode/extension.js" \
-     "$repo/tools/language-server/vscode/language-configuration.json" "$dir/"
+     "$repo/tools/language-server/vscode/language-configuration.json" "$repo/tools/language-server/vscode/README.md" "$dir/"
+  cp -R "$repo/tools/language-server/vscode/syntaxes" "$dir/"
   (cd "$dir" && npm install --omit=dev --no-audit --no-fund --silent >/dev/null 2>&1) ||
     { rm -rf "$dir"; say "Skipping the $1 extension: npm install failed."; return; }
   say "Installed the $1 extension in $dir"

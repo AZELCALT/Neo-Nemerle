@@ -104,6 +104,8 @@ for f in nitra.glob('Integrated.*'): shutil.copy2(f, toolchain / f.name)
 # 4. tools
 step('scripting-build', [py, build / 'build-scripting.py', '--toolchain', toolchain, '--references', toolchain / 'references'])
 step('lsp-build', [py, build / 'build-language-server.py', '--toolchain', toolchain, '--references', refs, '--output', out / 'lsp'])
+step('vscode-build', [py, build / 'build-vscode-extension.py', '--server', out / 'lsp', '--references', toolchain / 'references',
+                      '--output', out])
 # 5. tests (a failing suite is reported, the others still run)
 T, R = toolchain, refs
 suites = [
@@ -117,6 +119,7 @@ suites = [
     ('debug-resources', ['check-coreclr-debug-resources.py', '--toolchain', T, '--references', R]),
     ('coreclr-probe', ['probe-coreclr.py', '--compiler', T, '--support', T]),
     ('language-server', ['check-language-server.py', '--server', out / 'lsp/nemerle-lsp']),
+    ('vscode-extension', ['check-vscode-extension.py', '--vsix', out / 'nemerle-0.2.0.vsix']),
 ]
 if not a.quick:
     suites += [

@@ -35,13 +35,17 @@ newest `Microsoft.NETCore.App.Ref` pack of the running dotnet. Use `--log FILE` 
 
 ## Editor
 
-`vscode/` holds a minimal VS Code / VSCodium extension. Set it up with `npm install` in that folder, then either:
+`vscode/` holds the VS Code / VSCodium extension: the client, a TextMate grammar (highlighting before the server
+answers), and the language configuration.
 
-- run `codium --extensionDevelopmentPath=nemerle/tools/language-server/vscode`, or
-- package it with `npx @vscode/vsce package`.
+- **A .vsix to install by hand:** `build/build-vscode-extension.py` packages the extension with the server, its
+  toolchain and reference assemblies (`out/vscode/nemerle-<version>.vsix`, about 10 MB), so it needs only the .NET 10
+  runtime. `./bootstrap` builds it too and `tests/check-vscode-extension.py` checks it: its contents, that the
+  extension starts the server it carries, and that VSCodium (or VS Code) installs it.
+- **For development:** `npm install` in `vscode/`, then `codium --extensionDevelopmentPath=tools/language-server/vscode`.
 
-Point the `nemerle.languageServer.path` setting (or the `NEMERLE_LSP` environment variable) at the
-`nemerle-lsp` launcher.
+The extension uses, in order: the `nemerle.languageServer.path` setting (or `NEMERLE_LSP`), the server it carries
+(run on `nemerle.dotnet.path`, default `dotnet`), and `nemerle-lsp` on `PATH`.
 
 ## Timing
 

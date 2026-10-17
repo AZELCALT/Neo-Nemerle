@@ -1,0 +1,127 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Nemerle",
+  "scopeName": "source.nemerle",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#quotation"
+    },
+    {
+      "include": "#dial"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.nemerle",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.nemerle",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.interpolated.nemerle",
+          "begin": "\\$\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.nemerle",
+              "match": "\\\\."
+            },
+            {
+              "name": "variable.other.interpolated.nemerle",
+              "match": "\\$(\\([^)]*\\)|[A-Za-z_][A-Za-z0-9_]*)"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.verbatim.nemerle",
+          "begin": "@\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "match": "\"\"",
+              "name": "constant.character.escape.nemerle"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.nemerle",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.nemerle",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.nemerle",
+          "match": "'(\\\\.|[^'\\\\])'"
+        }
+      ]
+    },
+    "quotation": {
+      "name": "meta.quotation.nemerle",
+      "match": "<\\[|\\]>",
+      "captures": {
+        "0": {
+          "name": "punctuation.definition.quotation.nemerle"
+        }
+      }
+    },
+    "dial": {
+      "match": "\\b(dial)(:\\.)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.dial.nemerle"
+        },
+        "2": {
+          "name": "punctuation.separator.dial.nemerle"
+        }
+      }
+    },
+    "numbers": {
+      "name": "constant.numeric.nemerle",
+      "match": "\\b(0x[0-9A-Fa-f_]+|0b[01_]+|[0-9][0-9_]*(\\.[0-9_]+)?([eE][+-]?[0-9]+)?)([a-zA-Z]+)?\\b"
+    },
+    "keywords": {
+      "name": "keyword.control.nemerle",
+      "match": "\\b(implements|interface|namespace|protected|abstract|delegate|volatile|continue|override|internal|virtual|grammar|variant|mutable|foreach|finally|matches|private|partial|extern|repeat|sealed|params|syntax|public|unless|export|return|struct|static|module|typeof|false|break|array|using|while|space|catch|class|scope|macro|where|yield|event|throw|match|dial|this|base|when|mask|void|else|lock|true|with|null|enum|out|try|def|and|fun|for|ref|new|if|as|is|do|in|_)\\b"
+    },
+    "types": {
+      "name": "storage.type.nemerle",
+      "match": "\\b(decimal|ushort|double|string|option|object|float|sbyte|short|ulong|long|bool|list|char|uint|byte|int)\\b"
+    },
+    "operators": {
+      "name": "keyword.operator.nemerle",
+      "match": "[=<>@^&\\-+|*/$%!?~.:#\\\\`]+"
+    }
+  }
+}

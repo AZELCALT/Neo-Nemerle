@@ -83,6 +83,10 @@ The language server speaks LSP over stdio. It gives diagnostics, semantic highli
 including inside `grammar` and `space` blocks.
 - **VS Code / VSCodium:** the installer sets up the extension. It runs `nemerle-lsp` from `PATH`, or the
   `nemerle.languageServer.path` setting.
+- **The extension on its own:** `./bootstrap` also writes `out/bootstrap/nemerle-0.2.0.vsix` (or run
+  `build/build-vscode-extension.py`). It carries its language server and needs only the .NET 10 runtime:
+  `code --install-extension nemerle-0.2.0.vsix`, `codium --install-extension nemerle-0.2.0.vsix`, or
+  *Install from VSIX...* in the Extensions view.
 - **Other editors:** configure an LSP client to start `nemerle-lsp` for `*.n` files.
 
 Details are in [tools/language-server/README.md](tools/language-server/README.md).

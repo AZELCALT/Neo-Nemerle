@@ -24,7 +24,8 @@ $onWindows = ($null -eq $IsWindows) -or $IsWindows
 
 $repo = Split-Path -Parent $PSScriptRoot
 $bin = Join-Path $Prefix 'bin'
-$extension = 'nemerle.nemerle-nitra-0.1.0'
+$extension = 'neo-nemerle.nemerle-0.2.0'
+$oldExtension = 'nemerle.nemerle-nitra-0.1.0'
 $extensionRoots = @{ code = (Join-Path $HOME '.vscode\extensions'); codium = (Join-Path $HOME '.vscode-oss\extensions') }
 
 function Set-UserPath([string]$dir, [bool]$add) {
@@ -36,7 +37,9 @@ function Set-UserPath([string]$dir, [bool]$add) {
 
 if ($Uninstall) {
   Remove-Item -Recurse -Force $Prefix -ErrorAction SilentlyContinue
-  foreach ($root in $extensionRoots.Values) { Remove-Item -Recurse -Force (Join-Path $root $extension) -ErrorAction SilentlyContinue }
+  foreach ($root in $extensionRoots.Values) {
+    foreach ($name in $extension, $oldExtension) { Remove-Item -Recurse -Force (Join-Path $root $name) -ErrorAction SilentlyContinue }
+  }
   if ($onWindows) { Set-UserPath $bin $false }
   Write-Host "Nemerle removed from $Prefix."
   exit 0
@@ -103,9 +106,11 @@ function Install-Extension([string]$editorName) {
   $dir = Join-Path $extensionRoots[$editorName] $extension
   Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  foreach ($file in 'package.json', 'extension.js', 'language-configuration.json') {
+  Remove-Item -Recurse -Force (Join-Path $extensionRoots[$editorName] $oldExtension) -ErrorAction SilentlyContinue
+  foreach ($file in 'package.json', 'extension.js', 'language-configuration.json', 'README.md') {
     Copy-Item (Join-Path $repo "tools\language-server\vscode\$file") $dir
   }
+  Copy-Item -Recurse (Join-Path $repo 'tools\language-server\vscode\syntaxes') $dir
   Push-Location $dir
   try { & npm install --omit=dev --no-audit --no-fund --silent *> $null; $ok = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
   if ($ok) { Write-Host "Installed the $editorName extension in $dir" }
