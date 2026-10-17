@@ -3,7 +3,7 @@
 
 Usage: check-language-server.py --server <out>/nemerle-lsp [--log FILE]
 Build the server first with build-language-server.py."""
-import argparse, json, pathlib, subprocess, threading, queue, time, sys
+import argparse, json, pathlib, shutil, subprocess, tempfile, threading, queue, time, sys
 
 p = argparse.ArgumentParser()
 p.add_argument('--server', type=pathlib.Path, required=True)
@@ -84,6 +84,7 @@ c = Client()
 init = c.request('initialize', {'processId': None, 'rootUri': None, 'capabilities': {}})
 caps = init['capabilities']; legend = caps['semanticTokensProvider']['legend']['tokenTypes']
 check(caps['textDocumentSync'] == 1 and caps['foldingRangeProvider'] and caps['documentSymbolProvider'], 'capabilities')
+check(caps['hoverProvider'] and caps['definitionProvider'], 'hover and definition capabilities')
 c.notify('initialized', {})
 
 def open_doc(name, text, version=1):
@@ -165,4 +166,45 @@ check(any('namespace declarations are not allowed' in d['message'] for d in diag
 print('PASS: file modules by default (top-level functions, mask, using a file; namespace rejected)')
 c.request('shutdown', None); c.notify('exit', None)
 check(c.proc.wait(timeout=30) == 0, 'clean exit')
+
+# 6. a workspace: typed diagnostics across files (`using`, an exported type), hover and go-to-definition
+work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-lsp-ws-'))
+try:
+    (work / 'app').mkdir()
+    pen = 'export class Pen\n{\n  public Width : int = 3;\n}\n'
+    (work / 'app/pen.n').write_text(pen)
+    main = 'using app.pen;\n\ndef p = Pen();\nSystem.Console.WriteLine(p.Width);\ndef n : int = "oops";\n'
+    (work / 'main.n').write_text(main)
+    c = Client()
+    c.request('initialize', {'processId': None, 'rootUri': work.as_uri(), 'capabilities': {}})
+    c.notify('initialized', {})
+    uri = (work / 'main.n').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': uri, 'languageId': 'nemerle', 'version': 1, 'text': main}})
+    typed = c.pump(lambda m: m['params']['diagnostics'] if m.get('method') == 'textDocument/publishDiagnostics'
+                   and m['params']['uri'] == uri and any(d.get('source') == 'nemerle' for d in m['params']['diagnostics']) else None,
+                   'typed diagnostics')
+    error = [d for d in typed if d.get('source') == 'nemerle' and d['severity'] == 1]
+    check(len(error) == 1 and error[0]['range']['start']['line'] == 4 and 'string' in error[0]['message'], 'type error located: %s' % typed)
+    # repair it: the typed error clears, and the facts come back for the new text
+    fixed = main.replace('"oops"', '4')
+    c.notify('textDocument/didChange', {'textDocument': {'uri': uri, 'version': 2}, 'contentChanges': [{'text': fixed}]})
+    deadline = time.time() + a.timeout; hover = None
+    while time.time() < deadline:
+        l, ch = position(fixed, offset_of(fixed, 'Width'))
+        hover = c.request('textDocument/hover', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
+        if hover and 'Pen.Width : int' in hover['contents']['value']: break
+        time.sleep(0.5)
+    check(hover and 'Pen.Width : int' in hover['contents']['value'], 'hover on p.Width: %s' % hover)
+    check(not any(d['severity'] == 1 for d in c.diagnostics[uri]['diagnostics']), 'repaired workspace has no errors: %s' % c.diagnostics[uri])
+    l, ch = position(fixed, offset_of(fixed, 'Pen()'))
+    target = c.request('textDocument/definition', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
+    check(target and target['uri'].endswith('/app/pen.n') and target['range']['start']['line'] == 0, 'definition of Pen() is in app/pen.n: %s' % target)
+    l, ch = position(fixed, offset_of(fixed, 'p.Width'))
+    target = c.request('textDocument/definition', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
+    check(target and target['uri'] == uri and target['range']['start']['line'] == 2, 'definition of p is its binding: %s' % target)
+    print('PASS: workspace (typed diagnostics through using/export, hover, go-to-definition)')
+    c.request('shutdown', None); c.notify('exit', None)
+    check(c.proc.wait(timeout=30) == 0, 'clean exit')
+finally:
+    shutil.rmtree(work, ignore_errors=True)
 print('PASS: %d language server checks' % checks)

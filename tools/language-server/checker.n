@@ -1,0 +1,190 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using SCG = System.Collections.Generic;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.compilation_options;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.typer;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.expr_walker;
+
+/// `nemerle-lsp --check`: one typed compilation of the workspace files an editor needs, in a process of its own (the
+/// server starts it, and kills it when a newer edit arrives). It reads a request on stdin and writes the diagnostics,
+/// and the facts for hover and go-to-definition, on stdout, as JSON.
+///
+/// The files are the open ones (with their unsaved text), the files they import (`using`, followed transitively), and
+/// every workspace file that exports a type. A script (it names `DependsOn`) needs the scripting host and is left out.
+public module Checker
+{
+  UsingLine : Regex = Regex(@"^\s*using\s+(?:[A-Za-z_]\w*\s*=\s*)?([A-Za-z_][\w.]*)\s*;", RegexOptions.Multiline);
+  ExportLine : Regex = Regex(@"^\s*export\s", RegexOptions.Multiline);
+  Skipped : array[string] = array["out", "bin", "obj", "node_modules", ".git"];
+
+  public Run(input : TextReader, output : TextWriter) : int
+  {
+    def request = JsonNode.Parse(input.ReadToEnd());
+    def str(n : JsonNode) { if (n == null) null else n.GetValue.[string]() }
+    def root = Path.GetFullPath(str(request["root"]));
+    def overlay = SCG.Dictionary.[string, string](StringComparer.Ordinal);
+    foreach (f in request["files"].AsArray()) overlay[Path.GetFullPath(str(f["path"]))] = str(f["text"]);
+    def libraries = if (request["libraries"] is JsonArray) request["libraries"].AsArray().Select(l => str(l)).ToList() else SCG.List();
+    def result = Check(root, overlay, str(request["references"]), libraries.NToList(),
+                       request["fileNameNamespaces"] != null && request["fileNameNamespaces"].GetValue.[bool]());
+    output.Write(result.ToJsonString());
+    output.Flush();
+    0
+  }
+
+  Text(path : string, overlay : SCG.Dictionary[string, string]) : string
+  {
+    mutable text;
+    if (overlay.TryGetValue(path, out text)) text else try { File.ReadAllText(path) } catch { | _ => null }
+  }
+
+  /// The files to compile: the open files, what they import, and the workspace's exporters.
+  public Files(root : string, overlay : SCG.Dictionary[string, string]) : SCG.List[string]
+  {
+    def files = SCG.List.[string]();
+    def seen = SCG.HashSet.[string](StringComparer.Ordinal);
+    def queue = SCG.Queue.[string]();
+    def add(path : string) : void
+    {
+      def text = Text(path, overlay);
+      when (text != null && !text.Contains("DependsOn(") && seen.Add(path)) { files.Add(path); queue.Enqueue(path) }
+    }
+    foreach (path in overlay.Keys) when (path.StartsWith(root, StringComparison.Ordinal)) add(path);
+    // the workspace's global types are reached without a `using`
+    def workspace = try
+      {
+        Directory.EnumerateFiles(root, "*.n", SearchOption.AllDirectories)
+          .Where(p => !Skipped.Any(s => p.Substring(root.Length).Split(Path.DirectorySeparatorChar).Contains(s)))
+          .Take(5000).ToList()
+      }
+      catch { | _ => SCG.List() };
+    foreach (path in workspace)
+      when (!seen.Contains(path)) { def text = Text(path, overlay); when (text != null && ExportLine.IsMatch(text)) add(path) }
+    while (queue.Count > 0)
+    {
+      def text = Text(queue.Dequeue(), overlay);
+      foreach (m is Match in UsingLine.Matches(text))
+      {
+        def file = Path.Combine(root, m.Groups[1].Value.Replace('.', Path.DirectorySeparatorChar) + ".n");
+        when (File.Exists(file) || overlay.ContainsKey(file)) add(file)
+      }
+    }
+    files
+  }
+
+  public Check(root : string, overlay : SCG.Dictionary[string, string], references : string, libraries : list[string],
+               fileNameNamespaces : bool) : JsonObject
+  {
+    def files = Files(root, overlay);
+    def diagnostics = JsonArray();
+    def facts = JsonArray();
+    def result = JsonObject();
+    result["files"] = JsonArray(files.Select(f => JsonValue.Create(f) : JsonNode).ToArray());
+    result["diagnostics"] = diagnostics; result["facts"] = facts;
+    when (files.Count > 0)
+    {
+      def options = CompilationOptions();
+      options.CompileToMemory = true; options.TargetIsSet = true;
+      // a workspace with main.n is a program; otherwise its files are a library
+      options.TargetIsLibrary = !files.Contains(Path.Combine(root, "main.n"));
+      options.OutputFileName = if (options.TargetIsLibrary) "nemerle-lsp-check.dll" else "nemerle-lsp-check.exe";
+      options.SourceRoot = root; options.FileNameNamespaces = fileNameNamespaces;
+      options.ProgressBar = false; options.ColorMessages = false; options.IgnoreConfusion = true;
+      options.TargetReferenceDirectory = references;
+      options.ReferencedLibraries = libraries;
+      options.Sources = files.Select(f => StringSource(Location.GetFileIndex(f), Text(f, overlay)) : ISource).NToList();
+      def manager = ManagerClass(options);
+      manager.InitOutput(StringWriter());
+      def place(node : JsonObject, loc : Location) : void
+      {
+        node["path"] = JsonValue.Create(Location.GetFileName(loc.FileIndex));
+        node["line"] = JsonValue.Create(loc.Line); node["column"] = JsonValue.Create(loc.Column);
+        node["endLine"] = JsonValue.Create(loc.EndLine); node["endColumn"] = JsonValue.Create(loc.EndColumn);
+      }
+      def report(loc : Location, message : string, severity : int) : void
+      {
+        when (loc.FileIndex > 0 && loc.Line > 0)
+        {
+          def d = JsonObject(); place(d, loc); d["severity"] = JsonValue.Create(severity); d["message"] = JsonValue.Create(message);
+          diagnostics.Add(d);
+        }
+      }
+      manager.ErrorOccured += fun(loc, msg) { report(loc, msg, 1) };
+      manager.WarningOccured += fun(loc, msg) { report(loc, msg, 2) };
+      // facts: each typed reference, with its type or member and where that is declared
+      // a `using` line holds no code of its own: what is located there is the import's generated initializer call
+      def lines = SCG.Dictionary.[string, array[string]]();
+      def onUsing(at : Location) : bool
+      {
+        def path = Location.GetFileName(at.FileIndex);
+        mutable text;
+        unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
+        at.Line <= text.Length && text[at.Line - 1].TrimStart().StartsWith("using ", StringComparison.Ordinal)
+      }
+      def fact(at : Location, hover : string, target : Location) : void
+      {
+        when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at))
+        {
+          def f = JsonObject(); place(f, at); f["hover"] = JsonValue.Create(hover);
+          when (target.FileIndex > 0 && target.Line > 0 && target.IsSourceAvailable) { def t = JsonObject(); place(t, target); f["target"] = t; }
+          facts.Add(f);
+        }
+      }
+      def member(at : Location, m : IMember, ty : object) : void
+      {
+        def owner = if (m.DeclaringType != null) m.DeclaringType.FullName else "";
+        def shown = if (ty != null) ty.ToString() else m.GetMemType().ToString();
+        if (m.Name == ".ctor")
+        {
+          // a constructor without source of its own (the default one) leads to its type
+          def target = if (m.Location.Line > 0 && !m.Location.IsGenerated || m.DeclaringType == null) m.Location else m.DeclaringType.Location;
+          def parameters = if (shown.Contains(" -> ")) shown.Substring(0, shown.LastIndexOf(" -> ")) else "";
+          fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target)
+        }
+        else fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, m.Location)
+      }
+      def walk(body : TExpr) : void
+      {
+        ExprWalker().Walk(body, info =>
+          match (info.Node)
+          {
+            | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location)
+            | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location)
+            | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
+            | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
+            | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)
+            | TExpr.MethodRef(_, m, _, _) as e => member(e.Location, m, e.Type)
+            | TExpr.EventMember(_, ev) as e => member(e.Location, ev, e.Type)
+            | _ => ()
+          });
+      }
+      manager.TypeTreeBuildFinish += fun(_)
+      {
+        manager.Hierarchy.Iter(tb => tb.MethodBeforeStage2 += fun(_, args)
+          {
+            match (args.Typer.CurrentFunction.Body)
+            {
+              | FunBody.Typed(body) => try { walk(body) } catch { | _ => () }
+              | _ => ()
+            }
+          });
+      };
+      def previous = ManagerClass.Instance;
+      try { manager.Run() }
+      catch { | _ => () } // the errors were reported; the facts gathered so far still help
+      finally { ManagerClass.Instance = previous; }
+    }
+    result
+  }
+}

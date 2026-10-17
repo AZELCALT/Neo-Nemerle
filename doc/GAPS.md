@@ -32,11 +32,10 @@ unless it says so.
 
 ## Tooling
 
-- **The language server analyses one file and does not type it.** It lexes and parses the open file (Nemerle with
-  its own parser, grammar and space blocks with Nitra), so it shows parse errors, highlighting, folding and symbols.
-  It does not see the other files of the workspace (`using`, `export`, scopes and dials across files), does not run
-  typing (type errors, `NotYet` through functions, the type-change and thread checks), and has no hover,
-  go-to-definition or completion yet.
+- **The language server has no completion, references or rename.** Parse diagnostics, highlighting, folding and
+  symbols come as you type. Typed diagnostics for the workspace, hover and go-to-definition come from a background
+  compile after edits settle, so they lag the text until it ends; it recompiles everything each time, and scripts
+  (`DependsOn`) are not typed.
 - **The pinned toolchain is older than the source.** `boot/coreclr` predates this round of compiler changes, so the
   installers' default path (without `--build`) cannot build the current language server; `./bootstrap --update-boot`
   refreshes it from a passing build.

@@ -22,7 +22,9 @@
         "nemerle.languageServer.references": { "type": "string", "default": "", "description": "Optional .NET reference assembly directory passed as --references." },
         "nemerle.languageServer.log": { "type": "string", "default": "", "description": "Optional log file for the server." },
         "nemerle.languageServer.sourceRoot": { "type": "string", "default": "", "description": "Root directory for file module paths (default: the workspace folder)." },
-        "nemerle.languageServer.fileNameNamespaces": { "type": "boolean", "default": false, "description": "A file's namespace is its file name only (-file-name-namespaces)." }
+        "nemerle.languageServer.fileNameNamespaces": { "type": "boolean", "default": false, "description": "A file's namespace is its file name only (-file-name-namespaces)." },
+        "nemerle.languageServer.typecheck": { "type": "boolean", "default": true, "description": "Type the workspace in the background (a separate compiler process after edits settle): type errors across files, hover and go-to-definition." },
+        "nemerle.languageServer.libraries": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Assemblies the workspace references (each passed as --library), for the typed check." }
       }
     }
   },

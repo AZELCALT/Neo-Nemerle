@@ -37,6 +37,8 @@ function activate(context) {
   if (config.get('log')) args.push('--log', config.get('log'));
   if (config.get('sourceRoot')) args.push('--source-root', config.get('sourceRoot'));
   if (config.get('fileNameNamespaces')) args.push('--file-name-namespaces');
+  if (config.get('typecheck') === false) args.push('--no-typecheck');
+  for (const library of config.get('libraries') || []) args.push('--library', library);
   // a launcher on Windows (nemerle-lsp.cmd) only starts through a shell; dotnet does not need one
   const shell = process.platform === 'win32' && prefix.length === 0;
   const server = { command, args, transport: 0 /* stdio */, options: shell ? { shell: true } : undefined };

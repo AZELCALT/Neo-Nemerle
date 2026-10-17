@@ -14,8 +14,23 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   None of Nitra's IDE ecosystem (its client/server, project system or Visual Studio parts) is used, and the
   code a space expands to is not generated. The compiler itself keeps using its own engine (`NitraSyntax.Structure`).
 
+- **Typing** runs in a separate process, `nemerle-lsp --check` (`checker.n`), once edits have paused for 0.6 s; a newer
+  edit kills a check still running. It compiles in memory, with the full compiler, the files the editor needs:
+  - the open files (their unsaved text);
+  - the files they import (`using a.b` is `<root>/a/b.n`), transitively;
+  - every workspace file that exports a type (global types are reached without a `using`).
+
+  The workspace is a program when `<root>/main.n` is among them, a library otherwise. Its errors and warnings
+  (type errors, `NotYet`, type changes, threads, export conflicts) are published for every file they are in, open
+  or not, merged with the parse diagnostics. Each typed reference (a local, a member, a constructor) becomes a fact
+  with its type and its declaration: hover and go-to-definition answer from the latest check. A compilation with
+  errors stops before typing everything, so a file it typed nothing of keeps its earlier facts.
+
 Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
-`semanticTokens/full`, `foldingRange` and `documentSymbol`.
+`semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover` and `definition`.
+
+Options: `--references DIR`, `--source-root DIR`, `--file-name-namespaces`, `--library DLL` (repeatable, for the
+typed check), `--no-typecheck`, `--log FILE`.
 
 The installers in `install/` build and install it, together with the VS Code / VSCodium extension (see the
 top-level README). To build it by hand:
@@ -57,7 +72,13 @@ Measured on this machine:
 | First analysis of a file with grammars (Nitra compiles them) | about 2.5 s |
 | Later edits that leave the grammar text unchanged (compiled grammar cached by its text) | about 30–60 ms |
 | Edit to a grammar block | the grammar is recompiled before the next answer |
+| Typed check of a small workspace (two files) | about 2 s after edits settle |
 
 ## Limits
 
-No completion, hover, go-to-definition or references yet; those need typing.
+- No completion, find-references or rename yet.
+- Hover and go-to-definition come from the latest finished check: right after an edit they describe the previous text
+  until the next check ends, and positions can be off by the edit in between.
+- Scripts (files that name `DependsOn`) need the scripting host and are not typed. A workspace without a `main.n`
+  is checked as a library.
+- The typed check compiles everything it needs each time; a large workspace takes as long as a compile.

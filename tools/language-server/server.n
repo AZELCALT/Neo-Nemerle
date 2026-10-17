@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using SCG = System.Collections.Generic;
 using Nemerle.Imperative;
 using analysis;
+using checker;
 using transport;
 
 public sealed class Document
@@ -24,6 +25,8 @@ public variant Job
   | Analyze { Uri : string; Version : int; }
   | Request { Id : JsonNode; Method : string; Params : JsonNode; }
   | Close { Uri : string; }
+  /// A typed check finished: its diagnostics and facts, by file.
+  | Typed { Result : JsonObject; }
 }
 
 /// Reads messages on the calling thread; all analysis runs on one worker thread, in arrival order, so a request
@@ -40,11 +43,23 @@ public sealed class Server
   mutable analyzer : Analyzer;                                          // worker thread only
   mutable shutdownRequested : bool;
   log : TextWriter;
+  // the typed check (a `--check` process): requested after edits, run on its own thread, its result handed to the
+  // worker, which alone publishes
+  typecheck : bool;
+  libraries : SCG.List[string];
+  checkWanted : AutoResetEvent = AutoResetEvent(false);
+  mutable lastEdit : DateTime = DateTime.MinValue;
+  mutable checkGeneration : int;
+  mutable checking : Diagnostics.Process;
+  typedDiagnostics : SCG.Dictionary[string, SCG.List[JsonObject]] = SCG.Dictionary(); // worker thread only
+  typedFacts : SCG.Dictionary[string, SCG.List[JsonObject]] = SCG.Dictionary();       // worker thread only
 
-  public this(input : Stream, output : Stream, references : string, root : string, fileNameNamespaces : bool, log : TextWriter)
+  public this(input : Stream, output : Stream, references : string, root : string, fileNameNamespaces : bool, log : TextWriter,
+              typecheck : bool, libraries : SCG.List[string])
   {
     transport = Transport(input, output); this.references = references; this.log = log;
     this.root = root; this.fileNameNamespaces = fileNameNamespaces;
+    this.typecheck = typecheck; this.libraries = libraries;
   }
 
   /// Source root for file modules: --source-root, else the first workspace folder, else the root URI.
@@ -61,6 +76,7 @@ public sealed class Server
   {
     def worker = Thread(Work, 64 * 1024 * 1024); // the parsers recurse deeply on long inputs
     worker.IsBackground = true; worker.Start();
+    when (typecheck) { def checker = Thread(CheckLoop); checker.IsBackground = true; checker.Start(); }
     mutable exitCode = 1;
     mutable running = true;
     while (running)
@@ -101,7 +117,8 @@ public sealed class Server
               def uri = Str(message["params"]["textDocument"]["uri"]);
               lock (documents) _ = documents.Remove(uri);
               jobs.Add(Job.Close(uri))
-            | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol" =>
+            | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol"
+            | "textDocument/hover" | "textDocument/definition" =>
               jobs.Add(Job.Request(id.DeepClone(), method, message["params"].DeepClone()))
             | _ => when (id != null) transport.RespondError(id, -32601, "method not supported: " + method)
           }
@@ -127,7 +144,9 @@ public sealed class Server
     caps["semanticTokensProvider"] = tokens;
     caps["foldingRangeProvider"] = JsonValue.Create(true);
     caps["documentSymbolProvider"] = JsonValue.Create(true);
-    def info = JsonObject(); info["name"] = JsonValue.Create("nemerle-lsp"); info["version"] = JsonValue.Create("0.1");
+    caps["hoverProvider"] = JsonValue.Create(true);
+    caps["definitionProvider"] = JsonValue.Create(true);
+    def info = JsonObject(); info["name"] = JsonValue.Create("nemerle-lsp"); info["version"] = JsonValue.Create("0.2");
     def r = JsonObject(); r["capabilities"] = caps; r["serverInfo"] = info; r
   }
 
@@ -143,7 +162,8 @@ public sealed class Server
           | Job.Analyze(uri, version) =>
             Thread.Sleep(100); // let a burst of edits settle; a newer version makes this job obsolete
             def doc = Current(uri);
-            when (doc != null && doc.Version == version) Publish(uri, Ensure(doc))
+            when (doc != null && doc.Version == version) { Publish(uri, Ensure(doc)); RequestCheck() }
+          | Job.Typed(result) => ApplyCheck(result)
           | Job.Close(uri) =>
             _ = results.Remove(uri);
             def p = JsonObject(); p["uri"] = JsonValue.Create(uri); p["diagnostics"] = JsonArray();
@@ -158,6 +178,8 @@ public sealed class Server
               {
                 | "textDocument/semanticTokens/full" => transport.Respond(id, SemanticTokens(r))
                 | "textDocument/foldingRange" => transport.Respond(id, Folding(r))
+                | "textDocument/hover" => transport.Respond(id, Hover(doc, r, parameters["position"]))
+                | "textDocument/definition" => transport.Respond(id, Definition(doc, parameters["position"]))
                 | _ => transport.Respond(id, Symbols(r))
               }
             }
@@ -204,16 +226,182 @@ public sealed class Server
   Publish(uri : string, r : AnalysisResult) : void
   {
     def items = JsonArray();
-    foreach (d in r.Diagnostics)
+    def seen = SCG.HashSet.[string]();
+    def add(start : int, end : int, severity : int, source : string, message : string) : void
     {
-      def x = JsonObject();
-      x["range"] = Range(r, d.Start, d.End); x["severity"] = JsonValue.Create(d.Severity :> int);
-      x["source"] = JsonValue.Create(d.Source); x["message"] = JsonValue.Create(d.Message);
-      items.Add(x);
+      // a parse error is found by both passes: report it once
+      when (seen.Add(r.Lines.Line(start).ToString() + ":" + message))
+      {
+        def x = JsonObject();
+        x["range"] = Range(r, start, end); x["severity"] = JsonValue.Create(severity);
+        x["source"] = JsonValue.Create(source); x["message"] = JsonValue.Create(message);
+        items.Add(x);
+      }
     }
+    foreach (d in r.Diagnostics) add(d.Start, d.End, d.Severity :> int, d.Source, d.Message);
+    def path = PathOf(uri);
+    when (path != null && typedDiagnostics.ContainsKey(path))
+      foreach (d in typedDiagnostics[path])
+      {
+        def start = r.Lines.Offset(Int(d["line"]), Int(d["column"]));
+        def end = r.Lines.Offset(Int(d["endLine"]), Int(d["endColumn"]));
+        add(start, Math.Max(start + 1, end), Int(d["severity"]), "nemerle", Str(d["message"]));
+      }
     def p = JsonObject(); p["uri"] = JsonValue.Create(uri);
     p["version"] = JsonValue.Create(r.Version); p["diagnostics"] = items;
     transport.Notify("textDocument/publishDiagnostics", p)
+  }
+
+  static PathOf(uri : string) : string { try { Path.GetFullPath(System.Uri(uri).LocalPath) } catch { | _ => null } }
+  static UriOf(path : string) : string { System.Uri(path).AbsoluteUri }
+
+  // ---- the typed check ----
+
+  /// Called by the worker after an edit: the check thread starts one once edits settle.
+  RequestCheck() : void
+  {
+    when (typecheck && root != null)
+    {
+      lock (checkWanted) { lastEdit = DateTime.UtcNow; checkGeneration++; def running = checking; when (running != null) try { running.Kill() } catch { | _ => () } }
+      _ = checkWanted.Set();
+    }
+  }
+
+  CheckLoop() : void
+  {
+    while (true)
+    {
+      _ = checkWanted.WaitOne();
+      // wait until edits have paused
+      mutable settled = false;
+      while (!settled) { def wait = 600 - (DateTime.UtcNow - lastEdit).TotalMilliseconds; if (wait > 0) Thread.Sleep(wait :> int) else settled = true; }
+      def generation = lock (checkWanted) checkGeneration;
+      def request = JsonObject();
+      request["root"] = JsonValue.Create(root); request["references"] = JsonValue.Create(references);
+      request["fileNameNamespaces"] = JsonValue.Create(fileNameNamespaces);
+      request["libraries"] = JsonArray(libraries.Select(l => JsonValue.Create(l) : JsonNode).ToArray());
+      def files = JsonArray();
+      lock (documents)
+        foreach (d in documents.Values)
+          match (PathOf(d.Uri)) { | null => () | path => def f = JsonObject(); f["path"] = JsonValue.Create(path); f["text"] = JsonValue.Create(d.Text); files.Add(f) }
+      request["files"] = files;
+      try
+      {
+        def started = Diagnostics.Stopwatch.StartNew();
+        def info = Diagnostics.ProcessStartInfo(Environment.ProcessPath);
+        // the same server, as `dotnet nemerle-lsp.exe --check` (or the apphost itself)
+        when (Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "dotnet") info.ArgumentList.Add(typeof(Server).Assembly.Location);
+        info.ArgumentList.Add("--check");
+        info.RedirectStandardInput = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true; info.UseShellExecute = false;
+        def process = Diagnostics.Process.Start(info);
+        lock (checkWanted) checking = process;
+        process.StandardInput.Write(request.ToJsonString()); process.StandardInput.Close();
+        def errors = process.StandardError.ReadToEndAsync();
+        def output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        lock (checkWanted) checking = null;
+        def current = lock (checkWanted) checkGeneration;
+        if (process.ExitCode == 0 && current == generation && output.Length > 0)
+        {
+          log.WriteLine("checked " + files.Count.ToString() + " open file(s) in " + started.ElapsedMilliseconds.ToString() + " ms");
+          jobs.Add(Job.Typed(JsonNode.Parse(output).AsObject()))
+        }
+        else when (current == generation) log.WriteLine("check failed (" + process.ExitCode.ToString() + "): " + errors.Result)
+      }
+      catch { | e is Exception => log.WriteLine("check: " + e.Message) }
+    }
+  }
+
+  /// The worker applies a check: new typed diagnostics and facts, and republishes every file they change.
+  ApplyCheck(result : JsonObject) : void
+  {
+    def before = SCG.HashSet.[string](typedDiagnostics.Keys);
+    // a compilation with errors stops before typing the rest: a file it typed no fact of keeps its earlier facts
+    def failed = result["diagnostics"].AsArray().Any(d => Int(d["severity"]) == 1);
+    def earlier = SCG.Dictionary(typedFacts);
+    typedDiagnostics.Clear(); typedFacts.Clear();
+    foreach (d in result["diagnostics"].AsArray())
+    {
+      def path = Str(d["path"]);
+      unless (typedDiagnostics.ContainsKey(path)) typedDiagnostics[path] = SCG.List();
+      typedDiagnostics[path].Add(d.AsObject());
+    }
+    foreach (f in result["facts"].AsArray())
+    {
+      def path = Str(f["path"]);
+      unless (typedFacts.ContainsKey(path)) typedFacts[path] = SCG.List();
+      typedFacts[path].Add(f.AsObject());
+    }
+    when (failed) foreach (e in earlier) unless (typedFacts.ContainsKey(e.Key)) typedFacts[e.Key] = e.Value;
+    def affected = SCG.HashSet.[string](before); affected.UnionWith(typedDiagnostics.Keys);
+    foreach (path in affected)
+    {
+      // an open file is matched by path: an editor's URI spelling (an escaped drive letter) can differ from ours
+      def open = lock (documents) documents.Values.FirstOrDefault(d => PathOf(d.Uri) == path);
+      def uri = if (open != null) open.Uri else UriOf(path);
+      match (Current(uri))
+      {
+        | null =>
+          // a file that is not open: its typed diagnostics alone
+          def items = JsonArray();
+          when (typedDiagnostics.ContainsKey(path))
+            foreach (d in typedDiagnostics[path])
+            {
+              def position(line : int, column : int) { def p = JsonObject(); p["line"] = JsonValue.Create(Math.Max(0, line - 1)); p["character"] = JsonValue.Create(Math.Max(0, column - 1)); p }
+              def range = JsonObject(); range["start"] = position(Int(d["line"]), Int(d["column"])); range["end"] = position(Int(d["endLine"]), Int(d["endColumn"]));
+              def x = JsonObject(); x["range"] = range; x["severity"] = JsonValue.Create(Int(d["severity"]));
+              x["source"] = JsonValue.Create("nemerle"); x["message"] = JsonValue.Create(Str(d["message"])); items.Add(x);
+            }
+          def p = JsonObject(); p["uri"] = JsonValue.Create(uri); p["diagnostics"] = items;
+          transport.Notify("textDocument/publishDiagnostics", p)
+        | doc => Publish(uri, Ensure(doc))
+      }
+    }
+  }
+
+  /// The innermost fact of the latest check at an LSP position.
+  FactAt(doc : Document, position : JsonNode) : JsonObject
+  {
+    def path = PathOf(doc.Uri);
+    def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
+    mutable best = null; mutable bestSize = int.MaxValue;
+    when (path != null && typedFacts.ContainsKey(path))
+      foreach (f in typedFacts[path])
+      {
+        def (sl, sc, el, ec) = (Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"]));
+        def inside = (line > sl || line == sl && column >= sc) && (line < el || line == el && column <= ec);
+        def size = (el - sl) * 10000 + (ec - sc);
+        when (inside && size < bestSize) { best = f; bestSize = size; }
+      }
+    best
+  }
+
+  Hover(doc : Document, r : AnalysisResult, position : JsonNode) : JsonNode
+  {
+    match (FactAt(doc, position))
+    {
+      | null => null
+      | f =>
+        def contents = JsonObject(); contents["kind"] = JsonValue.Create("markdown");
+        contents["value"] = JsonValue.Create("```nemerle\n" + Str(f["hover"]) + "\n```");
+        def x = JsonObject(); x["contents"] = contents;
+        def start = r.Lines.Offset(Int(f["line"]), Int(f["column"])); def end = r.Lines.Offset(Int(f["endLine"]), Int(f["endColumn"]));
+        x["range"] = Range(r, start, end); x
+    }
+  }
+
+  Definition(doc : Document, position : JsonNode) : JsonNode
+  {
+    match (FactAt(doc, position))
+    {
+      | null => null
+      | f when f["target"] == null => null
+      | f =>
+        def t = f["target"];
+        def position(line : int, column : int) { def p = JsonObject(); p["line"] = JsonValue.Create(Math.Max(0, line - 1)); p["character"] = JsonValue.Create(Math.Max(0, column - 1)); p }
+        def range = JsonObject(); range["start"] = position(Int(t["line"]), Int(t["column"])); range["end"] = position(Int(t["endLine"]), Int(t["endColumn"]));
+        def x = JsonObject(); x["uri"] = JsonValue.Create(UriOf(Str(t["path"]))); x["range"] = range; x
+    }
   }
 
   SemanticTokens(r : AnalysisResult) : JsonNode
@@ -278,9 +466,14 @@ internal module Program
     mutable logPath = null;
     mutable root = null;
     mutable shortNames = false;
+    mutable typecheck = true;
+    def libraries = SCG.List.[string]();
+    when (args.Contains("--check")) return Checker.Run(Console.In, Console.Out);
     for (mutable i = 0; i < args.Length; ++i)
       match (args[i])
       {
+        | "--library" when i + 1 < args.Length => ++i; libraries.Add(Path.GetFullPath(args[i]))
+        | "--no-typecheck" => typecheck = false
         | "--references" when i + 1 < args.Length => ++i; references = args[i]
         | "--log" when i + 1 < args.Length => ++i; logPath = args[i]
         | "--source-root" when i + 1 < args.Length => ++i; root = Path.GetFullPath(args[i])
@@ -291,7 +484,8 @@ internal module Program
     when (references == null) references = DefaultReferences();
     def log = if (logPath != null) StreamWriter(logPath, true) : TextWriter else Console.Error;
     log.WriteLine("nemerle-lsp: references " + (references ?? "<none>"));
-    def server = Server(Console.OpenStandardInput(), Console.OpenStandardOutput(), references, root, shortNames, TextWriter.Synchronized(log));
+    def server = Server(Console.OpenStandardInput(), Console.OpenStandardOutput(), references, root, shortNames, TextWriter.Synchronized(log),
+                        typecheck, libraries);
     def code = server.Run();
     log.Flush();
     code

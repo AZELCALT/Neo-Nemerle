@@ -80,7 +80,9 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
   without the SDK installed.
   Libraries can declare script kinds (`[ScriptDefinition(".build.n")]`, as Kotlin's `@KotlinScript`): a script
   named `x.build.n` gets the kind's base class, imports, grammars and macros without setup lines.
-- **Language server:** Nemerle's own parser, plus Nitra for `grammar`/`space` blocks, with a VS Code client
+- **Language server:** Nemerle's own parser, plus Nitra for `grammar`/`space` blocks, as you type; typed
+  diagnostics for the workspace (across `using` and exported types), hover and go-to-definition from a background
+  compile (`nemerle-lsp --check`). The VS Code / VSCodium extension ships as a `.vsix` carrying the server
   (`tools/language-server/`).
 - **Build:** `./bootstrap` builds everything from the pinned compiler in `boot/coreclr` and runs every test suite.
   `--update-boot` refreshes the pinned compiler once everything passes.
