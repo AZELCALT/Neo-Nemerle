@@ -6,6 +6,8 @@ commit. Detailed notes from the port are in [doc/revive/](doc/revive).
 
 ## Unreleased: the revival
 
+Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
+
 ### Platform: .NET 10
 - The compiler, standard library and macros build themselves on .NET 10. Neither Mono nor .NET Framework (what upstream ran on) is needed
   to run them.
