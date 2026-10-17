@@ -338,6 +338,7 @@ cases = [
     ('refined', 'mutable items = [];\nitems ::= 1;\nitems ::= 2;\nSum() : int { items.FoldLeft(0, _ + _) }\nSystem.Console.WriteLine(Sum());', ['3']),
     ('rebound', 'def x = 5;\ndef x = x * 2;\nShow() : void { System.Console.WriteLine(x) }\nShow();', ['10']),
     ('retyped', 'def y = 5;\ndef y = y.ToString() + "!";\nSystem.Console.WriteLine(y.Length);\nShow() : void { System.Console.WriteLine(y.As.[string]()) }\nShow();', ['2', '5!']),
+    ('final-type', 'def y = 5;\ndef y = y.ToString() + "?";\nShow() : void { System.Console.WriteLine(y.Length) }\nShow();', ['2']),
     ('tuple', 'def pair = (1, 2);\nSum() : int { def (a, b) = pair; a + b }\nSystem.Console.WriteLine(Sum());', ['3']),
 ]
 for name, text, expected in cases:
@@ -348,8 +349,18 @@ for name, text, expected in cases:
     if got != expected: raise RuntimeError('top-level state ' + name + ': ' + ' '.join(got))
 source('init/main.n', 'def y = 5;\ndef y = y.ToString();\nBad() : int { y + 1 }\nSystem.Console.WriteLine(Bad());')
 run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-bad.exe'), '-no-color', *modern_references],
-    False, 'Nemerle.Scopes.Content')
+    False, 'changes type here (from int to string), but line 3 uses it as int')
 print('PASS: top-level values: lambdas read the storage, later uses refine the type, rebinding keeps or retypes the storage', flush=True)
+# an imported file's top-level code runs in its type initializer: starting work there is warned, and work that uses
+# the file while the top-level code waits for it is a deadlock, an error (the calls are the resolved ones)
+source('init/main.n', 'using worker;\nSystem.Console.WriteLine("main");')
+source('init/worker.n', 'def t = System.Threading.Tasks.Task.Run(() => 1);')
+run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-warn.exe'), '-no-color',
+     *modern_references], True, 'Task.Run in the top-level code of an imported file')
+source('init/worker.n', 'using T = System.Threading.Tasks.Task;\nHelper() : int { 2 }\ndef t = T.Run(() => Helper());\nt.Wait();')
+run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-deadlock.exe'), '-no-color',
+     *modern_references], False, 'Task.Run runs work that uses this file while its top-level code waits for it')
+print('PASS: threads in an imported file\'s top-level code: warned, and a provable deadlock is an error', flush=True)
 print('PASS: top-level code runs once at its using; top-level values are private state, public def is file.x after using; '
       'a program starts at main.n or -main:', flush=True)
 

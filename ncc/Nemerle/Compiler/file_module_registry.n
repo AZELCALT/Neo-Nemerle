@@ -19,6 +19,8 @@ using Nemerle.Compiler.MacroClassGen;
 using Nemerle.Compiler.syntax_definition;
 using Nemerle.Compiler.typer;
 using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.expr_walker;
+using Nemerle.Compiler.fixed_type;
 
 /// Compilation-local file ownership. Index before parsing ordinary imports.
 public sealed class FileModuleRegistry
@@ -337,7 +339,7 @@ internal sealed class ModuleInitMacro : IMacro
     def ns = manager.NameTree.ExactPath(["Nemerle", "Compiler"]);
     when (ns.LookupMacro(["__module_init"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleInitMacro());
     when (ns.LookupMacro(["__module_binding_value"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleBindingMacro());
-    foreach (macroName in ["__state_hole", "__state_type", "__state_bind", "__state_store"])
+    foreach (macroName in ["__state_hole", "__state_type", "__state_bind", "__state_store", "__state_read"])
       when (ns.LookupMacro([macroName]).IsNone) manager.MacrosRegistry.RegisterMacro(StateMacro(macroName));
   }
 
@@ -426,6 +428,26 @@ internal sealed class StateMacro : IMacro
             <[ _N_skip_write_check($field) = $(manager.ModuleTypedBindings[key] : typed) ]>
           | _ => <[ _N_skip_write_check($field) = $value ]>
         }
+      | ("__state_read", [PExpr.Literal(Literal.String(key)), field, PExpr.Literal(Literal.Bool(true))]) =>
+        // a member of the value is used: the read is of the value's final type
+        match (storage(key))
+        {
+          | "content" when manager.StateTypes.ContainsKey(key) =>
+            def types = System.Collections.Generic.List.[FixedType]();
+            foreach (pair in manager.StateTypes[key]) types.Add(pair.Value.Fix());
+            <[ $field.As.[$(PExpr.TypedType(types[types.Count - 1]))]() ]>
+          | _ => field
+        }
+      | ("__state_read", [PExpr.Literal(Literal.String(key)), field]) =>
+        match (storage(key))
+        {
+          | "content" =>
+            // the type the read needs is inferred from its use, and checked once everything is typed
+            def needed = ctx.FreshTypeVar();
+            manager.StateReads.Add((key, needed, field.Location));
+            <[ $field.As.[$(PExpr.TypedType(needed))]() ]>
+          | _ => field
+        }
       | ("__state_store", [PExpr.Literal(Literal.String(key)), field, local]) =>
         match (storage(key))
         {
@@ -434,5 +456,98 @@ internal sealed class StateMacro : IMacro
         }
       | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal top-level state macro"); null
     }
+  }
+
+  /// An imported file's top-level code runs in its type initializer, which holds the type's lock until it ends.
+  /// Starting a thread or task there is warned; when the started work uses the file and the top-level code waits
+  /// for it (Parallel always waits), it can never finish: an error. The calls are the resolved ones, whatever the
+  /// spelling.
+  public static CheckThreads(typer : Typer, body : TExpr) : void
+  {
+    def home = typer.CurrentTypeBuilder;
+    def inModule(t : TypeInfo) : bool
+    {
+      mutable at = t; mutable found = false;
+      while (at != null && !found) { found = at.Equals(home); at = at.DeclaringType; }
+      found
+    }
+    def threading(owner : string) : bool
+    {
+      owner == "System.Threading.Thread" || owner == "System.Threading.ThreadPool" || owner == "System.Threading.Timer"
+      || owner.StartsWith("System.Threading.Tasks.", System.StringComparison.Ordinal)
+    }
+    def waiting(name : string) : bool { ["Wait", "WaitAll", "WaitAny", "Join", "get_Result", "GetResult", "RunSynchronously"].Contains(name) }
+    def usesModule(e : TExpr) : bool
+    {
+      mutable uses = false;
+      ExprWalker().Walk(e, info =>
+        match (info.Node)
+        {
+          | TExpr.StaticRef(_, mem, _) when mem.DeclaringType != null && inModule(mem.DeclaringType) => uses = true
+          | TExpr.MethodRef(_, meth, _, _) when meth.DeclaringType != null && inModule(meth.DeclaringType) => uses = true
+          | _ => ()
+        });
+      uses
+    }
+    def starts = System.Collections.Generic.List.[Location * bool * bool * string]();
+    mutable waits = false;
+    // the method a call resolves to (an overloaded call is a resolved delayed typing)
+    def callee(f : TExpr) : IMethod
+    {
+      | TExpr.StaticRef(_, m is IMethod, _) => m
+      | TExpr.MethodRef(_, m, _, _) => m
+      | TExpr.Delayed(susp) when susp.IsResolved => callee(susp.ResolutionResult)
+      | _ => null
+    }
+    def visit(node : object) : void
+    {
+      match (node)
+      {
+        | TExpr.Call(func, parms, _) as call =>
+          def meth = callee(func);
+          when (meth != null && meth.DeclaringType != null)
+          {
+            def owner = meth.DeclaringType.FullName;
+            when (threading(owner) || owner == "System.Runtime.CompilerServices.TaskAwaiter")
+              if (waiting(meth.Name)) waits = true
+              else when (threading(owner))
+                starts.Add((call.Location, parms.Exists(p => usesModule(p.expr)), owner == "System.Threading.Tasks.Parallel",
+                            meth.DeclaringType.Name + "." + meth.Name));
+          }
+        | _ => ()
+      }
+    }
+    ExprWalker().Walk(body, info => visit(info.Node));
+    foreach ((at, uses, implicitWait, what) in starts)
+      if (uses && (implicitWait || waits))
+        Message.Error(at, $"$what runs work that uses this file while its top-level code waits for it; that code holds the "
+                          "file's type initializer lock, so the work can never run: move it out of the top-level code")
+      else
+        Message.Warning(at, $"$what in the top-level code of an imported file: that code runs in the file's type initializer, "
+                            "so work that calls into the file waits until the top-level code ends")
+  }
+
+  /// A top-level value that changes type is a Content; code that needs one of its earlier types depends on what is
+  /// no longer there, so the type change is an error (where the type changes) naming that code.
+  public static CheckReads(manager : ManagerClass) : void
+  {
+    foreach ((key, needed, at) in manager.StateReads)
+      when (manager.StateStorage.ContainsKey(key) && manager.StateStorage[key] == "content" && manager.StateTypes.ContainsKey(key))
+      {
+        def types = System.Collections.Generic.List.[FixedType]();
+        foreach (pair in manager.StateTypes[key]) types.Add(pair.Value.Fix());
+        def final = types[types.Count - 1];
+        def wanted = needed.Fix();
+        unless (wanted.Equals(final) || wanted.Equals(manager.InternalType.Object))
+        {
+          // where the type changes away from the one this code needs
+          mutable change = 1;
+          for (mutable i = 1; i < types.Count; i++) when (!types[i].Equals(types[i - 1]) && types[i - 1].Equals(wanted)) change = i;
+          def name = key.Substring(key.LastIndexOf('.') + 1);
+          def lines = if (manager.StateLines.ContainsKey(key)) manager.StateLines[key] else System.Collections.Generic.List();
+          def place = if (change < lines.Count) lines[change] else at;
+          Message.Error(place, $"`$name' changes type here (from $(types[change - 1]) to $(types[change])), but line $(at.Line) uses it as $wanted");
+        }
+      }
   }
 }

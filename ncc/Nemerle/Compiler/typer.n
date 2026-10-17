@@ -386,6 +386,14 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               messenger.InErrorMode = true;
               RunDelayedTypings();
               MaybeDumpTypedTree ("after delayed typings");
+              // an imported file's top-level code (its static constructor) holds the type's lock: threads started there
+              when (Manager.Options.FileModules && current_fun.decl == null && current_method_builder.Name == ".cctor"
+                    && Manager.FileModuleRegistry.TopLevel.Contains(current_type.FullName))
+                match (current_fun.body)
+                {
+                  | FunBody.Typed(body) => Nemerle.Compiler.file_module_registry.StateMacro.CheckThreads(this, body)
+                  | _ => ()
+                }
 
               when (errorCount == Message.ErrorCount)
               {

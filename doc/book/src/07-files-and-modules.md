@@ -141,8 +141,20 @@ A top-level value's type comes from the whole top-level code: `mutable items = [
 later `items ::= 1` gives. A function, a lambda or a local function reads the value's storage, so it may be written
 above the value's binding and sees whatever the storage holds when it runs. Binding a name again writes the same
 storage: `def x = 5; def x = x * 2;` leaves 10. If the new binding has another type, the storage holds a `Content`
-(the value and its current type), which functions read with `x.As.[string]()`; that is an error when code still uses
-the value with its old type.
+(the value and its current type). Functions read it as its final type, or through the Content itself
+(`x.As.[string]()`, `x.Is.[int]()`); if any code still needs one of its earlier types, the type change is an error at
+the binding that changes it:
+
+```nemerle,fail
+def y = 5;
+def y = y.ToString();
+Twice() : int { y * 2 }
+System.Console.WriteLine(Twice())
+```
+
+```text
+`y' changes type here (from int to string), but line 3 uses it as int
+```
 
 Before its first binding a value does not exist yet. Reading it there gives `NotYet`, which nothing accepts:
 
@@ -155,9 +167,10 @@ def z = 1;
 `z' is NotYet here: its top-level binding is at line 2
 ```
 
-Files that import each other while one of them has top-level code are reported, as is starting threads in an imported
-file's top-level code: that code runs in the file's type initializer, so a thread that calls back into the file while
-it is waited for would deadlock.
+Files that import each other while one of them has top-level code are reported. An imported file's top-level code
+runs in its type initializer, which holds the file's lock until it ends: starting a thread or task there is warned,
+and work that uses the file while the top-level code waits for it (as `Parallel` always does) is an error, since it
+could never run. The compiler judges the calls themselves, however they are written.
 
 A library's files work the same way: a program that imports a library's file runs its top-level code, so a library
 can set up its state (and its scopes, see [Grammars and spaces](10-grammars.md)). Code in C# does not run it.

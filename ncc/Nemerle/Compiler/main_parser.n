@@ -426,6 +426,8 @@ using Nemerle.Compiler.Utility;
                 def key = moduleName + "." + name.Id;
                 def k = if (seen.ContainsKey(name.Id)) seen[name.Id] + 1 else 1;
                 seen[name.Id] = k;
+                unless (lex.Manager.StateLines.ContainsKey(key)) lex.Manager.StateLines[key] = SCG.List();
+                lex.Manager.StateLines[key].Add(expression.Location);
                 def typed = if (ty is <[ _ ]>) value else <[ ($value : $ty) ]>;
                 when (k == 1)
                 {
@@ -598,31 +600,46 @@ using Nemerle.Compiler.Utility;
           })
         }
         foreach ((expression, isPublic) in collected) state(expression, isPublic);
+        // a `def` bound more than once may change type, and then its storage is a Content: the file's functions and
+        // the lambdas of its top-level code read it through a checked read whose type is what the read needs
+        def retypable = SCG.HashSet.[string]();
+        foreach (pair in bindings) when (pair.Value > 1 && !mutables.Contains(pair.Key)) _ = retypable.Add(pair.Key);
+        def checkedReads(e : PExpr, inLambdasOnly : bool) : PExpr
+        {
+          mutable depth = 0;
+          Macros.TraverseExpr(None(), e, false, (inPattern, after, node) =>
+          {
+            match (node)
+            {
+              | _ is PExpr.Lambda | _ is PExpr.DefFunctions => if (after) { depth--; node } else { depth++; node }
+              | PExpr.Ref(n) when after && !inPattern && retypable.Contains(n.Id) && (!inLambdasOnly || depth > 0) =>
+                <[ Nemerle.Compiler.__state_read($(moduleName + "." + n.Id : string), $(fieldRef(n))) ]>
+              // `y.As.[string]()`, `y.Is.[int]()`...: code that uses the Content itself reads it as it is
+              | PExpr.Member(PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [_, raw]), Splicable.Name(api) as member)
+                  when after && called.Id == "__state_read" && ["As", "Is", "Value", "Type", "Call"].Contains(api.Id) =>
+                PExpr.Member(node.Location, raw, member)
+              // `y.Length`: a member of the value itself, whose type then is the value's final one
+              | PExpr.Member(PExpr.Call(PExpr.Member(_, Splicable.Name(called)) as f, [key, raw]), member) when after && called.Id == "__state_read" =>
+                PExpr.Member(node.Location, PExpr.Call(f, [key, raw, <[ true ]>]), member)
+              | _ => node
+            }
+          })
+        }
+        when (retypable.Count > 0)
+        {
+          foreach (member is ClassMember.Function in members)
+            match (member.body)
+            {
+              | FunBody.Parsed(body) when !member.header.Parameters.Exists(p => retypable.Contains(p.Name)) =>
+                member.body = FunBody.Parsed(checkedReads(body, false))
+              | _ => ()
+            }
+          for (mutable i = 0; i < statements.Count; i++) statements[i] = checkedReads(statements[i], true);
+        }
         registry.Usings[moduleName] = usings.NToList();
         when (statements.Count > 0)
         {
           def start = registry.IsStart(fileIndex);
-          // an imported file's top-level code runs inside its type initializer, which holds the type's lock: a thread
-          // it starts and waits for, which calls into the file, deadlocks
-          unless (start)
-            foreach ((statement, _) in collected)
-              _ = Macros.TraverseExpr(None(), statement, false, (_, after, e) =>
-              {
-                def threading(owner : Name) : bool { !after && ["Thread", "Task", "Parallel", "ThreadPool"].Contains(owner.Id) }
-                def warn(owner : Name) : void
-                {
-                  Message.Warning(e.Location, $"`$(owner.Id)' in the top-level code of an imported file: that code runs in the "
-                                              "file's type initializer, so a thread that calls into the file while it is waited for deadlocks")
-                }
-                match (e)
-                {
-                  | PExpr.Member(PExpr.Ref(owner), _) => when (threading(owner)) warn(owner)
-                  | PExpr.Member(PExpr.Member(_, Splicable.Name(owner)), _) => when (threading(owner)) warn(owner)
-                  | PExpr.Call(PExpr.Ref(owner), _) => when (threading(owner)) warn(owner)
-                  | _ => ()
-                }
-                e
-              });
           def record = TopLevelRecord();
           record.Module = moduleName; record.Kind = if (start) "start" else "initializer";
           record.File = Location.GetFileName(fileIndex); record.Usings = usings.NToList();

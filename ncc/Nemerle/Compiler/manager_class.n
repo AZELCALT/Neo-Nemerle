@@ -245,6 +245,10 @@ using Nemerle.Compiler.XmlDump;
     public StateTypes : System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[int, Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
     /// Per top-level value: "typed" (one type) or "content" (its type changes; the storage is a Content).
     public StateStorage : System.Collections.Generic.Dictionary[string, string] = System.Collections.Generic.Dictionary();
+    /// Reads of a top-level value whose storage may be a Content: the type each one needs, checked after typing.
+    public StateReads : System.Collections.Generic.List[string * Nemerle.Compiler.type_var.TypeVar * Location] = System.Collections.Generic.List();
+    /// Where each top-level value is bound.
+    public StateLines : System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[Location]] = System.Collections.Generic.Dictionary();
 
     public UserData : SC.IDictionary
     {
@@ -582,7 +586,7 @@ using Nemerle.Compiler.XmlDump;
       foreach (path when IO.File.Exists(path) && Nemerle.Platform.ClrCompilerSection.HasSection(path) in Options.ReferencedLibraries) add(path);
       ContinueFrom = NList.FromArray(sources.ToArray());
       ContinuesScopes = false;
-      ModuleBindings.Clear(); ModuleTypedBindings.Clear(); StateTypes.Clear(); StateStorage.Clear(); QuietMessages = 0; QuietErrors = 0;
+      ModuleBindings.Clear(); ModuleTypedBindings.Clear(); StateTypes.Clear(); StateStorage.Clear(); StateReads.Clear(); StateLines.Clear(); QuietMessages = 0; QuietErrors = 0;
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)
@@ -912,6 +916,7 @@ using Nemerle.Compiler.XmlDump;
         NameTree.CheckReferencedNamespaces ();
 
         Hierarchy.EmitDecls ();
+        when (Options.FileModules) Nemerle.Compiler.file_module_registry.StateMacro.CheckReads(this);
         Hierarchy.CompleteClrTypes();
         Message.MaybeBailout();
 
