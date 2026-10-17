@@ -36,9 +36,5 @@ unless it says so.
   symbols come as you type. Typed diagnostics for the workspace, hover and go-to-definition come from a background
   compile after edits settle, so they lag the text until it ends; it recompiles everything each time, and scripts
   (`DependsOn`) are not typed.
-- **The pinned toolchain is older than the source.** `boot/coreclr` predates this round of compiler changes, so the
-  installers' default path (without `--build`) cannot build the current language server; `./bootstrap --update-boot`
-  refreshes it from a passing build.
-
 - **Windows installer:** `install.ps1` and `install.cmd` were run on Windows once; a .NET assembly version mismatch
   there still needs a small fix. The VS Code extension's Windows launch (`shell: true`) is untested.
