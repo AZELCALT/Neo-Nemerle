@@ -140,6 +140,37 @@ public sealed class FileModuleRegistry
     }
   }
 
+  /// Reports files that import each other while one of them has top-level code: one of them runs while the other
+  /// is not set up yet.
+  public ReportImportCycles() : void
+  {
+    def reported = System.Collections.Generic.HashSet.[string]();
+    foreach (start in TopLevel.Keys.NToList())
+    {
+      // a path from `start` back to itself through this compilation's files
+      def stack = System.Collections.Generic.List.[string]();
+      def visiting = System.Collections.Generic.HashSet.[string]();
+      def visit(name : string) : void
+      {
+        if (name == start && stack.Count > 0)
+        {
+          def cycle = String.Join(" -> ", stack.ToArray()) + " -> " + start;
+          def members = stack.ToArray(); System.Array.Sort(members, System.StringComparer.Ordinal);
+          when (reported.Add(String.Join(",", members)))
+            Message.Warning(if (TopLevel[start].File != "") Location(Location.GetFileIndex(TopLevel[start].File), 1, 1) else Location.Default,
+              $"files import each other ($cycle): one runs its top-level code while the other is not set up yet");
+        }
+        else when (visiting.Add(name) && Usings.Contains(name))
+        {
+          stack.Add(name);
+          foreach (u in Usings[name]) visit(u);
+          stack.RemoveAt(stack.Count - 1);
+        }
+      }
+      visit(start);
+    }
+  }
+
   /// The modules whose top-level code a file importing `modules` runs first, in order: each imported module with
   /// top-level code, and through an imported module without any, the modules it imports.
   public Initializers(modules : list[string], self : string) : list[string]
@@ -306,6 +337,8 @@ internal sealed class ModuleInitMacro : IMacro
     def ns = manager.NameTree.ExactPath(["Nemerle", "Compiler"]);
     when (ns.LookupMacro(["__module_init"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleInitMacro());
     when (ns.LookupMacro(["__module_binding_value"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleBindingMacro());
+    foreach (macroName in ["__state_hole", "__state_type", "__state_bind", "__state_store"])
+      when (ns.LookupMacro([macroName]).IsNone) manager.MacrosRegistry.RegisterMacro(StateMacro(macroName));
   }
 
   /// A fingerprint of top-level code (FNV-1a of its text), recorded in the continuation section.
@@ -340,6 +373,66 @@ internal sealed class ModuleBindingMacro : IMacro
         foreach (field is FieldBuilder in ctx.CurrentType.LookupMember(name)) field.InferScriptType(ctx);
         <[ _N_skip_write_check($(name : dyn)) = $(ctx.Manager.ModuleTypedBindings[key] : typed) ]>
       | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal top-level binding"); null
+    }
+  }
+}
+
+/// The top-level state macros. In the inference copy of the top-level code, `__state_hole()` is a value of open type
+/// and `__state_type(key, k, x)` records the type of a value's k-th binding. In the top-level code itself,
+/// `__state_bind(key, k, field, value)` writes a binding to the storage and `__state_store(key, field, local)` writes a
+/// rebound value's local to it (the storage is a Content when its type changes).
+internal sealed class StateMacro : IMacro
+{
+  name : string;
+  public this(name : string) { this.name = name; }
+  public GetName() : string { name }
+  public GetNamespace() : string { "Nemerle.Compiler" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null, null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    def manager = ctx.Manager;
+    def exprs = args.Map(fun (a) { | SyntaxElement.Expression(e) => e | _ => null });
+    def storage(key : string) : string { if (manager.StateStorage.ContainsKey(key)) manager.StateStorage[key] else null }
+    def fieldOf(key : string) : FieldBuilder
+    {
+      def short = key.Substring(key.LastIndexOf('.') + 1);
+      mutable found = null;
+      foreach (f is FieldBuilder in ctx.CurrentType.LookupMember(short)) found = f;
+      found
+    }
+    match (name, exprs)
+    {
+      | ("__state_hole", []) =>
+        <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]>
+      | ("__state_type", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), value]) =>
+        def typed = ctx.TypeExpr(value);
+        unless (manager.StateTypes.ContainsKey(key)) manager.StateTypes[key] = System.Collections.Generic.Dictionary();
+        manager.StateTypes[key][k :> int] = typed.Type;
+        <[ () ]>
+      | ("__state_bind", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), field, value]) =>
+        match (storage(key))
+        {
+          | "content" => <[ _N_skip_write_check($field) = Nemerle.Scopes.Content.Of($value) ]>
+          | "typed" => <[ _N_skip_write_check($field) = $value ]>
+          | _ when k == 1UL && manager.ModuleBindings.ContainsKey(key) =>
+            // the inference pass could not settle the type: the first initializer gives it
+            match (fieldOf(key)) { | null => () | f => f.InferScriptType(ctx) }
+            <[ _N_skip_write_check($field) = $(manager.ModuleTypedBindings[key] : typed) ]>
+          | _ => <[ _N_skip_write_check($field) = $value ]>
+        }
+      | ("__state_store", [PExpr.Literal(Literal.String(key)), field, local]) =>
+        match (storage(key))
+        {
+          | "content" => <[ _N_skip_write_check($field) = Nemerle.Scopes.Content.Of($local) ]>
+          | _ => <[ _N_skip_write_check($field) = $local ]>
+        }
+      | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal top-level state macro"); null
     }
   }
 }

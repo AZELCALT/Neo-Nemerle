@@ -27,6 +27,7 @@
  */
 
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.fixed_type;
 using Nemerle.Collections;
 using Nemerle.Utility;
 using System.Reflection;
@@ -645,6 +646,64 @@ using Nemerle.Compiler.Utility;
       catch { | e => Message.Error("Could not write native resource: " + e.Message) }
     }
 
+    /// The inference pass of a file module's top-level values (see compile_all_tyinfos).
+    InferModuleState(ti : TypeBuilder) : void
+    {
+      foreach (inference is MethodBuilder in ti.LookupMember("_N_state_types"))
+      {
+        def prefix = ti.FullName + ".";
+        def keys = System.Collections.Generic.List.[string]();
+        foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) keys.Add(key);
+        foreach (key in keys) _ = Manager.StateTypes.Remove(key);
+        def quietErrors = Manager.QuietErrors;
+        Manager.QuietMessages++;
+        try
+        {
+          def typer = Manager.ComponentsFactory.CreateTyper(inference);
+          typer.StopAfterPhase = 1;
+          try { typer.RunFullTyping() } catch { | _ => Manager.QuietErrors++ }
+        }
+        finally { Manager.QuietMessages--; }
+        inference.SkipEmiting = true;
+        when (Manager.QuietErrors == quietErrors)
+        {
+          def learned = System.Collections.Generic.List.[string]();
+          foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) learned.Add(key);
+          foreach (key in learned) DecideModuleState(ti, key, key.Substring(prefix.Length));
+        }
+      }
+    }
+
+    /// Gives a top-level value's field its type: the one type of all its bindings, else a Content.
+    DecideModuleState(ti : TypeBuilder, key : string, name : string) : void
+    {
+      def types = System.Collections.Generic.List.[FixedType]();
+      foreach (pair in Manager.StateTypes[key]) types.Add(pair.Value.Fix());
+      def first = types[0];
+      mutable same = true;
+      foreach (t in types) unless (t.Equals(first)) same = false;
+      foreach (field is FieldBuilder in ti.LookupMember(name))
+      {
+        if (same)
+        {
+          when (field.Ast.ty is <[ _ ]> || Manager.ModuleBindings.ContainsKey(key)) field.SetStateType(first);
+          Manager.StateStorage[key] = "typed";
+          _ = Manager.ModuleBindings.Remove(key);
+        }
+        else if (field.IsMutable)
+          Message.Error(field.Location, $"`$name' is bound with different types; a mutable top-level value keeps one type")
+        else
+          match (Manager.CoreEnv.LookupType(["Nemerle", "Scopes", "Content"]))
+          {
+            | Some(content) =>
+              field.SetStateType(FixedType.Class(content, []));
+              Manager.StateStorage[key] = "content";
+              _ = Manager.ModuleBindings.Remove(key);
+            | None => ()
+          }
+      }
+    }
+
     /**
      *
      */
@@ -890,6 +949,10 @@ using Nemerle.Compiler.Utility;
         Iter(ti => when (ti.FullName == Manager.Options.Script.TypeName)
           foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
             constructor.RunBodyTyper());
+      // a file module's top-level values: the inference pass types the inference copy of its top-level code
+      // quietly and only to learn types (no code), then gives each value's field its type, or a Content when its
+      // bindings differ in type
+      when (!aux_phase) Iter(InferModuleState);
       // a file module's top-level bindings infer from their initializers the same way: type its top-level code
       // (the static constructor, or the start file's Main) before the field declarations are emitted
       when (!aux_phase && Manager.ModuleBindings.Count > 0)

@@ -27,6 +27,7 @@
  */
 
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.IO;
 using Nemerle.Utility;
 using Nemerle.Compiler.Utility.Util;
@@ -164,6 +165,8 @@ public module Message
 {
   public Error (loc : Location, m : string) : void
   {
+    // a quiet typing pass (see ManagerClass.QuietMessages) only counts what goes wrong
+    when (Manager.QuietMessages > 0) { Manager.QuietErrors++; return; }
     def loc =
       if (loc == Location.Default) LocationStack.Top()
       else loc;
@@ -194,6 +197,7 @@ public module Message
 
   public Warning (code : int, loc : Location, m : string) : void
   {
+    when (Manager.QuietMessages > 0) return;
     def loc = findLoc (loc);
     when (code == -1 || Manager.Options.Warnings.IsEnabledAt (loc, code)) {
       Manager.RunWarningOccured (loc, m);
@@ -226,6 +230,7 @@ public module Message
   
   public Hint (loc : Location, m : string) : void
   {
+    when (Manager.QuietMessages > 0) return;
     if (Manager.Options.ColorMessages)
       Message.report (loc, "\e[01;32mhint\e[0m: " + m)
     else

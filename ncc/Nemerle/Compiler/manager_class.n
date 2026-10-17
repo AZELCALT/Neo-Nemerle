@@ -238,6 +238,13 @@ using Nemerle.Compiler.XmlDump;
     /// Top-level `def`/`mutable` of file modules (`module.name`) whose field type is their initializer's.
     public ModuleBindings : System.Collections.Generic.Dictionary[string, Nemerle.Compiler.Parsetree.PExpr] = System.Collections.Generic.Dictionary();
     public ModuleTypedBindings : System.Collections.Generic.Dictionary[string, Nemerle.Compiler.Typedtree.TExpr] = System.Collections.Generic.Dictionary();
+    /// While above zero, messages are not reported, only errors counted (a pass that only learns types).
+    public mutable QuietMessages : int;
+    public mutable QuietErrors : int;
+    /// Per top-level value (`module.name`): the type of each of its bindings, learned by the inference pass.
+    public StateTypes : System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[int, Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
+    /// Per top-level value: "typed" (one type) or "content" (its type changes; the storage is a Content).
+    public StateStorage : System.Collections.Generic.Dictionary[string, string] = System.Collections.Generic.Dictionary();
 
     public UserData : SC.IDictionary
     {
@@ -575,7 +582,7 @@ using Nemerle.Compiler.XmlDump;
       foreach (path when IO.File.Exists(path) && Nemerle.Platform.ClrCompilerSection.HasSection(path) in Options.ReferencedLibraries) add(path);
       ContinueFrom = NList.FromArray(sources.ToArray());
       ContinuesScopes = false;
-      ModuleBindings.Clear(); ModuleTypedBindings.Clear();
+      ModuleBindings.Clear(); ModuleTypedBindings.Clear(); StateTypes.Clear(); StateStorage.Clear(); QuietMessages = 0; QuietErrors = 0;
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)
@@ -863,6 +870,7 @@ using Nemerle.Compiler.XmlDump;
           }
 #endif
           def parseResults = Options.Sources.Map(Parser.Parse);
+          when (Options.FileModules) FileModuleRegistry.ReportImportCycles();
 
           Message.MaybeBailout();    // we have detected multiple files already
 

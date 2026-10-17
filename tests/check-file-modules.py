@@ -314,7 +314,7 @@ if ran.stdout.split() != ['config', 'runs', 'main', 'config', 'hello', 'from', '
 for name, text, diagnostic in (('bare', 'using lib.config;\nSystem.Console.WriteLine(name);', 'unbound name'),
                                ('unimported', 'System.Console.WriteLine(lib.config.name);', 'unbound name'),
                                ('private', 'using lib.config;\nSystem.Console.WriteLine(lib.config.secret);', 'cannot access'),
-                               ('early', 'System.Console.WriteLine(x);\ndef x = 42;', 'is used before its top-level binding')):
+                               ('early', 'System.Console.WriteLine(x);\ndef x = 42;', 'is NotYet here')):
     source('init/main.n', text)
     run([runtime, compiler, init / 'main.n', init / 'lib/config.n', '-source-root:' + str(init), '-out:' + str(work / ('init-' + name + '.exe')),
          '-no-color', *modern_references], False, diagnostic)
@@ -330,6 +330,26 @@ source('init/main.n', 'def x : int = 42;\ndef show() { System.Console.WriteLine(
 run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'init-typed.exe'), '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-typed.runtimeconfig.json')
 if run([runtime, work / 'init-typed.exe']).stdout.split() != ['42']: raise RuntimeError('typed top-level value')
+# a top-level value's type comes from all of the top-level code: a lambda above its binding reads the storage, later
+# uses refine it, a rebinding of the same type writes the same storage, and one that changes the type makes the storage
+# a Content, unless something still uses the old type
+cases = [
+    ('lambda', 'def show() { System.Console.WriteLine(x) }\ndef x = 42;\nshow();', ['42']),
+    ('refined', 'mutable items = [];\nitems ::= 1;\nitems ::= 2;\nSum() : int { items.FoldLeft(0, _ + _) }\nSystem.Console.WriteLine(Sum());', ['3']),
+    ('rebound', 'def x = 5;\ndef x = x * 2;\nShow() : void { System.Console.WriteLine(x) }\nShow();', ['10']),
+    ('retyped', 'def y = 5;\ndef y = y.ToString() + "!";\nSystem.Console.WriteLine(y.Length);\nShow() : void { System.Console.WriteLine(y.As.[string]()) }\nShow();', ['2', '5!']),
+    ('tuple', 'def pair = (1, 2);\nSum() : int { def (a, b) = pair; a + b }\nSystem.Console.WriteLine(Sum());', ['3']),
+]
+for name, text, expected in cases:
+    source('init/main.n', text)
+    run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / ('state-' + name + '.exe')), '-no-color', *modern_references])
+    if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / ('state-' + name + '.runtimeconfig.json'))
+    got = run([runtime, work / ('state-' + name + '.exe')]).stdout.split()
+    if got != expected: raise RuntimeError('top-level state ' + name + ': ' + ' '.join(got))
+source('init/main.n', 'def y = 5;\ndef y = y.ToString();\nBad() : int { y + 1 }\nSystem.Console.WriteLine(Bad());')
+run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-bad.exe'), '-no-color', *modern_references],
+    False, 'Nemerle.Scopes.Content')
+print('PASS: top-level values: lambdas read the storage, later uses refine the type, rebinding keeps or retypes the storage', flush=True)
 print('PASS: top-level code runs once at its using; top-level values are private state, public def is file.x after using; '
       'a program starts at main.n or -main:', flush=True)
 

@@ -563,6 +563,13 @@ public class FieldBuilder : MemberBuilder, IField
     ty.CheckAccessibility (this, accessibility);
   }
 
+  /// Gives a top-level value's field the type the inference pass learned.
+  internal SetStateType(t : FixedType) : void
+  {
+    ty = t;
+    Ast.ty = PT.PExpr.TypedType(Ast.Location, t);
+  }
+
   internal InferScriptType(typer : Typer) : void
   {
     // a file module's top-level binding: its type is its initializer's

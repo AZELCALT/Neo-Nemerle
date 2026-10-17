@@ -137,6 +137,28 @@ config
 3
 ```
 
+A top-level value's type comes from the whole top-level code: `mutable items = [];` is a list whose element type a
+later `items ::= 1` gives. A function, a lambda or a local function reads the value's storage, so it may be written
+above the value's binding and sees whatever the storage holds when it runs. Binding a name again writes the same
+storage: `def x = 5; def x = x * 2;` leaves 10. If the new binding has another type, the storage holds a `Content`
+(the value and its current type), which functions read with `x.As.[string]()`; that is an error when code still uses
+the value with its old type.
+
+Before its first binding a value does not exist yet. Reading it there gives `NotYet`, which nothing accepts:
+
+```nemerle,fail
+System.Console.WriteLine(z);
+def z = 1;
+```
+
+```text
+`z' is NotYet here: its top-level binding is at line 2
+```
+
+Files that import each other while one of them has top-level code are reported, as is starting threads in an imported
+file's top-level code: that code runs in the file's type initializer, so a thread that calls back into the file while
+it is waited for would deadlock.
+
 A library's files work the same way: a program that imports a library's file runs its top-level code, so a library
 can set up its state (and its scopes, see [Grammars and spaces](10-grammars.md)). Code in C# does not run it.
 
