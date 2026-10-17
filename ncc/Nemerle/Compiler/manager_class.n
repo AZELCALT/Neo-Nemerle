@@ -689,6 +689,7 @@ using Nemerle.Compiler.XmlDump;
                 def r = Nemerle.Compiler.file_module_registry.TopLevelRecord();
                 r.Module = m.Module; r.Kind = m.Kind; r.File = m.File; r.Start = m.Start; r.End = m.End; r.Hash = m.Hash;
                 r.Usings = NList.FromArray(m.Usings.ToArray()); r.State = NList.FromArray(m.State.ToArray());
+                r.Exports = NList.FromArray(m.Exports.ToArray());
                 FileModuleRegistry.External[m.Module] = r;
               }
           });
@@ -874,7 +875,11 @@ using Nemerle.Compiler.XmlDump;
           }
 #endif
           def parseResults = Options.Sources.Map(Parser.Parse);
-          when (Options.FileModules) FileModuleRegistry.ReportImportCycles();
+          when (Options.FileModules)
+          {
+            FileModuleRegistry.ReportImportCycles();
+            FileModuleRegistry.CheckExportConflicts(parseResults.Map(r => r.TopDeclarations).Flatten());
+          }
 
           Message.MaybeBailout();    // we have detected multiple files already
 

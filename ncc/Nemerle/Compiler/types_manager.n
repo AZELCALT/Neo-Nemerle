@@ -817,6 +817,7 @@ using Nemerle.Compiler.Utility;
           {
             def m = Nemerle.Compiler.continuation.ContinuationModule();
             m.Module = pair.Key; m.Usings.AddRange(pair.Value);
+            when (registry.Exports.Contains(pair.Key)) m.Exports.AddRange(registry.Exports[pair.Key]);
             foreach (key when key.StartsWith(pair.Key + ".", System.StringComparison.Ordinal) && key.IndexOf('.', pair.Key.Length + 1) < 0 in registry.State)
               m.State.Add(key.Substring(pair.Key.Length + 1));
             when (registry.TopLevel.Contains(pair.Key))

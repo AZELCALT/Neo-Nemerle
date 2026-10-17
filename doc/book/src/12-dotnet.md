@@ -62,6 +62,9 @@ generics look like C# types. Two things are specific:
   (`util.text.Pen`), and `using static util.text;` opens it.
 - **Nemerle's own types** (`list[T]`, `option[T]`, function types) come from `Nemerle.dll`, which a C# project
   references along with the library.
+- **Exported types are at the top level**: `export class Pen` is C#'s `Pen`.
+- **C# does not run a file's top-level code.** A Nemerle `using` runs it; C# has no such step. C# can use a Nemerle
+  library that does not depend on its top-level code, and Nemerle can use any C# library.
 
 ```nemerle,ignore
 // file: geometry/shapes.n   (compiled to geometry.dll)

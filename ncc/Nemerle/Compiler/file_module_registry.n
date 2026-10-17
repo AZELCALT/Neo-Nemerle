@@ -118,6 +118,10 @@ public sealed class FileModuleRegistry
 
   /// The top-level state of the modules (`module.name`), and the files a script imports.
   public State : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+  /// Per module: the types it exports (global, at the top level).
+  public Exports : Hashtable[string, list[string]] = Hashtable();
+  /// Per exported name: the module that exports it.
+  public ExportedBy : Hashtable[string, string] = Hashtable();
   public ScriptUsings : System.Collections.Generic.List[string] = System.Collections.Generic.List();
 
   /// Whether `member` may be reached from code in `parent`: a module's top-level state is reached bare only in its
@@ -140,6 +144,40 @@ public sealed class FileModuleRegistry
         }
       | _ => true
     }
+  }
+
+  /// An exported type is global: its name is one type everywhere. Another type of that name (in any file, mask or
+  /// referenced Nemerle binary) contradicts it, and is an error.
+  public CheckExportConflicts(declarations : list[TopDeclaration]) : void
+  {
+    def global = Hashtable.[string, string]();
+    foreach (pair in ExportedBy) global[pair.Key] = pair.Value;
+    foreach (pair in External)
+      foreach (name in pair.Value.Exports)
+        if (global.Contains(name) && global[name] != pair.Key)
+          foreach (declaration when declaration.Name == name && declaration.Location.FileIndex != 0 in declarations)
+            Message.Error(declaration.Location, $"`$name' is already exported by $(pair.Key) (a referenced binary); an exported name is global, so one file exports it")
+        else global[name] = pair.Key;
+    def visit(members : list[ClassMember], owner : string) : void
+    {
+      foreach (member in members)
+        match (member)
+        {
+          | ClassMember.TypeDeclaration(td) =>
+            when (global.Contains(td.Name))
+              Message.Error(td.Location, $"`$(td.Name)' is exported by $(global[td.Name]) as a global type, so no other type can have that name"
+                                         + (if (owner != "") " (here in " + owner + ")" else ""));
+            match (td) { | TopDeclaration.Class(decls = inner) | TopDeclaration.Variant(decls = inner) => visit(inner, owner) | _ => () }
+          | _ => ()
+        }
+    }
+    when (global.Count > 0)
+      foreach (declaration in declarations)
+        match (declaration)
+        {
+          | TopDeclaration.Class(decls = members) when IsModule(declaration.Location.FileIndex) => visit(members, Name(declaration.Location.FileIndex))
+          | _ => ()
+        }
   }
 
   /// Reports files that import each other while one of them has top-level code: one of them runs while the other
@@ -302,6 +340,8 @@ public sealed class TopLevelRecord
   public mutable Usings : list[string] = [];
   /// The names of the module's top-level state.
   public mutable State : list[string] = [];
+  /// The types the module exports.
+  public mutable Exports : list[string] = [];
 }
 
 /// `__module_init(self, imports...)` starts a file's top-level code: it runs the top-level code of the files it

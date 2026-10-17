@@ -361,6 +361,19 @@ source('init/worker.n', 'using T = System.Threading.Tasks.Task;\nHelper() : int 
 run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-deadlock.exe'), '-no-color',
      *modern_references], False, 'Task.Run runs work that uses this file while its top-level code waits for it')
 print('PASS: threads in an imported file\'s top-level code: warned, and a provable deadlock is an error', flush=True)
+# `export` makes a type global: one type by that name everywhere, reached without a using; any other type of that
+# name contradicts it (the exporting file itself is the same origin)
+source('init/lib/shapes.n', 'export class Pen { public Name() : string { "global pen" } }')
+source('init/main.n', 'System.Console.WriteLine(Pen().Name());')
+run([runtime, compiler, init / 'main.n', init / 'lib/shapes.n', '-source-root:' + str(init), '-out:' + str(work / 'export.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'export.runtimeconfig.json')
+if run([runtime, work / 'export.exe']).stdout.split() != ['global', 'pen']: raise RuntimeError('export')
+source('init/other.n', 'public class Pen { }')
+run([runtime, compiler, init / 'main.n', init / 'lib/shapes.n', init / 'other.n', '-source-root:' + str(init), '-out:' + str(work / 'export-clash.exe'),
+     '-no-color', *modern_references], False, 'is exported by lib.shapes as a global type, so no other type can have that name')
+source('init/main.n', 'using lib.shapes;\nSystem.Console.WriteLine(Pen().Name());')
+run([runtime, compiler, init / 'main.n', init / 'lib/shapes.n', '-source-root:' + str(init), '-out:' + str(work / 'export-same.exe'), '-no-color', *modern_references])
+print('PASS: export: a global type is one type by its name everywhere; another type of that name is an error', flush=True)
 print('PASS: top-level code runs once at its using; top-level values are private state, public def is file.x after using; '
       'a program starts at main.n or -main:', flush=True)
 

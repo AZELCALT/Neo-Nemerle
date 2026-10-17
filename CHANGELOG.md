@@ -28,6 +28,8 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
   - a file may not sit beside a directory of the same name (CS0434);
   - no member may have its file's name (CS0542);
   - the same module path in two libraries is an error.
+- `export class Pen { }` makes a type global: one type by that name for the program and the programs that use its
+  library, reached without a `using`, emitted at the top level (C#'s `Pen`); any other type of that name is an error.
 - `partial` is gone from source code. Macro-generated types nest into the source module of the same path, and a
   generated `partial` part completes the hand-written type.
 - `-file-name-namespaces` shortens a module's name to the file name.

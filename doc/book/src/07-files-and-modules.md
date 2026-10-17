@@ -175,6 +175,46 @@ could never run. The compiler judges the calls themselves, however they are writ
 A library's files work the same way: a program that imports a library's file runs its top-level code, so a library
 can set up its state (and its scopes, see [Grammars and spaces](10-grammars.md)). Code in C# does not run it.
 
+## Global types: `export`
+
+A type lives in its file: `util/text.n`'s `Pen` is `util.text.Pen`, reached through `using util.text;` or its full
+name. `export` makes a type global instead: one type by that name for the whole program, reached anywhere by its name
+alone, and by programs that use the library it is in. It still comes from its file; importing that file is the same
+type, not a second one.
+
+```nemerle
+// file: lib/shapes.n
+export class Pen
+{
+  public Name() : string { "the global pen" }
+}
+
+// file: main.n
+System.Console.WriteLine(Pen().Name())
+```
+
+```text
+the global pen
+```
+
+Because the name is the type's everywhere, no other type can have it, in any file, mask or referenced library:
+
+```nemerle,fail
+// file: lib/shapes.n
+export class Pen { }
+
+// file: main.n
+class Pen { }
+System.Console.WriteLine(1)
+```
+
+```text
+is exported by lib.shapes as a global type, so no other type can have that name
+```
+
+This is why `partial` is not needed: a type has one definition in one file, and `export` is how it is shared.
+Only types are exported; functions and top-level values are reached through their file.
+
 ## The rules
 
 The rules keep names unambiguous for Nemerle and for C# code that uses Nemerle assemblies:

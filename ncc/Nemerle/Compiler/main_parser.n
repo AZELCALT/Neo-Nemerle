@@ -394,6 +394,7 @@ using Nemerle.Compiler.Utility;
         // on import). Top-level `def`/`mutable` are the module's state: private, or `public def` for `file.x`.
         def statements : SCG.List[PExpr] = SCG.List();
         def collected : SCG.List[PExpr * bool] = SCG.List();
+        def exports : SCG.List[TopDeclaration] = SCG.List();
         def bindings : SCG.Dictionary[string, int] = SCG.Dictionary();
         def usings : SCG.List[string] = SCG.List();
         mutable statementsLocation = Location.Default;
@@ -522,6 +523,14 @@ using Nemerle.Compiler.Utility;
               | _ => false
             };
           when (publicState) topstream.Child = topstream.Child.Next;
+          // `export class Pen { }`: the type is global, the default for its name everywhere (a type the file defines
+          // or imports by that name still comes first there)
+          def exported = match (topstream.Child)
+            {
+              | Token.Identifier("export") as ex => ex.Next != null && IsMemberStart(ex.Next, false)
+              | _ => false
+            };
+          when (exported) topstream.Child = topstream.Child.Next;
           match (topstream.Child)
           {
             | Token.Using(newEnv, _, _) =>
@@ -532,7 +541,26 @@ using Nemerle.Compiler.Utility;
             | token when !publicState && IsMemberStart(token, false) =>
               def next = topstream.Next;
               topstream.Next = null;
-              try members.AddRange(fileParser.ParseClassMembers(topstream, "module"))
+              try
+              {
+                def parsed = fileParser.ParseClassMembers(topstream, "module");
+                if (exported)
+                  foreach (member in parsed)
+                    match (member)
+                    {
+                      | ClassMember.TypeDeclaration(td) =>
+                        // a global type lives at the top level, named in the root namespace
+                        td.name = Splicable.Name(Name.NameInCurrentColor(td.Name, td.Location, lex.Manager.CoreEnv));
+                        when ((td.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
+                          td.modifiers.mods |= NemerleModifiers.Public;
+                        when (registry.ExportedBy.Contains(td.Name) && registry.ExportedBy[td.Name] != moduleName)
+                          Message.Error(td.Location, $"`$(td.Name)' is already exported by $(registry.ExportedBy[td.Name]); an exported name is global, so one file exports it");
+                        registry.ExportedBy[td.Name] = moduleName;
+                        exports.Add(td);
+                      | _ => Message.Error(member.Location, "only types are exported; a function or value is reached through its file")
+                    }
+                else members.AddRange(parsed)
+              }
               finally { topstream.Next = next; }
             | _ =>
               // consecutive statements are one sequence, as in classic Nemerle, so a construct may continue on the
@@ -659,7 +687,8 @@ using Nemerle.Compiler.Utility;
         foreach (member when !(member is ClassMember.TypeDeclaration) in members)
           when (member.modifiers != null) member.modifiers.mods |= NemerleModifiers.Static;
         def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
-        return [declaration];
+        registry.Exports[moduleName] = exports.NToList().Map(td => td.Name);
+        return declaration :: exports.NToList();
       }
 
       def parser = MainParser (lex.Manager.CoreEnv);

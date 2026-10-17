@@ -107,6 +107,8 @@ public sealed class ContinuationModule
   public Usings : SCG.List[string] = SCG.List();
   /// The names of the module's top-level state.
   public State : SCG.List[string] = SCG.List();
+  /// The types the module exports (global).
+  public Exports : SCG.List[string] = SCG.List();
 }
 
 public sealed class ContinuationDiff
@@ -370,6 +372,7 @@ public sealed class ContinuationStore
         WriteInt(modules, str(m.Hash.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         WriteInt(modules, m.Usings.Count); foreach (u in m.Usings) WriteInt(modules, str(u));
         WriteInt(modules, m.State.Count); foreach (s in m.State) WriteInt(modules, str(s));
+        WriteInt(modules, m.Exports.Count); foreach (x in m.Exports) WriteInt(modules, str(x));
       }
     }
     def output = MemoryStream();
@@ -498,6 +501,7 @@ public sealed class ContinuationStore
           m.Hash = long.Parse(strings[payload.Int()], System.Globalization.CultureInfo.InvariantCulture);
           repeat (payload.Int()) m.Usings.Add(strings[payload.Int()]);
           repeat (payload.Int()) m.State.Add(strings[payload.Int()]);
+          repeat (payload.Int()) m.Exports.Add(strings[payload.Int()]);
           store.Modules.Add(m);
         }
       // unknown subsection kinds are skipped: newer writers may add them
