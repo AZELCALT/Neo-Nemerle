@@ -191,9 +191,9 @@ internal module Projects
       {
         | (_, t) when t != null && t.Family == "netstandard" => mine == null || mine.Family != "netstandard" || t.Version <= mine.Version
         | (null, null) => true
-        | (null, t) => t.Family == "netcore" && t.Version.Major <= host.Version.Major
+        | (null, t) => t.Family == "netcore" && t.Version.Major <= host.Version.Major && t.Platform == null
         | (m, null) => m.Family == "netcore" && m.Version.Major >= host.Version.Major
-        | (m, t) => m.Family == t.Family && t.Version <= m.Version
+        | (m, t) => m.Family == t.Family && t.Version <= m.Version && (t.Platform == null || t.Platform == m.Platform)
       };
       unless (usable)
         throw project.Error("references.projects", reference, "`" + reference + "' is built for " + (if (theirs == null) host.Name else theirs.Name)
@@ -226,7 +226,24 @@ internal module Projects
     when (target != null)
     {
       targetOptions.Add("-target-framework:" + target.Name);
-      targetOptions.Add("-target-references:" + FetchReferences(project, target, offline));
+      // the base .NET's reference assemblies: the compiler's own when the base is its .NET (net10.0-windows)
+      unless (target.Base.SameAs(Nemerle.Platform.ClrTarget.Host))
+        targetOptions.Add("-target-references:" + FetchReferences(project, target, offline));
+      // a platform's own assemblies are compiled against; its workload (or the desktop runtime) provides them
+      match (FetchPlatform(project, target, offline))
+      {
+        | null => ()
+        | folder =>
+          // what the base .NET's references have too (the desktop pack repeats Microsoft.VisualBasic, ...) comes
+          // from the base; a name the base has only as a facade (WindowsBase) is the platform's
+          def host = Path.GetDirectoryName(typeof(object).Assembly.Location);
+          def facade(path : string) { try { System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(System.Reflection.PortableExecutable.PEReader(File.OpenRead(path))).TypeDefinitions.Count <= 1 } catch { | _ => false } }
+          foreach (dll in Directory.GetFiles(folder, "*.dll"))
+          {
+            def same = Path.Combine(host, Path.GetFileName(dll));
+            when (!File.Exists(same) || facade(same) && !facade(dll)) compileReferences.Add(dll)
+          }
+      }
       runtimeLibrary = Path.Combine(toolchainDir, "netstandard2.0", "Nemerle.dll");
       unless (File.Exists(runtimeLibrary))
         throw project.Error("target", null, "this toolchain has no Nemerle.dll for .NET Standard 2.0 (netstandard2.0/Nemerle.dll), which " + target.Name + " programs need; rebuild it with ./bootstrap while online");
@@ -297,33 +314,49 @@ internal module Projects
     else
     {
       def target = try { Nemerle.Platform.ClrTarget.Parse(project.Target) } catch { | e is ArgumentException => throw project.Error("target", null, e.Message) };
-      if (target.SameAs(Nemerle.Platform.ClrTarget.Host)) null else target
+      if (target.SameAs(Nemerle.Platform.ClrTarget.Host) && target.Platform == null) null else target
     }
   }
 
-  /// The target's reference assemblies: its reference package from nuget.org, downloaded once into the cache.
+  /// The cache of reference packages (in the user's data folder).
+  CacheRoot : string
+  {
+    get
+    {
+      def data = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
+      Path.Combine(if (data == "") Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share") else data,
+                   "Nemerle", "references")
+    }
+  }
+
+  Feed : string { get { (Environment.GetEnvironmentVariable("NEMERLE_REFERENCE_FEED") ?? "https://api.nuget.org/v3-flatcontainer/").TrimEnd('/') } }
+
+  /// The base .NET's reference assemblies of the target.
   FetchReferences(project : Project, target : Nemerle.Platform.ClrTarget, offline : bool) : string
   {
     mutable id; mutable version; mutable folder;
-    target.ReferencePackage(out id, out version, out folder);
-    def data = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
-    def cache = Path.Combine(if (data == "") Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share") else data,
-                             "Nemerle", "references", id.ToLowerInvariant(), version);
+    target.Base.ReferencePackage(out id, out version, out folder);
+    FetchPackage(project, target.Name + " reference assemblies", id, version, folder, offline)
+  }
+
+  /// A package from the feed, downloaded once into the cache; the path of `folder` inside it.
+  FetchPackage(project : Project, what : string, id : string, version : string, folder : string, offline : bool) : string
+  {
+    def cache = Path.Combine(CacheRoot, id.ToLowerInvariant(), version);
     def references = Path.Combine(cache, folder.Replace('/', Path.DirectorySeparatorChar));
     unless (Directory.Exists(references))
     {
-      when (offline) throw project.Error("target", null, "the reference assemblies of " + target.Name + " (" + id + " " + version + ") are not in the cache, and --offline does not download them");
-      def feed = Environment.GetEnvironmentVariable("NEMERLE_REFERENCE_FEED") ?? "https://api.nuget.org/v3-flatcontainer/";
+      when (offline) throw project.Error("target", null, "the " + what + " (" + id + " " + version + ") are not in the cache, and --offline does not download them");
       def lower = id.ToLowerInvariant();
-      def url = feed.TrimEnd('/') + "/" + lower + "/" + version + "/" + lower + "." + version + ".nupkg";
-      Console.WriteLine(project.Name + ": fetching the " + target.Name + " reference assemblies (" + id + " " + version + ")");
+      def url = Feed + "/" + lower + "/" + version + "/" + lower + "." + version + ".nupkg";
+      Console.WriteLine(project.Name + ": fetching the " + what + " (" + id + " " + version + ")");
       def pending = cache + ".partial";
       try
       {
         when (Directory.Exists(pending)) Directory.Delete(pending, true);
         _ = Directory.CreateDirectory(pending);
         def bytes = if (File.Exists(url)) File.ReadAllBytes(url)
-                    else using (client = Net.Http.HttpClient()) client.GetByteArrayAsync(url).GetAwaiter().GetResult();
+                    else using (client = Client()) client.GetByteArrayAsync(url).GetAwaiter().GetResult();
         using (archive = IO.Compression.ZipArchive(MemoryStream(bytes)))
           foreach (entry in archive.Entries)
           {
@@ -342,10 +375,108 @@ internal module Projects
       catch
       {
         | e is ProjectException => throw e
-        | e => throw project.Error("target", null, "could not fetch the " + target.Name + " reference assemblies from " + url + ": " + e.Message)
+        | e => throw project.Error("target", null, "could not fetch the " + what + " from " + url + ": " + e.Message)
       }
     }
     references
+  }
+
+  // ---- platform reference packs (net8.0-windows, net9.0-android35.0, net9.0-ios18.0, ...) ----
+
+  Get(url : string) : string { using (client = Client()) client.GetStringAsync(url).GetAwaiter().GetResult() }
+
+  // reference packs are large (an Android one is 60 MB): a long timeout
+  Client() : Net.Http.HttpClient { def c = Net.Http.HttpClient(); c.Timeout = TimeSpan(0, 20, 0); c }
+
+  /// The stable versions of a package on the feed (offline: the ones in the cache), lowest first.
+  Versions(id : string, offline : bool) : list[string]
+  {
+    def stable(v : string) { !v.Contains("-") }
+    def all = if (offline)
+      {
+        def dir = Path.Combine(CacheRoot, id.ToLowerInvariant());
+        if (Directory.Exists(dir)) Directory.GetDirectories(dir).Map(Path.GetFileName).Filter(v => !v.EndsWith(".partial", StringComparison.Ordinal)).NToList() else []
+      }
+      else try
+      {
+        def json = Text.Json.JsonDocument.Parse(Get(Feed + "/" + id.ToLowerInvariant() + "/index.json"));
+        json.RootElement.GetProperty("versions").EnumerateArray().Map(e => e.GetString()).NToList()
+      }
+      catch { | _ => [] };
+    def parse(v : string) { mutable x; if (Version.TryParse(v, out x)) x else Version(0, 0) }
+    all.Filter(stable).Sort((a, b) => parse(a).CompareTo(parse(b)))
+  }
+
+  /// The ids of the packages whose id starts with `prefix` (nuget.org's search; offline: the cache's).
+  Ids(prefix : string, offline : bool) : list[string]
+  {
+    if (offline)
+    {
+      if (Directory.Exists(CacheRoot)) Directory.GetDirectories(CacheRoot).Map(Path.GetFileName).Filter(d => d.StartsWith(prefix.ToLowerInvariant(), StringComparison.Ordinal)).NToList() else []
+    }
+    else try
+    {
+      def index = Text.Json.JsonDocument.Parse(Get("https://api.nuget.org/v3/index.json"));
+      def search = index.RootElement.GetProperty("resources").EnumerateArray()
+        .Find(r => r.GetProperty("@type").GetString().StartsWith("SearchQueryService", StringComparison.Ordinal));
+      def result = Text.Json.JsonDocument.Parse(Get(search.Value.GetProperty("@id").GetString() + "?q=" + Uri.EscapeDataString(prefix) + "&prerelease=false&take=200"));
+      result.RootElement.GetProperty("data").EnumerateArray().Map(e => e.GetProperty("id").GetString())
+        .Filter(i => i.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.x64", StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.arm64", StringComparison.OrdinalIgnoreCase)).NToList()
+    }
+    catch { | _ => [] }
+  }
+
+  /// The platform's reference assemblies (Mono.Android, Microsoft.iOS, WinForms and WPF, ...) for a platform
+  /// target, which its code compiles against; null for a target without a platform.
+  FetchPlatform(project : Project, target : Nemerle.Platform.ClrTarget, offline : bool) : string
+  {
+    if (target.Platform == null) null
+    else
+    {
+      def net = target.Version.Major.ToString() + "." + target.Version.Minor.ToString();
+      def folder = "ref/net" + net;
+      def failed(message : string) : ProjectException { project.Error("target", null, message) }
+      def newest(id : string, prefix : string) : string
+      {
+        match (Versions(id, offline).Filter(v => prefix == null || v.StartsWith(prefix, StringComparison.Ordinal)).Rev())
+        {
+          | v :: _ => v
+          | [] => throw failed("no version of " + id + (if (prefix != null) " " + prefix + "*" else "") + " is " + (if (offline) "in the cache (--offline)" else "on the feed"))
+        }
+      }
+      def (id, version) = match (target.Platform)
+      {
+        | "windows" => ("Microsoft.WindowsDesktop.App.Ref", newest("Microsoft.WindowsDesktop.App.Ref", net + "."))
+        | "android" =>
+          // one package per API level: the one named, else the newest that has this .NET's folder
+          def level = if (target.PlatformVersion != null) target.PlatformVersion.Split('.')[0] else null;
+          def candidates = if (level != null) ["Microsoft.Android.Ref." + level]
+                           else Ids("Microsoft.Android.Ref.", offline).Filter(i => { mutable n; int.TryParse(i.Substring("Microsoft.Android.Ref.".Length), out n) })
+                                  .Sort((a, b) => int.Parse(b.Substring(22)).CompareTo(int.Parse(a.Substring(22))));
+          def fits = candidates.Find(i => !Versions(i, offline).IsEmpty);
+          match (fits) { | Some(i) => (i, newest(i, null)) | None => throw failed("no Android reference package for " + target.Name + " is on the feed") }
+        | apple =>
+          def name = match (apple) { | "ios" => "iOS" | "maccatalyst" => "MacCatalyst" | "macos" => "macOS" | _ => "tvOS" };
+          if (target.Version.Major < 9)
+          {
+            def id = "Microsoft." + name + ".Ref";
+            (id, newest(id, null))
+          }
+          else
+          {
+            // from .NET 9 one package per .NET and OS version: Microsoft.iOS.Ref.net9.0_18.0
+            def prefix = "Microsoft." + name + ".Ref.net" + net + "_";
+            def ids = if (target.PlatformVersion != null) [prefix + target.PlatformVersion] else Ids(prefix, offline);
+            def osVersion(i : string) { mutable v; if (Version.TryParse(i.Substring(prefix.Length), out v)) v else Version(0, 0) };
+            match (ids.Filter(i => !Versions(i, offline).IsEmpty).Sort((a, b) => osVersion(b).CompareTo(osVersion(a))))
+            {
+              | i :: _ => (i, newest(i, null))
+              | [] => throw failed("no " + name + " reference package for " + target.Name + " is " + (if (offline) "in the cache (--offline)" else "on the feed"))
+            }
+          }
+      };
+      FetchPackage(project, target.Platform + " reference assemblies", id, version, folder, offline)
+    }
   }
 
   ReadList(path : string) : SCG.IEnumerable[string]

@@ -128,7 +128,7 @@ namespace Nemerle.Platform
                 path = Path.GetFullPath(path);
                 var name = AssemblyName.GetAssemblyName(path);
                 Assembly previous;
-                if (Shared(name.Name))
+                if (Shared(name.Name) && !ReplacesHostFacade(name.Name, path))
                 {
                     if (!OtherRuntimeBuild(name, path)) return Default.LoadFromAssemblyName(name);
                     if (loaded.TryGetValue(name.FullName, out previous)) return previous;
@@ -149,13 +149,16 @@ namespace Nemerle.Platform
                     // Scripts loaded from validated PE bytes have no Location. A
                     // host-shared instance is the authority for their CLR identity.
                     if (previous.Location.Length == 0) return previous;
-                    if (Path.GetFullPath(previous.Location) != path)
-                        throw new InvalidOperationException("Two different reference paths have the same assembly identity: " + previous.Location + " and " + path);
+                    string original;
+                    if (!origins.TryGetValue(name.FullName, out original)) original = Path.GetFullPath(previous.Location);
+                    if (original != path)
+                        throw new InvalidOperationException("Two different reference paths have the same assembly identity: " + original + " and " + path);
                     return previous;
                 }
                 directories.Add(Path.GetDirectoryName(path));
-                var assembly = LoadFromAssemblyPath(path);
+                var assembly = LoadFromAssemblyPath(Loadable(path));
                 loaded[name.FullName] = assembly;
+                origins[name.FullName] = path;
                 return assembly;
             }
             // Bootstrapping a runtime whose types moved: a compiler running on one build of Nemerle.dll /
@@ -172,6 +175,117 @@ namespace Nemerle.Platform
                 var own = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll");
                 return File.Exists(own) && ModuleId(own) != ModuleId(path);
             }
+            // The paths references were asked for, by identity (a reference assembly loads from a copy).
+            readonly System.Collections.Generic.Dictionary<string, string> origins = new System.Collections.Generic.Dictionary<string, string>();
+
+            // A reference assembly (metadata only, as platform packs and many packages ship them) is not loaded for
+            // execution by the runtime; the compiler only reads its metadata, so it loads a copy without the
+            // ReferenceAssembly mark, cached by the module id. The output still names the original identity.
+            static string Loadable(string path)
+            {
+                if (!IsReferenceAssembly(path)) return path;
+                var directory = Path.Combine(Path.GetTempPath(), "nemerle-reference-copies", ModuleId(path).ToString("N"));
+                var copy = Path.Combine(directory, Path.GetFileName(path));
+                if (File.Exists(copy)) return copy;
+                Directory.CreateDirectory(directory);
+                var pending = copy + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    // writing resolves some of its references (enum values in attributes): its folder and the host's
+                    using (var resolver = new Mono.Cecil.DefaultAssemblyResolver())
+                    {
+                        resolver.AddSearchDirectory(Path.GetDirectoryName(path));
+                        resolver.AddSearchDirectory(Path.GetDirectoryName(typeof(object).Assembly.Location));
+                        using (var definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(path, new Mono.Cecil.ReaderParameters { AssemblyResolver = resolver }))
+                        {
+                            var marks = new System.Collections.Generic.List<Mono.Cecil.CustomAttribute>();
+                            foreach (var a in definition.CustomAttributes)
+                                if (a.AttributeType.FullName == "System.Runtime.CompilerServices.ReferenceAssemblyAttribute") marks.Add(a);
+                            foreach (var a in marks) definition.CustomAttributes.Remove(a);
+                            // the other mark: processor architecture "none" (0x70); a copy is plain IL
+                            var flags = (uint)definition.Name.Attributes;
+                            if ((flags & 0x70) == 0x70) definition.Name.Attributes = (Mono.Cecil.AssemblyAttributes)((flags & ~0x70u) | 0x10u);
+                            // attributes are constructed when the compiler reads them, and their members here are
+                            // stubs (they throw): give attribute types bodies that return defaults
+                            foreach (var type in definition.MainModule.GetTypes())
+                                if (IsAttribute(type))
+                                    foreach (var method in type.Methods)
+                                        if (method.HasBody) Stub(method);
+                            // a module initializer's body is a stub (it throws), and reading attributes would run it
+                            foreach (var type in definition.MainModule.Types)
+                                if (type.Name == "<Module>")
+                                    foreach (var method in new System.Collections.Generic.List<Mono.Cecil.MethodDefinition>(type.Methods))
+                                        if (method.IsConstructor && method.IsStatic) type.Methods.Remove(method);
+                            definition.Write(pending);
+                        }
+                    }
+                    try { File.Move(pending, copy); } catch (IOException) { File.Delete(pending); } // another compiler made it first
+                    return copy;
+                }
+                catch (Exception error) when (!(error is IOException))
+                {
+                    if (File.Exists(pending)) File.Delete(pending);
+                    throw new BadImageFormatException("the reference assembly " + path + " cannot be read for compilation: " + error.Message, error);
+                }
+            }
+            static bool IsAttribute(Mono.Cecil.TypeDefinition type)
+            {
+                for (var b = type.BaseType; b != null; )
+                {
+                    if (b.FullName == "System.Attribute") return true;
+                    Mono.Cecil.TypeDefinition next;
+                    try { next = b.Resolve(); } catch (Exception) { return false; }
+                    b = next == null ? null : next.BaseType;
+                }
+                return false;
+            }
+            static void Stub(Mono.Cecil.MethodDefinition method)
+            {
+                var body = new Mono.Cecil.Cil.MethodBody(method);
+                var il = body.GetILProcessor();
+                var result = method.ReturnType;
+                if (result.MetadataType != Mono.Cecil.MetadataType.Void)
+                {
+                    if (result.IsValueType || result.IsGenericParameter)
+                    {
+                        var local = new Mono.Cecil.Cil.VariableDefinition(result);
+                        body.Variables.Add(local); body.InitLocals = true;
+                        il.Emit(Mono.Cecil.Cil.OpCodes.Ldloca, local);
+                        il.Emit(Mono.Cecil.Cil.OpCodes.Initobj, result);
+                        il.Emit(Mono.Cecil.Cil.OpCodes.Ldloc, local);
+                    }
+                    else il.Emit(Mono.Cecil.Cil.OpCodes.Ldnull);
+                }
+                il.Emit(Mono.Cecil.Cil.OpCodes.Ret);
+                method.Body = body;
+            }
+            static bool IsReferenceAssembly(string path)
+            {
+                using (var stream = File.OpenRead(path))
+                using (var pe = new System.Reflection.PortableExecutable.PEReader(stream))
+                {
+                    if (!pe.HasMetadata) return false;
+                    var metadata = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+                    if (((int)metadata.GetAssemblyDefinition().Flags & 0x70) == 0x70) return true;
+                    foreach (var handle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+                    {
+                        var attribute = metadata.GetCustomAttribute(handle);
+                        System.Reflection.Metadata.EntityHandle type;
+                        if (attribute.Constructor.Kind == System.Reflection.Metadata.HandleKind.MemberReference)
+                            type = metadata.GetMemberReference((System.Reflection.Metadata.MemberReferenceHandle)attribute.Constructor).Parent;
+                        else if (attribute.Constructor.Kind == System.Reflection.Metadata.HandleKind.MethodDefinition)
+                            type = metadata.GetMethodDefinition((System.Reflection.Metadata.MethodDefinitionHandle)attribute.Constructor).GetDeclaringType();
+                        else continue;
+                        string name = null;
+                        if (type.Kind == System.Reflection.Metadata.HandleKind.TypeReference)
+                            name = metadata.GetString(metadata.GetTypeReference((System.Reflection.Metadata.TypeReferenceHandle)type).Name);
+                        else if (type.Kind == System.Reflection.Metadata.HandleKind.TypeDefinition)
+                            name = metadata.GetString(metadata.GetTypeDefinition((System.Reflection.Metadata.TypeDefinitionHandle)type).Name);
+                        if (name == "ReferenceAssemblyAttribute") return true;
+                    }
+                    return false;
+                }
+            }
             static Guid ModuleId(string path)
             {
                 using (var stream = File.OpenRead(path))
@@ -180,6 +294,29 @@ namespace Nemerle.Platform
                     var metadata = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
                     return metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
                 }
+            }
+            // The host has an assembly of this name only as a facade (it defines no types), and `path` defines them:
+            // a platform's own assembly (WindowsBase of the Windows desktop pack) is meant, not the host's stand-in.
+            static readonly System.Collections.Generic.Dictionary<string, bool> facades = new System.Collections.Generic.Dictionary<string, bool>();
+            static bool ReplacesHostFacade(string name, string path)
+            {
+                var host = Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location), name + ".dll");
+                if (!File.Exists(host) || Path.GetFullPath(path) == Path.GetFullPath(host)) return false;
+                return DefinesNoTypes(host) && !DefinesNoTypes(path);
+            }
+            static bool DefinesNoTypes(string path)
+            {
+                bool result;
+                lock (facades)
+                    if (facades.TryGetValue(path, out result)) return result;
+                using (var stream = File.OpenRead(path))
+                using (var pe = new System.Reflection.PortableExecutable.PEReader(stream))
+                {
+                    var metadata = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+                    result = metadata.TypeDefinitions.Count <= 1; // <Module> only
+                }
+                lock (facades) facades[path] = result;
+                return result;
             }
             static bool Shared(string name)
             {
@@ -203,6 +340,12 @@ namespace Nemerle.Platform
                     // Only for a request of that build's version: code built for the running runtime keeps it.
                     if ((name.Version == null || name.Version.Equals(candidateName.Version)) && OtherRuntimeBuild(candidateName, candidate))
                         return LoadReference(candidate);
+                }
+                // a real assembly in a reference folder over the host's facade of that name (WPF's WindowsBase)
+                foreach (var directory in directories)
+                {
+                    var candidate = Path.Combine(directory, name.Name + ".dll");
+                    if (File.Exists(candidate) && ReplacesHostFacade(name.Name, candidate)) return LoadReference(candidate);
                 }
                 if (Shared(name.Name)) return Default.LoadFromAssemblyName(name);
                 // The build of the requested version first: a macro library built against one build of a library

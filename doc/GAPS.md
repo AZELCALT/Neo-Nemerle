@@ -37,10 +37,15 @@ unless it says so.
   never loaded, so the binary runs; a strict checker (Unity's) may still list them.
 - **Old MSBuild `TargetFrameworkVersion` is not read.** `v3.5`/`v4.0` name frameworks this toolchain does not
   target; an SDK-style `TargetFramework` is read.
-- **Targets not reached:** platform-specific .NET (`net8.0-android`, `-ios`, `-windows`: their workload reference
-  packs are not fetched; a `netstandard2.0` library works inside such apps), .NET Framework before 4.6.2 (the
-  .NET Standard 2.0 `Nemerle.dll` needs 4.6.1+), .NET Standard 1.x, UWP and older dead platforms, and any .NET newer
-  than the one the compiler runs on.
+- **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time
+  by the platform's .NET workload; a Nemerle library goes into such an app project. Platform outputs are compiled
+  here but not run (no device or Windows in `./bootstrap`).
+- **Platform reference assemblies are read through stand-in copies.** The runtime does not load reference
+  assemblies, so the compiler reads a cached copy without the reference marks, whose attribute types return
+  defaults (`/tmp/nemerle-reference-copies`). An attribute whose value the compiler needs from its constructor
+  would read as a default.
+- **Targets not reached:** .NET Framework before 4.6.2 (the .NET Standard 2.0 `Nemerle.dll` needs 4.6.1+),
+  .NET Standard 1.x, UWP and older dead platforms, and any .NET newer than the one the compiler runs on.
 - **Older .NET is checked by its reference assemblies, not run** in `./bootstrap` unless that runtime is installed
   (Mono runs the `net48` checks).
 

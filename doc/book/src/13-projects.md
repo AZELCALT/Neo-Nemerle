@@ -96,6 +96,15 @@ By default a project is built for the .NET the compiler runs on (.NET 10). `targ
 | `netcoreapp3.0`, `netcoreapp3.1`, `net5.0` ... `net9.0` | programs and libraries | that .NET or newer |
 | `netstandard2.0`, `netstandard2.1` | libraries only | every .NET, .NET Framework 4.6.2+, Mono, Unity |
 | `net462` ... `net481` | programs and libraries | .NET Framework, Mono |
+| `net10.0-windows` (any .NET 5+ base) | programs and libraries (WinForms, WPF) | Windows, on the desktop runtime |
+| `net10.0-android`, `net10.0-android36.0` | libraries | an Android app built by the .NET Android workload |
+| `net10.0-ios`, `-maccatalyst`, `-macos`, `-tvos` | libraries | an Apple app built by its .NET workload |
+
+A platform target also fetches the platform's own reference pack (`Microsoft.WindowsDesktop.App.Ref`,
+`Microsoft.Android.Ref.<API>`, `Microsoft.iOS.Ref...`): the newest stable one for that .NET, or the version the name
+gives (`net10.0-android35.0`). Android and Apple apps are packaged (and compiled ahead of time) by their workloads,
+so a Nemerle project builds the libraries such an app uses; a platform library is used only by projects for the same
+platform.
 
 `ncc build` fetches the target's reference assemblies from nuget.org the first time (into the user's data folder,
 `Nemerle/references`), and uses them offline after that. The compiler still types against the .NET it runs on, and

@@ -17,7 +17,10 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
 - Output for other targets: `-target-framework:` (and `target = "..."` in a project) builds for older .NET
   (`net5.0`+), .NET Standard 2.0/2.1 and .NET Framework 4.6.2+ / Mono. The output is moved to the target's reference
   assemblies (fetched from nuget.org by `ncc build`), every member it uses is checked against them, and programs run
-  with a .NET Standard 2.0 build of `Nemerle.dll`.
+  with a .NET Standard 2.0 build of `Nemerle.dll`. Platform targets (`net10.0-windows`, `-android`, `-ios`,
+  `-maccatalyst`, `-macos`, `-tvos`) also fetch the platform's reference pack: Windows programs run on the desktop
+  runtime, Android and Apple libraries go into apps their workloads build. Reference assemblies (which the runtime
+  does not load) are read through cached stand-in copies.
 
 ### Language: a file is its namespace
 - Every `.n` file is a module named by its path under the source root (`src/util/text.n` is `util.text`).

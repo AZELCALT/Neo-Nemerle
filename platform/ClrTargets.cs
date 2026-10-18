@@ -15,15 +15,29 @@ namespace Nemerle.Platform
         /// "netcore", "netstandard" or "netframework".
         public string Family { get; private set; }
         public Version Version { get; private set; }
+        /// The OS a .NET target is specific to (`windows`, `android`, `ios`, `maccatalyst`, `macos`, `tvos`), or null.
+        public string Platform { get; private set; }
+        /// The platform's version from the name (`35.0` in `net9.0-android35.0`), or null for the default one.
+        public string PlatformVersion { get; private set; }
 
         ClrTarget(string name, string family, Version version) { Name = name; Family = family; Version = version; }
 
-        /// A .NET Standard target is a contract between runtimes: it has libraries only.
-        public bool Executables { get { return Family != "netstandard"; } }
+        static readonly string[] Platforms = { "windows", "android", "ios", "maccatalyst", "macos", "tvos" };
+
+        /// The target without its platform (`net9.0` for `net9.0-android35.0`): the base .NET's reference assemblies.
+        public ClrTarget Base { get { return Platform == null ? this : new ClrTarget("net" + Version.Major + "." + Version.Minor, Family, Version); } }
+
+        /// A .NET Standard target is a contract between runtimes: it has libraries only. So are the mobile and Apple
+        /// platforms here: their apps are packaged (and compiled ahead of time) by the platform's workload, which takes
+        /// these libraries; Windows programs run on the desktop runtime.
+        public bool Executables { get { return Family != "netstandard" && (Platform == null || Platform == "windows"); } }
 
         /// The framework a program names in its runtimeconfig.json; null when it needs none (.NET Framework and
-        /// Mono start a program directly).
-        public string RuntimeConfigFramework { get { return Family == "netcore" ? "Microsoft.NETCore.App" : null; } }
+        /// Mono start a program directly). A Windows program runs on the desktop runtime (WinForms, WPF).
+        public string RuntimeConfigFramework
+        {
+            get { return Family != "netcore" ? null : Platform == "windows" ? "Microsoft.WindowsDesktop.App" : "Microsoft.NETCore.App"; }
+        }
 
         /// The version a program names in its runtimeconfig.json.
         public string RuntimeConfigVersion { get { return Version.Major + "." + Version.Minor + ".0"; } }
@@ -45,6 +59,18 @@ namespace Nemerle.Platform
                 return new ClrTarget(n, "netstandard", v);
             if (n.StartsWith("netcoreapp", StringComparison.Ordinal) && Version.TryParse(n.Substring(10), out v) && v.Major >= 3)
                 return new ClrTarget(n, "netcore", v);
+            // a platform: net8.0-windows, net9.0-android35.0, net9.0-ios18.0, ...
+            int dash = n.IndexOf('-');
+            if (dash > 0 && n.StartsWith("net", StringComparison.Ordinal) && Version.TryParse(n.Substring(3, dash - 3), out v) && v.Major >= 5)
+            {
+                string rest = n.Substring(dash + 1);
+                string platform = Platforms.FirstOrDefault(x => rest.StartsWith(x, StringComparison.Ordinal) && (rest.Length == x.Length || char.IsDigit(rest[x.Length])));
+                if (platform == null) throw new ArgumentException("unknown platform `" + rest + "' in `" + name + "'; the platforms are " + string.Join(", ", Platforms));
+                string pv = rest.Substring(platform.Length);
+                Version check;
+                if (pv.Length > 0 && !Version.TryParse(pv.Contains(".") ? pv : pv + ".0", out check)) throw new ArgumentException("`" + pv + "' is not a platform version in `" + name + "'");
+                return new ClrTarget(n, "netcore", v) { Platform = platform, PlatformVersion = pv.Length == 0 ? null : (pv.Contains(".") ? pv : pv + ".0") };
+            }
             if (n.StartsWith("net", StringComparison.Ordinal) && n.Contains(".") && Version.TryParse(n.Substring(3), out v) && v.Major >= 5)
                 return new ClrTarget(n, "netcore", v);
             // .NET Framework: net462 ... net481
@@ -55,7 +81,7 @@ namespace Nemerle.Platform
                 var fv = new Version(d[0] - '0', d[1] - '0', d.Length > 2 ? d[2] - '0' : 0);
                 if (fv >= new Version(4, 6, 2) && fv.Major == 4) return new ClrTarget(n, "netframework", fv);
             }
-            throw new ArgumentException("unknown target framework `" + name + "'; the targets are net5.0 and later, netstandard2.0, netstandard2.1, and net462 to net481");
+            throw new ArgumentException("unknown target framework `" + name + "'; the targets are netcoreapp3.x, net5.0 and later (with a platform: net8.0-windows, net9.0-android, net9.0-ios, ...), netstandard2.0, netstandard2.1, and net462 to net481");
         }
 
         /// The target a reference assembly folder is for: System.Runtime's version for .NET, netstandard.dll's for

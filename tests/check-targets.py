@@ -97,6 +97,31 @@ try:
         print('PASS: a net8.0 program runs on .NET 8')
     else:
         print('PASS: a net8.0 program names .NET 8 (SKIP running it: no .NET 8 runtime installed)')
+    # 5. platform targets: the platform's own reference pack is fetched and compiled against; Android and Apple
+    # targets are libraries (their workloads package the apps), Windows ones may be programs on the desktop runtime
+    def platform(name, settings, files, needs):
+        d = project(name, settings, files)
+        r = subprocess.run(ncc + ['build', str(d)], cwd=work, capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        if r.returncode != 0 and unreachable(out):
+            print('SKIP: the %s reference pack cannot be fetched' % name); return None
+        check(r.returncode == 0, name + ': ' + out)
+        data = (d / 'out' / (name + ('.exe' if 'program' in settings or 'kind' not in settings else '.dll'))).read_bytes()
+        check(needs.encode() in data, name + ' references ' + needs)
+        return d
+    if platform('droid', 'kind = "library"\ntarget = "net10.0-android"\n',
+                {'droid.n': 'public Model() : string { Android.OS.Build.Model }\npublic Log(m : string) : void { _ = Android.Util.Log.Info("nemerle", m) }\n'}, 'Mono.Android'):
+        user = project('user', '[references]\nprojects = ["../droid"]\n', {'main.n': '()\n'})
+        check('cannot load' in run('build', user, ok=False), 'a .NET 10 program cannot use an Android library')
+        print('PASS: a net10.0-android library (Mono.Android), not usable from a plain .NET program')
+    if platform('apple', 'kind = "library"\ntarget = "net10.0-ios"\n', {'apple.n': 'public Device() : string { UIKit.UIDevice.CurrentDevice.Name }\n'}, 'Microsoft.iOS'):
+        print('PASS: a net10.0-ios library (Microsoft.iOS)')
+    check('has libraries only' in run('build', project('phone', 'target = "net10.0-android"\n', {'main.n': '()\n'}), ok=False), 'an Android program is the workload\'s')
+    win = platform('win', 'target = "net10.0-windows"\n', {'main.n': 'def form = System.Windows.Forms.Form();\nform.Text = "Nemerle";\n'}, 'System.Windows.Forms')
+    if win:
+        config = (win / 'out/win.runtimeconfig.json').read_text()
+        check('Microsoft.WindowsDesktop.App' in config, 'a Windows program runs on the desktop runtime: ' + config)
+        print('PASS: a net10.0-windows program (WinForms) on the desktop runtime')
     print('PASS: %d target checks' % checks)
 finally:
     shutil.rmtree(work, ignore_errors=True)
