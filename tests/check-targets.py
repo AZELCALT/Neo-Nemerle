@@ -86,6 +86,10 @@ try:
     run('build', n8)
     config = (n8 / 'out/n8.runtimeconfig.json').read_text()
     check('"net8.0"' in config and '"8.0.0"' in config, 'the net8.0 runtimeconfig: ' + config)
+    core = project('core31', 'target = "netcoreapp3.1"\n', {'main.n': 'System.Console.WriteLine("on .NET Core 3.1");\n'})
+    run('build', core)
+    config = (core / 'out/core31.runtimeconfig.json').read_text()
+    check('"netcoreapp3.1"' in config and '"3.1.0"' in config, 'the netcoreapp3.1 runtimeconfig: ' + config)
     runtimes = subprocess.run(['dotnet', '--list-runtimes'], capture_output=True, text=True).stdout
     if 'Microsoft.NETCore.App 8.' in runtimes:
         out = subprocess.run(['dotnet', str(n8 / 'out/n8.exe')], capture_output=True, text=True).stdout

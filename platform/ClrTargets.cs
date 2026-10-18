@@ -77,6 +77,8 @@ namespace Nemerle.Platform
             if (File.Exists(Path.Combine(root, "System.Runtime.dll")))
             {
                 var v = version("System.Runtime.dll");
+                // before .NET 5, .NET Core numbered System.Runtime 4.2.x (3.0 and 3.1 alike)
+                if (v.Major < 5) return new ClrTarget("netcoreapp3.x", "netcore", new Version(3, 0));
                 return new ClrTarget("net" + v.Major + ".0", "netcore", new Version(v.Major, 0));
             }
             throw new ArgumentException("not a reference assembly folder (no System.Runtime.dll, netstandard.dll or mscorlib.dll): " + root);
@@ -105,7 +107,8 @@ namespace Nemerle.Platform
                     return;
                 default:
                     id = "Microsoft.NETCore.App.Ref"; version = Version.Major + "." + Version.Minor + ".0";
-                    folder = "ref/net" + Version.Major + "." + Version.Minor;
+                    // .NET Core 3.x calls its folder netcoreappX.Y; .NET 5 and later netX.Y
+                    folder = (Version.Major >= 5 ? "ref/net" : "ref/netcoreapp") + Version.Major + "." + Version.Minor;
                     return;
             }
         }

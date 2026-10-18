@@ -93,7 +93,7 @@ By default a project is built for the .NET the compiler runs on (.NET 10). `targ
 
 | `target` | Output | Runs on |
 |---|---|---|
-| `net5.0` ... `net9.0` | programs and libraries | that .NET or newer |
+| `netcoreapp3.0`, `netcoreapp3.1`, `net5.0` ... `net9.0` | programs and libraries | that .NET or newer |
 | `netstandard2.0`, `netstandard2.1` | libraries only | every .NET, .NET Framework 4.6.2+, Mono, Unity |
 | `net462` ... `net481` | programs and libraries | .NET Framework, Mono |
 
