@@ -11,8 +11,6 @@ unless it says so.
   the error, though it can deadlock the same way.
 - **Threads: any wait counts.** A `Wait`, `Join`, `.Result` or `GetResult` anywhere in the top-level code counts as
   waiting for every task started there, not only for the task it is called on.
-- **Type changes: an open use type passes.** When a top-level value changes type, a read in a function takes the type
-  its use needs. A use that leaves the type open (it accepts anything) reads as `object` and is not reported.
 - **Type changes: names are matched by spelling.** A function parameter with the value's name hides it, but a lambda
   parameter or a local of the same name inside a function is still read as the top-level value.
 - **The inference pass expands macros twice.** It types a copy of the top-level code, so macros used there expand once

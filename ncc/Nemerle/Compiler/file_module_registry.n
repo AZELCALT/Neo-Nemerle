@@ -482,10 +482,11 @@ internal sealed class StateMacro : IMacro
         match (storage(key))
         {
           | "content" =>
-            // the type the read needs is inferred from its use, and checked once everything is typed
+            // the type the read needs is inferred from its use, and checked once everything is typed; a use that
+            // takes any object gets the Content itself (Read), with its type
             def needed = ctx.FreshTypeVar();
             manager.StateReads.Add((key, needed, field.Location));
-            <[ $field.As.[$(PExpr.TypedType(needed))]() ]>
+            <[ $field.Read.[$(PExpr.TypedType(needed))]() ]>
           | _ => field
         }
       | ("__state_store", [PExpr.Literal(Literal.String(key)), field, local]) =>

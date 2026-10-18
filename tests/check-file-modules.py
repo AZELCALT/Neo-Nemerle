@@ -339,6 +339,7 @@ cases = [
     ('rebound', 'def x = 5;\ndef x = x * 2;\nShow() : void { System.Console.WriteLine(x) }\nShow();', ['10']),
     ('retyped', 'def y = 5;\ndef y = y.ToString() + "!";\nSystem.Console.WriteLine(y.Length);\nShow() : void { System.Console.WriteLine(y.As.[string]()) }\nShow();', ['2', '5!']),
     ('final-type', 'def y = 5;\ndef y = y.ToString() + "?";\nShow() : void { System.Console.WriteLine(y.Length) }\nShow();', ['2']),
+    ('open-use', 'def y = 5;\ndef y = "five";\nKeep(o : object) : string { match (o) { | c is Nemerle.Scopes.Content => "container of " + c.Type.Name + ": " + c.As.[string]() | _ => "bare" } }\nShow() : void { System.Console.WriteLine(Keep(y)) }\nShow();', ['container', 'of', 'String:', 'five']),
     ('tuple', 'def pair = (1, 2);\nSum() : int { def (a, b) = pair; a + b }\nSystem.Console.WriteLine(Sum());', ['3']),
 ]
 for name, text, expected in cases:

@@ -87,6 +87,13 @@ public sealed class Content
     Value :> T
   }
 
+  /// The content as a `T` for code that uses it: checked as `As` does, except that a use taking any object (or a
+  /// Content) gets the container itself, so the value keeps its type instead of becoming a bare object.
+  public Read[T]() : T
+  {
+    if (typeof(T) == typeof(object) || typeof(T) == typeof(Content)) (this : object) :> T else As.[T]()
+  }
+
   /// Calls the content: a function value, or the form of a dial member whose parameters fit `arguments`.
   public Call(params arguments : array[object]) : Content
   {

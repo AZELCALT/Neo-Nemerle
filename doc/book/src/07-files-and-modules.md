@@ -142,7 +142,8 @@ later `items ::= 1` gives. A function, a lambda or a local function reads the va
 above the value's binding and sees whatever the storage holds when it runs. Binding a name again writes the same
 storage: `def x = 5; def x = x * 2;` leaves 10. If the new binding has another type, the storage holds a `Content`
 (the value and its current type). Functions read it as its final type, or through the Content itself
-(`x.As.[string]()`, `x.Is.[int]()`); if any code still needs one of its earlier types, the type change is an error at
+(`x.As.[string]()`, `x.Is.[int]()`). Code that takes any object (a parameter of type `object`) gets the Content
+itself, so the value keeps its type. If any code still needs one of its earlier types, the type change is an error at
 the binding that changes it:
 
 ```nemerle,fail
