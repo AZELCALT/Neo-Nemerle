@@ -686,6 +686,10 @@ using Nemerle.Compiler.Utility;
         }
         foreach (member when !(member is ClassMember.TypeDeclaration) in members)
           when (member.modifiers != null) member.modifiers.mods |= NemerleModifiers.Static;
+        // the file's members are typed in the file's environment after its `using`s (a name a member's code meets
+        // only later, as in a `$"..."` splice, resolves there too); the class itself keeps the folder's namespace
+        foreach (member when member._env == null && !(member is ClassMember.TypeDeclaration) in members) member._env = fileParser.env;
+        registry.MemberEnvironments[fileIndex] = fileParser.env;
         def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
         registry.Exports[moduleName] = exports.NToList().Map(td => td.Name);
         return declaration :: exports.NToList();

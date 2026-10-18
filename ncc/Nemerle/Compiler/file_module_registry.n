@@ -272,6 +272,18 @@ public sealed class FileModuleRegistry
     containsExternal(node)
   }
 
+  /// The environment a file's own members are typed in (the file's, after its `using`s), by file.
+  public MemberEnvironments : System.Collections.Generic.Dictionary[int, GlobalEnv] = System.Collections.Generic.Dictionary();
+
+  /// The environment `method` is typed in: its file's, for a member of a file's class, else its type's.
+  public MethodEnvironment(method : MethodBuilder) : GlobalEnv
+  {
+    def type = method.DeclaringType;
+    mutable env;
+    if (type.DeclaringType == null && MemberEnvironments.TryGetValue(type.Location.FileIndex, out env) && method.Env : object == env) env
+    else type.GlobalEnv
+  }
+
   public Environment(fileIndex : int) : GlobalEnv
   {
     // Only the module itself is entered: its directories are not opened, so sibling files are reached by explicit path.

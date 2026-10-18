@@ -201,7 +201,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     public this (m : MethodBuilder)
     {
       this (m.Manager, m.DeclaringType, m);
-      env = current_type.GlobalEnv;
+      env = Manager.FileModuleRegistry.MethodEnvironment(m);
       tenv = current_fun.tenv.CopyWithObsolete(TriggerObsoleteWarning);
       assert(!solver.InUse);
     }
