@@ -28,6 +28,18 @@ unless it says so.
 - **The top-level rule for spaces is token-level.** A space must stand at the top level of its file; the check looks
   at the tokens before it, not at the parsed tree.
 
+## Targets
+
+- **The target check names a line only with debug information.** Without `-debug+`, a member the target lacks is
+  reported with the method that uses it, not its line.
+- **Unused references to .NET 10 assemblies stay in the output.** After the output is moved to the target's
+  assemblies, references nothing uses any more are kept (removing them corrupts lazily read signatures). They are
+  never loaded, so the binary runs; a strict checker (Unity's) may still list them.
+- **Old MSBuild `TargetFrameworkVersion` is not read.** `v3.5`/`v4.0` name frameworks this toolchain does not
+  target; an SDK-style `TargetFramework` is read.
+- **Older .NET is checked by its reference assemblies, not run** in `./bootstrap` unless that runtime is installed
+  (Mono runs the `net48` checks).
+
 ## Tooling
 
 - **The language server has no completion, references or rename.** Parse diagnostics, highlighting, folding and

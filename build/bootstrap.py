@@ -74,7 +74,7 @@ def finish():
     if a.update_boot:
         target = repo / 'boot/coreclr'
         keep = [f for f in toolchain.iterdir()
-                if f.name == 'references' or f.suffix in ('.dll', '.nitrametadata', '.nitrametadata2', '.exe', '.json', '.txt', '.rtf')
+                if f.name in ('references', 'netstandard2.0') or f.suffix in ('.dll', '.nitrametadata', '.nitrametadata2', '.exe', '.json', '.txt', '.rtf')
                 or f.name in ('ncc', 'nscript')]
         keep = [f for f in keep if not f.name.endswith('-STATUS.json') and not f.name.startswith('_N_')]
         shutil.rmtree(target); target.mkdir()
@@ -102,6 +102,7 @@ text = step('nitra', [py, build / 'build-nitra-core.py', '--snapshot', 'Nitra', 
 nitra = pathlib.Path(re.findall(r'(/tmp/nemerle-nitra-core-\w+/output)', text)[-1])
 for f in nitra.glob('Integrated.*'): shutil.copy2(f, toolchain / f.name)
 # 4. tools
+step('runtime-netstandard', [py, build / 'build-netstandard-runtime.py', '--toolchain', toolchain])
 step('scripting-build', [py, build / 'build-scripting.py', '--toolchain', toolchain, '--references', toolchain / 'references'])
 step('lsp-build', [py, build / 'build-language-server.py', '--toolchain', toolchain, '--references', refs, '--output', out / 'lsp'])
 step('vscode-build', [py, build / 'build-vscode-extension.py', '--server', out / 'lsp', '--references', toolchain / 'references',
@@ -111,6 +112,7 @@ T, R = toolchain, refs
 suites = [
     ('file-modules', ['check-file-modules.py', T / 'ncc.exe', '--runtime', 'dotnet', '--target-references', R]),
     ('projects', ['check-projects.py', '--toolchain', T]),
+    ('targets', ['check-targets.py', '--toolchain', T]),
     ('runtime-only', ['check-runtime-only.py', '--compiler', T / 'ncc.exe', '--references', T / 'references']),
     ('grammar-regressions', ['check-grammar-regressions.py', '--toolchain', T, '--references', R]),
     ('scripting', ['check-scripting.py', '--toolchain', T, '--references', T / 'references']),

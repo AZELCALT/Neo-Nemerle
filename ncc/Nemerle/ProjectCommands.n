@@ -184,6 +184,20 @@ internal module Projects
       def used = Project.Load(found);
       when (used.IsProgram)
         throw project.Error("references.projects", reference, "`" + reference + "' is a program; a project uses libraries only");
+      // what this project runs on must be able to load the used one
+      def mine = TargetOf(project); def theirs = TargetOf(used);
+      def host = Nemerle.Platform.ClrTarget.Host;
+      def usable = match ((mine, theirs))
+      {
+        | (_, t) when t != null && t.Family == "netstandard" => mine == null || mine.Family != "netstandard" || t.Version <= mine.Version
+        | (null, null) => true
+        | (null, t) => t.Family == "netcore" && t.Version.Major <= host.Version.Major
+        | (m, null) => m.Family == "netcore" && m.Version.Major >= host.Version.Major
+        | (m, t) => m.Family == t.Family && t.Version <= m.Version
+      };
+      unless (usable)
+        throw project.Error("references.projects", reference, "`" + reference + "' is built for " + (if (theirs == null) host.Name else theirs.Name)
+                            + ", which " + (if (mine == null) host.Name else mine.Name) + " cannot load; give it a target this project can use, such as netstandard2.0");
       def binary = Build(found, options, offline, project.File :: building);
       compileReferences.Add(binary); runtimeFiles.Add(binary);
       runtimeFiles.AddRange(ReadList(Path.Combine(used.OutputDirectory, used.Name + ".runtime")));
@@ -204,6 +218,19 @@ internal module Projects
       when (File.Exists(path) && name != "Nemerle" && name != "Nemerle.Macros") { compileReferences.Add(path); runtimeFiles.Add(path) }
     }
     unless (project.Packages.Count == 0) ResolvePackages(project, offline, compileReferences, runtimeFiles);
+    // a target other than the compiler's own .NET: its reference assemblies (fetched once), and the runtime library
+    // built for .NET Standard 2.0, which every target can load
+    def target = TargetOf(project);
+    def targetOptions = SCG.List.[string]();
+    mutable runtimeLibrary = Path.Combine(toolchainDir, "Nemerle.dll");
+    when (target != null)
+    {
+      targetOptions.Add("-target-framework:" + target.Name);
+      targetOptions.Add("-target-references:" + FetchReferences(project, target, offline));
+      runtimeLibrary = Path.Combine(toolchainDir, "netstandard2.0", "Nemerle.dll");
+      unless (File.Exists(runtimeLibrary))
+        throw project.Error("target", null, "this toolchain has no Nemerle.dll for .NET Standard 2.0 (netstandard2.0/Nemerle.dll), which " + target.Name + " programs need; rebuild it with ./bootstrap while online");
+    }
     def references = compileReferences.Distinct().ToList();
 
     def sources = project.Sources();
@@ -211,7 +238,7 @@ internal module Projects
     def output = project.OutputDirectory;
     _ = Directory.CreateDirectory(output);
     def stampFile = Path.Combine(output, project.Name + ".stamp");
-    def stamp = Stamp(project, sources, references, options);
+    def stamp = Stamp(project, sources, references, options + targetOptions.NToList());
     def binary = project.Binary;
     if (File.Exists(binary) && File.Exists(stampFile) && File.ReadAllText(stampFile) == stamp)
       Console.WriteLine(project.Name + ": up to date")
@@ -220,6 +247,7 @@ internal module Projects
       def started = Stopwatch.StartNew();
       def arguments = SCG.List.[string]();
       arguments.AddRange(options);
+      arguments.AddRange(targetOptions); // after the launcher's -target-references, which they replace
       arguments.Add("-source-root:" + project.Root);
       arguments.Add("-out:" + binary);
       arguments.Add(if (project.IsProgram) "-target:exe" else "-target:library");
@@ -250,8 +278,7 @@ internal module Projects
                         + (started.ElapsedMilliseconds / 100 / 10.0).ToString(Globalization.CultureInfo.InvariantCulture) + " s)");
     }
     // the runtime: Nemerle.dll and what the references need, next to the binary
-    def toolchain = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
-    def runtime = Path.Combine(toolchain, "Nemerle.dll") :: runtimeFiles.Distinct().NToList();
+    def runtime = runtimeLibrary :: runtimeFiles.Distinct().NToList();
     foreach (f in runtime)
     {
       def target = Path.Combine(output, Path.GetFileName(f));
@@ -261,6 +288,64 @@ internal module Projects
     File.WriteAllLines(project.ReferencesFile, references);
     File.WriteAllLines(Path.Combine(output, project.Name + ".runtime"), runtimeFiles.Distinct());
     binary
+  }
+
+  /// The project's target, or null when it is the compiler's own .NET.
+  TargetOf(project : Project) : Nemerle.Platform.ClrTarget
+  {
+    if (project.Target == null) null
+    else
+    {
+      def target = try { Nemerle.Platform.ClrTarget.Parse(project.Target) } catch { | e is ArgumentException => throw project.Error("target", null, e.Message) };
+      if (target.SameAs(Nemerle.Platform.ClrTarget.Host)) null else target
+    }
+  }
+
+  /// The target's reference assemblies: its reference package from nuget.org, downloaded once into the cache.
+  FetchReferences(project : Project, target : Nemerle.Platform.ClrTarget, offline : bool) : string
+  {
+    mutable id; mutable version; mutable folder;
+    target.ReferencePackage(out id, out version, out folder);
+    def data = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
+    def cache = Path.Combine(if (data == "") Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share") else data,
+                             "Nemerle", "references", id.ToLowerInvariant(), version);
+    def references = Path.Combine(cache, folder.Replace('/', Path.DirectorySeparatorChar));
+    unless (Directory.Exists(references))
+    {
+      when (offline) throw project.Error("target", null, "the reference assemblies of " + target.Name + " (" + id + " " + version + ") are not in the cache, and --offline does not download them");
+      def feed = Environment.GetEnvironmentVariable("NEMERLE_REFERENCE_FEED") ?? "https://api.nuget.org/v3-flatcontainer/";
+      def lower = id.ToLowerInvariant();
+      def url = feed.TrimEnd('/') + "/" + lower + "/" + version + "/" + lower + "." + version + ".nupkg";
+      Console.WriteLine(project.Name + ": fetching the " + target.Name + " reference assemblies (" + id + " " + version + ")");
+      def pending = cache + ".partial";
+      try
+      {
+        when (Directory.Exists(pending)) Directory.Delete(pending, true);
+        _ = Directory.CreateDirectory(pending);
+        def bytes = if (File.Exists(url)) File.ReadAllBytes(url)
+                    else using (client = Net.Http.HttpClient()) client.GetByteArrayAsync(url).GetAwaiter().GetResult();
+        using (archive = IO.Compression.ZipArchive(MemoryStream(bytes)))
+          foreach (entry in archive.Entries)
+          {
+            def destination = Path.GetFullPath(Path.Combine(pending, entry.FullName));
+            when (destination.StartsWith(pending + Path.DirectorySeparatorChar, StringComparison.Ordinal) && entry.Name.Length > 0)
+            {
+              _ = Directory.CreateDirectory(Path.GetDirectoryName(destination));
+              using (input = entry.Open(), output = File.Create(destination)) input.CopyTo(output);
+            }
+          }
+        unless (Directory.Exists(Path.Combine(pending, folder.Replace('/', Path.DirectorySeparatorChar))))
+          throw InvalidDataException(id + " " + version + " has no " + folder);
+        when (Directory.Exists(cache)) Directory.Delete(cache, true);
+        Directory.Move(pending, cache);
+      }
+      catch
+      {
+        | e is ProjectException => throw e
+        | e => throw project.Error("target", null, "could not fetch the " + target.Name + " reference assemblies from " + url + ": " + e.Message)
+      }
+    }
+    references
   }
 
   ReadList(path : string) : SCG.IEnumerable[string]

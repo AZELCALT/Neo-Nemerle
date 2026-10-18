@@ -62,6 +62,9 @@ using Nemerle.Compiler.Utility;
     public mutable SharedAssemblies : array[System.Reflection.Assembly];
     public mutable SourceRoot : string;
     public mutable TargetReferenceDirectory : string;
+    /// -target-framework: the framework the output is for (net8.0, netstandard2.0, net48, ...); null: the one the
+    /// target references are for.
+    public mutable TargetFramework : string;
     public mutable XmlDocOutputFileName : string;
     public mutable DumpTypedTree : bool;
     public mutable PrintExpressionsType : bool;
@@ -443,6 +446,9 @@ using Nemerle.Compiler.Utility;
         Getopt.CliOption.String (name = "-target-references",
                        help = "directory containing target CLR reference assemblies",
                        handler = fun (s) { this.TargetReferenceDirectory = s; }),
+        Getopt.CliOption.String (name = "-target-framework",
+                       help = "the framework the output is for: net5.0 and later, netstandard2.0, netstandard2.1, net462 to net481 (its reference assemblies are -target-references)",
+                       handler = fun (s) { this.TargetFramework = s; }),
         Getopt.CliOption.String (name = "-assembly-version",
                        aliases = [],
                        help = "AssemblyVersion of the output (e.g. 1.2.0.610)",

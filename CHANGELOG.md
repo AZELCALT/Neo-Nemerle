@@ -14,7 +14,10 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
 - New CLR backend adapter in `platform/` (`Nemerle.Platform.dll`, C#). It covers emission, metadata, signing,
   resources, reference assemblies and assembly loading. Plugins such as macro libraries get an isolated load context when
   a compilation references a different build of their dependencies.
-- Only .NET 10 is targeted for now. A mapping for older targets is not written yet.
+- Output for other targets: `-target-framework:` (and `target = "..."` in a project) builds for older .NET
+  (`net5.0`+), .NET Standard 2.0/2.1 and .NET Framework 4.6.2+ / Mono. The output is moved to the target's reference
+  assemblies (fetched from nuget.org by `ncc build`), every member it uses is checked against them, and programs run
+  with a .NET Standard 2.0 build of `Nemerle.dll`.
 
 ### Language: a file is its namespace
 - Every `.n` file is a module named by its path under the source root (`src/util/text.n` is `util.text`).

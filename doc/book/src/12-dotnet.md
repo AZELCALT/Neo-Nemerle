@@ -75,6 +75,13 @@ using static geometry.shapes;
 System.Console.WriteLine(Area(2.0));
 ```
 
+## Older .NET, .NET Framework and Mono
+
+The compiler runs on .NET 10, and builds for it by default. `-target-framework:NAME` with that target's reference
+assemblies (`-target-references:DIR`) builds for another: `net8.0`, `netstandard2.0` (libraries for every runtime,
+Unity included), or `net48` (.NET Framework and Mono). A project says `target = "..."`, and `ncc build` fetches the
+reference assemblies itself (chapter 13). What the target does not have is a compile error.
+
 ## The continuation section
 
 Every assembly that defines grammars or macros carries a `.nemir` section. It holds the compiled grammars with a trace

@@ -54,6 +54,7 @@ version = "0.1.0"
 # kind = "library"          # default: a program when main.n exists, a library otherwise
 # main = "main.n"            # the file whose top-level code is Main
 # output = "out"
+# target = "netstandard2.0"     # default: the compiler's .NET; or net8.0, netstandard2.1, net48, ...
 
 [references]
 # assemblies = ["lib/Engine.dll"]
@@ -68,6 +69,7 @@ version = "0.1.0"
 - **`name`** is required. It names the binary (`out/hello.exe` or `out/hello.dll`).
 - **`kind`** is usually left out: a project with its main file is a program, one without is a library.
 - **`main`** is the file the program starts at, when it is not `main.n`: `main = "app/start.n"`.
+- **`target`** is the .NET the output is for, when it is not the compiler's own (see *Targets* below).
 - **`assemblies`** are .NET assemblies by path, relative to the project.
 - **`projects`** are other projects this one uses, each a folder or `.nproj` file. They are built first, and they
   must be libraries. Two projects that use each other are an error.
@@ -81,9 +83,32 @@ a dot, `bin/`, `obj/`, and folders that hold a project of their own.
 Settings the file does not know are errors, not ignored, and every error points at its line and column:
 
 ```text
-hello.nproj:3:1: error: unknown setting `verison'; the settings are name, version, kind, main, output
+hello.nproj:3:1: error: unknown setting `verison'; the settings are name, version, kind, main, output, target
 hello.nproj:7:3: error: `../app' is a program; a project uses libraries only
 ```
+
+## Targets
+
+By default a project is built for the .NET the compiler runs on (.NET 10). `target` builds it for another:
+
+| `target` | Output | Runs on |
+|---|---|---|
+| `net5.0` ... `net9.0` | programs and libraries | that .NET or newer |
+| `netstandard2.0`, `netstandard2.1` | libraries only | every .NET, .NET Framework 4.6.2+, Mono, Unity |
+| `net462` ... `net481` | programs and libraries | .NET Framework, Mono |
+
+`ncc build` fetches the target's reference assemblies from nuget.org the first time (into the user's data folder,
+`Nemerle/references`), and uses them offline after that. The compiler still types against the .NET it runs on, and
+then checks the output against the target: anything the target does not have is an error, and no binary is written.
+
+```text
+bad.n:3: error: the method System.String.Contains(System.Char) is not in netstandard2.0 (used in bad.Has)
+```
+
+(The line is known when the project builds with `-debug+`; otherwise the error names the method.) The program runs
+with the .NET Standard 2.0 build of `Nemerle.dll`, which `ncc build` copies next to it. A project may use another
+only when its runtime can load it: a `netstandard2.0` library is usable from every target, while a library built
+for .NET 10 is not usable from a `net48` program.
 
 ## MSBuild projects
 
@@ -91,8 +116,8 @@ Upstream Nemerle wrote its `.nproj` files as MSBuild XML. `ncc` reads those too:
 reader (XML starts with `<`), and both give the same project, so a declarative project can use an MSBuild one and
 the other way round. From the XML it takes what such a project says plainly:
 
-- `AssemblyName` (or `Name`), `OutputType` (`Exe`, `WinExe`, `Library`), `Version` and `DefineConstants`, from
-  property groups without a condition;
+- `AssemblyName` (or `Name`), `OutputType` (`Exe`, `WinExe`, `Library`), `Version`, `TargetFramework` and
+  `DefineConstants`, from property groups without a condition;
 - `Compile` items: the sources, which are then only the listed files;
 - `Reference` items: a `HintPath` that exists, a toolchain assembly (`Nemerle.Compiler`), or a .NET one (`System.*`);
 - `ProjectReference` items to other `.nproj` projects, and `PackageReference` items with a `Version`.

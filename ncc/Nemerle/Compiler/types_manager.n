@@ -548,6 +548,16 @@ using Nemerle.Compiler.Utility;
       Manager = man;
       ClrEmitter.PersistedOutput = !man.Options.CompileToMemory;
       ClrEmitter.TargetReferenceDirectory = man.Options.TargetReferenceDirectory;
+      // the target framework: the one named, else the one the target references are for, else the host's
+      try
+      {
+        when (man.Options.TargetFramework != null) ClrEmitter.Target = Nemerle.Platform.ClrTarget.Parse(man.Options.TargetFramework);
+        def target = ClrEmitter.EffectiveTarget;
+        ClrEmitter.Target = target;
+        when (!man.Options.TargetIsLibrary && !target.Executables)
+          Message.Error($"$target has libraries only: build a library (-target:library), or target a runtime such as net8.0 or net48");
+      }
+      catch { | e is System.ArgumentException => Message.Error(e.Message) }
       _OutputFileName = Manager.Options.OutputFileName;
 
       unless (Manager.Options.TargetIsLibrary)
@@ -584,6 +594,7 @@ using Nemerle.Compiler.Utility;
             GetLegacyAssemblyPermissions() else null);
       }
       catch { | e is System.NotSupportedException => Nemerle.Compiler.MessageMacros.FatalError(e.Message) }
+      _assembly_session.Target = ClrEmitter.Target;
       _assembly_builder = _assembly_session.Builder;
       _module_builder = _assembly_session.Module;
       GetInformationalAssemblyAttributes().Iter(_assembly_builder.SetCustomAttribute);
@@ -867,6 +878,15 @@ using Nemerle.Compiler.Utility;
 
         | e is System.ApplicationException =>
           Message.Error (e.Message);
+
+        | e is Nemerle.Platform.ClrTargetException =>
+          // the output names what the target framework does not have: no binary
+          foreach (problem in e.Problems) Message.Error(problem);
+          try { File.Delete(_OutputFileName) } catch { | _ => () }
+
+        | e is System.NotSupportedException =>
+          Message.Error(e.Message);
+          try { File.Delete(_OutputFileName) } catch { | _ => () }
       }
     }
 

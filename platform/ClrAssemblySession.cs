@@ -46,6 +46,9 @@ namespace Nemerle.Platform
         byte[] compilerSigningKey;
 #endif
 
+        /// The target framework of the output; null: the host's.
+        public ClrTarget Target { get; set; }
+
         public ClrAssemblySession(AssemblyName name, string outputPath, bool compileToMemory, bool debug)
             : this(name, outputPath, compileToMemory, debug, null) { }
 
@@ -189,12 +192,14 @@ namespace Nemerle.Platform
             using (var stream = File.Create(output)) blob.WriteContentTo(stream);
             if (!emitDebug && File.Exists(Path.ChangeExtension(output, ".pdb")))
                 File.Delete(Path.ChangeExtension(output, ".pdb"));
-            if (entryPoint != null)
-            {
-                string major = typeof(object).Assembly.GetName().Version.Major.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                File.WriteAllText(Path.ChangeExtension(output, ".runtimeconfig.json"),
-                    "{\"runtimeOptions\":{\"tfm\":\"net" + major + ".0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" + major + ".0.0\"}}}");
-            }
+            // a program for .NET names the runtime it starts on; .NET Framework and Mono start it directly
+            var target = Target ?? ClrTarget.Host;
+            var config = Path.ChangeExtension(output, ".runtimeconfig.json");
+            if (entryPoint != null && target.RuntimeConfigFramework != null)
+                File.WriteAllText(config,
+                    "{\"runtimeOptions\":{\"tfm\":\"" + target.Name + "\",\"framework\":{\"name\":\"" + target.RuntimeConfigFramework
+                    + "\",\"version\":\"" + target.RuntimeConfigVersion + "\"}}}");
+            else if (File.Exists(config)) File.Delete(config);
 #else
             Builder.Save(Path.GetFileName(output), kind, machine);
 #endif

@@ -48,6 +48,8 @@ public sealed class Project
   public mutable Main : string = "main.n";
   /// Where the build goes (relative to the root).
   public mutable Output : string = "out";
+  /// The framework the output is for (`net8.0`, `netstandard2.0`, `net48`, ...); null: the compiler's own.
+  public mutable Target : string;
   /// .NET assemblies, by path (relative to the root).
   public Assemblies : SCG.List[string] = SCG.List();
   /// Other projects this one uses, each a folder or `.nproj` file (relative to the root). They must be libraries.
@@ -224,6 +226,7 @@ public sealed class Project
               throw ProjectException(file, value.Line, value.Column, "kind is \"program\" or \"library\"")
           | "main" => project.Main = str(value, "main")
           | "output" => project.Output = str(value, "output")
+          | "target" => project.Target = str(value, "target")
           | "references.assemblies" => project.Assemblies.AddRange(strings(value, "assemblies"))
           | "references.projects" => project.Projects.AddRange(strings(value, "projects"))
           | "references.repositories" => project.Repositories.AddRange(strings(value, "repositories"))
@@ -237,7 +240,7 @@ public sealed class Project
             }
           | "compiler.options" => project.Options.AddRange(strings(value, "options"))
           | _ =>
-            def known = if (section == "") "name, version, kind, main, output"
+            def known = if (section == "") "name, version, kind, main, output, target"
                         else if (section == "references") "assemblies, projects, packages, repositories"
                         else "options";
             throw ProjectException(file, reader.Line, reader.Column, "unknown setting `" + full + "'; " + (if (section == "") "the settings are " else "[" + section + "] has ") + known)
@@ -262,7 +265,8 @@ public sealed class Project
     if (library) _ = b.Append("kind = \"library\"\n")
     else _ = b.Append("# kind = \"library\"          # default: a program when main.n exists, a library otherwise\n");
     _ = b.Append("# main = \"main.n\"            # the file whose top-level code is Main\n");
-    _ = b.Append("# output = \"out\"\n\n");
+    _ = b.Append("# output = \"out\"\n");
+    _ = b.Append("# target = \"netstandard2.0\"     # default: the compiler's .NET; or net8.0, netstandard2.1, net48, ...\n\n");
     _ = b.Append("[references]\n");
     _ = b.Append("# assemblies = [\"lib/Engine.dll\"]\n");
     _ = b.Append("# projects = [\"../engine\"]\n");
@@ -544,6 +548,9 @@ module MsBuild
         }
     }
     when (property("Version") != null) project.Version = property("Version");
+    // an SDK-style TargetFramework (net48, netstandard2.0, ...); the old TargetFrameworkVersion (v3.5) named
+    // frameworks this toolchain does not target, so it is left out
+    when (property("TargetFramework") != null) project.Target = property("TargetFramework");
     when (property("DefineConstants") != null)
       foreach (symbol in property("DefineConstants").Split(array[';', ','], StringSplitOptions.RemoveEmptyEntries))
         project.Options.Add("-define:" + symbol.Trim());
