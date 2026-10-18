@@ -15,6 +15,7 @@ using Nemerle.Compiler.typer;
 using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.type_info;
 using Nemerle.Compiler.expr_walker;
+using Nemerle.Compiler.project;
 
 /// `nemerle-lsp --check`: one typed compilation of the workspace files an editor needs, in a process of its own (the
 /// server starts it, and kills it when a newer edit arrives). It reads a request on stdin and writes the diagnostics,
@@ -96,8 +97,20 @@ public module Checker
     {
       def options = CompilationOptions();
       options.CompileToMemory = true; options.TargetIsSet = true;
-      // a workspace with main.n is a program; otherwise its files are a library
-      options.TargetIsLibrary = !files.Contains(Path.Combine(root, "main.n"));
+      // a project says what it is and what it references (the references its last build resolved, packages included);
+      // otherwise a workspace with main.n is a program and its files are a library
+      def project = try { if (Project.Find(root) != null) Project.Load(root) else null } catch { | _ => null };
+      mutable libraries = libraries;
+      if (project != null)
+      {
+        options.TargetIsLibrary = !project.IsProgram;
+        when (project.IsProgram && project.Main != "main.n")
+          options.MainClass = Path.ChangeExtension(project.Main, null).Replace('/', '.').Replace('\\', '.');
+        def resolved = if (File.Exists(project.ReferencesFile)) File.ReadAllLines(project.ReferencesFile).Where(l => l.Length > 0).ToArray()
+                       else project.Assemblies.Select(a => Path.GetFullPath(Path.Combine(project.Root, a))).ToArray();
+        foreach (r in resolved) when (File.Exists(r)) libraries = r :: libraries;
+      }
+      else options.TargetIsLibrary = !files.Contains(Path.Combine(root, "main.n"));
       options.OutputFileName = if (options.TargetIsLibrary) "nemerle-lsp-check.dll" else "nemerle-lsp-check.exe";
       options.SourceRoot = root; options.FileNameNamespaces = fileNameNamespaces;
       options.ProgressBar = false; options.ColorMessages = false; options.IgnoreConfusion = true;

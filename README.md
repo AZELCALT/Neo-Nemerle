@@ -103,6 +103,10 @@ dotnet hello.exe
 A compiled program needs `Nemerle.dll`, the standard library, next to it when it uses the library. Find it in the
 installed toolchain folder.
 
+For more than one file, make a project: `ncc init hello && cd hello && ncc run`. The `.nproj` file names the
+project and lists its references (assemblies, other projects, NuGet packages); `ncc build` puts a ready-to-run
+program, with `Nemerle.dll` and its references, in `out/`. See [Projects](doc/book/src/13-projects.md).
+
 ## Learn more
 
 - **[The Nemerle Book](doc/book/src/SUMMARY.md):** the language from the ground up, from values and functions to

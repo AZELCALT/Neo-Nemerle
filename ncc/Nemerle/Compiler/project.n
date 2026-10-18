@@ -1,0 +1,587 @@
+// The project file. A folder with one `<name>.nproj` is a project: its sources are every `.n` file under the
+// folder (the folder is the source root, so a file's path is its module), and the project file says only what the
+// layout cannot: its name, version, references and compiler options. The format is a small declarative subset of
+// TOML. `ncc init`, `ncc build` and `ncc run` use it, and so does the language server. See doc/book (Projects).
+using System;
+using System.IO;
+using System.Text;
+using SCG = System.Collections.Generic;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+
+/// A mistake in a project file, at its line and column.
+public sealed class ProjectException : Exception
+{
+  public File : string;
+  public Line : int;
+  public Column : int;
+  public this(file : string, line : int, column : int, message : string)
+  {
+    base(message); File = file; Line = line; Column = column;
+  }
+  public override ToString() : string { File + ":" + Line.ToString() + ":" + Column.ToString() + ": error: " + Message }
+}
+
+/// A NuGet package a project uses: an exact version.
+public sealed class ProjectPackage
+{
+  public Id : string;
+  public Version : string;
+  public this(id : string, version : string) { Id = id; Version = version; }
+}
+
+/// A project, read from its `.nproj` file.
+public sealed class Project
+{
+  public static Extension : string = ".nproj";
+
+  /// The project file.
+  public File : string;
+  /// The project's folder: the source root.
+  public Root : string;
+  public mutable Name : string;
+  public mutable Version : string = "0.1.0";
+  /// "program", "library", or null: a program when the main file exists, a library otherwise.
+  public mutable Kind : string;
+  /// The file whose top-level code is Main (relative to the root).
+  public mutable Main : string = "main.n";
+  /// Where the build goes (relative to the root).
+  public mutable Output : string = "out";
+  /// .NET assemblies, by path (relative to the root).
+  public Assemblies : SCG.List[string] = SCG.List();
+  /// Other projects this one uses, each a folder or `.nproj` file (relative to the root). They must be libraries.
+  public Projects : SCG.List[string] = SCG.List();
+  public Packages : SCG.List[ProjectPackage] = SCG.List();
+  /// NuGet feeds besides nuget.org: URLs or folders.
+  public Repositories : SCG.List[string] = SCG.List();
+  /// Further compiler options, as on the command line (`-define:X`, `-debug+`, ...).
+  public Options : SCG.List[string] = SCG.List();
+  internal places : SCG.Dictionary[string, int * int] = SCG.Dictionary();
+  /// "toml" for the declarative file, "msbuild" for an MSBuild project as upstream Nemerle wrote them.
+  public mutable Format : string = "toml";
+  /// The sources an MSBuild project lists (`Compile` items); null for the declarative file, whose sources are
+  /// every `.n` file under the folder.
+  public mutable SourceList : SCG.List[string];
+  /// Assemblies the toolchain provides, by name (`Nemerle.Compiler`), from an MSBuild project's `Reference` items.
+  public Toolchain : SCG.List[string] = SCG.List();
+
+  /// An error at the setting `key` (as `references.projects`), at its item `item` when given.
+  public Error(key : string, item : string, message : string) : ProjectException
+  {
+    mutable at;
+    if (item != null && places.TryGetValue(key + "\0" + item, out at) || places.TryGetValue(key, out at))
+      ProjectException(File, at[0], at[1], message)
+    else ProjectException(File, 1, 1, message)
+  }
+
+  public this(file : string) { File = Path.GetFullPath(file); Root = Path.GetDirectoryName(File); }
+
+  public IsProgram : bool
+  {
+    get { if (Kind != null) Kind == "program" else IO.File.Exists(Path.Combine(Root, Main)) }
+  }
+
+  public OutputDirectory : string { get { Path.GetFullPath(Path.Combine(Root, Output)) } }
+
+  /// The built binary.
+  public Binary : string { get { Path.Combine(OutputDirectory, Name + (if (IsProgram) ".exe" else ".dll")) } }
+
+  /// The references a build resolved (assemblies, projects' binaries, packages), one path per line: what a tool
+  /// such as the language server compiles against without resolving packages itself.
+  public ReferencesFile : string { get { Path.Combine(OutputDirectory, Name + ".references") } }
+
+  /// The project file of a folder (its one `*.nproj`), or the file itself; null when there is none.
+  public static Find(path : string) : string
+  {
+    def full = Path.GetFullPath(path);
+    if (IO.File.Exists(full) && full.EndsWith(Extension, StringComparison.Ordinal)) full
+    else if (Directory.Exists(full))
+    {
+      def files = Directory.GetFiles(full, "*" + Extension);
+      match (files.Length)
+      {
+        | 0 => null
+        | 1 => files[0]
+        | _ => throw ProjectException(full, 1, 1, "more than one project file in this folder: " + string.Join(", ", files.Map(Path.GetFileName)))
+      }
+    }
+    else null
+  }
+
+  /// The project file of the folder `path` or of the nearest folder above it.
+  public static FindUpward(path : string) : string
+  {
+    mutable dir = Path.GetFullPath(path);
+    mutable found = null;
+    while (found == null && dir != null)
+    {
+      found = try { Find(dir) } catch { | _ is ProjectException => null };
+      dir = Path.GetDirectoryName(dir);
+    }
+    found
+  }
+
+  /// The sources: every `.n` file under the root, except the output folder, hidden folders (`.git`, ...) and folders
+  /// that are projects of their own.
+  public Sources() : SCG.List[string]
+  {
+    if (SourceList != null) SourceList else AllSources()
+  }
+
+  AllSources() : SCG.List[string]
+  {
+    def result = SCG.List();
+    def output = OutputDirectory;
+    def walk(dir : string) : void
+    {
+      foreach (file in Directory.GetFiles(dir, "*.n")) result.Add(file);
+      foreach (sub in Directory.GetDirectories(dir))
+      {
+        def name = Path.GetFileName(sub);
+        unless (name.StartsWith(".", StringComparison.Ordinal) || name == "bin" || name == "obj"
+                || string.Equals(Path.GetFullPath(sub), output, StringComparison.Ordinal)
+                || Directory.GetFiles(sub, "*" + Extension).Length > 0)
+          walk(sub)
+      }
+    }
+    walk(Root);
+    result.Sort(StringComparer.Ordinal);
+    result
+  }
+
+  // ---- reading ----
+
+  public static Load(path : string) : Project
+  {
+    def file = match (Find(path)) { | null => throw ProjectException(Path.GetFullPath(path), 1, 1, "no " + Extension + " file here") | f => f };
+    Parse(file, IO.File.ReadAllText(file))
+  }
+
+  /// Reads project text. Unknown keys and sections are errors: a misspelt setting is reported, not ignored.
+  public static Parse(file : string, text : string) : Project
+  {
+    def project = Project(file);
+    // the content picks the reader: an MSBuild project (as upstream Nemerle wrote them) is XML
+    when (text.TrimStart('\uFEFF', ' ', '\t', '\r', '\n').StartsWith("<", StringComparison.Ordinal))
+      return(MsBuild.Read(project, text));
+    def reader = TomlReader(file, text);
+    mutable section = "";
+    def seen = SCG.HashSet.[string]();
+    def strings(v : TomlValue, what : string) : SCG.List[string]
+    {
+      match (v)
+      {
+        | TomlValue.Array(items) =>
+          def result = SCG.List();
+          foreach (item in items)
+            match (item)
+            {
+              | TomlValue.String(s) => result.Add(s)
+              | other => throw ProjectException(file, other.Line, other.Column, what + " lists strings")
+            }
+          result
+        | other => throw ProjectException(file, other.Line, other.Column, what + " is a list of strings, as [\"a\", \"b\"]")
+      }
+    }
+    def str(v : TomlValue, what : string) : string
+    {
+      match (v)
+      {
+        | TomlValue.String(s) => s
+        | other => throw ProjectException(file, other.Line, other.Column, what + " is a string, in double quotes")
+      }
+    }
+    while (reader.Next())
+    {
+      match (reader.Section)
+      {
+        | null => ()
+        | s =>
+          unless (s == "references" || s == "compiler")
+            throw ProjectException(file, reader.Line, reader.Column, "unknown section [" + s + "]; the sections are [references] and [compiler]");
+          section = s
+      }
+      when (reader.Key != null)
+      {
+        def key = reader.Key; def value = reader.Value;
+        def full = if (section == "") key else section + "." + key;
+        unless (seen.Add(full)) throw ProjectException(file, reader.Line, reader.Column, "`" + full + "' is set twice");
+        project.places[full] = (reader.Line, reader.Column);
+        match (value)
+        {
+          | TomlValue.Array(items) => foreach (TomlValue.String(s) as item in items) project.places[full + "\0" + s] = (item.Line, item.Column)
+          | TomlValue.Table(entries) => foreach ((k, item) in entries) project.places[full + "\0" + k] = (item.Line, item.Column)
+          | _ => ()
+        }
+        match (full)
+        {
+          | "name" => project.Name = str(value, "name")
+          | "version" => project.Version = str(value, "version")
+          | "kind" =>
+            project.Kind = str(value, "kind");
+            unless (project.Kind == "program" || project.Kind == "library")
+              throw ProjectException(file, value.Line, value.Column, "kind is \"program\" or \"library\"")
+          | "main" => project.Main = str(value, "main")
+          | "output" => project.Output = str(value, "output")
+          | "references.assemblies" => project.Assemblies.AddRange(strings(value, "assemblies"))
+          | "references.projects" => project.Projects.AddRange(strings(value, "projects"))
+          | "references.repositories" => project.Repositories.AddRange(strings(value, "repositories"))
+          | "references.packages" =>
+            match (value)
+            {
+              | TomlValue.Table(entries) =>
+                foreach ((id, version) in entries)
+                  project.Packages.Add(ProjectPackage(id, str(version, "the version of " + id)))
+              | other => throw ProjectException(file, other.Line, other.Column, "packages is a table of exact versions, as { \"Newtonsoft.Json\" = \"13.0.3\" }")
+            }
+          | "compiler.options" => project.Options.AddRange(strings(value, "options"))
+          | _ =>
+            def known = if (section == "") "name, version, kind, main, output"
+                        else if (section == "references") "assemblies, projects, packages, repositories"
+                        else "options";
+            throw ProjectException(file, reader.Line, reader.Column, "unknown setting `" + full + "'; " + (if (section == "") "the settings are " else "[" + section + "] has ") + known)
+        }
+      }
+    }
+    when (project.Name == null) throw ProjectException(file, 1, 1, "the project has no name (name = \"...\")");
+    when (project.Name.Length == 0 || project.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || project.Name.Contains(" "))
+      throw ProjectException(file, 1, 1, "the name `" + project.Name + "' cannot be a file name");
+    project
+  }
+
+  // ---- writing (ncc init) ----
+
+  /// The project file `ncc init` writes.
+  public static Template(name : string, library : bool) : string
+  {
+    def b = StringBuilder();
+    _ = b.Append("# The project ").Append(name).Append(". Its sources are every .n file under this folder; a file's path is its module.\n");
+    _ = b.Append("name = \"").Append(name).Append("\"\n");
+    _ = b.Append("version = \"0.1.0\"\n");
+    if (library) _ = b.Append("kind = \"library\"\n")
+    else _ = b.Append("# kind = \"library\"          # default: a program when main.n exists, a library otherwise\n");
+    _ = b.Append("# main = \"main.n\"            # the file whose top-level code is Main\n");
+    _ = b.Append("# output = \"out\"\n\n");
+    _ = b.Append("[references]\n");
+    _ = b.Append("# assemblies = [\"lib/Engine.dll\"]\n");
+    _ = b.Append("# projects = [\"../engine\"]\n");
+    _ = b.Append("# packages = { \"Newtonsoft.Json\" = \"13.0.3\" }\n");
+    _ = b.Append("# repositories = [\"https://my.feed/v3/index.json\"]\n\n");
+    _ = b.Append("[compiler]\n");
+    _ = b.Append("# options = [\"-debug+\", \"-define:TRACE\"]\n");
+    b.ToString()
+  }
+}
+
+/// A value of the project file's TOML subset.
+public variant TomlValue
+{
+  | String { Text : string; }
+  | Bool { Flag : bool; }
+  | Integer { Number : long; }
+  | Array { Items : list[TomlValue]; }
+  | Table { Entries : list[string * TomlValue]; }
+
+  public mutable Line : int;
+  public mutable Column : int;
+}
+
+/// Reads the TOML subset line by line: `# comments`, `[section]`, and `key = value` with strings, booleans,
+/// integers, arrays (over several lines too) and inline tables. Keys are bare (letters, digits, `_`, `-`) or quoted.
+public sealed class TomlReader
+{
+  file : string;
+  text : string;
+  mutable pos : int;
+  mutable line : int = 1;
+  mutable lineStart : int;
+
+  public mutable Section : string;
+  public mutable Key : string;
+  public mutable Value : TomlValue;
+  public mutable Line : int;
+  public mutable Column : int;
+
+  public this(file : string, text : string) { this.file = file; this.text = text; }
+
+  Fail(message : string) : ProjectException { ProjectException(file, line, pos - lineStart + 1, message) }
+
+  Peek : char { get { if (pos < text.Length) text[pos] else '\0' } }
+
+  /// Skips spaces, and comments and line ends when `lines` is set.
+  Skip(lines : bool) : void
+  {
+    mutable go = true;
+    while (go && pos < text.Length)
+    {
+      def c = text[pos];
+      if (c == ' ' || c == '\t' || c == '\r') { pos++ }
+      else if (c == '#') { while (pos < text.Length && text[pos] != '\n') pos++ }
+      else if (c == '\n' && lines) { pos++; line++; lineStart = pos }
+      else go = false
+    }
+  }
+
+  EndOfLine() : void
+  {
+    Skip(false);
+    if (pos >= text.Length) ()
+    else if (text[pos] == '\n') { pos++; line++; lineStart = pos }
+    else throw Fail("unexpected `" + text[pos].ToString() + "' after the value")
+  }
+
+  /// The next section header or setting; false at the end.
+  public Next() : bool
+  {
+    Section = null; Key = null; Value = null;
+    Skip(true);
+    if (pos >= text.Length) false
+    else
+    {
+      Line = line; Column = pos - lineStart + 1;
+      if (Peek == '[')
+      {
+        pos++; Skip(false);
+        Section = ReadKey(); Skip(false);
+        unless (Peek == ']') throw Fail("expected `]' to close the section name");
+        pos++; EndOfLine();
+      }
+      else
+      {
+        Key = ReadKey(); Skip(false);
+        unless (Peek == '=') throw Fail("expected `=' after `" + Key + "'");
+        pos++; Skip(false);
+        Value = ReadValue();
+        EndOfLine();
+      }
+      true
+    }
+  }
+
+  ReadKey() : string
+  {
+    if (Peek == '"') ReadString()
+    else
+    {
+      def start = pos;
+      while (pos < text.Length && (char.IsLetterOrDigit(text[pos]) || text[pos] == '_' || text[pos] == '-')) pos++;
+      when (pos == start) throw Fail(if (pos < text.Length) "unexpected `" + text[pos].ToString() + "'; expected a name" else "expected a name");
+      text.Substring(start, pos - start)
+    }
+  }
+
+  ReadString() : string
+  {
+    pos++; // the opening quote
+    def b = StringBuilder();
+    mutable closed = false;
+    while (!closed)
+    {
+      when (pos >= text.Length || text[pos] == '\n') throw Fail("the string is not closed");
+      def c = text[pos]; pos++;
+      if (c == '"') closed = true
+      else if (c == '\\')
+      {
+        when (pos >= text.Length) throw Fail("the string is not closed");
+        def e = text[pos]; pos++;
+        _ = match (e)
+        {
+          | '"' => b.Append('"') | '\\' => b.Append('\\') | 'n' => b.Append('\n') | 't' => b.Append('\t')
+          | _ => throw Fail("unknown escape `\\" + e.ToString() + "'")
+        }
+      }
+      else _ = b.Append(c)
+    }
+    b.ToString()
+  }
+
+  ReadValue() : TomlValue
+  {
+    def (l, c) = (line, pos - lineStart + 1);
+    def value : TomlValue = match (Peek)
+    {
+      | '"' => TomlValue.String(ReadString())
+      | '[' =>
+        pos++;
+        def items = SCG.List();
+        Skip(true);
+        while (Peek != ']')
+        {
+          when (pos >= text.Length) throw Fail("the list is not closed with `]'");
+          items.Add(ReadValue()); Skip(true);
+          if (Peek == ',') { pos++; Skip(true) }
+          else unless (Peek == ']') throw Fail("expected `,' or `]' in the list");
+        }
+        pos++;
+        TomlValue.Array(items.NToList())
+      | '{' =>
+        pos++;
+        def entries = SCG.List();
+        Skip(false);
+        while (Peek != '}')
+        {
+          def key = ReadKey(); Skip(false);
+          unless (Peek == '=') throw Fail("expected `=' after `" + key + "'");
+          pos++; Skip(false);
+          when (entries.Exists(e => { def (k, _) = e; k == key })) throw Fail("`" + key + "' is set twice");
+          entries.Add((key, ReadValue())); Skip(false);
+          if (Peek == ',') { pos++; Skip(false) }
+          else unless (Peek == '}') throw Fail("expected `,' or `}' in the table");
+        }
+        pos++;
+        TomlValue.Table(entries.NToList())
+      | ch when char.IsDigit(ch) || ch == '-' || ch == '+' =>
+        def start = pos; pos++;
+        while (pos < text.Length && (char.IsLetterOrDigit(text[pos]) || text[pos] == '_' || text[pos] == '.' || text[pos] == '-')) pos++;
+        def word = text.Substring(start, pos - start);
+        mutable n;
+        unless (long.TryParse(word.Replace("_", ""), out n))
+          throw ProjectException(file, l, c, "`" + word + "' is not a value; a string is written in double quotes");
+        TomlValue.Integer(n)
+      | _ =>
+        def word = ReadKey();
+        match (word)
+        {
+          | "true" => TomlValue.Bool(true)
+          | "false" => TomlValue.Bool(false)
+          | _ => throw ProjectException(file, l, c, "`" + word + "' is not a value; a string is written in double quotes")
+        }
+    };
+    value.Line = l; value.Column = c;
+    value
+  }
+}
+
+/// Reads an MSBuild project as upstream Nemerle wrote them into the same project model. Only what such a project
+/// says plainly is read: properties outside conditions (`AssemblyName`, `OutputType`, `DefineConstants`, ...),
+/// `Compile`, `Reference`, `ProjectReference` and `PackageReference` items. Conditions, imports and targets are
+/// MSBuild's own and are left out; the build itself is always `ncc build`'s.
+module MsBuild
+{
+  /// An element: name, attributes, text, place, children.
+  class Node
+  {
+    public Name : string;
+    public Attributes : SCG.Dictionary[string, string] = SCG.Dictionary();
+    public Children : SCG.List[Node] = SCG.List();
+    public mutable Text : string = "";
+    public Line : int;
+    public Column : int;
+    public this(name : string, line : int, column : int) { Name = name; Line = line; Column = column; }
+    public Attribute(name : string) : string { mutable v; if (Attributes.TryGetValue(name, out v)) v else null }
+    public Conditional : bool { get { Attribute("Condition") != null } }
+  }
+
+  Tree(file : string, text : string) : Node
+  {
+    def settings = Xml.XmlReaderSettings();
+    settings.DtdProcessing = Xml.DtdProcessing.Prohibit; settings.XmlResolver = null;
+    def reader = Xml.XmlReader.Create(StringReader(text), settings);
+    def info = reader :> Xml.IXmlLineInfo;
+    def stack = SCG.Stack.[Node]();
+    mutable root = null;
+    try
+    {
+      while (reader.Read())
+        match (reader.NodeType)
+        {
+          | Xml.XmlNodeType.Element =>
+            def node = Node(reader.LocalName, info.LineNumber, info.LinePosition);
+            def empty = reader.IsEmptyElement;
+            when (reader.MoveToFirstAttribute())
+              do { node.Attributes[reader.LocalName] = reader.Value } while (reader.MoveToNextAttribute());
+            if (stack.Count > 0) stack.Peek().Children.Add(node) else root = node;
+            unless (empty) stack.Push(node)
+          | Xml.XmlNodeType.EndElement => _ = stack.Pop()
+          | Xml.XmlNodeType.Text | Xml.XmlNodeType.CDATA => when (stack.Count > 0) stack.Peek().Text += reader.Value
+          | _ => ()
+        }
+    }
+    catch { | e is Xml.XmlException => throw ProjectException(file, e.LineNumber, e.LinePosition, "the MSBuild project is not well-formed XML: " + e.Message) }
+    root
+  }
+
+  /// Assemblies that come with .NET: the target references have them.
+  Framework(name : string) : bool
+  {
+    name == "mscorlib" || name == "System" || name == "netstandard" || name.StartsWith("System.", StringComparison.Ordinal)
+    || name.StartsWith("Microsoft.", StringComparison.Ordinal) || name == "WindowsBase"
+  }
+
+  public Read(project : Project, text : string) : Project
+  {
+    def file = project.File;
+    project.Format = "msbuild";
+    def root = Tree(file, text);
+    when (root == null || root.Name != "Project")
+      throw ProjectException(file, 1, 1, "an MSBuild project has <Project> as its root element");
+    // properties outside conditions, in order; $(Name) expands to them
+    def properties = SCG.Dictionary.[string, string](StringComparer.OrdinalIgnoreCase);
+    properties["MSBuildProjectDirectory"] = project.Root;
+    properties["MSBuildProjectName"] = Path.GetFileNameWithoutExtension(file);
+    def expand(s : string) : string
+    {
+      Text.RegularExpressions.Regex.Replace(s ?? "", @"\$\(([A-Za-z_][\w.]*)\)", m =>
+      {
+        mutable v; if (properties.TryGetValue(m.Groups[1].Value, out v)) v else m.Value
+      })
+    }
+    def local(path : string) : string { expand(path).Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar) }
+    foreach (group when group.Name == "PropertyGroup" && !group.Conditional in root.Children)
+      foreach (p when !p.Conditional in group.Children) properties[p.Name] = expand(p.Text.Trim());
+    def property(name : string) : string { mutable v; if (properties.TryGetValue(name, out v) && v.Length > 0) v else null }
+    project.Name = property("AssemblyName") ?? property("Name") ?? Path.GetFileNameWithoutExtension(file);
+    match (property("OutputType"))
+    {
+      | null => ()
+      | kind =>
+        match (kind.ToLowerInvariant())
+        {
+          | "exe" | "winexe" => project.Kind = "program"
+          | "library" => project.Kind = "library"
+          | _ => throw ProjectException(file, 1, 1, "OutputType `" + kind + "' is not Exe, WinExe or Library")
+        }
+    }
+    when (property("Version") != null) project.Version = property("Version");
+    when (property("DefineConstants") != null)
+      foreach (symbol in property("DefineConstants").Split(array[';', ','], StringSplitOptions.RemoveEmptyEntries))
+        project.Options.Add("-define:" + symbol.Trim());
+    def sources = SCG.List.[string]();
+    foreach (group when group.Name == "ItemGroup" && !group.Conditional in root.Children)
+      foreach (item when !item.Conditional in group.Children)
+      {
+        def include = item.Attribute("Include");
+        def at(message : string) : ProjectException { ProjectException(file, item.Line, item.Column, message) }
+        match (item.Name)
+        {
+          | "Compile" when include != null =>
+            def path = Path.GetFullPath(Path.Combine(project.Root, local(include)));
+            unless (IO.File.Exists(path)) throw at("the source `" + include + "' does not exist");
+            sources.Add(path)
+          | "Reference" when include != null =>
+            def name = include.Split(',')[0].Trim();
+            def hint = item.Children.Find(c => c.Name == "HintPath");
+            def hinted = if (hint != null) Path.GetFullPath(Path.Combine(project.Root, local(hint.Text.Trim()))) else null;
+            if (hinted != null && IO.File.Exists(hinted)) project.Assemblies.Add(hinted)
+            else if (name.StartsWith("Nemerle", StringComparison.Ordinal)) project.Toolchain.Add(name)
+            else unless (Framework(name))
+              throw at("the reference `" + name + "' is not found" + (if (hint != null) " (HintPath " + hint.Text.Trim() + ")" else ""))
+          | "ProjectReference" when include != null =>
+            def path = local(include);
+            unless (path.EndsWith(Project.Extension, StringComparison.OrdinalIgnoreCase))
+              throw at("`" + include + "' is not a Nemerle project; a project uses " + Project.Extension + " projects only");
+            project.Projects.Add(path);
+            project.places["references.projects\0" + path] = (item.Line, item.Column)
+          | "PackageReference" when include != null =>
+            def version = item.Attribute("Version") ?? (match (item.Children.Find(c => c.Name == "Version")) { | null => null | v => v.Text.Trim() });
+            when (version == null) throw at("the package `" + include + "' has no Version");
+            project.Packages.Add(ProjectPackage(include, version));
+            project.places["references.packages\0" + include] = (item.Line, item.Column)
+          | _ => () // Content, Folder, None, ...: nothing to build
+        }
+      }
+    project.SourceList = sources;
+    project
+  }
+}

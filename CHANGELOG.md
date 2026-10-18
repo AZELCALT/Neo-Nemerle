@@ -84,6 +84,11 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
   diagnostics for the workspace (across `using` and exported types), hover and go-to-definition from a background
   compile (`nemerle-lsp --check`). The VS Code / VSCodium extension ships as a `.vsix` carrying the server
   (`tools/language-server/`).
+- **Projects:** a folder with a `.nproj` file (a small declarative TOML subset: name, version, references to
+  assemblies, other projects and NuGet packages, compiler options) is a project; its sources are every `.n` file
+  under it. `ncc init`, `ncc build`, `ncc run` and `ncc clean` make, build (incrementally, used projects first) and
+  run it, and the language server reads it. Upstream's MSBuild `.nproj` files are read too (sources, references,
+  project and package references, defines), into the same model.
 - **Build:** `./bootstrap` builds everything from the pinned compiler in `boot/coreclr` and runs every test suite.
   `--update-boot` refreshes the pinned compiler once everything passes.
 

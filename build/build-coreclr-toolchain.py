@@ -86,8 +86,8 @@ for number in (1, 2):
               runtime / 'System.Xml.XDocument.dll', runtime / 'System.Linq.dll'],
               'Nemerle.Compiler.snk', ['-target:library', '-source-root:' + str(repo / 'macros'), *new_macros])
         # and so is its command-line front end (the copied one was built against the previous API)
-        build('cli1', previous, [repo / 'ncc/Nemerle/CommandlineCompiler.n'],
-              current / 'ncc.exe', [current / 'Nemerle.Compiler.dll', runtime / 'System.Console.dll'], 'Nemerle.Compiler.snk',
+        build('cli1', previous, [repo / 'ncc/Nemerle/CommandlineCompiler.n', repo / 'ncc/Nemerle/ProjectCommands.n'],
+              current / 'ncc.exe', [current / 'Nemerle.Compiler.dll', runtime / 'System.Console.dll', runtime / 'System.Linq.dll'], 'Nemerle.Compiler.snk',
               ['-source-root:' + str(repo / 'ncc'), *new_macros])
         new_macros = ['-no-stdmacros', '-macros:' + str(stage_macros / 'Nemerle.Macros.dll')]
     # Compile macros in an isolated output directory with their real identity;
@@ -98,7 +98,7 @@ for number in (1, 2):
                runtime / 'System.Xml.ReaderWriter.dll', runtime / 'System.Xml.XmlSerializer.dll',
                runtime / 'System.Xml.XDocument.dll', runtime / 'System.Linq.dll'],
               'Nemerle.Compiler.snk', ['-target:library', '-source-root:' + str(repo / 'macros'), *new_runtime, *new_macros])
-        build('cli2', previous, [repo / 'ncc/Nemerle/CommandlineCompiler.n'],
-              current / 'ncc.exe', [current / 'Nemerle.Compiler.dll', runtime / 'System.Console.dll'], 'Nemerle.Compiler.snk', ['-source-root:' + str(repo / 'ncc'), *new_runtime, *new_macros])
+        build('cli2', previous, [repo / 'ncc/Nemerle/CommandlineCompiler.n', repo / 'ncc/Nemerle/ProjectCommands.n'],
+              current / 'ncc.exe', [current / 'Nemerle.Compiler.dll', runtime / 'System.Console.dll', runtime / 'System.Linq.dll'], 'Nemerle.Compiler.snk', ['-source-root:' + str(repo / 'ncc'), *new_runtime, *new_macros])
     previous = current
 print('Verified CoreCLR source toolchain:', previous / 'ncc.exe', flush=True)

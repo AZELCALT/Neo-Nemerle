@@ -47,6 +47,19 @@ Three things are worth noticing already:
 A program that uses the standard library needs `Nemerle.dll` next to it at run time. It is in the toolchain directory;
 copy it with your program.
 
+## A project
+
+For more than one file, make a project. `ncc init` writes one, and `ncc run` builds and runs it:
+
+```sh
+ncc init hello
+cd hello
+ncc run
+```
+
+The project's folder is its source root, and `hello.nproj` names it and lists what it references. Chapter 13
+covers projects.
+
 ## Running a file as a script
 
 The same file runs without a build step:

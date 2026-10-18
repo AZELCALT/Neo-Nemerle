@@ -20,7 +20,10 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   - the files they import (`using a.b` is `<root>/a/b.n`), transitively;
   - every workspace file that exports a type (global types are reached without a `using`).
 
-  The workspace is a program when `<root>/main.n` is among them, a library otherwise. Its errors and warnings
+  When the workspace folder is a project (a `.nproj` file), the project says whether it is a program, where it
+  starts, and what it references: the references its last `ncc build` resolved (`out/NAME.references`, packages and
+  other projects included). Otherwise the workspace is a program when `<root>/main.n` is among them, a library
+  otherwise. Its errors and warnings
   (type errors, `NotYet`, type changes, threads, export conflicts) are published for every file they are in, open
   or not, merged with the parse diagnostics. Each typed reference (a local, a member, a constructor) becomes a fact
   with its type and its declaration: hover and go-to-definition answer from the latest check. A compilation with

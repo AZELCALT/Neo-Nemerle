@@ -14,5 +14,6 @@
 - [Grammars and spaces](10-grammars.md)
 - [Scripts](11-scripts.md)
 - [Working with .NET](12-dotnet.md)
+- [Projects](13-projects.md)
 
 [Appendix: syntax at a glance](appendix-syntax.md)

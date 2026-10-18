@@ -46,6 +46,7 @@ using Nemerle.Compiler.compilation_options;
 using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.Source;
 using Nemerle.Compiler.Utility;
+using Nemerle.ProjectCommands;
 
   internal module MainClass
   {
@@ -90,6 +91,9 @@ using Nemerle.Compiler.Utility;
         }
       #endif
       }
+      // `ncc init|build|run|clean`: a project command, not a compilation
+      def arguments = Environment.GetCommandLineArgs().NToList().Tail;
+      when (Projects.IsCommand(arguments)) Environment.Exit(Projects.Run(arguments));
       Options = CompilationOptions();
       Manager = ManagerClass(Options);
       Manager.InitOutput(Console.Out);
