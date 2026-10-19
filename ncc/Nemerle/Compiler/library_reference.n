@@ -642,6 +642,18 @@ using Nemerle.Compiler.Utility;
       [Accessor (Header)]
       protected fun_header  : TFunHeader;
       protected is_var_args : bool;
+
+      // using a constructor uses its type (as for a type built here), so an obsolete type is reported where it is
+      // constructed, `SHA1Managed()`, not only where it is named
+      public override HasBeenUsed : bool
+      {
+        get { base.HasBeenUsed }
+        set
+        {
+          base.HasBeenUsed = value;
+          when (value && handle.IsConstructor) DeclaringType.HasBeenUsed = true
+        }
+      }
       
       public this (tenv : Map [string, StaticTypeVar], lib : LibraryReference, h : SR.MethodBase)
       {
