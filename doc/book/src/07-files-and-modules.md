@@ -168,6 +168,10 @@ def z = 1;
 `z' is NotYet here: its top-level binding is at line 2
 ```
 
+A top-level `mutable x;` written without a value declares `x` but does not give it one: its first value is the first
+top-level `x = ...`, and reading it before that is NotYet too. The error says where it gets its first value, or that it
+never gets one.
+
 Files that import each other while one of them has top-level code are reported. An imported file's top-level code
 runs in its type initializer, which holds the file's lock until it ends: starting a thread or task there is warned,
 and work that uses the file while the top-level code waits for it (as `Parallel` always does) is an error, since it

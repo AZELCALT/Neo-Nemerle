@@ -314,7 +314,10 @@ if ran.stdout.split() != ['config', 'runs', 'main', 'config', 'hello', 'from', '
 for name, text, diagnostic in (('bare', 'using lib.config;\nSystem.Console.WriteLine(name);', 'unbound name'),
                                ('unimported', 'System.Console.WriteLine(lib.config.name);', 'unbound name'),
                                ('private', 'using lib.config;\nSystem.Console.WriteLine(lib.config.secret);', 'cannot access'),
-                               ('early', 'System.Console.WriteLine(x);\ndef x = 42;', 'is NotYet here')):
+                               ('early', 'System.Console.WriteLine(x);\ndef x = 42;', 'is NotYet here'),
+                               ('no-value', 'mutable x;\nSystem.Console.WriteLine($"$x");', 'declared at line 1 (mutable x;) but never given a value'),
+                               ('later-value', 'mutable x;\nSystem.Console.WriteLine(x);\nx = 10;', 'gets its first one at line 3'),
+                               ('hint', 'WriteLine("hi");', 'it is System.Console.WriteLine: add `using System.Console;\'')):
     source('init/main.n', text)
     run([runtime, compiler, init / 'main.n', init / 'lib/config.n', '-source-root:' + str(init), '-out:' + str(work / ('init-' + name + '.exe')),
          '-no-color', *modern_references], False, diagnostic)
@@ -326,6 +329,11 @@ run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.
      '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-other.runtimeconfig.json')
 if run([runtime, work / 'init-other.exe']).stdout.split() != ['other']: raise RuntimeError('-main:other')
+# a variable declared without a value and given one before it is read is fine
+source('init/main.n', 'mutable x;\nx = 10;\nSystem.Console.WriteLine(x);')
+run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'init-assigned.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-assigned.runtimeconfig.json')
+if run([runtime, work / 'init-assigned.exe']).stdout.split() != ['10']: raise RuntimeError('mutable x; x = 10')
 source('init/main.n', 'def x : int = 42;\ndef show() { System.Console.WriteLine(x) }\nshow();')
 run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'init-typed.exe'), '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-typed.runtimeconfig.json')

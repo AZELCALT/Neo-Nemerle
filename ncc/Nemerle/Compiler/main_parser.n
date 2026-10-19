@@ -604,14 +604,57 @@ using Nemerle.Compiler.Utility;
         // before its first binding a value does not exist yet: a direct read of it there is NotYet, which nothing
         // accepts (a lambda or local function reads the storage, so it may come first)
         def firstBinding : SCG.Dictionary[string, int * Location] = SCG.Dictionary();
+        // `mutable x;` (no value) declares x without binding it: its first value is the first top-level statement
+        // that assigns it (outside functions and lambdas, which run later)
+        def declaredOnly : SCG.Dictionary[string, Location] = SCG.Dictionary();
+        def assigns(e : PExpr, name : string) : bool
+        {
+          mutable found = false; mutable depth = 0;
+          _ = Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+          {
+            match (node)
+            {
+              | _ is PExpr.Lambda | _ is PExpr.DefFunctions => if (after) { depth-- } else { depth++ }
+              | PExpr.Assign(PExpr.Ref(target), _) when depth == 0 && target.Id == name => found = true
+              | _ => ()
+            }
+            node
+          });
+          found
+        }
         for (mutable i = 0; i < collected.Count; i++)
+        {
           match (collected[i][0])
           {
+            | PExpr.DefMutable(PExpr.Ref(name) as at, null) | PExpr.DefMutable(PExpr.TypeEnforcement(PExpr.Ref(name) as at, _), null) =>
+              unless (firstBinding.ContainsKey(name.Id) || declaredOnly.ContainsKey(name.Id)) declaredOnly[name.Id] = at.Location
             | PExpr.Define(PExpr.Ref(name) as at, _) | PExpr.DefMutable(PExpr.Ref(name) as at, _)
             | PExpr.Define(PExpr.TypeEnforcement(PExpr.Ref(name) as at, _), _) | PExpr.DefMutable(PExpr.TypeEnforcement(PExpr.Ref(name) as at, _), _) =>
               unless (firstBinding.ContainsKey(name.Id)) firstBinding[name.Id] = (i, at.Location)
             | _ => ()
           }
+          foreach (pair in declaredOnly)
+            when (!firstBinding.ContainsKey(pair.Key) && assigns(collected[i][0], pair.Key))
+              firstBinding[pair.Key] = (i, collected[i][0].Location);
+        }
+        // declared and never given a value at the top level: every direct read of it there is NotYet
+        foreach (pair in declaredOnly)
+          unless (firstBinding.ContainsKey(pair.Key)) firstBinding[pair.Key] = (int.MaxValue, pair.Value);
+        def notYet(at : Location, name : string) : void
+        {
+          def (index, bound) = firstBinding[name];
+          def declared = if (declaredOnly.ContainsKey(name)) declaredOnly[name] else Location.Default;
+          Message.Error(at,
+            if (index == int.MaxValue)
+              $"`$name' is NotYet here: it is declared at line $(declared.Line) (mutable $name;) but never given a value; give it one (mutable $name = ...;, or $name = ...; before this line)"
+            else if (declared.Line > 0)
+              $"`$name' is NotYet here: it is declared at line $(declared.Line) without a value and gets its first one at line $(bound.Line)"
+            else
+              $"`$name' is NotYet here: its top-level binding is at line $(bound.Line)")
+        }
+        def early(name : string, j : int) : bool { firstBinding.ContainsKey(name) && firstBinding[name][0] > j }
+        def splice = System.Text.RegularExpressions.Regex(@"\$(?:([A-Za-z_]\w*)|\(([^)]*)\))");
+        def word = System.Text.RegularExpressions.Regex(@"[A-Za-z_]\w*");
         for (mutable j = 0; j < collected.Count; j++)
         {
           mutable depth = 0;
@@ -620,8 +663,18 @@ using Nemerle.Compiler.Utility;
             match (e)
             {
               | _ is PExpr.Lambda | _ is PExpr.DefFunctions => if (after) { depth-- } else { depth++ }
-              | PExpr.Ref(used) when !after && !inPattern && depth == 0 && firstBinding.ContainsKey(used.Id) && firstBinding[used.Id][0] > j =>
-                Message.Error(e.Location, $"`$(used.Id)' is NotYet here: its top-level binding is at line $(firstBinding[used.Id][1].Line)")
+              // an interpolated string ($"..." is parsed as Nemerle.IOMacros.sprint("...")) reads the names of its
+              // splices ($x, $(x + 1))
+              | PExpr.Call(PExpr.Member(PExpr.Member(PExpr.Ref(ns), Splicable.Name(io)), Splicable.Name(sprint)), [PExpr.Literal(Literal.String(text))])
+                  when !after && depth == 0 && ns.Id == "Nemerle" && io.Id == "IOMacros" && sprint.Id == "sprint" =>
+                foreach (m is System.Text.RegularExpressions.Match in splice.Matches(text))
+                {
+                  def inside = if (m.Groups[1].Success) m.Groups[1].Value else m.Groups[2].Value;
+                  mutable reported = false;
+                  foreach (n is System.Text.RegularExpressions.Match in word.Matches(inside))
+                    when (!reported && early(n.Value, j)) { notYet(e.Location, n.Value); reported = true }
+                }
+              | PExpr.Ref(used) when !after && !inPattern && depth == 0 && early(used.Id, j) => notYet(e.Location, used.Id)
               | _ => ()
             }
             e
@@ -4004,7 +4057,7 @@ using Nemerle.Compiler.Utility;
                             };
                           PExpr.Define (loc + expr.Location, define, expr)
 
-                        | x => fatal_error(x, "expecting `def x = expr' or `def f () { .. }'");
+                        | x => fatal_error(x, "expecting `def x = expr' or `def f () { .. }' (a def is given its value where it is written; a variable that gets one later is `mutable x')");
                       }
                     | _ => parse_define()
                   }

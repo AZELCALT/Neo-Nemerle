@@ -2,6 +2,9 @@
 
 ## Values and mutability
 
+The examples open `System.Console` with `using System.Console;`, so `WriteLine` is short for
+`System.Console.WriteLine`. Without that line, write the full name.
+
 `def` binds a name to a value. The binding can't change:
 
 ```nemerle

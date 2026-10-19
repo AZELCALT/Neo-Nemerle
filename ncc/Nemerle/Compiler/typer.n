@@ -1007,6 +1007,30 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       expr is TExpr.Error
     }
 
+    /// For an unbound plain name: where a well-known static member of that name lives (`WriteLine' is
+    /// System.Console.WriteLine), as a hint.
+    WhereNameIs(expr : PExpr) : string
+    {
+      match (expr)
+      {
+        | PExpr.Ref(name) =>
+          def homes = ["System.Console", "System.Math", "System.String", "System.Convert", "System.IO.File", "System.IO.Path",
+                       "System.IO.Directory", "System.Environment", "System.Array", "System.Linq.Enumerable"];
+          def found = homes.Filter(home =>
+            match (try { env.LookupType(NString.Split(home, '.')) } catch { | _ => None() })
+            {
+              | Some(ti) => ti.LookupMember(name.Id).Exists(m => m.IsStatic && (m.Attributes %&& NemerleModifiers.Public))
+              | None => false
+            });
+          match (found)
+          {
+            | [] => ""
+            | home :: _ => $" (it is $home.$(name.Id): add `using $home;', or write $home.$(name.Id))"
+          }
+        | _ => ""
+      }
+    }
+
     IsLValue (e : TExpr, need_ref : bool) : bool
     {
       match (e)
@@ -3745,7 +3769,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 false
                   
               | _ =>
-                ReportLocatedError(expr.Location, messenger, $"unbound name `$expr'");
+                ReportLocatedError(expr.Location, messenger, $"unbound name `$expr'" + WhereNameIs(expr));
                 false
                   
             }
