@@ -29,7 +29,9 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   with its type and its declaration: hover and go-to-definition answer from the latest check. A compilation with
   errors stops before typing everything, so a file it typed nothing of keeps its earlier facts.
 
-- **Completion** writes a marker identifier at the cursor and runs the checker in the compiler's completion mode:
+- **Keywords and syntax forms** (snippets of `def`, `match`, `foreach`, `try`/`catch`, a function, a class, a
+  variant, ...) are offered for the word being typed, with no compile, so completion always has something.
+- **Typed completion** writes a marker identifier at the cursor and runs the checker in the compiler's completion mode:
   when the typer reaches the marker, it lists what fits there from its own view (the members of the object's type
   after a dot, the types, namespaces and static members of a path, else the locals in scope, the file's functions and
   state, what the `using`s open, and keywords).
@@ -88,8 +90,8 @@ Measured on this machine:
 
 ## Limits
 
-- Completion types the file with the marker at the cursor: another unfinished line elsewhere in the file (a parse
-  error) stops the compiler before it gets there, and nothing is offered.
+- Typed completion types the file with the marker at the cursor; when another unfinished line stops the compiler,
+  the lines with errors are blanked and it types again, so names bound only there are missing.
 - Types (and their constructors) are not renamed yet; type annotations are not facts, so a rename would miss them.
 - Find-references and rename compile the whole workspace each time (a few seconds for a small one).
 - Hover and go-to-definition come from the latest finished check: right after an edit they describe the previous text

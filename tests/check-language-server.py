@@ -222,8 +222,24 @@ try:
     l, ch = position(typing, len(typing) - 1)
     items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']]
     check('Pen' in items, 'completion of `Pe` offers the exported type: %s' % items)
+    # another unfinished line in the file: the typed completion still gets to the cursor
+    typing = edit(fixed + 'def broken = (1 + ;\ndef w = p.\n')
+    l, ch = position(typing, len(typing) - 1)
+    items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']]
+    check('Width' in items, 'completion after `p.` with another broken line: %s' % items)
+    # keywords and syntax forms, with or without a compile
+    typing = edit(fixed + 'ma\n')
+    l, ch = position(typing, len(typing) - 1)
+    result = c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']
+    match = [i for i in result if i['label'] == 'match' and i.get('insertTextFormat') == 2]
+    check(match and '| ${2:pattern}' in match[0]['insertText'], 'the match form as a snippet: %s' % result)
+    check(any(i['label'] == 'mask' and i['kind'] == 14 for i in result), 'keywords for the prefix: %s' % [i['label'] for i in result])
+    typing = edit(fixed + 'def x = Pen().\n')
+    l, ch = position(typing, len(typing) - 1)
+    result = c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']
+    check(not any(i['kind'] in (14, 15) for i in result), 'no keywords after a dot: %s' % [i['label'] for i in result])
     edit(fixed)
-    print('PASS: completion (members after a dot, names in scope)')
+    print('PASS: completion (members after a dot, names in scope, despite another broken line; keywords and forms)')
     # find-references and rename, over the whole workspace
     l, ch = position(fixed, offset_of(fixed, 'p.Width'))
     refs = c.request('textDocument/references', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'context': {'includeDeclaration': True}})

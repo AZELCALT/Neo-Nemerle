@@ -47,15 +47,35 @@ public module Checker
     def flag(name : string) { request[name] != null && request[name].GetValue.[bool]() }
     // completion: the marker goes where the cursor is, and the typer says what fits there
     mutable completion = null;
+    mutable completing = null;
+    mutable cursorLine = 0;
     when (request["complete"] != null)
     {
       def at = request["complete"];
       def path = Path.GetFullPath(str(at["path"]));
-      def (text, prefix) = Mark(Text(path, overlay) ?? "", at["line"].GetValue.[int](), at["column"].GetValue.[int]());
+      cursorLine = at["line"].GetValue.[int]();
+      def (text, prefix) = Mark(Text(path, overlay) ?? "", cursorLine, at["column"].GetValue.[int]());
       overlay[path] = text;
-      completion = prefix;
+      completion = prefix; completing = path;
     }
-    def result = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion);
+    mutable result = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion);
+    // an unfinished line elsewhere in the file stops the compiler before the cursor: without the lines its errors are
+    // on (blanked, so lines keep their numbers), the typer gets to the cursor
+    when (completing != null && (result["completion"] == null || result["completion"].AsArray().Count == 0))
+    {
+      def broken = SCG.HashSet.[int]();
+      foreach (d in result["diagnostics"].AsArray())
+        when (d["severity"].GetValue.[int]() == 1 && Path.GetFullPath(str(d["path"])) == completing && d["line"].GetValue.[int]() != cursorLine)
+          for (mutable l = d["line"].GetValue.[int](); l <= d["endLine"].GetValue.[int](); l++) when (l != cursorLine) _ = broken.Add(l);
+      when (broken.Count > 0)
+      {
+        def lines = overlay[completing].Split('\n');
+        foreach (l when l >= 1 && l <= lines.Length in broken) lines[l - 1] = string(' ', lines[l - 1].Length);
+        overlay[completing] = string.Join("\n", lines);
+        def retry = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion);
+        when (retry["completion"] != null && retry["completion"].AsArray().Count > 0) result = retry;
+      }
+    }
     output.Write(result.ToJsonString());
     output.Flush();
     0

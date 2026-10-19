@@ -56,8 +56,9 @@ unless it says so.
 - **Debugging needs netcoredbg installed.** The extension finds it on `PATH` (or `nemerle.debugger.path`) and
   points to its releases otherwise; the installers do not fetch it.
 
-- **Completion needs the rest of the file to parse.** It types the file with a marker at the cursor; an unfinished
-  line elsewhere stops the compiler before it gets there. Types are not renamed yet (type annotations are not
-  facts), and find-references and rename compile the whole workspace each time.
+- **Typed completion skips broken lines elsewhere.** When an unfinished line elsewhere in the file stops the
+  compiler, the lines with errors are blanked and the file is typed again, so names bound only on those lines are
+  not offered (keywords and syntax forms always are). Types are not renamed yet (type annotations are not facts),
+  and find-references and rename compile the whole workspace each time.
 - **Windows installer:** `install.ps1` and `install.cmd` were run on Windows once; a .NET assembly version mismatch
   there still needs a small fix. The VS Code extension's Windows launch (`shell: true`) is untested.

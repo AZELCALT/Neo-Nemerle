@@ -440,11 +440,65 @@ public sealed class Server
 
   // ---- completion, references, rename ----
 
+  /// Nemerle's basic forms, as snippets (LSP snippet syntax): offered for the word being typed, with no compile.
+  static Forms : array[string * string * string] = array[
+    ("def", "def ${1:name} = ${2:value};", "a value"),
+    ("mutable", "mutable ${1:name} = ${2:value};", "a variable"),
+    ("if", "if (${1:condition}) ${2:then} else ${3:otherwise}", "if / else (both branches)"),
+    ("when", "when (${1:condition}) ${2:body}", "when (no else)"),
+    ("unless", "unless (${1:condition}) ${2:body}", "unless (no else)"),
+    ("match", "match (${1:value})\n{\n  | ${2:pattern} => ${3:result}\n  | _ => ${4:otherwise}\n}", "match with cases"),
+    ("foreach", "foreach (${1:x} in ${2:items})\n{\n  $0\n}", "foreach over a collection"),
+    ("for", "for (mutable ${1:i} = 0; $1 < ${2:n}; $1++)\n{\n  $0\n}", "counting loop"),
+    ("while", "while (${1:condition})\n{\n  $0\n}", "while loop"),
+    ("try", "try\n{\n  $0\n}\ncatch\n{\n  | e is ${1:System.Exception} => ${2:()}\n}", "try / catch"),
+    ("fun", "fun (${1:x}) { $0 }", "a function value"),
+    ("function", "${1:Name}(${2:x} : ${3:int}) : ${4:int}\n{\n  $0\n}", "a function of the file"),
+    ("class", "class ${1:Name}\n{\n  public this() { }\n  $0\n}", "a class"),
+    ("export", "export class ${1:Name}\n{\n  $0\n}", "a type for the whole program"),
+    ("variant", "variant ${1:Name}\n{\n  | ${2:First}\n  | ${3:Second} { ${4:value} : ${5:int} }\n}", "a variant (closed set of cases)"),
+    ("using", "using ${1:System};", "open a namespace or file"),
+    ("macro", "macro ${1:Name}(${2:expr})\n{\n  <[ \\$${2:expr} ]>\n}", "a macro"),
+  ];
+  static Words : array[string] = array["def", "mutable", "if", "else", "when", "unless", "match", "foreach", "for", "while", "do",
+    "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
+    "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "mask",
+    "export", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void",
+    "abstract", "override", "virtual", "sealed", "ref", "out", "params", "implements", "where"];
+
+  /// The keywords and forms that start with the word before the cursor (none after a dot).
+  static Basics(text : string, offset : int) : JsonArray
+  {
+    def items = JsonArray();
+    def ident(c : char) { char.IsLetterOrDigit(c) || c == '_' }
+    mutable start = Math.Min(offset, text.Length); while (start > 0 && ident(text[start - 1])) start--;
+    def word = text.Substring(start, Math.Min(offset, text.Length) - start);
+    def afterDot = start > 0 && text[start - 1] == '.';
+    unless (afterDot)
+    {
+      foreach ((label, body, detail) when label.StartsWith(word, StringComparison.Ordinal) in Forms)
+      {
+        def x = JsonObject(); x["label"] = JsonValue.Create(label); x["kind"] = JsonValue.Create(15 : int); // snippet
+        x["detail"] = JsonValue.Create(detail); x["insertText"] = JsonValue.Create(body); x["insertTextFormat"] = JsonValue.Create(2 : int);
+        x["sortText"] = JsonValue.Create("1" + label);
+        items.Add(x);
+      }
+      foreach (k when k.StartsWith(word, StringComparison.Ordinal) in Words)
+      {
+        def x = JsonObject(); x["label"] = JsonValue.Create(k); x["kind"] = JsonValue.Create(14 : int); x["sortText"] = JsonValue.Create("2" + k);
+        items.Add(x);
+      }
+    }
+    items
+  }
+
   Completions(doc : Document, position : JsonNode) : JsonNode
   {
     def result = JsonObject(); result["isIncomplete"] = JsonValue.Create(false);
     def items = JsonArray();
     def path = PathOf(doc.Uri);
+    // what the compiler offers first (members, names in scope), then the keywords and forms, each label once
+    def basics = Basics(doc.Text, Ensure(doc).Lines.Offset(Int(position["line"]) + 1, Int(position["character"]) + 1));
     when (typecheck && root != null && path != null)
     {
       def request = CheckRequest();
@@ -460,6 +514,11 @@ public sealed class Server
           log.WriteLine("completion: " + items.Count.ToString() + " item(s) in " + started.ElapsedMilliseconds.ToString() + " ms")
       }
     }
+    def labels = SCG.HashSet.[string](items.Select(i => Str(i["label"]) + "/" + Int(i["kind"]).ToString()));
+    def typedWords = SCG.HashSet.[string](items.Where(i => Int(i["kind"]) == 14).Select(i => Str(i["label"])));
+    foreach (b in basics)
+      when (Int(b["kind"]) == 15 || !typedWords.Contains(Str(b["label"])))
+        when (labels.Add(Str(b["label"]) + "/" + Int(b["kind"]).ToString())) items.Add(b.DeepClone());
     result["items"] = items;
     result
   }
