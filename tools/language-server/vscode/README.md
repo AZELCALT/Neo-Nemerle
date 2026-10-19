@@ -25,7 +25,7 @@ Or in the editor: Extensions view, `...` menu, *Install from VSIX...*.
 Run and Debug (F5) builds the folder's project with `ncc build` and debugs `out/<name>.exe`: breakpoints in `.n`
 files, stepping, the call stack, parameters, locals and top-level state. The debugger is
 [netcoredbg](https://github.com/Samsung/netcoredbg) (MIT), which works in VS Code and VSCodium alike: put it on `PATH`
-or set `nemerle.debugger.path`. Build with `options = ["-debug+"]` in the project's `[compiler]` section.
+or set `nemerle.debugger.path` (the installers fetch it into their folder, where the extension finds it). Build with `options = ["-debug+"]` in the project's `[compiler]` section.
 
 ## Settings
 

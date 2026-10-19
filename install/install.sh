@@ -3,7 +3,7 @@
 # (nemerle-lsp), and the VS Code / VSCodium extension as a .vsix next to this script (install/nemerle-<version>.vsix),
 # which it also installs in VS Code or VSCodium (--editor none: only the .vsix). Run it from a clone of the repository.
 #
-#   install/install.sh [--prefix DIR] [--bin DIR] [--build] [--no-lsp] [--editor auto|code|codium|none] [--uninstall]
+#   install/install.sh [--prefix DIR] [--bin DIR] [--build] [--no-lsp] [--no-debugger] [--editor auto|code|codium|none] [--uninstall]
 #
 # Needs only the .NET 10 runtime (https://dotnet.microsoft.com/download/dotnet/10.0). The editor extension also needs npm.
 set -eu
@@ -13,6 +13,7 @@ prefix="${XDG_DATA_HOME:-$HOME/.local/share}/nemerle"
 bin="$HOME/.local/bin"
 build=0
 lsp=1
+debugger=1
 editor=auto
 uninstall=0
 
@@ -25,6 +26,7 @@ while [ $# -gt 0 ]; do
     --bin) [ $# -ge 2 ] || fail "--bin needs a directory"; bin=$2; shift 2 ;;
     --build) build=1; shift ;;
     --no-lsp) lsp=0; shift ;;
+    --no-debugger) debugger=0; shift ;;
     --editor) [ $# -ge 2 ] || fail "--editor needs auto, code, codium or none"; editor=$2; shift 2 ;;
     --uninstall) uninstall=1; shift ;;
     -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -89,6 +91,29 @@ launcher() {
 launcher ncc ncc.exe "-target-references:\"$tc/references\" "
 launcher nscript nscript.exe ""
 [ $lsp = 1 ] && launcher nemerle-lsp nemerle-lsp.exe ""
+
+# --- the debugger: netcoredbg (MIT), which the extension debugs with; it looks in $prefix/tools/netcoredbg ---
+if [ $lsp = 1 ] && [ $debugger = 1 ]; then
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) asset=netcoredbg-linux-amd64.tar.gz ;;
+    Linux-aarch64|Linux-arm64) asset=netcoredbg-linux-arm64.tar.gz ;;
+    Darwin-*) asset=netcoredbg-osx-amd64.tar.gz ;;
+    *) asset="" ;;
+  esac
+  url="https://github.com/Samsung/netcoredbg/releases/latest/download/$asset"
+  dbg="$prefix/tools/netcoredbg"
+  if [ -z "$asset" ]; then say "Skipping the debugger: netcoredbg has no build for $(uname -s) $(uname -m)."
+  else
+    rm -rf "$dbg"; mkdir -p "$dbg"
+    if { command -v curl >/dev/null 2>&1 && curl -fsSL "$url" -o "$dbg/netcoredbg.tar.gz"; } ||
+       { command -v wget >/dev/null 2>&1 && wget -q "$url" -O "$dbg/netcoredbg.tar.gz"; }; then
+      tar -xzf "$dbg/netcoredbg.tar.gz" -C "$dbg" && rm -f "$dbg/netcoredbg.tar.gz"
+      say "The debugger: $dbg/netcoredbg/netcoredbg"
+    else
+      rm -rf "$dbg"; say "Skipping the debugger: netcoredbg could not be downloaded from $url (debug later with netcoredbg on PATH)."
+    fi
+  fi
+fi
 
 # --- the editor extension: a .vsix (next to this script) that carries the server, installed by the editor ---
 make_vsix() {  # prints the .vsix's path; nothing (and a reason on stderr) when it cannot be made

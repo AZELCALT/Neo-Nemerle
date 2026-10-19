@@ -49,9 +49,6 @@ unless it says so.
 
 ## Tooling
 
-- **Debugging needs netcoredbg installed.** The extension finds it on `PATH` (or `nemerle.debugger.path`) and
-  points to its releases otherwise; the installers do not fetch it.
-
 - **Typed completion skips broken lines elsewhere.** When an unfinished line elsewhere in the file stops the
   compiler, the lines with errors are blanked and the file is typed again, so names bound only on those lines are
   not offered (keywords and syntax forms always are). Types are not renamed yet (type annotations are not facts),

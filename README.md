@@ -76,6 +76,7 @@ The installer:
 | Commands go to | `~/.local/bin` (`--bin`) | `%LOCALAPPDATA%\Nemerle\bin`, added to your user `PATH` |
 | Build from source first | `--build` | `-Build` |
 | Skip the language server | `--no-lsp` | `-NoLsp` |
+| Skip the debugger (netcoredbg, fetched for the extension) | `--no-debugger` | `-NoDebugger` |
 | Editor extension (`none`: only the `.vsix`) | `--editor auto\|code\|codium\|none` | `-Editor auto\|code\|codium\|none` |
 | Remove everything | `--uninstall` | `-Uninstall` |
 

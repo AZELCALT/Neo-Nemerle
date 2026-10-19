@@ -16,6 +16,7 @@ param(
   [string]$Prefix = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Nemerle' } else { Join-Path $HOME '.local/share/nemerle' }),
   [switch]$Build,
   [switch]$NoLsp,
+  [switch]$NoDebugger,
   [ValidateSet('auto', 'code', 'codium', 'none')][string]$Editor = 'auto',
   [switch]$Uninstall
 )
@@ -100,6 +101,31 @@ New-Launcher 'nscript' 'nscript.exe' $false
 if (-not $NoLsp) { New-Launcher 'nemerle-lsp' 'nemerle-lsp.exe' $false }
 if ($onWindows) { Set-UserPath $bin $true }
 $env:Path = "$bin$([IO.Path]::PathSeparator)$env:Path"
+
+# --- the debugger: netcoredbg (MIT), which the extension debugs with; it looks in $Prefix\tools\netcoredbg ---
+if (-not $NoLsp -and -not $NoDebugger) {
+  $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  $asset = if ($onWindows) { if ($arch -eq 'X64') { 'netcoredbg-win64.zip' } else { $null } }
+           elseif ($IsMacOS) { 'netcoredbg-osx-amd64.tar.gz' }
+           elseif ($arch -eq 'Arm64') { 'netcoredbg-linux-arm64.tar.gz' } else { 'netcoredbg-linux-amd64.tar.gz' }
+  $dbg = Join-Path $Prefix 'tools\netcoredbg'
+  if (-not $asset) { Write-Host "Skipping the debugger: netcoredbg has no build for this machine ($arch)." }
+  else {
+    Remove-Item -Recurse -Force $dbg -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $dbg | Out-Null
+    $download = Join-Path $dbg $asset
+    try {
+      $ProgressPreference = 'SilentlyContinue'
+      Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/Samsung/netcoredbg/releases/latest/download/$asset" -OutFile $download
+      if ($asset.EndsWith('.zip')) { Expand-Archive -Path $download -DestinationPath $dbg -Force } else { & tar -xzf $download -C $dbg }
+      Remove-Item -Force $download
+      Write-Host "The debugger: $(Join-Path $dbg 'netcoredbg')"
+    } catch {
+      Remove-Item -Recurse -Force $dbg -ErrorAction SilentlyContinue
+      Write-Host "Skipping the debugger: netcoredbg could not be downloaded ($($_.Exception.Message)); debug later with netcoredbg on PATH."
+    }
+  }
+}
 
 # --- the editor extension: a .vsix (next to this script) that carries the server, installed by the editor ---
 function New-Vsix {

@@ -26,16 +26,32 @@ function hasDotnet10(dotnet) {
 
 // ---- debugging: netcoredbg (MIT) as the debug adapter, for VS Code and VSCodium alike ----
 
-function findOnPath(name) {
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
+function findOnPath(name, only) {
+  const exts = only || (process.platform === 'win32' ? ['.exe', '.cmd', ''] : ['']);
   for (const dir of (process.env.PATH || '').split(path.delimiter))
     for (const ext of exts) { const file = path.join(dir, name + ext); if (dir && fs.existsSync(file)) return file; }
   return null;
 }
 
-/// The debugger: the nemerle.debugger.path setting, else netcoredbg on PATH; null when there is none.
+/// Where the installers put netcoredbg (their default prefixes).
+function installedDebugger() {
+  const exe = process.platform === 'win32' ? 'netcoredbg.exe' : 'netcoredbg';
+  const homes = process.platform === 'win32'
+    ? [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Nemerle')]
+    : [path.join(process.env.XDG_DATA_HOME || path.join(require('os').homedir(), '.local', 'share'), 'nemerle')];
+  for (const home of homes.filter(Boolean)) {
+    const file = path.join(home, 'tools', 'netcoredbg', 'netcoredbg', exe);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+/// The debugger: the nemerle.debugger.path setting, else netcoredbg on PATH, else the one the installer fetched;
+/// null when there is none.
 function debuggerPath(settings) {
-  return settings.get('path') || findOnPath('netcoredbg');
+  // a .exe on Windows: a .cmd wrapper cannot be started as a debug adapter
+  const onPath = process.platform === 'win32' ? findOnPath('netcoredbg', ['.exe']) : findOnPath('netcoredbg');
+  return settings.get('path') || onPath || installedDebugger();
 }
 
 /// The project in a folder: its .nproj file's name setting (the binary is out/<name>.exe).
@@ -136,4 +152,4 @@ function activate(context) {
 
 function deactivate() { return client ? client.stop() : undefined; }
 
-module.exports = { activate, deactivate, _test: { serverCommand, hasDotnet10, debuggerPath, projectOf, completeConfiguration, adapterConfiguration } };
+module.exports = { activate, deactivate, _test: { serverCommand, hasDotnet10, debuggerPath, installedDebugger, projectOf, completeConfiguration, adapterConfiguration } };

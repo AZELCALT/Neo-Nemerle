@@ -36,6 +36,29 @@ try:
     check(r.returncode == 0, 'install.sh: ' + r.stdout + r.stderr)
     check(installed(prefix, 'nscript'), 'the commands install.sh installed run')
     check(vsix.exists(), 'install.sh writes ' + str(vsix))
+    # the debugger it fetched (skipped, and said so, without the network)
+    netcoredbg = prefix / 'tools/netcoredbg/netcoredbg/netcoredbg'
+    if 'Skipping the debugger' in r.stdout:
+        print('SKIP: the debugger download (%s)' % [l for l in r.stdout.splitlines() if 'Skipping the debugger' in l][0], flush=True)
+    else:
+        v = subprocess.run([str(netcoredbg), '--version'], capture_output=True, text=True)
+        check('NET Core debugger' in v.stdout, 'the fetched netcoredbg runs: ' + v.stdout + v.stderr)
+    # the extension finds a debugger where the installers put it (their default prefix)
+    xdg = work / 'xdg'; found = xdg / 'nemerle/tools/netcoredbg/netcoredbg/netcoredbg'
+    found.parent.mkdir(parents=True); found.write_text('#!/bin/sh\n'); found.chmod(0o755)
+    harness = work / 'find.js'
+    harness.write_text('''
+const Module = require('module'); const original = Module._load;
+Module._load = function (request) {
+  if (request === 'vscode-languageclient/node') return { LanguageClient: class {} };
+  if (request === 'vscode') return { workspace: { getConfiguration: () => ({ get: () => undefined }) }, window: {}, env: {}, Uri: {} };
+  return original.apply(this, arguments);
+};
+console.log(require(process.argv[2])._test.debuggerPath({ get: () => undefined }) || '');
+''')
+    out = subprocess.run(['node', str(harness), str(repo / 'tools/language-server/vscode/extension.js')], capture_output=True, text=True,
+                         env=dict(os.environ, XDG_DATA_HOME=str(xdg), PATH='/usr/bin:/bin')).stdout.strip()
+    check(out == str(found), 'the extension finds the installed debugger: %r' % out)
     ok, out = extension_check()
     check(ok, 'the .vsix of install.sh: ' + out)
     # the editor step: the editor's own --install-extension, after the old copied-in folder is removed
@@ -58,6 +81,9 @@ try:
                            capture_output=True, text=True)
         check(r.returncode == 0, 'install.ps1: ' + r.stdout + r.stderr)
         check(installed(prefix, 'nscript'), 'the commands install.ps1 installed run')
+        if 'Skipping the debugger' not in r.stdout:
+            v = subprocess.run([str(prefix / 'tools/netcoredbg/netcoredbg/netcoredbg'), '--version'], capture_output=True, text=True)
+            check('NET Core debugger' in v.stdout, 'the netcoredbg install.ps1 fetched runs: ' + v.stdout + v.stderr)
         ok, out = extension_check()
         check(ok, 'the .vsix of install.ps1: ' + out)
         print('PASS: install.ps1 (PowerShell 7) installs the commands and writes a working .vsix', flush=True)
