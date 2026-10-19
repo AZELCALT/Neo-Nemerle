@@ -736,6 +736,12 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       get { current_type }
     }
 
+    /// The locals in scope where the typer is (for code completion).
+    public CurrentLocalContext : LocalContext
+    {
+      get { local_context }
+    }
+
     IsTopLevel : bool
     {
       get { ! (parent_typer.IsSome) }

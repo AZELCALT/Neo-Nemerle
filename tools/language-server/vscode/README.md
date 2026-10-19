@@ -5,7 +5,7 @@ Language support for [Nemerle](https://github.com/AZELCALT/Neo-Nemerle), the rev
 - highlighting, including `grammar` and `space` blocks (parsed by Nitra with the file's own grammars);
 - diagnostics from the compiler's parser and Nitra, as you type;
 - typed diagnostics for the workspace (type errors, through `using` and exported types across files), hover with the
-  type of a name, and go-to-definition, from a background compile once edits settle;
+  type of a name, go-to-definition, completion, find-references and rename, from the compiler itself;
 - outline (document symbols) and folding.
 
 The extension carries its language server. It needs only the

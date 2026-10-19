@@ -29,8 +29,17 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   with its type and its declaration: hover and go-to-definition answer from the latest check. A compilation with
   errors stops before typing everything, so a file it typed nothing of keeps its earlier facts.
 
+- **Completion** writes a marker identifier at the cursor and runs the checker in the compiler's completion mode:
+  when the typer reaches the marker, it lists what fits there from its own view (the members of the object's type
+  after a dot, the types, namespaces and static members of a path, else the locals in scope, the file's functions and
+  state, what the `using`s open, and keywords).
+- **Find-references and rename** run a check of the whole workspace and use its facts: every use of the declaration
+  under the cursor (or of the one a use names). Rename edits the names alone, for locals, fields, properties,
+  methods and events.
+
 Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
-`semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover` and `definition`.
+`semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`, `references`,
+`prepareRename` and `rename`.
 
 Options: `--references DIR`, `--source-root DIR`, `--file-name-namespaces`, `--library DLL` (repeatable, for the
 typed check), `--no-typecheck`, `--log FILE`.
@@ -79,7 +88,10 @@ Measured on this machine:
 
 ## Limits
 
-- No completion, find-references or rename yet.
+- Completion types the file with the marker at the cursor: another unfinished line elsewhere in the file (a parse
+  error) stops the compiler before it gets there, and nothing is offered.
+- Types (and their constructors) are not renamed yet; type annotations are not facts, so a rename would miss them.
+- Find-references and rename compile the whole workspace each time (a few seconds for a small one).
 - Hover and go-to-definition come from the latest finished check: right after an edit they describe the previous text
   until the next check ends, and positions can be off by the edit in between.
 - Scripts (files that name `DependsOn`) need the scripting host and are not typed. A workspace without a `main.n`

@@ -56,9 +56,8 @@ unless it says so.
 - **Debugging needs netcoredbg installed.** The extension finds it on `PATH` (or `nemerle.debugger.path`) and
   points to its releases otherwise; the installers do not fetch it.
 
-- **The language server has no completion, references or rename.** Parse diagnostics, highlighting, folding and
-  symbols come as you type. Typed diagnostics for the workspace, hover and go-to-definition come from a background
-  compile after edits settle, so they lag the text until it ends; it recompiles everything each time, and scripts
-  (`DependsOn`) are not typed.
+- **Completion needs the rest of the file to parse.** It types the file with a marker at the cursor; an unfinished
+  line elsewhere stops the compiler before it gets there. Types are not renamed yet (type annotations are not
+  facts), and find-references and rename compile the whole workspace each time.
 - **Windows installer:** `install.ps1` and `install.cmd` were run on Windows once; a .NET assembly version mismatch
   there still needs a small fix. The VS Code extension's Windows launch (`shell: true`) is untested.

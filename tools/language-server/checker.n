@@ -16,6 +16,13 @@ using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.type_info;
 using Nemerle.Compiler.expr_walker;
 using Nemerle.Compiler.project;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.namespace_tree;
+using Nemerle.Compiler.global_env;
+using Nemerle.Compiler.CodeCompletionEngine;
+using Nemerle.Compiler.type_var;
+using Nemerle.Compiler.fixed_type;
 
 /// `nemerle-lsp --check`: one typed compilation of the workspace files an editor needs, in a process of its own (the
 /// server starts it, and kills it when a newer edit arrives). It reads a request on stdin and writes the diagnostics,
@@ -37,11 +44,40 @@ public module Checker
     def overlay = SCG.Dictionary.[string, string](StringComparer.Ordinal);
     foreach (f in request["files"].AsArray()) overlay[Path.GetFullPath(str(f["path"]))] = str(f["text"]);
     def libraries = if (request["libraries"] is JsonArray) request["libraries"].AsArray().Select(l => str(l)).ToList() else SCG.List();
-    def result = Check(root, overlay, str(request["references"]), libraries.NToList(),
-                       request["fileNameNamespaces"] != null && request["fileNameNamespaces"].GetValue.[bool]());
+    def flag(name : string) { request[name] != null && request[name].GetValue.[bool]() }
+    // completion: the marker goes where the cursor is, and the typer says what fits there
+    mutable completion = null;
+    when (request["complete"] != null)
+    {
+      def at = request["complete"];
+      def path = Path.GetFullPath(str(at["path"]));
+      def (text, prefix) = Mark(Text(path, overlay) ?? "", at["line"].GetValue.[int](), at["column"].GetValue.[int]());
+      overlay[path] = text;
+      completion = prefix;
+    }
+    def result = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion);
     output.Write(result.ToJsonString());
     output.Flush();
     0
+  }
+
+  /// The text with the completion marker at (line, column) (1-based), in place of the identifier there; and the
+  /// identifier's part before the cursor (the prefix to complete).
+  public Mark(text : string, line : int, column : int) : string * string
+  {
+    def lines = text.Split('\n');
+    if (line < 1 || line > lines.Length) (text, "")
+    else
+    {
+      def l = lines[line - 1];
+      def at = Math.Min(Math.Max(column - 1, 0), l.Length);
+      def ident(c : char) { char.IsLetterOrDigit(c) || c == '_' }
+      mutable start = at; while (start > 0 && ident(l[start - 1])) start--;
+      mutable stop = at; while (stop < l.Length && ident(l[stop])) stop++;
+      def prefix = l.Substring(start, at - start);
+      lines[line - 1] = l.Substring(0, start) + prefix + CompletionManager.Marker + l.Substring(stop);
+      (string.Join("\n", lines), prefix)
+    }
   }
 
   Text(path : string, overlay : SCG.Dictionary[string, string]) : string
@@ -51,7 +87,10 @@ public module Checker
   }
 
   /// The files to compile: the open files, what they import, and the workspace's exporters.
-  public Files(root : string, overlay : SCG.Dictionary[string, string]) : SCG.List[string]
+  public Files(root : string, overlay : SCG.Dictionary[string, string]) : SCG.List[string] { Files(root, overlay, false) }
+
+  /// With `all`, every workspace file (find-references and rename look at the whole workspace).
+  public Files(root : string, overlay : SCG.Dictionary[string, string], all : bool) : SCG.List[string]
   {
     def files = SCG.List.[string]();
     def seen = SCG.HashSet.[string](StringComparer.Ordinal);
@@ -71,7 +110,7 @@ public module Checker
       }
       catch { | _ => SCG.List() };
     foreach (path in workspace)
-      when (!seen.Contains(path)) { def text = Text(path, overlay); when (text != null && ExportLine.IsMatch(text)) add(path) }
+      when (!seen.Contains(path)) { def text = Text(path, overlay); when (text != null && (all || ExportLine.IsMatch(text))) add(path) }
     while (queue.Count > 0)
     {
       def text = Text(queue.Dequeue(), overlay);
@@ -86,8 +125,13 @@ public module Checker
 
   public Check(root : string, overlay : SCG.Dictionary[string, string], references : string, libraries : list[string],
                fileNameNamespaces : bool) : JsonObject
+  { Check(root, overlay, references, libraries, fileNameNamespaces, false, null) }
+
+  /// `completion` (the prefix at the marker) asks for what can be written at the marker instead of diagnostics.
+  public Check(root : string, overlay : SCG.Dictionary[string, string], references : string, libraries : list[string],
+               fileNameNamespaces : bool, all : bool, completion : string) : JsonObject
   {
-    def files = Files(root, overlay);
+    def files = Files(root, overlay, all);
     def diagnostics = JsonArray();
     def facts = JsonArray();
     def result = JsonObject();
@@ -117,7 +161,8 @@ public module Checker
       options.TargetReferenceDirectory = references;
       options.ReferencedLibraries = libraries;
       options.Sources = files.Select(f => StringSource(Location.GetFileIndex(f), Text(f, overlay)) : ISource).NToList();
-      def manager = ManagerClass(options);
+      def completer = if (completion != null) CompletionManager(options, completion) else null;
+      def manager = if (completer != null) completer : ManagerClass else ManagerClass(options);
       manager.InitOutput(StringWriter());
       def place(node : JsonObject, loc : Location) : void
       {
@@ -145,12 +190,53 @@ public module Checker
         unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
         at.Line <= text.Length && text[at.Line - 1].TrimStart().StartsWith("using ", StringComparison.Ordinal)
       }
-      def fact(at : Location, hover : string, target : Location) : void
+      def lineOf(path : string, line : int) : string
+      {
+        mutable text;
+        unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
+        if (line >= 1 && line <= text.Length) text[line - 1].TrimEnd('\r') else ""
+      }
+      // the span of `name` itself in a reference (`p.Width` ends with it, `Square(...)` starts with it) or in a
+      // declaration (its first whole-word occurrence on the declaration's line)
+      def nameSpan(loc : Location, name : string, declaration : bool) : option[int * int * int]
+      {
+        def path = Location.GetFileName(loc.FileIndex);
+        def word(l : string, from : int) : option[int * int * int]
+        {
+          def m = Regex.Match(if (from <= l.Length) l.Substring(from) else "", @"(?<![\w])" + Regex.Escape(name) + @"(?![\w])");
+          if (m.Success) Some((loc.Line, from + m.Index + 1, from + m.Index + 1 + name.Length)) else None()
+        }
+        if (name.Length == 0) None()
+        else if (declaration) word(lineOf(path, loc.Line), Math.Max(0, loc.Column - 1))
+        else
+        {
+          def last = lineOf(path, loc.EndLine);
+          def first = lineOf(path, loc.Line);
+          if (loc.EndColumn - 1 <= last.Length && loc.EndColumn - 1 >= name.Length && last.Substring(loc.EndColumn - 1 - name.Length, name.Length) == name)
+            Some((loc.EndLine, loc.EndColumn - name.Length, loc.EndColumn))
+          else if (loc.Column - 1 + name.Length <= first.Length && first.Substring(loc.Column - 1, name.Length) == name)
+            Some((loc.Line, loc.Column, loc.Column + name.Length))
+          else None()
+        }
+      }
+      def span(node : JsonObject, prefix : string, s : option[int * int * int]) : void
+      {
+        | (_, _, Some((l, c, e))) => node[prefix + "Line"] = JsonValue.Create(l); node[prefix + "Column"] = JsonValue.Create(c); node[prefix + "EndColumn"] = JsonValue.Create(e)
+        | _ => ()
+      }
+      def fact(at : Location, hover : string, target : Location, name : string, kind : string) : void
       {
         when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at))
         {
           def f = JsonObject(); place(f, at); f["hover"] = JsonValue.Create(hover);
-          when (target.FileIndex > 0 && target.Line > 0 && target.IsSourceAvailable) { def t = JsonObject(); place(t, target); f["target"] = t; }
+          f["name"] = JsonValue.Create(name); f["kind"] = JsonValue.Create(kind);
+          span(f, "name", nameSpan(at, name, false));
+          when (target.FileIndex > 0 && target.Line > 0 && target.IsSourceAvailable)
+          {
+            def t = JsonObject(); place(t, target);
+            span(t, "name", nameSpan(target, name, true));
+            f["target"] = t;
+          }
           facts.Add(f);
         }
       }
@@ -163,17 +249,25 @@ public module Checker
           // a constructor without source of its own (the default one) leads to its type
           def target = if (m.Location.Line > 0 && !m.Location.IsGenerated || m.DeclaringType == null) m.Location else m.DeclaringType.Location;
           def parameters = if (shown.Contains(" -> ")) shown.Substring(0, shown.LastIndexOf(" -> ")) else "";
-          fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target)
+          fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target, if (m.DeclaringType != null) m.DeclaringType.Name else "", "constructor")
         }
-        else fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, m.Location)
+        else
+        {
+          // a member's declaration is named where its name is (its whole span starts at its modifiers)
+          // (a generated member, as a top-level value's field, has no declaration of its own: NameLocation throws)
+          def nameLocation(b : MemberBuilder) { try { b.NameLocation } catch { | _ => Location.Default } }
+          def declared = match (m) { | b is MemberBuilder when nameLocation(b).Line > 0 => nameLocation(b) | _ => m.Location };
+          def kind = match (m.MemberKind) { | MemberKinds.Field => "field" | MemberKinds.Property => "property" | MemberKinds.Event => "event" | _ => "method" };
+          fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, declared, m.Name, kind)
+        }
       }
       def walk(body : TExpr) : void
       {
         ExprWalker().Walk(body, info =>
           match (info.Node)
           {
-            | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location)
-            | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location)
+            | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
+            | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
             | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
             | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
             | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)
@@ -188,16 +282,168 @@ public module Checker
           {
             match (args.Typer.CurrentFunction.Body)
             {
-              | FunBody.Typed(body) => try { walk(body) } catch { | _ => () }
+              | FunBody.Typed(body) => try { walk(body) } catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("walk: " + e.ToString()) }
               | _ => ()
             }
           });
       };
       def previous = ManagerClass.Instance;
       try { manager.Run() }
-      catch { | _ => () } // the errors were reported; the facts gathered so far still help
+      catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("run: " + e.ToString()) } // the errors were reported; the facts gathered so far still help (and completion stops here)
       finally { ManagerClass.Instance = previous; }
+      when (completer != null) result["completion"] = completer.Items;
     }
     result
+  }
+}
+
+/// A compiler manager that answers code completion. The marker (an identifier the checker writes at the cursor) is
+/// typed like any name; when the typer reaches it, `Complete` lists what fits there from the typer's own view: the
+/// members of the object's type after a dot (or the types, namespaces and static members of a type or namespace
+/// path), else the locals in scope, the current type's members, and the types and namespaces opened there.
+public sealed class CompletionManager : ManagerClass
+{
+  public static Marker : string = "__nemerle_complete__";
+  /// What was found: [{label, kind (LSP CompletionItemKind), detail}].
+  public Items : JsonArray = JsonArray();
+  prefix : string;
+  mutable done : bool;
+
+  public this(options : CompilationOptions, prefix : string)
+  {
+    base(options);
+    this.prefix = prefix;
+    _isIntelliSenseMode = true;
+    _isCompletionInProgress = true;
+  }
+
+  public class Found : Exception { }
+
+  protected override CompletePattern(_ : PExpr, _ : TypeVar, _ : Typer.PatternTyper, _ : GlobalEnv) : void { }
+  protected override IsExtensionMethod(_ : IMethod, _ : TypeVar) : bool { false }
+
+  Keywords : array[string] = array["def", "mutable", "if", "else", "when", "unless", "match", "foreach", "for", "while", "do",
+    "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
+    "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "mask",
+    "export", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void"];
+
+  protected override Complete(expression : PExpr, _ : TypeVar, typer : Typer, env : GlobalEnv) : TExpr
+  {
+    def marked(n : Name) { !done && n.Id.EndsWith(Marker, StringComparison.Ordinal) }
+    match (expression)
+    {
+      | PExpr.Member(obj, Splicable.Name(n)) when marked(n) => done = true; AfterDot(obj, n, typer, env); throw Found()
+      | PExpr.Ref(n) when marked(n) => done = true; Names(n, typer, env); throw Found()
+      | _ => null
+    }
+  }
+
+  seen : SCG.HashSet[string] = SCG.HashSet();
+
+  Add(label : string, kind : int, detail : string) : void
+  {
+    when (!label.Contains(Marker) && !label.StartsWith("_N_", StringComparison.Ordinal) && Completion.MatchName(label, prefix) && seen.Add(label + "/" + kind.ToString()))
+    {
+      def item = JsonObject();
+      item["label"] = JsonValue.Create(label); item["kind"] = JsonValue.Create(kind);
+      when (detail != null) item["detail"] = JsonValue.Create(detail);
+      Items.Add(item);
+    }
+  }
+
+  static Hidden(name : string) : bool
+  {
+    name.StartsWith("get_", StringComparison.Ordinal) || name.StartsWith("set_", StringComparison.Ordinal)
+    || name.StartsWith("add_", StringComparison.Ordinal) || name.StartsWith("remove_", StringComparison.Ordinal)
+    || name.StartsWith("op_", StringComparison.Ordinal) || name.StartsWith(".", StringComparison.Ordinal) || name.StartsWith("_N_", StringComparison.Ordinal)
+  }
+
+  Members(ti : TypeInfo, instance : bool, all : bool) : void
+  {
+    def flags = System.Reflection.BindingFlags.Public
+              | (if (all) System.Reflection.BindingFlags.NonPublic else System.Reflection.BindingFlags.Default)
+              | (if (instance) System.Reflection.BindingFlags.Instance else System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.FlattenHierarchy);
+    foreach (m in (try { ti.GetMembers(flags) } catch { | _ => [] }))
+      // System.Object's statics (ReferenceEquals, Equals) come with every type's: they are noise there
+      unless (Hidden(m.Name) || !instance && m.DeclaringType != null && m.DeclaringType.FullName == "System.Object")
+      {
+        def kind = match (m.MemberKind)
+        {
+          | MemberKinds.Method => 2 | MemberKinds.Field => 5 | MemberKinds.Property => 10 | MemberKinds.Event => 23
+          | MemberKinds.NestedType => 7 | _ => 1
+        };
+        Add(m.Name, kind, try { m.GetMemType().ToString() } catch { | _ => null })
+      }
+  }
+
+  Nodes(elems : SCG.List[Elem]) : void
+  {
+    foreach (e in elems)
+      match (e)
+      {
+        | Elem.Node(name, node) =>
+          def kind = match (node.Value) { | NamespaceTree.TypeInfoCache.Cached(_) | NamespaceTree.TypeInfoCache.NotLoaded(_) => 7 | _ => 9 };
+          Add(name, kind, node.GetDisplayName())
+        | Elem.Member(m) => Add(m.Name, 2, null)
+        | Elem.Simple(name, info, _) => Add(name, 7, info)
+        | Elem.Local(v) => Add(v.Name, 6, v.Type.ToString())
+        | _ => ()
+      }
+  }
+
+  static Path(e : PExpr) : list[string]
+  {
+    match (e)
+    {
+      | PExpr.Ref(n) => [n.Id]
+      | PExpr.Member(o, Splicable.Name(n)) => match (Path(o)) { | null => null | p => p + [n.Id] }
+      | _ => null
+    }
+  }
+
+  AfterDot(obj : PExpr, name : Name, typer : Typer, env : GlobalEnv) : void
+  {
+    def current = typer.CurrentTypeBuilder;
+    // a type or namespace path: its types, namespaces and static members
+    def path = Path(obj);
+    mutable asType = false;
+    when (path != null)
+    {
+      match (try { env.LookupType(path) } catch { | _ => None() })
+      {
+        | Some(ti) => asType = true; Members(ti, false, ti.Equals(current))
+        | None => ()
+      }
+      def elems = SCG.List();
+      try { Completion.AddTypesAndNamespaces(elems, env.NameTree.NamespaceTree :: env.OpenNamespaces, obj, Name(prefix), true, true) } catch { | _ => () }
+      Nodes(elems);
+    }
+    // a value: its type's members
+    unless (asType)
+      try
+      {
+        def typed = typer.TypeExpr(obj);
+        match (typed.Type.Hint)
+        {
+          | Some(FixedType.Class(ti, _)) => Members(ti, true, ti.Equals(current))
+          | Some(FixedType.Array) => Members(InternalType.Array_tc, true, false)
+          | _ => ()
+        }
+      }
+      catch { | _ is Found => throw Found() | _ => () }
+  }
+
+  Names(_ : Name, typer : Typer, env : GlobalEnv) : void
+  {
+    // the locals in scope
+    try { foreach ((_, v) in typer.CurrentLocalContext.GetLocals()) Add(v.Name, 6, v.Type.ToString()) } catch { | _ => () }
+    // the current type's members (a file's functions and top-level state)
+    def current = typer.CurrentTypeBuilder;
+    when (current != null) { Members(current, true, true); Members(current, false, true) }
+    // the types, namespaces and members the environment opens (`using`)
+    def elems = SCG.List();
+    try { Completion.AddTypesAndNamespaces(elems, env.NameTree.NamespaceTree :: env.OpenNamespaces, null, Name(prefix), true, false) } catch { | _ => () }
+    Nodes(elems);
+    foreach (k in Keywords) Add(k, 14, null);
   }
 }

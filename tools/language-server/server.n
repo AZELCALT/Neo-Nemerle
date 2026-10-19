@@ -118,7 +118,8 @@ public sealed class Server
               lock (documents) _ = documents.Remove(uri);
               jobs.Add(Job.Close(uri))
             | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol"
-            | "textDocument/hover" | "textDocument/definition" =>
+            | "textDocument/hover" | "textDocument/definition" | "textDocument/completion" | "textDocument/references"
+            | "textDocument/prepareRename" | "textDocument/rename" =>
               jobs.Add(Job.Request(id.DeepClone(), method, message["params"].DeepClone()))
             | _ => when (id != null) transport.RespondError(id, -32601, "method not supported: " + method)
           }
@@ -146,6 +147,14 @@ public sealed class Server
     caps["documentSymbolProvider"] = JsonValue.Create(true);
     caps["hoverProvider"] = JsonValue.Create(true);
     caps["definitionProvider"] = JsonValue.Create(true);
+    when (typecheck)
+    {
+      def completion = JsonObject(); completion["triggerCharacters"] = JsonArray(array[JsonValue.Create(".") : JsonNode]);
+      caps["completionProvider"] = completion;
+      caps["referencesProvider"] = JsonValue.Create(true);
+      def rename = JsonObject(); rename["prepareProvider"] = JsonValue.Create(true);
+      caps["renameProvider"] = rename;
+    }
     def info = JsonObject(); info["name"] = JsonValue.Create("nemerle-lsp"); info["version"] = JsonValue.Create("0.2");
     def r = JsonObject(); r["capabilities"] = caps; r["serverInfo"] = info; r
   }
@@ -180,6 +189,17 @@ public sealed class Server
                 | "textDocument/foldingRange" => transport.Respond(id, Folding(r))
                 | "textDocument/hover" => transport.Respond(id, Hover(doc, r, parameters["position"]))
                 | "textDocument/definition" => transport.Respond(id, Definition(doc, parameters["position"]))
+                | "textDocument/completion" => transport.Respond(id, Completions(doc, parameters["position"]))
+                | "textDocument/references" =>
+                  def context = parameters["context"];
+                  transport.Respond(id, References(doc, parameters["position"], context != null && context["includeDeclaration"] != null && context["includeDeclaration"].GetValue.[bool]()))
+                | "textDocument/prepareRename" => transport.Respond(id, PrepareRename(doc, parameters["position"]))
+                | "textDocument/rename" =>
+                  match (Rename(doc, parameters["position"], Str(parameters["newName"])))
+                  {
+                    | (null, message) => transport.RespondError(id, -32803, message)
+                    | (edit, _) => transport.Respond(id, edit)
+                  }
                 | _ => transport.Respond(id, Symbols(r))
               }
             }
@@ -267,6 +287,40 @@ public sealed class Server
     }
   }
 
+  /// A request for the checker: the workspace and the open documents' text.
+  CheckRequest() : JsonObject
+  {
+    def request = JsonObject();
+    request["root"] = JsonValue.Create(root); request["references"] = JsonValue.Create(references);
+    request["fileNameNamespaces"] = JsonValue.Create(fileNameNamespaces);
+    request["libraries"] = JsonArray(libraries.Select(l => JsonValue.Create(l) : JsonNode).ToArray());
+    def files = JsonArray();
+    lock (documents)
+      foreach (d in documents.Values)
+        match (PathOf(d.Uri)) { | null => () | path => def f = JsonObject(); f["path"] = JsonValue.Create(path); f["text"] = JsonValue.Create(d.Text); files.Add(f) }
+    request["files"] = files;
+    request
+  }
+
+  /// Runs a checker process (`nemerle-lsp --check`) on a request; null when it fails.
+  RunChecker(request : JsonObject, track : bool) : JsonObject
+  {
+    def info = Diagnostics.ProcessStartInfo(Environment.ProcessPath);
+    // the same server, as `dotnet nemerle-lsp.exe --check` (or the apphost itself)
+    when (Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "dotnet") info.ArgumentList.Add(typeof(Server).Assembly.Location);
+    info.ArgumentList.Add("--check");
+    info.RedirectStandardInput = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true; info.UseShellExecute = false;
+    def process = Diagnostics.Process.Start(info);
+    when (track) lock (checkWanted) checking = process;
+    process.StandardInput.Write(request.ToJsonString()); process.StandardInput.Close();
+    def errors = process.StandardError.ReadToEndAsync();
+    def output = process.StandardOutput.ReadToEnd();
+    process.WaitForExit();
+    when (track) lock (checkWanted) checking = null;
+    if (process.ExitCode == 0 && output.Length > 0) JsonNode.Parse(output).AsObject()
+    else { log.WriteLine("check failed (" + process.ExitCode.ToString() + "): " + errors.Result); null }
+  }
+
   CheckLoop() : void
   {
     while (true)
@@ -276,37 +330,17 @@ public sealed class Server
       mutable settled = false;
       while (!settled) { def wait = 600 - (DateTime.UtcNow - lastEdit).TotalMilliseconds; if (wait > 0) Thread.Sleep(wait :> int) else settled = true; }
       def generation = lock (checkWanted) checkGeneration;
-      def request = JsonObject();
-      request["root"] = JsonValue.Create(root); request["references"] = JsonValue.Create(references);
-      request["fileNameNamespaces"] = JsonValue.Create(fileNameNamespaces);
-      request["libraries"] = JsonArray(libraries.Select(l => JsonValue.Create(l) : JsonNode).ToArray());
-      def files = JsonArray();
-      lock (documents)
-        foreach (d in documents.Values)
-          match (PathOf(d.Uri)) { | null => () | path => def f = JsonObject(); f["path"] = JsonValue.Create(path); f["text"] = JsonValue.Create(d.Text); files.Add(f) }
-      request["files"] = files;
+      def request = CheckRequest();
       try
       {
         def started = Diagnostics.Stopwatch.StartNew();
-        def info = Diagnostics.ProcessStartInfo(Environment.ProcessPath);
-        // the same server, as `dotnet nemerle-lsp.exe --check` (or the apphost itself)
-        when (Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "dotnet") info.ArgumentList.Add(typeof(Server).Assembly.Location);
-        info.ArgumentList.Add("--check");
-        info.RedirectStandardInput = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true; info.UseShellExecute = false;
-        def process = Diagnostics.Process.Start(info);
-        lock (checkWanted) checking = process;
-        process.StandardInput.Write(request.ToJsonString()); process.StandardInput.Close();
-        def errors = process.StandardError.ReadToEndAsync();
-        def output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-        lock (checkWanted) checking = null;
+        def result = RunChecker(request, true);
         def current = lock (checkWanted) checkGeneration;
-        if (process.ExitCode == 0 && current == generation && output.Length > 0)
+        when (result != null && current == generation)
         {
-          log.WriteLine("checked " + files.Count.ToString() + " open file(s) in " + started.ElapsedMilliseconds.ToString() + " ms");
-          jobs.Add(Job.Typed(JsonNode.Parse(output).AsObject()))
+          log.WriteLine("checked " + request["files"].AsArray().Count.ToString() + " open file(s) in " + started.ElapsedMilliseconds.ToString() + " ms");
+          jobs.Add(Job.Typed(result))
         }
-        else when (current == generation) log.WriteLine("check failed (" + process.ExitCode.ToString() + "): " + errors.Result)
       }
       catch { | e is Exception => log.WriteLine("check: " + e.Message) }
     }
@@ -401,6 +435,164 @@ public sealed class Server
         def position(line : int, column : int) { def p = JsonObject(); p["line"] = JsonValue.Create(Math.Max(0, line - 1)); p["character"] = JsonValue.Create(Math.Max(0, column - 1)); p }
         def range = JsonObject(); range["start"] = position(Int(t["line"]), Int(t["column"])); range["end"] = position(Int(t["endLine"]), Int(t["endColumn"]));
         def x = JsonObject(); x["uri"] = JsonValue.Create(UriOf(Str(t["path"]))); x["range"] = range; x
+    }
+  }
+
+  // ---- completion, references, rename ----
+
+  Completions(doc : Document, position : JsonNode) : JsonNode
+  {
+    def result = JsonObject(); result["isIncomplete"] = JsonValue.Create(false);
+    def items = JsonArray();
+    def path = PathOf(doc.Uri);
+    when (typecheck && root != null && path != null)
+    {
+      def request = CheckRequest();
+      def at = JsonObject(); at["path"] = JsonValue.Create(path);
+      at["line"] = JsonValue.Create(Int(position["line"]) + 1); at["column"] = JsonValue.Create(Int(position["character"]) + 1);
+      request["complete"] = at;
+      def started = Diagnostics.Stopwatch.StartNew();
+      match (RunChecker(request, false))
+      {
+        | null => ()
+        | answer =>
+          when (answer["completion"] != null) foreach (item in answer["completion"].AsArray()) items.Add(item.DeepClone());
+          log.WriteLine("completion: " + items.Count.ToString() + " item(s) in " + started.ElapsedMilliseconds.ToString() + " ms")
+      }
+    }
+    result["items"] = items;
+    result
+  }
+
+  /// A span of the check's JSON (1-based lines and columns) as an LSP range.
+  static RangeOf(line : int, column : int, endLine : int, endColumn : int) : JsonObject
+  {
+    def position(l : int, c : int) { def p = JsonObject(); p["line"] = JsonValue.Create(Math.Max(0, l - 1)); p["character"] = JsonValue.Create(Math.Max(0, c - 1)); p }
+    def range = JsonObject(); range["start"] = position(line, column); range["end"] = position(endLine, endColumn); range
+  }
+
+  /// The name span of a fact or target ("name" fields), if it has one.
+  static NameRange(node : JsonNode) : JsonObject
+  {
+    if (node["nameLine"] == null) null
+    else RangeOf(Int(node["nameLine"]), Int(node["nameColumn"]), Int(node["nameLine"]), Int(node["nameEndColumn"]))
+  }
+
+  static Key(target : JsonNode) : string { Str(target["path"]) + ":" + Int(target["line"]).ToString() + ":" + Int(target["column"]).ToString() }
+
+  static Inside(line : int, column : int, l : int, c : int, el : int, ec : int) : bool
+  {
+    (line > l || line == l && column >= c) && (line < el || line == el && column <= ec)
+  }
+
+  /// The symbol at a position, from a whole-workspace check: its declaration (target), its name and kind, and the
+  /// facts of the check; null when there is none.
+  Symbol(doc : Document, position : JsonNode) : JsonObject * string * string * JsonArray
+  {
+    def path = PathOf(doc.Uri);
+    if (!typecheck || root == null || path == null) (null, null, null, null)
+    else
+    {
+      def request = CheckRequest(); request["all"] = JsonValue.Create(true);
+      match (RunChecker(request, false))
+      {
+        | null => (null, null, null, null)
+        | answer =>
+          def facts = answer["facts"].AsArray();
+          def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
+          mutable found = null;
+          foreach (f in facts)
+            when (found == null && f["target"] != null)
+            {
+              // on a use (its name, or its whole span), or on the declaration's name
+              def onUse = Str(f["path"]) == path && (if (f["nameLine"] != null) Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))
+                                                   else Inside(line, column, Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"])));
+              def t = f["target"];
+              def onDeclaration = Str(t["path"]) == path && t["nameLine"] != null && Inside(line, column, Int(t["nameLine"]), Int(t["nameColumn"]), Int(t["nameLine"]), Int(t["nameEndColumn"]));
+              when (onUse || onDeclaration) found = f.AsObject();
+            }
+          if (found == null) (null, null, null, facts) else (found["target"].AsObject(), Str(found["name"]), Str(found["kind"]), facts)
+      }
+    }
+  }
+
+  References(doc : Document, position : JsonNode, declaration : bool) : JsonNode
+  {
+    def (target, _, _, facts) = Symbol(doc, position);
+    def result = JsonArray();
+    when (target != null)
+    {
+      def key = Key(target);
+      // a top-level value's binding is also a write of its field, at the declaration: each place once
+      def seen = SCG.HashSet.[string]();
+      def add(path : string, range : JsonObject)
+      {
+        when (seen.Add(path + range.ToJsonString())) { def l = JsonObject(); l["uri"] = JsonValue.Create(UriOf(path)); l["range"] = range; result.Add(l) }
+      }
+      when (declaration) add(Str(target["path"]), NameRange(target) ?? RangeOf(Int(target["line"]), Int(target["column"]), Int(target["endLine"]), Int(target["endColumn"])));
+      foreach (f when f["target"] != null && Key(f["target"]) == key in facts)
+        add(Str(f["path"]), NameRange(f) ?? RangeOf(Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"])));
+    }
+    result
+  }
+
+  static Renamable : array[string] = array["local", "field", "property", "method", "event"];
+
+  PrepareRename(doc : Document, position : JsonNode) : JsonNode
+  {
+    match (Symbol(doc, position))
+    {
+      | (null, _, _, _) => null
+      | (target, name, kind, facts) when Renamable.Contains(kind) && target["nameLine"] != null =>
+        // the range at the cursor: the use's or the declaration's name
+        def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
+        def path = PathOf(doc.Uri);
+        mutable range = null;
+        foreach (f when f["nameLine"] != null && Str(f["path"]) == path in facts)
+          when (range == null && Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))) range = NameRange(f);
+        when (range == null) range = NameRange(target);
+        def x = JsonObject(); x["range"] = range; x["placeholder"] = JsonValue.Create(name); x
+      | _ => null
+    }
+  }
+
+  static Identifier : Text.RegularExpressions.Regex = Text.RegularExpressions.Regex(@"^[A-Za-z_][A-Za-z0-9_']*$");
+  static Keywords : array[string] = array["def", "mutable", "if", "else", "when", "unless", "match", "foreach", "for", "while", "do",
+    "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
+    "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "macro",
+    "where", "namespace", "type", "void", "array", "list", "lock", "typeof", "abstract", "override", "virtual", "sealed", "extern"];
+
+  /// A workspace edit renaming the symbol at a position everywhere, or (null, why not).
+  Rename(doc : Document, position : JsonNode, newName : string) : JsonNode * string
+  {
+    if (newName == null || !Identifier.IsMatch(newName) || Keywords.Contains(newName)) (null, "`" + newName + "' is not a name")
+    else match (Symbol(doc, position))
+    {
+      | (null, _, _, _) => (null, "there is nothing to rename here")
+      | (_, _, kind, _) when !Renamable.Contains(kind) => (null, "a " + kind + " cannot be renamed yet (only locals, fields, properties, methods and events)")
+      | (target, _, _, _) when target["nameLine"] == null => (null, "the declaration's name is not found in its source")
+      | (target, _, _, facts) =>
+        def key = Key(target);
+        def uses = facts.Where(f => f["target"] != null && Key(f["target"]) == key).ToList();
+        if (uses.Any(f => f["nameLine"] == null)) (null, "some uses of it are not plain names (generated code); rename them by hand")
+        else
+        {
+          def edits = SCG.Dictionary.[string, JsonArray]();
+          def seen = SCG.HashSet.[string]();
+          def edit(path : string, range : JsonObject) : void
+          {
+            when (seen.Add(path + range.ToJsonString()))
+            {
+              unless (edits.ContainsKey(path)) edits[path] = JsonArray();
+              def e = JsonObject(); e["range"] = range; e["newText"] = JsonValue.Create(newName); edits[path].Add(e);
+            }
+          }
+          edit(Str(target["path"]), NameRange(target));
+          foreach (f in uses) edit(Str(f["path"]), NameRange(f));
+          def changes = JsonObject();
+          foreach (pair in edits) changes[UriOf(pair.Key)] = pair.Value;
+          def x = JsonObject(); x["changes"] = changes; (x, null)
+        }
     }
   }
 

@@ -88,7 +88,8 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
   named `x.build.n` gets the kind's base class, imports, grammars and macros without setup lines.
 - **Language server:** Nemerle's own parser, plus Nitra for `grammar`/`space` blocks, as you type; typed
   diagnostics for the workspace (across `using` and exported types), hover and go-to-definition from a background
-  compile (`nemerle-lsp --check`). The VS Code / VSCodium extension ships as a `.vsix` carrying the server
+  compile (`nemerle-lsp --check`), completion from the compiler's completion mode, find-references and rename over
+  the whole workspace; debugging through netcoredbg (VS Code and VSCodium). The VS Code / VSCodium extension ships as a `.vsix` carrying the server
   (`tools/language-server/`).
 - **Projects:** a folder with a `.nproj` file (a small declarative TOML subset: name, version, references to
   assemblies, other projects and NuGet packages, compiler options) is a project; its sources are every `.n` file

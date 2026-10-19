@@ -203,6 +203,48 @@ try:
     target = c.request('textDocument/definition', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
     check(target and target['uri'] == uri and target['range']['start']['line'] == 2, 'definition of p is its binding: %s' % target)
     print('PASS: workspace (typed diagnostics through using/export, hover, go-to-definition)')
+    # completion: members after a dot, names in scope
+    v = 3
+    def edit(text):
+        global v
+        v += 1
+        c.notify('textDocument/didChange', {'textDocument': {'uri': uri, 'version': v}, 'contentChanges': [{'text': text}]})
+        return text
+    typing = edit(fixed + 'def w = p.\n')
+    l, ch = position(typing, len(typing) - 1)
+    items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']]
+    check('Width' in items and 'ReferenceEquals' not in items, 'completion after `p.`: %s' % items)
+    typing = edit(fixed + 'def w = pe\n')
+    l, ch = position(typing, len(typing) - 1)
+    items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']]
+    check(items == [] or all(i.lower().startswith('pe') or 'pe' in i.lower() for i in items), 'completion of `pe`: %s' % items)
+    typing = edit(fixed + 'def w = Pe\n')
+    l, ch = position(typing, len(typing) - 1)
+    items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']]
+    check('Pen' in items, 'completion of `Pe` offers the exported type: %s' % items)
+    edit(fixed)
+    print('PASS: completion (members after a dot, names in scope)')
+    # find-references and rename, over the whole workspace
+    l, ch = position(fixed, offset_of(fixed, 'p.Width'))
+    refs = c.request('textDocument/references', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'context': {'includeDeclaration': True}})
+    lines = sorted(r['range']['start']['line'] for r in refs)
+    check(lines == [2, 3], 'references of p (its declaration and its use): %s' % refs)
+    l, ch = position(fixed, offset_of(fixed, 'Width'))
+    refs = c.request('textDocument/references', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'context': {'includeDeclaration': True}})
+    check(any(r['uri'].endswith('/app/pen.n') for r in refs) and any(r['uri'] == uri for r in refs), 'references of Width reach app/pen.n: %s' % refs)
+    l, ch = position(fixed, offset_of(fixed, 'p.Width'))
+    prepared = c.request('textDocument/prepareRename', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
+    check(prepared and prepared['placeholder'] == 'p', 'prepareRename on p: %s' % prepared)
+    renamed = c.request('textDocument/rename', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'newName': 'pen'})
+    edits = renamed['changes'][uri]
+    check(len(edits) == 2 and all(e['newText'] == 'pen' and e['range']['end']['character'] - e['range']['start']['character'] == 1 for e in edits),
+          'rename p -> pen edits the two names: %s' % renamed)
+    l, ch = position(fixed, offset_of(fixed, 'Width'))
+    renamed = c.request('textDocument/rename', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'newName': 'Thickness'})
+    check(set(renamed['changes']) == {uri, (work / 'app/pen.n').as_uri()}, 'rename Width edits both files: %s' % renamed)
+    l, ch = position(fixed, offset_of(fixed, 'Pen()'))
+    check(c.request('textDocument/prepareRename', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}}) is None, 'a constructor (type) is not renamed yet')
+    print('PASS: find-references and rename across files')
     c.request('shutdown', None); c.notify('exit', None)
     check(c.proc.wait(timeout=30) == 0, 'clean exit')
 finally:
