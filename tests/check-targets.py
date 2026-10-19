@@ -50,6 +50,9 @@ try:
                   {'main.n': 'using shapes;\nSystem.Console.WriteLine(Area(6, 7));\nSystem.Console.WriteLine(Names());\n'})
     out = run('run', app)
     check('42' in out and '[square, strip]' in out, 'a .NET 10 program uses the netstandard2.0 library: ' + out)
+    data = (lib / 'out/shapes.dll').read_bytes()
+    check(b'System.Private.CoreLib' not in data and b'netstandard' in data, 'a netstandard2.0 library names only .NET Standard\'s assemblies')
+    check(b'System.Private.CoreLib' not in (tc / 'netstandard2.0/Nemerle.dll').read_bytes(), 'so does the .NET Standard Nemerle.dll')
     print('PASS: a netstandard2.0 library, used from the compiler\'s .NET')
 
     # 2. the target's API is checked; .NET Standard has libraries only

@@ -14,6 +14,9 @@ namespace Nemerle.Platform
         /// The target framework; null: the one the target references are for (or the host's without them).
         public ClrTarget Target { get; set; }
 
+        /// The target is not the host's .NET.
+        public bool OtherTarget { get { return TargetReferenceDirectory != null && !EffectiveTarget.SameAs(ClrTarget.Host); } }
+
         public ClrTarget EffectiveTarget
         {
             get { return Target ?? (TargetReferenceDirectory != null ? ClrTarget.FromReferences(TargetReferenceDirectory) : ClrTarget.Host); }
@@ -82,8 +85,23 @@ namespace Nemerle.Platform
                 var targetAssemblies = new HashSet<string>(contracts.Values.Select(c => c.FullName), StringComparer.Ordinal);
                 if (!target.SameAs(ClrTarget.Host)) CheckMembers(output, target, targetAssemblies, definitions, problems);
                 if (problems.Count > 0) throw new ClrTargetException(target.Name, problems.Distinct().ToList());
-                // References to host assemblies that nothing names any more stay: signatures are read lazily and
-                // point at reference rows by position, and a reference that is not used is never loaded.
+                // References to host assemblies that nothing names any more: for another target (the module read up
+                // front) they go, so the output names only the target's assemblies; for the host they stay (signatures
+                // read lazily point at reference rows by position, and a reference that is not used is never loaded).
+                if (!target.SameAs(ClrTarget.Host))
+                {
+                    var used = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var type in UsedTypeReferences(output))
+                    {
+                        var owner = type;
+                        while (owner.DeclaringType != null) owner = owner.DeclaringType;
+                        var scope = owner.Scope as AssemblyNameReference;
+                        if (scope != null) used.Add(scope.FullName);
+                    }
+                    foreach (var reference in output.AssemblyReferences.ToList())
+                        if (host.Contains(reference.Name) && !used.Contains(reference.FullName) && !targetAssemblies.Contains(reference.FullName))
+                            output.AssemblyReferences.Remove(reference);
+                }
             }
             finally { foreach (var d in opened) d.Dispose(); }
         }

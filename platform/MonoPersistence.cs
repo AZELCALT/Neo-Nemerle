@@ -40,7 +40,10 @@ namespace Nemerle.Platform
                 bool symbols = false;
 #endif
                 using (var assembly = AssemblyDefinition.ReadAssembly(path,
-                    new ReaderParameters { InMemory = true, AssemblyResolver = resolver, ReadSymbols = symbols }))
+                    new ReaderParameters { InMemory = true, AssemblyResolver = resolver, ReadSymbols = symbols,
+                        // for another target the whole module is read up front, so references nothing uses any more can
+                        // be removed (a lazily read signature points at reference rows by position)
+                        ReadingMode = OtherTarget ? ReadingMode.Immediate : ReadingMode.Deferred }))
             {
                 var replacements = new Dictionary<MethodDefinition, List<MethodReference>>();
                 var localBodies = new HashSet<MethodDefinition>();
