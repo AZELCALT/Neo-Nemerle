@@ -189,6 +189,14 @@ Hello, engine!
 A library's `export class` types are global (chapter 7), so a program that uses the library sees them without a
 `using`.
 
+## Debugging
+
+A project built with `options = ["-debug+"]` writes a `.pdb` next to its binary, and any .NET debugger steps through
+the Nemerle source: breakpoints, the call stack with lines, parameters, locals, and top-level state by name
+(`total`, or `main.total`). In VS Code and VSCodium, the extension's Run and Debug builds the project and starts it
+under [netcoredbg](https://github.com/Samsung/netcoredbg); from a terminal, `netcoredbg --interpreter=cli -- dotnet
+out/app.exe` does the same.
+
 ## The editor
 
 The language server reads the project of the workspace folder: what the program starts at, whether it is a library,

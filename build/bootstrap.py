@@ -113,6 +113,7 @@ suites = [
     ('file-modules', ['check-file-modules.py', T / 'ncc.exe', '--runtime', 'dotnet', '--target-references', R]),
     ('projects', ['check-projects.py', '--toolchain', T]),
     ('targets', ['check-targets.py', '--toolchain', T]),
+    ('debugger', ['check-debugger.py', '--toolchain', T]),
     ('runtime-only', ['check-runtime-only.py', '--compiler', T / 'ncc.exe', '--references', T / 'references']),
     ('grammar-regressions', ['check-grammar-regressions.py', '--toolchain', T, '--references', R]),
     ('scripting', ['check-scripting.py', '--toolchain', T, '--references', T / 'references']),

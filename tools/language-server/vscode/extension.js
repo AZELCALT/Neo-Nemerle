@@ -24,7 +24,93 @@ function hasDotnet10(dotnet) {
   catch { return false; }
 }
 
+// ---- debugging: netcoredbg (MIT) as the debug adapter, for VS Code and VSCodium alike ----
+
+function findOnPath(name) {
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
+  for (const dir of (process.env.PATH || '').split(path.delimiter))
+    for (const ext of exts) { const file = path.join(dir, name + ext); if (dir && fs.existsSync(file)) return file; }
+  return null;
+}
+
+/// The debugger: the nemerle.debugger.path setting, else netcoredbg on PATH; null when there is none.
+function debuggerPath(settings) {
+  return settings.get('path') || findOnPath('netcoredbg');
+}
+
+/// The project in a folder: its .nproj file's name setting (the binary is out/<name>.exe).
+function projectOf(folder) {
+  try {
+    const file = fs.readdirSync(folder).find(f => f.endsWith('.nproj'));
+    if (!file) return null;
+    const text = fs.readFileSync(path.join(folder, file), 'utf8');
+    if (text.trimStart().startsWith('<')) {
+      const m = /<AssemblyName>([^<]+)<\/AssemblyName>/.exec(text);
+      return { file: path.join(folder, file), name: m ? m[1].trim() : path.basename(file, '.nproj'), output: 'out' };
+    }
+    const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(text);
+    const output = /^\s*output\s*=\s*"([^"]+)"/m.exec(text);
+    return { file: path.join(folder, file), name: name ? name[1] : path.basename(file, '.nproj'), output: output ? output[1] : 'out' };
+  } catch { return null; }
+}
+
+/// A launch configuration completed for the folder's project: program (out/<name>.exe), cwd, and a build first.
+function completeConfiguration(folder, config) {
+  const project = folder ? projectOf(folder) : null;
+  const filled = Object.assign({}, config);
+  if (!filled.type) filled.type = 'nemerle';
+  if (!filled.request) filled.request = 'launch';
+  if (!filled.name) filled.name = 'Nemerle: run the project';
+  if (!filled.program && project) filled.program = path.join(folder, project.output, project.name + '.exe');
+  if (!filled.cwd && folder) filled.cwd = folder;
+  if (filled.build === undefined) filled.build = !!project;
+  if (!filled.args) filled.args = [];
+  return filled;
+}
+
+/// What the debug adapter gets: netcoredbg starts a .NET program through dotnet, so the program becomes its argument.
+function adapterConfiguration(config, dotnet) {
+  const managed = /\.(exe|dll)$/i.test(config.program);
+  return Object.assign({}, config, managed ? { program: dotnet, args: [config.program].concat(config.args || []) } : {});
+}
+
+function registerDebugger(context) {
+  const settings = () => vscode.workspace.getConfiguration('nemerle.debugger');
+  context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('nemerle', {
+    provideDebugConfigurations: folder => [completeConfiguration(folder && folder.uri.fsPath, {})],
+    resolveDebugConfiguration: async (folder, config) => {
+      const root = folder ? folder.uri.fsPath : (vscode.workspace.workspaceFolders || [])[0]?.uri.fsPath;
+      const filled = completeConfiguration(root, config);
+      if (!filled.program) {
+        vscode.window.showErrorMessage('Nemerle: no project here to debug (a folder with a .nproj file), and no "program" in the launch configuration.');
+        return undefined;
+      }
+      if (filled.build) {
+        const ncc = vscode.workspace.getConfiguration('nemerle').get('ncc.path') || 'ncc';
+        try { execFileSync(ncc, ['build', root], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' }); }
+        catch (e) {
+          vscode.window.showErrorMessage('Nemerle: the build failed. ' + String(e.stdout || e.message).trim().split('\n').slice(-3).join(' '));
+          return undefined;
+        }
+      }
+      return adapterConfiguration(filled, vscode.workspace.getConfiguration('nemerle.dotnet').get('path') || 'dotnet');
+    }
+  }));
+  context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('nemerle', {
+    createDebugAdapterDescriptor: () => {
+      const debugger_ = debuggerPath(settings());
+      if (!debugger_) {
+        vscode.window.showErrorMessage('Nemerle debugging needs netcoredbg (on PATH, or set nemerle.debugger.path).', 'Get netcoredbg')
+          .then(choice => { if (choice) vscode.env.openExternal(vscode.Uri.parse('https://github.com/Samsung/netcoredbg/releases')); });
+        return undefined;
+      }
+      return new vscode.DebugAdapterExecutable(debugger_, ['--interpreter=vscode']);
+    }
+  }));
+}
+
 function activate(context) {
+  if (vscode.debug) registerDebugger(context);
   const config = vscode.workspace.getConfiguration('nemerle.languageServer');
   const { command, prefix } = serverCommand(context, config);
   if (prefix.length > 0 && !hasDotnet10(command)) {
@@ -50,4 +136,4 @@ function activate(context) {
 
 function deactivate() { return client ? client.stop() : undefined; }
 
-module.exports = { activate, deactivate, _test: { serverCommand, hasDotnet10 } };
+module.exports = { activate, deactivate, _test: { serverCommand, hasDotnet10, debuggerPath, projectOf, completeConfiguration, adapterConfiguration } };

@@ -20,6 +20,13 @@ codium --install-extension nemerle-0.2.0.vsix    # VSCodium
 
 Or in the editor: Extensions view, `...` menu, *Install from VSIX...*.
 
+## Debugging
+
+Run and Debug (F5) builds the folder's project with `ncc build` and debugs `out/<name>.exe`: breakpoints in `.n`
+files, stepping, the call stack, parameters, locals and top-level state. The debugger is
+[netcoredbg](https://github.com/Samsung/netcoredbg) (MIT), which works in VS Code and VSCodium alike: put it on `PATH`
+or set `nemerle.debugger.path`. Build with `options = ["-debug+"]` in the project's `[compiler]` section.
+
 ## Settings
 
 - `nemerle.dotnet.path`: the `dotnet` that runs the server (default: `dotnet` on `PATH`).
@@ -28,5 +35,6 @@ Or in the editor: Extensions view, `...` menu, *Install from VSIX...*.
 - `nemerle.languageServer.log`: a log file for the server.
 - `nemerle.languageServer.typecheck`: the background typed check (default on).
 - `nemerle.languageServer.libraries`: assemblies the workspace references, for the typed check.
+- `nemerle.debugger.path`: netcoredbg (default: on `PATH`); `nemerle.ncc.path`: the `ncc` that builds before debugging.
 
 The extension and its server are licensed under the GNU GPL, version 2 or later.

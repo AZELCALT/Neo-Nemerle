@@ -10,8 +10,29 @@
   "categories": ["Programming Languages"],
   "keywords": ["nemerle", "nitra", "dotnet"],
   "main": "./extension.js",
-  "activationEvents": [],
+  "activationEvents": ["onDebugResolve:nemerle", "onDebugDynamicConfigurations:nemerle"],
   "contributes": {
+    "breakpoints": [{ "language": "nemerle" }],
+    "debuggers": [{
+      "type": "nemerle",
+      "label": "Nemerle",
+      "languages": ["nemerle"],
+      "configurationAttributes": {
+        "launch": {
+          "properties": {
+            "program": { "type": "string", "description": "The program to run (default: out/<name>.exe of the folder's project)." },
+            "args": { "type": "array", "items": { "type": "string" }, "description": "Its arguments." },
+            "cwd": { "type": "string", "description": "Its working directory (default: the folder)." },
+            "env": { "type": "object", "description": "Environment variables for it." },
+            "build": { "type": "boolean", "description": "Build the project with `ncc build` first (default: when the folder has a .nproj)." },
+            "stopAtEntry": { "type": "boolean", "description": "Stop at the program's first line." }
+          }
+        }
+      },
+      "initialConfigurations": [{ "type": "nemerle", "request": "launch", "name": "Nemerle: run the project" }],
+      "configurationSnippets": [{ "label": "Nemerle: run the project", "description": "Build the folder's project and debug it",
+                                  "body": { "type": "nemerle", "request": "launch", "name": "Nemerle: run the project" } }]
+    }],
     "languages": [{ "id": "nemerle", "aliases": ["Nemerle", "nemerle"], "extensions": [".n"], "configuration": "./language-configuration.json" }],
     "grammars": [{ "language": "nemerle", "scopeName": "source.nemerle", "path": "./syntaxes/nemerle.tmLanguage.json" }],
     "configuration": {
@@ -23,6 +44,8 @@
         "nemerle.languageServer.log": { "type": "string", "default": "", "description": "Optional log file for the server." },
         "nemerle.languageServer.sourceRoot": { "type": "string", "default": "", "description": "Root directory for file module paths (default: the workspace folder)." },
         "nemerle.languageServer.fileNameNamespaces": { "type": "boolean", "default": false, "description": "A file's namespace is its file name only (-file-name-namespaces)." },
+        "nemerle.debugger.path": { "type": "string", "default": "", "description": "netcoredbg (the MIT-licensed .NET debugger) to debug with; default: netcoredbg on PATH." },
+        "nemerle.ncc.path": { "type": "string", "default": "", "description": "The ncc that builds a project before debugging it (default: ncc on PATH)." },
         "nemerle.languageServer.typecheck": { "type": "boolean", "default": true, "description": "Type the workspace in the background (a separate compiler process after edits settle): type errors across files, hover and go-to-definition." },
         "nemerle.languageServer.libraries": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Assemblies the workspace references (each passed as --library), for the typed check." }
       }
