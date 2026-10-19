@@ -103,9 +103,9 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
 ### Installation
 - `install/install.sh` (Linux, macOS) and `install/install.cmd` / `install.ps1` (Windows; PowerShell 7 elsewhere) install
   the toolchain, build the language server, put `ncc`, `nscript` and `nemerle-lsp` on `PATH`, set up the VS Code /
-  VSCodium extension, and uninstall again. Only the .NET 10 runtime is required. On Windows the installer writes the extension as a
-  `.vsix` next to itself (`install\nemerle-<version>.vsix`, carrying its language server) and installs it with the
-  editor's own `--install-extension`.
+  VSCodium extension, and uninstall again. Only the .NET 10 runtime is required. Both installers write the extension as a `.vsix`
+  next to themselves (`install/nemerle-<version>.vsix`, carrying its language server) and install it with the editor's
+  own `--install-extension`; the `installers` suite runs them into scratch folders and checks the result.
 
 ### Documentation
 - [The Nemerle Book](doc/book/src/SUMMARY.md): a guide to the language in the style of the Rust book, from values

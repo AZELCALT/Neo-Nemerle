@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Run the installers into scratch folders and check what they leave: the commands, and the editor extension.
+
+Usage: check-installers.py
+
+install/install.sh (and install/install.ps1 when PowerShell 7 is on PATH) install the pinned toolchain into a temporary
+prefix with --editor none, and the .vsix each writes next to itself must pass tests/check-vscode-extension.py. The
+editor step runs against a stand-in editor command that records how it is called (no real editor is touched)."""
+import os, pathlib, shutil, subprocess, sys, tempfile
+
+repo = pathlib.Path(__file__).resolve().parents[1]
+work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-installers-'))
+vsix = repo / 'install/nemerle-0.2.0.vsix'
+checks = 0
+
+def check(ok, message):
+    global checks
+    if not ok: raise SystemExit('FAIL: ' + message)
+    checks += 1
+
+def installed(prefix, launcher):
+    hello = work / 'hello.n'; hello.write_text('System.Console.WriteLine("hello from the installed nscript")\n')
+    r = subprocess.run([str(prefix / 'bin' / launcher), 'run', str(hello), '--no-cache'], capture_output=True, text=True)
+    return 'hello from the installed nscript' in r.stdout
+
+def extension_check():
+    r = subprocess.run([sys.executable, str(repo / 'tests/check-vscode-extension.py'), '--vsix', str(vsix)], capture_output=True, text=True)
+    return r.returncode == 0, r.stdout + r.stderr
+
+try:
+    # install.sh
+    prefix = work / 'unix'
+    vsix.unlink(missing_ok=True)
+    r = subprocess.run(['sh', str(repo / 'install/install.sh'), '--prefix', str(prefix), '--bin', str(prefix / 'bin'), '--editor', 'none'],
+                       capture_output=True, text=True)
+    check(r.returncode == 0, 'install.sh: ' + r.stdout + r.stderr)
+    check(installed(prefix, 'nscript'), 'the commands install.sh installed run')
+    check(vsix.exists(), 'install.sh writes ' + str(vsix))
+    ok, out = extension_check()
+    check(ok, 'the .vsix of install.sh: ' + out)
+    # the editor step: the editor's own --install-extension, after the old copied-in folder is removed
+    fake = work / 'editor'; (fake / 'bin').mkdir(parents=True)
+    old = fake / 'home/.vscode-oss/extensions/neo-nemerle.nemerle-0.2.0'; old.mkdir(parents=True)
+    (fake / 'bin/codium').write_text('#!/bin/sh\necho "$@" > "%s/called.txt"\n' % fake); (fake / 'bin/codium').chmod(0o755)
+    env = dict(os.environ, HOME=str(fake / 'home'), PATH=str(fake / 'bin') + os.pathsep + os.environ['PATH'])
+    r = subprocess.run(['sh', str(repo / 'install/install.sh'), '--prefix', str(prefix), '--bin', str(prefix / 'bin'), '--editor', 'codium'],
+                       capture_output=True, text=True, env=env)
+    called = (fake / 'called.txt').read_text().split() if (fake / 'called.txt').exists() else []
+    check(r.returncode == 0 and called[:1] == ['--install-extension'] and called[-1] == '--force' and not old.exists(),
+          'install.sh installs the .vsix through the editor: %s %s' % (called, r.stdout[-500:]))
+    print('PASS: install.sh installs the commands and writes a working .vsix, which the editor\'s own command installs', flush=True)
+    # install.ps1, under PowerShell 7 where it is available
+    pwsh = shutil.which('pwsh') or os.environ.get('PWSH')
+    if pwsh:
+        prefix = work / 'ps'
+        vsix.unlink(missing_ok=True)
+        r = subprocess.run([pwsh, '-NoProfile', '-File', str(repo / 'install/install.ps1'), '-Prefix', str(prefix), '-Editor', 'none'],
+                           capture_output=True, text=True)
+        check(r.returncode == 0, 'install.ps1: ' + r.stdout + r.stderr)
+        check(installed(prefix, 'nscript'), 'the commands install.ps1 installed run')
+        ok, out = extension_check()
+        check(ok, 'the .vsix of install.ps1: ' + out)
+        print('PASS: install.ps1 (PowerShell 7) installs the commands and writes a working .vsix', flush=True)
+    else:
+        print('SKIP: install.ps1 (no pwsh on PATH; set PWSH to run it)', flush=True)
+    print('PASS: %d installer checks' % checks)
+finally:
+    shutil.rmtree(work, ignore_errors=True)

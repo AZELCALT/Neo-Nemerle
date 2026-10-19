@@ -62,9 +62,8 @@ The installer:
 1. copies the toolchain (compiler, standard library and macros, Nitra, scripting) into a folder of your own;
 2. builds the language server from source with that compiler;
 3. puts `ncc`, `nscript` and `nemerle-lsp` on your `PATH`;
-4. installs the VS Code / VSCodium extension if it finds the editor and `npm` (on Windows it also writes the extension
-   as `install\nemerle-0.2.0.vsix`, which carries its language server, to install by hand: *Extensions → … →
-   Install from VSIX*);
+4. writes the VS Code / VSCodium extension as `install/nemerle-0.2.0.vsix` (it carries its language server; install
+   it by hand with *Extensions → … → Install from VSIX*), and installs it in the editor it finds (needs `npm`);
 5. checks that a script runs.
 
 | | Linux / macOS (`install.sh`) | Windows (`install.cmd`, `install.ps1`) |
@@ -73,7 +72,7 @@ The installer:
 | Commands go to | `~/.local/bin` (`--bin`) | `%LOCALAPPDATA%\Nemerle\bin`, added to your user `PATH` |
 | Build from source first | `--build` | `-Build` |
 | Skip the language server | `--no-lsp` | `-NoLsp` |
-| Editor extension | `--editor auto\|code\|codium\|none` | `-Editor auto\|code\|codium\|none` (`none`: only the `.vsix`) |
+| Editor extension (`none`: only the `.vsix`) | `--editor auto\|code\|codium\|none` | `-Editor auto\|code\|codium\|none` |
 | Remove everything | `--uninstall` | `-Uninstall` |
 
 `install/install.ps1` also runs under PowerShell 7 on Linux and macOS. The Windows-specific parts (`.cmd` launchers, the

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installs Nemerle for the current user: the compiler (ncc), scripting (nscript), Nitra, and the language server
-# (nemerle-lsp), plus optionally the VS Code / VSCodium extension. Run it from a clone of the repository.
+# (nemerle-lsp), and the VS Code / VSCodium extension as a .vsix next to this script (install/nemerle-<version>.vsix),
+# which it also installs in VS Code or VSCodium (--editor none: only the .vsix). Run it from a clone of the repository.
 #
 #   install/install.sh [--prefix DIR] [--bin DIR] [--build] [--no-lsp] [--editor auto|code|codium|none] [--uninstall]
 #
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
     --no-lsp) lsp=0; shift ;;
     --editor) [ $# -ge 2 ] || fail "--editor needs auto, code, codium or none"; editor=$2; shift 2 ;;
     --uninstall) uninstall=1; shift ;;
-    -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) fail "unknown option $1 (see --help)" ;;
   esac
 done
@@ -89,30 +90,102 @@ launcher ncc ncc.exe "-target-references:\"$tc/references\" "
 launcher nscript nscript.exe ""
 [ $lsp = 1 ] && launcher nemerle-lsp nemerle-lsp.exe ""
 
-# --- the editor extension ---
-install_extension() {  # $1 = editor command, $2 = its extensions directory
-  command -v npm >/dev/null 2>&1 || { say "Skipping the $1 extension: npm is needed to install its one dependency."; return; }
-  dir="$2/$extension"
-  rm -rf "$dir" "$2/nemerle.nemerle-nitra-0.1.0"
-  mkdir -p "$dir"
-  cp "$repo/tools/language-server/vscode/package.json" "$repo/tools/language-server/vscode/extension.js" \
-     "$repo/tools/language-server/vscode/language-configuration.json" "$repo/tools/language-server/vscode/README.md" "$dir/"
-  cp -R "$repo/tools/language-server/vscode/syntaxes" "$dir/"
-  (cd "$dir" && npm install --omit=dev --no-audit --no-fund --silent >/dev/null 2>&1) ||
-    { rm -rf "$dir"; say "Skipping the $1 extension: npm install failed."; return; }
-  say "Installed the $1 extension in $dir"
+# --- the editor extension: a .vsix (next to this script) that carries the server, installed by the editor ---
+make_vsix() {  # prints the .vsix's path; nothing (and a reason on stderr) when it cannot be made
+  command -v npm >/dev/null 2>&1 || { say "Skipping the editor extension: npm is needed to fetch its one dependency." >&2; return 1; }
+  src="$repo/tools/language-server/vscode"
+  field() { sed -n "s/^  \"$1\": \"\([^\"]*\)\".*/\1/p" "$src/package.json" | head -n 1; }
+  name=$(field name); version=$(field version); publisher=$(field publisher)
+  vsix="$repo/install/$name-$version.vsix"
+  work=$(mktemp -d); ext="$work/extension"; mkdir -p "$ext"
+  cp "$src/package.json" "$src/extension.js" "$src/language-configuration.json" "$src/README.md" "$ext/"
+  cp -R "$src/syntaxes" "$src/images" "$ext/"
+  cp "$repo/LICENSES/GPL-2.0-or-later.txt" "$ext/LICENSE.txt"
+  # the client library, the extension's one production dependency
+  (cd "$ext" && npm install --omit=dev --no-audit --no-fund --silent >/dev/null 2>&1) ||
+    { rm -rf "$work"; say "Skipping the editor extension: npm install failed." >&2; return 1; }
+  rm -f "$ext/package-lock.json"
+  # the server: the installed toolchain with nemerle-lsp.exe and its reference assemblies
+  cp -R "$tc" "$ext/server"
+  engine=$(sed -n 's/^ *"vscode": "\([^"]*\)".*/\1/p' "$src/package.json" | head -n 1)
+  cat >"$work/extension.vsixmanifest" <<MANIFEST
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="$name" Version="$version" Publisher="$publisher" />
+    <DisplayName>Nemerle</DisplayName>
+    <Description xml:space="preserve">$(field description)</Description>
+    <Categories>Programming Languages</Categories>
+    <GalleryFlags>Public</GalleryFlags>
+    <Icon>extension/images/icon.png</Icon>
+    <Properties>
+      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="$engine" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionPack" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="workspace" />
+      <Property Id="Microsoft.VisualStudio.Code.LocalizedLanguages" Value="" />
+    </Properties>
+    <License>extension/LICENSE.txt</License>
+  </Metadata>
+  <Installation><InstallationTarget Id="Microsoft.VisualStudio.Code" /></Installation>
+  <Dependencies />
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Content.Details" Path="extension/README.md" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE.txt" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/images/icon.png" Addressable="true" />
+  </Assets>
+</PackageManifest>
+MANIFEST
+  types=$(find "$work" -type f -name '*.*' | sed 's/.*\.//' | tr 'A-Z' 'a-z' | sort -u | while read -r e; do
+    case "$e" in
+      json) k=application/json ;; js) k=application/javascript ;; md) k=text/markdown ;; txt) k=text/plain ;;
+      png) k=image/png ;; svg) k=image/svg+xml ;; vsixmanifest|xml) k=text/xml ;; *) k=application/octet-stream ;;
+    esac
+    printf '<Default Extension=".%s" ContentType="%s" />' "$e" "$k"
+  done)
+  printf '<?xml version="1.0" encoding="utf-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">%s</Types>\n' "$types" >"$work/[Content_Types].xml"
+  rm -f "$vsix"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$work" "$vsix" <<'ZIP'
+import os, sys, zipfile
+work, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+    for top, _, files in os.walk(work):
+        for f in sorted(files):
+            path = os.path.join(top, f)
+            z.write(path, os.path.relpath(path, work).replace(os.sep, '/'))
+ZIP
+  elif command -v zip >/dev/null 2>&1; then
+    (cd "$work" && zip -qr "$vsix" .)
+  else
+    rm -rf "$work"; say "Skipping the editor extension: python3 or zip is needed to write the .vsix." >&2; return 1
+  fi
+  rm -rf "$work"
+  say "The editor extension: $vsix (install it by hand with Extensions > ... > Install from VSIX)" >&2
+  printf '%s\n' "$vsix"
+}
+install_vsix() {  # $1 = the editor's command, $2 = its extensions directory, $3 = the .vsix
+  # the old copied-in folders go first; the editor's own command installs the package (with a time limit: a
+  # command that is the editor's GUI rather than its CLI does not return)
+  rm -rf "$2/$extension" "$2/nemerle.nemerle-nitra-0.1.0"
+  limit=""; command -v timeout >/dev/null 2>&1 && limit="timeout 180"
+  if $limit "$1" --install-extension "$3" --force >/dev/null 2>&1; then say "Installed the extension in $1"
+  else say "$1 could not install $3; install it by hand from the Extensions view."; fi
 }
 if [ $lsp = 1 ]; then
-  case "$editor" in
-    auto)
-      command -v code >/dev/null 2>&1 && install_extension code "$HOME/.vscode/extensions"
-      command -v codium >/dev/null 2>&1 && install_extension codium "$HOME/.vscode-oss/extensions"
-      true ;;
-    code) install_extension code "$HOME/.vscode/extensions" ;;
-    codium) install_extension codium "$HOME/.vscode-oss/extensions" ;;
-    none) ;;
-    *) fail "unknown editor $editor" ;;
-  esac
+  if vsix=$(make_vsix); then
+    case "$editor" in
+      auto)
+        command -v code >/dev/null 2>&1 && install_vsix code "$HOME/.vscode/extensions" "$vsix"
+        command -v codium >/dev/null 2>&1 && install_vsix codium "$HOME/.vscode-oss/extensions" "$vsix"
+        true ;;
+      code) install_vsix code "$HOME/.vscode/extensions" "$vsix" ;;
+      codium) install_vsix codium "$HOME/.vscode-oss/extensions" "$vsix" ;;
+      none) ;;
+      *) fail "unknown editor $editor" ;;
+    esac
+  fi
 fi
 
 # --- check it works ---
