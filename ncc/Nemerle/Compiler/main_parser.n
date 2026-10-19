@@ -627,6 +627,21 @@ using Nemerle.Compiler.Utility;
             e
           })
         }
+        // a space is a top-level declaration: its placeholder (`__g(n)`, where the space was) is a statement of the
+        // file's top-level code, not part of one
+        def spacePlaceholder(e : PExpr) : bool
+        {
+          | PExpr.Call(PExpr.Ref(n), [PExpr.Literal(Literal.Integer)]) => n.Id == "__g"
+          | _ => false
+        }
+        foreach ((expression, _) in collected)
+          unless (spacePlaceholder(expression))
+            _ = Macros.TraverseExpr(None(), expression, false, (_, after, node) =>
+            {
+              when (!after && spacePlaceholder(node))
+                Message.Error(node.Location, "a space is a top-level declaration, not an expression; read its results through scope bindings and dials");
+              node
+            });
         foreach ((expression, isPublic) in collected) state(expression, isPublic);
         // a `def` bound more than once may change type, and then its storage is a Content: the file's functions and
         // the lambdas of its top-level code read it through a checked read whose type is what the read needs

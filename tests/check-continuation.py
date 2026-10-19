@@ -469,7 +469,9 @@ if a.stage == 'E6':
         raise SystemExit('FAILED: a plain space does not look across grammars')
     print('PASS: P a plain space with no grammar in its file selects the visible grammars (cross-grammar lookup)', flush=True)
     for name, text, where in (('in-function', 'f() : void { space G { go } }\n', 'bad.n:1:14:'),
-                              ('expression', 'def x = space G { go };\n', 'bad.n:1:9:')):
+                              ('expression', 'def x = space G { go };\n', 'bad.n:1:9:'),
+                              ('operand', 'def y = 1 + space G { go };\n', 'bad.n:1:13:'),
+                              ('argument', 'System.Console.WriteLine(space G { go });\n', 'bad.n:1:26:')):
         d = w / ('reject-' + name)
         d.mkdir()
         shutil.copy2(shost / 'app.exe', d / 'app.exe')

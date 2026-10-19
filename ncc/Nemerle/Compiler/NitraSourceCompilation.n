@@ -236,13 +236,13 @@ internal sealed class NitraSourceSession
         else if(!t.Quoted && previous!="." && t.Text=="space" && IsBlockHeader(text,file,t.Start,"space"))
         {
           // a space is a top-level declaration of the file: it talks to the program through scopes and dials, not as
-          // a value inside a function, type or expression
-          unless(depth==0 && (previous=="" || previous==";" || previous=="}" || previous=="]" || previous=="grammar"
-                              || previous=="scope" || previous=="space"))
+          // a value inside a function, type or expression. Inside braces it is never at the top level; at the top
+          // level, whether it is a statement of its own or part of an expression is decided on the parsed file
+          // (main_parser: its placeholder must be a top-level statement)
+          when(depth>0)
           {
             r.Pos=t.Start; r.Reset();
-            r.Fail(if(depth>0) "a space must be at the top level of the file, not inside a function or type; use scope bindings and dials to communicate with it"
-                   else "a space is a top-level declaration, not an expression; read its results through scope bindings and dials");
+            r.Fail("a space must be at the top level of the file, not inside a function or type; use scope bindings and dials to communicate with it");
           }
           def z=NitraSourceZone(); z.Id=zones.Count; z.File=source.FileIndex; z.Start=t.Start; z.Source=text;
           if(r.Eat("(")) { z.Names.Add(r.Name()); while(r.Eat(",")) z.Names.Add(r.Name()); r.Need(")"); }
