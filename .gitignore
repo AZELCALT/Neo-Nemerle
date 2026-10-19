@@ -61,3 +61,6 @@ __pycache__/
 
 # mdBook output
 /doc/book/book/
+
+# the installer writes the editor extension next to itself
+/install/*.vsix
