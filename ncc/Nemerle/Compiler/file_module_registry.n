@@ -56,8 +56,9 @@ public sealed class FileModuleRegistry
     foreach (source in manager.Options.Sources)
     {
       def file = Path.GetFullPath(Location.GetFileName(source.FileIndex));
-      // Only Nemerle sources are file modules; other parsers (e.g. .nitra) keep their own rules.
-      unless (String.Equals(Path.GetExtension(file), ".n", StringComparison.OrdinalIgnoreCase)) continue;
+      // Only Nemerle sources (.n, and .ns scripts) are file modules; other parsers (e.g. .nitra) keep their own rules.
+      unless (String.Equals(Path.GetExtension(file), ".n", StringComparison.OrdinalIgnoreCase)
+              || String.Equals(Path.GetExtension(file), ".ns", StringComparison.OrdinalIgnoreCase)) continue;
       def loc = Location(source.FileIndex, 1, 1);
       unless (shortNames || file.StartsWith(prefix, StringComparison.Ordinal))
       {

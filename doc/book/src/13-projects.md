@@ -18,7 +18,7 @@ Created program hello in /home/me/hello:
   main.n
   .gitignore
 Next: cd hello && ncc run
-hello: built out/hello.exe (1 file, 2.1 s)
+hello: built out/hello.dll (1 file, 2.1 s)
 Hello from hello!
 ```
 
@@ -41,7 +41,14 @@ local cache and local feeds only.
 
 A build is skipped when nothing it depends on changed: the project file, the sources, the references, the options
 and the compiler itself. The output folder is ready to run or ship: the binary, `Nemerle.dll`, and every assembly
-the references need, so `dotnet out/hello.exe` works anywhere the .NET 10 runtime is installed.
+the references need, so `dotnet out/hello.dll` works anywhere the .NET 10 runtime is installed.
+
+A program also gets a launcher next to its `.dll`: `out/hello.exe` on Windows, `out/hello` elsewhere. It is the .NET
+application host (the same one `dotnet build` gives a C# program), so `./out/hello` starts the program directly, on
+the installed .NET runtime. The launcher is native: it is for the machine it was built on (or for Windows, with a
+`-windows` target). It comes from the .NET SDK's host pack when one is installed, else from nuget.org; without
+either, the build says so and the program still runs with `dotnet`. A .NET Framework program (`target = "net48"`)
+is a `.exe` itself and needs no launcher.
 
 ## The project file
 
@@ -67,7 +74,7 @@ version = "0.1.0"
 # options = ["-debug+", "-define:TRACE"]
 ```
 
-- **`name`** is required. It names the binary (`out/hello.exe` or `out/hello.dll`).
+- **`name`** is required. It names the binary (`out/hello.dll`, and a program's launcher `out/hello`).
 - **`kind`** is usually left out: a project with its main file is a program, one without is a library.
 - **`main`** is the file the program starts at, when it is not `main.n`: `main = "app/start.n"`.
 - **`target`** is the .NET the output is for, when it is not the compiler's own (see *Targets* below).
@@ -184,7 +191,7 @@ System.Console.WriteLine(Greet("engine"))
 
 ```text
 greet: built ../greet/out/greet.dll (1 file, 2 s)
-app: built out/app.exe (1 file, 1.8 s)
+app: built out/app.dll (1 file, 1.8 s)
 Hello, engine!
 ```
 
@@ -197,7 +204,7 @@ A project built with `options = ["-debug+"]` writes a `.pdb` next to its binary,
 the Nemerle source: breakpoints, the call stack with lines, parameters, locals, and top-level state by name
 (`total`, or `main.total`). In VS Code and VSCodium, the extension's Run and Debug builds the project and starts it
 under [netcoredbg](https://github.com/Samsung/netcoredbg); from a terminal, `netcoredbg --interpreter=cli -- dotnet
-out/app.exe` does the same.
+out/app.dll` does the same.
 
 ## The editor
 

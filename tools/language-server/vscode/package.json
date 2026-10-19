@@ -35,8 +35,11 @@
                                   "body": { "type": "nemerle", "request": "launch", "name": "Nemerle: run the project" } }]
     }],
     "languages": [{ "id": "nemerle", "aliases": ["Nemerle", "nemerle"], "extensions": [".n"], "configuration": "./language-configuration.json",
-                   "icon": { "light": "./images/nemerle.svg", "dark": "./images/nemerle.svg" } }],
-    "grammars": [{ "language": "nemerle", "scopeName": "source.nemerle", "path": "./syntaxes/nemerle.tmLanguage.json" }],
+                   "icon": { "light": "./images/nemerle.svg", "dark": "./images/nemerle.svg" } },
+                 { "id": "nemerle-script", "aliases": ["Nemerle script"], "extensions": [".ns"], "configuration": "./language-configuration.json",
+                   "icon": { "light": "./images/nemerle-script.svg", "dark": "./images/nemerle-script.svg" } }],
+    "grammars": [{ "language": "nemerle", "scopeName": "source.nemerle", "path": "./syntaxes/nemerle.tmLanguage.json" },
+                 { "language": "nemerle-script", "scopeName": "source.nemerle.script", "path": "./syntaxes/nemerle-script.tmLanguage.json" }],
     "configuration": {
       "title": "Nemerle",
       "properties": {

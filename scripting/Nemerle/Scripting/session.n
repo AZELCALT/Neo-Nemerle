@@ -83,10 +83,7 @@ public sealed class ScriptSession : IDisposable
           def name = type.Name.Split('`')[0];
           config.PreviousTypeNames[name] = type.FullName.Replace('+', '.').Split('`')[0];
         }
-        def filename = Path.GetFileName(history[i].Path);
-        def extension = previous.Definition.FileExtension;
-        def owner = if (filename.EndsWith(extension, StringComparison.Ordinal))
-          filename.Substring(0, filename.Length - extension.Length) else Path.GetFileNameWithoutExtension(filename);
+        def owner = previous.Definition.StemOf(history[i].Path);
         config.PreviousTypeNames[owner] = previous.ScriptType.FullName;
         foreach (pair in previous.Members)
         {

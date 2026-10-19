@@ -65,7 +65,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     both = json.loads(subprocess.run(['node', str(harness), str(a.extension / 'extension.js'), str(prog)],
                                      capture_output=True, text=True, check=True).stdout)
     config, adapter = both['config'], both['adapter']
-    check(config['type'] == 'nemerle' and config['program'] == str(prog / 'out/prog.exe') and config['build'] is True,
+    check(config['type'] == 'nemerle' and config['program'] == str(prog / 'out/prog.dll') and config['build'] is True,
           'the extension\'s launch configuration: %s' % config)
     r = subprocess.run([str(tc / 'ncc'), 'build', str(prog)], capture_output=True, text=True)
     check(r.returncode == 0 and (prog / 'out/prog.pdb').exists(), 'the build with debug information: ' + r.stdout + r.stderr)

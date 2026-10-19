@@ -158,6 +158,7 @@ public sealed class DispatchingFileParser : IParser
   {
     this.manager = manager;
     this.registeredParsers[NormalizeExtension("n")] = Some(defaultParser);
+    this.registeredParsers[NormalizeExtension("ns")] = Some(defaultParser);   // a script: Nemerle, run by nscript
   }
 
   public Register(parserType : Type, fileExtension : string) : void

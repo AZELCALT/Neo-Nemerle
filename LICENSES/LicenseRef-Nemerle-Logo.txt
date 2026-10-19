@@ -11,8 +11,8 @@ documentation, packages, and in projects about or built with Nemerle. You may re
 or show it in one colour to suit where it appears, and resize it.
 
 Not permitted. You may not use the logo, or a design confusingly similar to it (in
-particular in the same purple and shading), as the logo, icon or identity of another
-project, product or organisation, or in a way that suggests an official connection with
-Nemerle that does not exist.
+particular in the same purple or script yellow and shading), as the logo, icon or
+identity of another project, product or organisation, or in a way that suggests an
+official connection with Nemerle that does not exist.
 
 The copyright holder may withdraw permission from a use that does not follow these terms.

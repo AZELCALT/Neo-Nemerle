@@ -114,5 +114,19 @@ r = run([T / 'nscript', 'run', missing / 'deploy.build.n', '--no-cache'], cwd=mi
 if 'no script kind declares the extension .build.n' not in r.stderr:
     raise SystemExit('FAILED: undeclared kind message\n' + r.stderr)
 print('PASS: plain scripts use the default definition; an undeclared kind is reported', flush=True)
+
+# 5. the script format: a .ns file; a kind's .build.n covers x.build.ns, the same way as x.build.n
+(here / 'deploy.build.ns').write_text(SCRIPT)
+out = run([T / 'nscript', 'run', here / 'deploy.build.ns', '--no-cache'], cwd=here).stdout.splitlines()
+if out != EXPECTED:
+    raise SystemExit('FAILED: a .build.ns script printed %r' % out)
+(here / 'plain.ns').write_text('System.Console.WriteLine(6 * 7);\n')
+if run([T / 'nscript', 'run', here / 'plain.ns', '--no-cache'], cwd=here).stdout.strip() != '42':
+    raise SystemExit('FAILED: plain .ns script')
+(missing / 'deploy.build.ns').write_text(SCRIPT)
+r = run([T / 'nscript', 'run', missing / 'deploy.build.ns', '--no-cache'], cwd=missing, ok=False)
+if 'no script kind declares the extension .build.ns' not in r.stderr:
+    raise SystemExit('FAILED: undeclared .ns kind message\n' + r.stderr)
+print('PASS: .ns scripts: plain, of a kind (.build.n covers x.build.ns), and an undeclared kind reported', flush=True)
 shutil.rmtree(w, ignore_errors=True)
 print('PASS: library-declared script kinds', flush=True)

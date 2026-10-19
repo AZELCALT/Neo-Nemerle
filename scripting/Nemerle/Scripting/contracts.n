@@ -78,6 +78,21 @@ public sealed class ScriptDefinition
     copy.BaseType = BaseType; copy.Debug = Debug; copy.TargetReferenceDirectory = TargetReferenceDirectory;
     copy
   }
+  /// How much of the end of `file` (a name or a path) is this definition's extension: `FileExtension`, or its script
+  /// spelling, `.ns` for `.n` (`x.build.ns` for `.build.n`); -1 when it ends with neither.
+  public ExtensionLength(file : string) : int
+  {
+    if (FileExtension.EndsWith(".n", StringComparison.Ordinal) && file.EndsWith(FileExtension + "s", StringComparison.Ordinal)) FileExtension.Length + 1
+    else if (file.EndsWith(FileExtension, StringComparison.Ordinal)) FileExtension.Length
+    else -1
+  }
+  /// A script file's name without its extension: the script's name (`deploy` for `deploy.build.ns`).
+  public StemOf(file : string) : string
+  {
+    def name = System.IO.Path.GetFileName(file);
+    def length = ExtensionLength(name);
+    if (length >= 0) name.Substring(0, name.Length - length) else System.IO.Path.GetFileNameWithoutExtension(name)
+  }
 }
 
 public sealed class ScriptInputs

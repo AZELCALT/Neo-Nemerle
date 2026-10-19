@@ -5,7 +5,9 @@
 #
 #   install/install.sh [--prefix DIR] [--bin DIR] [--build] [--no-lsp] [--no-debugger] [--editor auto|code|codium|none] [--uninstall]
 #
-# Needs only the .NET 10 runtime (https://dotnet.microsoft.com/download/dotnet/10.0). The editor extension also needs npm.
+# Needs only the .NET 10 runtime (https://dotnet.microsoft.com/download/dotnet/10.0). The editor extension's JavaScript
+# dependencies are downloaded from the npm registry as package-lock.json pins them (checked against its hashes); npm
+# itself is used only when that cannot be done.
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,6 +20,10 @@ editor=auto
 uninstall=0
 
 say() { printf '%s\n' "$*"; }
+# what was installed and what was skipped (and why), printed at the end; a file, as some steps run in a subshell
+notes=$(mktemp)
+trap 'rm -f "$notes"' EXIT
+note() { printf '  %-10s %s\n' "$1" "$2" >>"$notes"; }
 fail() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
@@ -69,6 +75,7 @@ mkdir -p "$prefix" "$bin"
 rm -rf "$prefix/toolchain"
 cp -R "$source" "$prefix/toolchain"
 tc="$prefix/toolchain"
+note installed "the toolchain (ncc, nscript, Nitra) in $tc"
 
 # --- the language server, compiled from source with the installed compiler ---
 if [ $lsp = 1 ]; then
@@ -81,6 +88,9 @@ if [ $lsp = 1 ]; then
     -r:"$tc/Integrated.Nitra.Compiler.dll" -r:"$tc/Integrated.DotNetLang.dll" >"$prefix/lsp-build.log" 2>&1 ||
     fail "building the language server failed; see $prefix/lsp-build.log"
   cp "$tc/ncc.runtimeconfig.json" "$tc/nemerle-lsp.runtimeconfig.json"
+  note installed "the language server (nemerle-lsp)"
+else
+  note skipped "the language server, the debugger and the editor extension: --no-lsp"
 fi
 
 # --- launchers on PATH ---
@@ -91,6 +101,7 @@ launcher() {
 launcher ncc ncc.exe "-target-references:\"$tc/references\" "
 launcher nscript nscript.exe ""
 [ $lsp = 1 ] && launcher nemerle-lsp nemerle-lsp.exe ""
+note installed "the commands in $bin"
 
 # --- the debugger: netcoredbg (MIT), which the extension debugs with; it looks in $prefix/tools/netcoredbg ---
 if [ $lsp = 1 ] && [ $debugger = 1 ]; then
@@ -103,21 +114,58 @@ if [ $lsp = 1 ] && [ $debugger = 1 ]; then
   url="https://github.com/Samsung/netcoredbg/releases/latest/download/$asset"
   dbg="$prefix/tools/netcoredbg"
   if [ -z "$asset" ]; then say "Skipping the debugger: netcoredbg has no build for $(uname -s) $(uname -m)."
+    note skipped "the debugger: netcoredbg has no build for $(uname -s) $(uname -m)"
   else
     rm -rf "$dbg"; mkdir -p "$dbg"
     if { command -v curl >/dev/null 2>&1 && curl -fsSL "$url" -o "$dbg/netcoredbg.tar.gz"; } ||
        { command -v wget >/dev/null 2>&1 && wget -q "$url" -O "$dbg/netcoredbg.tar.gz"; }; then
       tar -xzf "$dbg/netcoredbg.tar.gz" -C "$dbg" && rm -f "$dbg/netcoredbg.tar.gz"
       say "The debugger: $dbg/netcoredbg/netcoredbg"
+      note installed "the debugger (netcoredbg) in $dbg"
     else
       rm -rf "$dbg"; say "Skipping the debugger: netcoredbg could not be downloaded from $url (debug later with netcoredbg on PATH)."
+      note skipped "the debugger: netcoredbg could not be downloaded (debug later with netcoredbg on PATH)"
     fi
   fi
+elif [ $lsp = 1 ]; then
+  note skipped "the debugger: --no-debugger"
 fi
+
+# --- the editor extension's JavaScript dependencies, as package-lock.json pins them ---
+download() {  # $1 = URL, $2 = file
+  { command -v curl >/dev/null 2>&1 && curl -fsSL "$1" -o "$2"; } || { command -v wget >/dev/null 2>&1 && wget -q "$1" -O "$2"; }
+}
+sha512_hex() {  # a file's SHA-512, in hex
+  if command -v sha512sum >/dev/null 2>&1; then sha512sum "$1" | cut -d ' ' -f 1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 512 "$1" | cut -d ' ' -f 1
+  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha512 -r "$1" | cut -d ' ' -f 1
+  else return 1; fi
+}
+node_modules() {  # $1 = package-lock.json, $2 = the folder to put node_modules in; says why on stderr when it cannot
+  # each package: its folder, the registry tarball and the tarball's SHA-512 (npm's "sha512-<base64>")
+  entries=$(awk '
+    /^    "node_modules\// { sub(/^    "/, ""); sub(/": \{.*/, ""); path = $0; url = ""; next }
+    path != "" && /"resolved":/ { sub(/.*"resolved": "/, ""); sub(/".*/, ""); url = $0; next }
+    path != "" && /"integrity":/ { sub(/.*"integrity": "/, ""); sub(/".*/, ""); print path, url, $0; path = ""; next }
+    /^    }/ { path = "" }' "$1")
+  [ -n "$entries" ] || { say "no packages in $1" >&2; return 1; }
+  scratch=$(mktemp -d)
+  printf '%s\n' "$entries" | while read -r path url integrity; do
+    case "$integrity" in sha512-*) ;; *) say "$path has no sha512 hash in the lock file" >&2; exit 1 ;; esac
+    download "$url" "$scratch/package.tgz" || { say "$url could not be downloaded" >&2; exit 1; }
+    want=$(printf '%s' "${integrity#sha512-}" | base64 -d 2>/dev/null | od -An -v -tx1 | tr -d ' \n')
+    have=$(sha512_hex "$scratch/package.tgz") || { say "no sha512sum, shasum or openssl to check the download" >&2; exit 1; }
+    [ -n "$want" ] && [ "$want" = "$have" ] || { say "$url does not match its hash in the lock file" >&2; exit 1; }
+    mkdir -p "$2/$path"
+    tar -xzf "$scratch/package.tgz" -C "$2/$path" --strip-components=1 || { say "$url could not be unpacked" >&2; exit 1; }
+  done
+  status=$?
+  rm -rf "$scratch"
+  return $status
+}
 
 # --- the editor extension: a .vsix (next to this script) that carries the server, installed by the editor ---
 make_vsix() {  # prints the .vsix's path; nothing (and a reason on stderr) when it cannot be made
-  command -v npm >/dev/null 2>&1 || { say "Skipping the editor extension: npm is needed to fetch its one dependency." >&2; return 1; }
   src="$repo/tools/language-server/vscode"
   field() { sed -n "s/^  \"$1\": \"\([^\"]*\)\".*/\1/p" "$src/package.json" | head -n 1; }
   name=$(field name); version=$(field version); publisher=$(field publisher)
@@ -126,10 +174,22 @@ make_vsix() {  # prints the .vsix's path; nothing (and a reason on stderr) when 
   cp "$src/package.json" "$src/extension.js" "$src/language-configuration.json" "$src/README.md" "$ext/"
   cp -R "$src/syntaxes" "$src/images" "$ext/"
   cp "$repo/LICENSES/GPL-2.0-or-later.txt" "$ext/LICENSE.txt"
-  # the client library, the extension's one production dependency
-  (cd "$ext" && npm install --omit=dev --no-audit --no-fund --silent >/dev/null 2>&1) ||
-    { rm -rf "$work"; say "Skipping the editor extension: npm install failed." >&2; return 1; }
-  rm -f "$ext/package-lock.json"
+  # the client library, the extension's one production dependency, and what it uses: from the npm registry as the lock
+  # file pins them; npm only when that fails
+  if ! why=$(node_modules "$src/package-lock.json" "$ext" 2>&1); then
+    rm -rf "$ext/node_modules"
+    if command -v npm >/dev/null 2>&1; then
+      say "The extension's dependencies could not be fetched directly ($why); using npm" >&2
+      cp "$src/package-lock.json" "$ext/"
+      (cd "$ext" && npm ci --omit=dev --no-audit --no-fund --silent >/dev/null 2>&1) ||
+        { rm -rf "$work"; say "Skipping the editor extension: its dependencies could not be fetched ($why), and npm ci failed." >&2
+          note skipped "the editor extension: its dependencies could not be fetched ($why), nor by npm"; return 1; }
+      rm -f "$ext/package-lock.json"
+    else
+      rm -rf "$work"; say "Skipping the editor extension: its dependencies could not be fetched ($why)." >&2
+      note skipped "the editor extension: its dependencies could not be fetched ($why)"; return 1
+    fi
+  fi
   # the server: the installed toolchain with nemerle-lsp.exe and its reference assemblies
   cp -R "$tc" "$ext/server"
   engine=$(sed -n 's/^ *"vscode": "\([^"]*\)".*/\1/p' "$src/package.json" | head -n 1)
@@ -184,10 +244,12 @@ ZIP
   elif command -v zip >/dev/null 2>&1; then
     (cd "$work" && zip -qr "$vsix" .)
   else
-    rm -rf "$work"; say "Skipping the editor extension: python3 or zip is needed to write the .vsix." >&2; return 1
+    rm -rf "$work"; say "Skipping the editor extension: python3 or zip is needed to write the .vsix." >&2
+    note skipped "the editor extension: python3 or zip is needed to write the .vsix"; return 1
   fi
   rm -rf "$work"
   say "The editor extension: $vsix (install it by hand with Extensions > ... > Install from VSIX)" >&2
+  note installed "the editor extension package: $vsix"
   printf '%s\n' "$vsix"
 }
 install_vsix() {  # $1 = the editor's command, $2 = its extensions directory, $3 = the .vsix
@@ -195,8 +257,8 @@ install_vsix() {  # $1 = the editor's command, $2 = its extensions directory, $3
   # command that is the editor's GUI rather than its CLI does not return)
   rm -rf "$2/$extension" "$2/nemerle.nemerle-nitra-0.1.0"
   limit=""; command -v timeout >/dev/null 2>&1 && limit="timeout 180"
-  if $limit "$1" --install-extension "$3" --force >/dev/null 2>&1; then say "Installed the extension in $1"
-  else say "$1 could not install $3; install it by hand from the Extensions view."; fi
+  if $limit "$1" --install-extension "$3" --force >/dev/null 2>&1; then say "Installed the extension in $1"; note installed "the extension in $1"
+  else say "$1 could not install $3; install it by hand from the Extensions view."; note skipped "the extension in $1: $1 --install-extension failed (install the .vsix by hand)"; fi
 }
 if [ $lsp = 1 ]; then
   if vsix=$(make_vsix); then
@@ -204,10 +266,12 @@ if [ $lsp = 1 ]; then
       auto)
         command -v code >/dev/null 2>&1 && install_vsix code "$HOME/.vscode/extensions" "$vsix"
         command -v codium >/dev/null 2>&1 && install_vsix codium "$HOME/.vscode-oss/extensions" "$vsix"
+        command -v code >/dev/null 2>&1 || command -v codium >/dev/null 2>&1 ||
+          note skipped "installing the extension in an editor: no code or codium on PATH"
         true ;;
       code) install_vsix code "$HOME/.vscode/extensions" "$vsix" ;;
       codium) install_vsix codium "$HOME/.vscode-oss/extensions" "$vsix" ;;
-      none) ;;
+      none) note skipped "installing the extension in an editor: --editor none" ;;
       *) fail "unknown editor $editor" ;;
     esac
   fi
@@ -224,5 +288,8 @@ case ":$PATH:" in
   *":$bin:"*) ;;
   *) say ""; say "Add $bin to your PATH, for example in ~/.profile:"; say "  export PATH=\"$bin:\$PATH\"" ;;
 esac
+say ""
+say "Summary:"
+cat "$notes"
 say ""
 say "ncc, nscript$([ $lsp = 1 ] && printf ' and nemerle-lsp') are in $bin. Next: doc/book/src/SUMMARY.md"

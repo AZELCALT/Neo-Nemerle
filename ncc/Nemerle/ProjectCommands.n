@@ -305,6 +305,8 @@ internal module Projects
       unless (string.Equals(Path.GetFullPath(f), target, StringComparison.Ordinal) || File.Exists(target) && File.GetLastWriteTimeUtc(target) == File.GetLastWriteTimeUtc(f) && FileInfo(target).Length == FileInfo(f).Length)
         File.Copy(f, target, true);
     }
+    // a program's launcher, next to its .dll
+    when (project.Launcher != null) MakeLauncher(project, binary, offline);
     File.WriteAllLines(project.ReferencesFile, references);
     File.WriteAllLines(Path.Combine(output, project.Name + ".runtime"), runtimeFiles.Distinct());
     binary
@@ -587,6 +589,104 @@ internal module Projects
       text("_rels/.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
            + "<Relationship Type=\"http://schemas.microsoft.com/packaging/2010/07/manifest\" Target=\"/" + id + ".nuspec\" Id=\"R1\" /></Relationships>\n");
     }
+  }
+
+  // ---- the launcher (the .NET apphost) ----
+
+  /// The placeholder in the apphost template where the app's file name is written.
+  static AppPlaceholder : string = "c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2";
+
+  /// The runtime identifier the launcher is built for: the target's platform (windows) or this machine's.
+  static LauncherRid(project : Project) : string
+  {
+    def arch = match (Runtime.InteropServices.RuntimeInformation.OSArchitecture)
+    {
+      | Runtime.InteropServices.Architecture.Arm64 => "arm64" | Runtime.InteropServices.Architecture.X86 => "x86"
+      | Runtime.InteropServices.Architecture.Arm => "arm" | _ => "x64"
+    };
+    def os = if (project.Target != null && project.Target.IndexOf("-windows", StringComparison.OrdinalIgnoreCase) >= 0) "win"
+             else if (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows)) "win"
+             else if (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX)) "osx"
+             else "linux";
+    os + "-" + arch
+  }
+
+  /// The apphost template for a runtime identifier: from an installed SDK's host pack, else from nuget.org (into the
+  /// cache); null when there is none to be had.
+  static LauncherTemplate(project : Project, rid : string, offline : bool) : string
+  {
+    def file = if (rid.StartsWith("win", StringComparison.Ordinal)) "apphost.exe" else "apphost";
+    // an SDK's host packs (dotnet/packs/Microsoft.NETCore.App.Host.<rid>/<version>/runtimes/<rid>/native); a Linux
+    // distribution may name its own (artix-x64), which serves the same machine
+    def runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);              // shared/Microsoft.NETCore.App/<v>
+    def packs = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(runtimeDir))), "packs");
+    def arch = rid.Substring(rid.IndexOf('-') + 1);
+    def local = if (!Directory.Exists(packs)) null else
+    {
+      def mine = Directory.GetDirectories(packs, "Microsoft.NETCore.App.Host.*")
+        .Where(d => { def r = Path.GetFileName(d).Substring("Microsoft.NETCore.App.Host.".Length);
+                      r == rid || !rid.StartsWith("win", StringComparison.Ordinal) && !rid.StartsWith("osx", StringComparison.Ordinal)
+                                  && !r.StartsWith("win", StringComparison.Ordinal) && !r.StartsWith("osx", StringComparison.Ordinal) && r.EndsWith("-" + arch, StringComparison.Ordinal) });
+      mine.SelectMany(d => Directory.GetFiles(d, file, SearchOption.AllDirectories)).OrderByDescending(f => f).FirstOrDefault()
+    };
+    if (local != null) local
+    else
+    {
+      def id = "Microsoft.NETCore.App.Host." + rid;
+      def wanted = Environment.Version.Major.ToString() + "." + Environment.Version.Minor.ToString() + ".";
+      def version = match (Versions(id, offline).Filter(v => v.StartsWith(wanted, StringComparison.Ordinal)).Rev())
+      {
+        | v :: _ => v
+        | [] => null
+      };
+      if (version == null) null
+      else
+        try { Path.Combine(FetchPackage(project, "launcher (" + rid + ")", id, version, "runtimes/" + rid + "/native", offline), file) }
+        catch { | _ is ProjectException => null }
+    }
+  }
+
+  /// Writes the program's launcher: the apphost template with the .dll's name in its placeholder (as the .NET SDK
+  /// does), executable, re-signed on macOS. Without a template the program still runs with `dotnet name.dll`.
+  static MakeLauncher(project : Project, binary : string, offline : bool) : void
+  {
+    def launcher = project.Launcher;
+    def rid = LauncherRid(project);
+    match (LauncherTemplate(project, rid, offline))
+    {
+      | null => Console.Error.WriteLine("warning: " + project.Name + ": no launcher for " + rid + " (no .NET SDK host pack here, and none could be fetched); run it with `dotnet " + Path.GetFileName(binary) + "`")
+      | template =>
+        def bytes = File.ReadAllBytes(template);
+        def placeholder = Text.Encoding.UTF8.GetBytes(AppPlaceholder);
+        def name = Text.Encoding.UTF8.GetBytes(Path.GetFileName(binary));
+        def at = IndexOf(bytes, placeholder);
+        when (at < 0) throw ProjectException(project.File, 1, 1, "the launcher template " + template + " has no app placeholder");
+        when (name.Length >= 1024) throw ProjectException(project.File, 1, 1, "the program's file name is too long for its launcher");
+        for (mutable i = 0; i < placeholder.Length; i++) bytes[at + i] = 0;
+        Array.Copy(name, 0, bytes, at, name.Length);
+        // only rewrite a launcher that differs (an unchanged one keeps its time stamp)
+        unless (File.Exists(launcher) && File.ReadAllBytes(launcher).SequenceEqual(bytes))
+        {
+          File.WriteAllBytes(launcher, bytes);
+          unless (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows))
+            File.SetUnixFileMode(launcher, File.GetUnixFileMode(launcher) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+          // macOS refuses a patched binary whose ad-hoc signature no longer matches: sign it again
+          when (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX))
+            try { def sign = Process.Start("codesign", "-s - -f \"" + launcher + "\""); sign.WaitForExit() } catch { | _ => () }
+        }
+    }
+  }
+
+  static IndexOf(haystack : array[byte], needle : array[byte]) : int
+  {
+    mutable found = -1;
+    for (mutable i = 0; found < 0 && i <= haystack.Length - needle.Length; i++)
+    {
+      mutable j = 0;
+      while (j < needle.Length && haystack[i + j] == needle[j]) j++;
+      when (j == needle.Length) found = i;
+    }
+    found
   }
 
   ReadList(path : string) : SCG.IEnumerable[string]

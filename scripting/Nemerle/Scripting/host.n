@@ -255,8 +255,7 @@ public sealed class ScriptHost
             unless (result.Success) return result;
             imported = result.Script; graph.Compiled.Add(childKey, imported);
           }
-          def filename = Path.GetFileName(child.Path);
-          def owner = if (filename.EndsWith(imported.Definition.FileExtension, StringComparison.Ordinal)) filename.Substring(0, filename.Length - imported.Definition.FileExtension.Length) else Path.GetFileNameWithoutExtension(filename);
+          def owner = imported.Definition.StemOf(child.Path);
           when (definition.ImportBindings.Exists(b => b.Owner == owner)) throw ScriptDependencyException(ScriptDiagnostic(source.Path, request.Location.Line, request.Location.Column, "Imported file owner is ambiguous: " + owner, true));
           def property = "__import_" + childKey.Substring(0, 24);
           definition.ImportBindings.Add(ScriptImportBinding(owner, property, imported));
@@ -389,9 +388,7 @@ public sealed class ScriptHost
         options.EmitDebug = definition.Debug;
         options.OutputFileName = Path.Combine(directory, "Script_" + Guid.NewGuid().ToString("N") + ".dll");
         def data = ScriptCompilationData();
-        def filename = Path.GetFileName(source.Path);
-        data.FileName = if (filename.EndsWith(definition.FileExtension, StringComparison.Ordinal))
-          filename.Substring(0, filename.Length - definition.FileExtension.Length) else Path.GetFileNameWithoutExtension(filename);
+        data.FileName = definition.StemOf(source.Path);
         unless (ClrScriptSupport.Identifier(data.FileName) && !LexerBase.BaseKeywords.Contains(data.FileName)) throw ArgumentException("Script filename must be a language identifier");
         data.CaptureResult = definition.CaptureResult; data.ResultField = definition.ResultField;
         data.ResultTypeName = if (definition.ResultType == null) null else ClrScriptSupport.TypeName(definition.ResultType);

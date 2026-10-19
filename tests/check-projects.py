@@ -41,15 +41,23 @@ try:
     for f in ('hello.nproj', 'main.n', '.gitignore'): check((work / 'hello' / f).exists(), 'init writes ' + f)
     check('Next: cd hello && ncc run' in out, 'init says what to do next: ' + out)
     hello = work / 'hello'
-    check('Hello from hello!' in run('run', cwd=hello), 'the new program runs')
+    (hello / 'tool.ns').write_text('[assembly: DependsOn("nothing.dll")]\nthis is a script, not part of the project\n')
+    check('Hello from hello!' in run('run', cwd=hello), 'the new program runs (a .ns script in its folder is not compiled)')
     check('hello: up to date' in run('run', cwd=hello), 'a second run does not rebuild')
     (hello / 'main.n').write_text('System.Console.WriteLine("edited");\n')
     out = run('run', cwd=hello)
     check('hello: built' in out and 'edited' in out, 'an edit rebuilds: ' + out)
     check('already a project' in run('init', 'hello', ok=False), 'init refuses an existing project')
     check((hello / 'out/Nemerle.dll').exists() and (hello / 'out/hello.runtimeconfig.json').exists(), 'the output runs on its own')
-    out = subprocess.run(['dotnet', str(hello / 'out/hello.exe')], capture_output=True, text=True).stdout
-    check(out.strip() == 'edited', 'dotnet out/hello.exe: ' + out)
+    out = subprocess.run(['dotnet', str(hello / 'out/hello.dll')], capture_output=True, text=True).stdout
+    check(out.strip() == 'edited', 'dotnet out/hello.dll: ' + out)
+    # the launcher (the .NET apphost) starts it directly: ./hello, hello.exe on Windows
+    launcher = hello / ('out/hello.exe' if os.name == 'nt' else 'out/hello')
+    check(launcher.exists(), 'a program has a launcher next to its .dll')
+    out = subprocess.run([str(launcher)], capture_output=True, text=True).stdout
+    check(out.strip() == 'edited', 'the launcher runs the program: ' + out)
+    run('build', cwd=hello)
+    check(launcher.stat().st_mtime > 0 and os.access(launcher, os.X_OK), 'the launcher is executable')
     run('clean', cwd=hello)
     check(not (hello / 'out').exists(), 'clean removes out/')
     print('PASS: init, run, up to date, rebuild after an edit, clean')

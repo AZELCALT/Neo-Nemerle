@@ -101,7 +101,7 @@ public class ScriptRunner
     {
       when (arguments.Length == 0)
       {
-        Console.Error.WriteLine("Usage: nscript run source.n [options] [-- arguments] | compile source.n output.dll [options] | run-compiled output.dll [-- arguments] | repl [options]");
+        Console.Error.WriteLine("Usage: nscript run source.ns [options] [-- arguments] | compile source.ns output.dll [options] | run-compiled output.dll [-- arguments] | repl [options]");
         return(2);
       }
       def definition = ScriptDefinition(); definition.Properties.Add("args", typeof(array[string]));
@@ -181,16 +181,18 @@ public class ScriptRunner
       {
         unless (positions[0] == "run" || positions[0] == "compile") throw ArgumentException("Unknown script command");
         def source = ScriptSource(File.ReadAllText(positions[1]), Path.GetFullPath(positions[1]));
-        // the script kind (a library's [ScriptDefinition(".x.n")] class) is chosen by file name, as in Kotlin
+        // the script kind (a library's [ScriptDefinition(".x.n")] class) is chosen by file name, as in Kotlin (x.build.ns
+        // or x.build.n)
         def registry = ScriptDefinitionRegistry(definition);
         def searched = ScriptKinds.SearchPath(source.Path);
         ScriptKinds.Register(registry, definition, searched);
         def selected = registry.Select(source);
         def name = Path.GetFileName(source.Path);
-        def stem = if (name.EndsWith(selected.FileExtension, StringComparison.Ordinal)) name.Substring(0, name.Length - selected.FileExtension.Length) else name;
+        def length = selected.ExtensionLength(name);
+        def stem = if (length >= 0) name.Substring(0, name.Length - length) else name;
         when (stem.Contains("."))
         {
-          Console.Error.WriteLine($"no script kind declares the extension .$(stem.Substring(stem.IndexOf('.') + 1))$(selected.FileExtension) of $name;"
+          Console.Error.WriteLine($"no script kind declares the extension $(name.Substring(stem.IndexOf('.'))) of $name;"
             + $" searched $(string.Join(\", \", searched.ToArray())) (set NEMERLE_SCRIPT_PATH, or rename the script)");
           return(1);
         }

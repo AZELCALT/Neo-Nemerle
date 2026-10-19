@@ -1,8 +1,14 @@
 # Scripts
 
-A script is a Nemerle file run directly, without a build step: `nscript run file.n`. The design follows Kotlin's
-scripting. Scripts are ordinary Nemerle, they can declare what they depend on, and libraries can define kinds of script
-with their own base class and imports.
+A script is a Nemerle file run directly, without a build step: `nscript run file.ns`. The design follows Kotlin's
+scripting, and so does the name: as Kotlin scripts are `.kts` files next to `.kt` ones, Nemerle scripts are `.ns` files
+next to `.n` ones. Scripts are ordinary Nemerle, they can declare what they depend on, and libraries can define kinds
+of script with their own base class and imports.
+
+The extension keeps the two apart: a project compiles its `.n` files and leaves `.ns` files alone, and the editor
+shows a script with the yellow logo. `nscript` runs a plain `.n` file too, the same way: that is for running ordinary
+Nemerle directly, wherever that is needed. A `.ns` file is the same job in its own format, a file that is a script and
+nothing else.
 
 ## Running scripts
 
@@ -20,8 +26,8 @@ hello, grace
 
 | Command | What it does |
 |---|---|
-| `nscript run file.n` | compile (cached) and run |
-| `nscript compile file.n out.dll` | compile to an artifact |
+| `nscript run file.ns` | compile (cached) and run |
+| `nscript compile file.ns out.dll` | compile to an artifact |
 | `nscript run-compiled out.dll` | run an artifact without the compiler |
 | `nscript repl` | an interactive session |
 
@@ -38,7 +44,7 @@ A script lists what it needs at its top, as Kotlin's `@file:` annotations do:
 [assembly: DependsOn("tools.dll")]                 // a local library, relative to the script
 [assembly: DependsOn("Example.Package", "1.2.3")]  // a NuGet package at an exact version
 [assembly: Repository("https://api.nuget.org/v3/index.json")]
-[assembly: Import("helpers.n")]                    // another script, as a typed child
+[assembly: Import("helpers.ns")]                   // another script, as a typed child
 [assembly: CompilerOptions("-define:FAST")]
 ```
 
@@ -150,7 +156,7 @@ def definition = Nemerle.Scripting.contracts.ScriptDefinition();
 definition.TargetReferenceDirectory = System.IO.Path.Combine(System.AppContext.BaseDirectory, "references");
 definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);
 definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "appres.dll"));
-def plugin = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText("plugin.txt"), "plugin.n"), definition);
+def plugin = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText("plugin.txt"), "plugin.ns"), definition);
 if (plugin.Success) _ = host.Evaluate(plugin.Script, Nemerle.Scripting.contracts.ScriptInputs());
 else foreach (d in plugin.Diagnostics) System.Console.WriteLine(d.Message);
 System.Console.WriteLine($"the application sees $(scope.A.value)");
@@ -168,13 +174,15 @@ scope.A.value = 50;
 the application sees 50
 ```
 
-The plugin is `plugin.n` to the compiler, so its space is `dial:.plugin.G`. `using main;` imports the application's
+The plugin is `plugin.ns` to the compiler, so its space is `dial:.plugin.G`. `using main;` imports the application's
 file, which is what makes its scope `A` (`main.A`) the plugin's `scope.A`.
 
 ## Script kinds
 
 A library can declare a **kind of script**, as Kotlin's `@KotlinScript` does. A class marked `[ScriptDefinition(ext)]`
-becomes the base class of every script whose file name ends in `ext`. Those scripts need no setup lines at all:
+becomes the base class of every script whose file name ends in `ext`. The extension is written in its `.n` form and
+covers both: `.build.n` is the kind of `deploy.build.ns` and of `deploy.build.n`. Those scripts need no
+setup lines at all:
 
 ```nemerle,lib=buildkind
 // ncc: -r:{toolchain}/Nemerle.Scripting.dll
@@ -190,7 +198,7 @@ public class BuildScript
 ```
 
 ```nemerle,script
-// file: deploy.build.n
+// file: deploy.build.ns
 Log("building " + Target);
 WriteLine("done")
 ```

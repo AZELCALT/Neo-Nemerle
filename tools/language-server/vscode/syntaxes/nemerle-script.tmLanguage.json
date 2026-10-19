@@ -1,0 +1,6 @@
+{
+  "$comment": "A Nemerle script (.ns, run by nscript) is highlighted as Nemerle.",
+  "name": "Nemerle script",
+  "scopeName": "source.nemerle.script",
+  "patterns": [{ "include": "source.nemerle" }]
+}

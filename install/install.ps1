@@ -9,8 +9,10 @@ install\install.cmd
 install\install.cmd -Editor none
 install\install.cmd -Uninstall
 
-Needs only the .NET 10 runtime (https://dotnet.microsoft.com/download/dotnet/10.0). The editor extension also needs
-npm. -Build compiles everything from source first and needs Python 3 and the strong-name tool sn as well.
+Needs only the .NET 10 runtime (https://dotnet.microsoft.com/download/dotnet/10.0). The editor extension's JavaScript
+dependencies are downloaded from the npm registry as package-lock.json pins them (checked against its hashes); npm
+itself is used only when that cannot be done. -Build compiles everything from source first and needs Python 3 and the
+strong-name tool sn as well.
 #>
 param(
   [string]$Prefix = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Nemerle' } else { Join-Path $HOME '.local/share/nemerle' }),
@@ -29,6 +31,10 @@ $bin = Join-Path $Prefix 'bin'
 $extension = 'neo-nemerle.nemerle-0.2.0'
 $oldExtension = 'nemerle.nemerle-nitra-0.1.0'
 $extensionRoots = @{ code = (Join-Path $HOME '.vscode\extensions'); codium = (Join-Path $HOME '.vscode-oss\extensions') }
+
+# what was installed and what was skipped (and why), printed at the end
+$notes = New-Object Collections.Generic.List[string]
+function Note([string]$what, [string]$text) { $notes.Add(('  {0,-10} {1}' -f $what, $text)) }
 
 function Set-UserPath([string]$dir, [bool]$add) {
   $current = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -70,6 +76,7 @@ $tc = Join-Path $Prefix 'toolchain'
 New-Item -ItemType Directory -Force -Path $Prefix, $bin | Out-Null
 Remove-Item -Recurse -Force $tc -ErrorAction SilentlyContinue
 Copy-Item -Recurse $source $tc
+Note 'installed' "the toolchain (ncc, nscript, Nitra) in $tc"
 
 # --- the language server, compiled from source with the installed compiler ---
 if (-not $NoLsp) {
@@ -82,7 +89,8 @@ if (-not $NoLsp) {
     "-out:$(Join-Path $tc 'nemerle-lsp.exe')" "-target-references:$(Join-Path $tc 'references')" -no-color @references *> $log
   if ($LASTEXITCODE -ne 0) { throw "Building the language server failed; see $log" }
   Copy-Item (Join-Path $tc 'ncc.runtimeconfig.json') (Join-Path $tc 'nemerle-lsp.runtimeconfig.json')
-}
+  Note 'installed' 'the language server (nemerle-lsp)'
+} else { Note 'skipped' 'the language server, the debugger and the editor extension: -NoLsp' }
 
 # --- launchers (bin is added to the user's PATH) ---
 function New-Launcher([string]$name, [string]$program, [bool]$references) {
@@ -100,6 +108,7 @@ New-Launcher 'ncc' 'ncc.exe' $true
 New-Launcher 'nscript' 'nscript.exe' $false
 if (-not $NoLsp) { New-Launcher 'nemerle-lsp' 'nemerle-lsp.exe' $false }
 if ($onWindows) { Set-UserPath $bin $true }
+Note 'installed' "the commands in $bin"
 $env:Path = "$bin$([IO.Path]::PathSeparator)$env:Path"
 
 # --- the debugger: netcoredbg (MIT), which the extension debugs with; it looks in $Prefix\tools\netcoredbg ---
@@ -112,7 +121,7 @@ if (-not $NoLsp -and -not $NoDebugger) {
            elseif ($IsMacOS) { 'netcoredbg-osx-amd64.tar.gz' }
            elseif ($arch -eq 'Arm64') { 'netcoredbg-linux-arm64.tar.gz' } else { 'netcoredbg-linux-amd64.tar.gz' }
   $dbg = Join-Path $Prefix 'tools\netcoredbg'
-  if (-not $asset) { Write-Host "Skipping the debugger: netcoredbg has no build for this machine ($arch)." }
+  if (-not $asset) { Write-Host "Skipping the debugger: netcoredbg has no build for this machine ($arch)."; Note 'skipped' "the debugger: netcoredbg has no build for this machine ($arch)" }
   else {
     Remove-Item -Recurse -Force $dbg -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $dbg | Out-Null
@@ -125,16 +134,45 @@ if (-not $NoLsp -and -not $NoDebugger) {
       if ($asset.EndsWith('.zip')) { Expand-Archive -Path $download -DestinationPath $dbg -Force } else { & tar -xzf $download -C $dbg }
       Remove-Item -Force $download
       Write-Host "The debugger: $(Join-Path $dbg 'netcoredbg')"
+      Note 'installed' "the debugger (netcoredbg) in $dbg"
     } catch {
       Remove-Item -Recurse -Force $dbg -ErrorAction SilentlyContinue
       Write-Host "Skipping the debugger: netcoredbg could not be downloaded ($($_.Exception.Message)); debug later with netcoredbg on PATH."
+      Note 'skipped' 'the debugger: netcoredbg could not be downloaded (debug later with netcoredbg on PATH)'
     }
   }
+} elseif (-not $NoLsp) { Note 'skipped' 'the debugger: -NoDebugger' }
+
+# --- the editor extension's JavaScript dependencies, as package-lock.json pins them ---
+function Get-NodeModules([string]$lock, [string]$folder) {
+  # each "node_modules/..." entry: its registry tarball, checked against its sha512, unpacked without its top folder;
+  # throws with the reason when it cannot. (The lock file's root entry is named ""; Windows PowerShell 5.1's
+  # ConvertFrom-Json refuses an empty name, so it is renamed first.)
+  $text = (Get-Content -Raw $lock) -replace '"packages": \{\s*"": \{', '"packages": { "(root)": {'
+  $packages = (ConvertFrom-Json $text).packages
+  if (-not (Get-Command tar -ErrorAction SilentlyContinue)) { throw 'no tar to unpack the packages' }
+  $ProgressPreference = 'SilentlyContinue'
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  $download = Join-Path ([IO.Path]::GetTempPath()) ("nemerle-package-" + [Guid]::NewGuid().ToString('N') + '.tgz')
+  try {
+    foreach ($entry in $packages.PSObject.Properties) {
+      if (-not $entry.Name.StartsWith('node_modules/') -or $entry.Value.dev -or $entry.Value.link) { continue }
+      $url = $entry.Value.resolved; $integrity = [string]$entry.Value.integrity
+      if (-not $integrity.StartsWith('sha512-')) { throw "$($entry.Name) has no sha512 hash in the lock file" }
+      try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $download } catch { throw "$url could not be downloaded ($($_.Exception.Message))" }
+      $sha = [Security.Cryptography.SHA512]::Create()
+      try { $hash = [Convert]::ToBase64String($sha.ComputeHash([IO.File]::ReadAllBytes($download))) } finally { $sha.Dispose() }
+      if ($hash -ne $integrity.Substring(7)) { throw "$url does not match its hash in the lock file" }
+      $target = Join-Path $folder ($entry.Name.Replace('/', [IO.Path]::DirectorySeparatorChar))
+      New-Item -ItemType Directory -Force -Path $target | Out-Null
+      & tar -xzf $download -C $target --strip-components=1
+      if ($LASTEXITCODE -ne 0) { throw "$url could not be unpacked" }
+    }
+  } finally { Remove-Item -Force $download -ErrorAction SilentlyContinue }
 }
 
 # --- the editor extension: a .vsix (next to this script) that carries the server, installed by the editor ---
 function New-Vsix {
-  if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Host 'Skipping the editor extension: npm is needed to fetch its one dependency.'; return $null }
   $source = Join-Path $repo 'tools\language-server\vscode'
   $manifest = Get-Content -Raw (Join-Path $source 'package.json') | ConvertFrom-Json
   $vsix = Join-Path $PSScriptRoot "$($manifest.name)-$($manifest.version).vsix"
@@ -146,11 +184,27 @@ function New-Vsix {
     Copy-Item -Recurse (Join-Path $source 'syntaxes') $ext
     Copy-Item -Recurse (Join-Path $source 'images') $ext
     Copy-Item (Join-Path $repo 'LICENSES\GPL-2.0-or-later.txt') (Join-Path $ext 'LICENSE.txt')
-    # the client library, the extension's one production dependency
-    Push-Location $ext
-    try { & npm install --omit=dev --no-audit --no-fund --silent *> $null; $ok = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
-    if (-not $ok) { Write-Host 'Skipping the editor extension: npm install failed.'; return $null }
-    Remove-Item -Force (Join-Path $ext 'package-lock.json') -ErrorAction SilentlyContinue
+    # the client library, the extension's one production dependency, and what it uses: from the npm registry as the
+    # lock file pins them; npm only when that fails
+    $lock = Join-Path $source 'package-lock.json'
+    try { Get-NodeModules $lock $ext }
+    catch {
+      $why = $_.Exception.Message
+      Remove-Item -Recurse -Force (Join-Path $ext 'node_modules') -ErrorAction SilentlyContinue
+      if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "Skipping the editor extension: its dependencies could not be fetched ($why)."
+        Note 'skipped' "the editor extension: its dependencies could not be fetched ($why)"; return $null
+      }
+      Write-Host "The extension's dependencies could not be fetched directly ($why); using npm"
+      Copy-Item $lock $ext
+      Push-Location $ext
+      try { & npm ci --omit=dev --no-audit --no-fund --silent *> $null; $ok = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
+      if (-not $ok) {
+        Write-Host "Skipping the editor extension: its dependencies could not be fetched ($why), and npm ci failed."
+        Note 'skipped' "the editor extension: its dependencies could not be fetched ($why), nor by npm"; return $null
+      }
+      Remove-Item -Force (Join-Path $ext 'package-lock.json') -ErrorAction SilentlyContinue
+    }
     # the server: the installed toolchain with nemerle-lsp.exe and its reference assemblies
     Copy-Item -Recurse $tc (Join-Path $ext 'server')
     $escape = { param($s) [Security.SecurityElement]::Escape([string]$s) }
@@ -206,6 +260,7 @@ function New-Vsix {
       }
     } finally { $zip.Dispose() }
     Write-Host "The editor extension: $vsix (install it by hand with Extensions > ... > Install from VSIX)"
+    Note 'installed' "the editor extension package: $vsix"
     return $vsix
   } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
 }
@@ -213,7 +268,8 @@ function Install-Vsix([string]$editorName, [string]$vsix) {
   # the editor's own command installs it (the old copied-in folder goes first)
   foreach ($name in $extension, $oldExtension) { Remove-Item -Recurse -Force (Join-Path $extensionRoots[$editorName] $name) -ErrorAction SilentlyContinue }
   & $editorName --install-extension $vsix --force *> $null
-  if ($LASTEXITCODE -eq 0) { Write-Host "Installed the extension in $editorName" } else { Write-Host "$editorName could not install $vsix; install it by hand from the Extensions view." }
+  if ($LASTEXITCODE -eq 0) { Write-Host "Installed the extension in $editorName"; Note 'installed' "the extension in $editorName" }
+  else { Write-Host "$editorName could not install $vsix; install it by hand from the Extensions view."; Note 'skipped' "the extension in ${editorName}: --install-extension failed (install the .vsix by hand)" }
 }
 if (-not $NoLsp) {
   $vsix = New-Vsix
@@ -222,9 +278,13 @@ if (-not $NoLsp) {
       'auto' {
         if (Get-Command code -ErrorAction SilentlyContinue) { Install-Vsix 'code' $vsix }
         if (Get-Command codium -ErrorAction SilentlyContinue) { Install-Vsix 'codium' $vsix }
+        if (-not (Get-Command code -ErrorAction SilentlyContinue) -and -not (Get-Command codium -ErrorAction SilentlyContinue)) {
+          Note 'skipped' 'installing the extension in an editor: no code or codium on PATH'
+        }
       }
       'code' { Install-Vsix 'code' $vsix }
       'codium' { Install-Vsix 'codium' $vsix }
+      'none' { Note 'skipped' 'installing the extension in an editor: -Editor none' }
     }
   }
 }
@@ -238,6 +298,9 @@ $status = $LASTEXITCODE
 Remove-Item -Recurse -Force $check
 if ($status -ne 0) { throw "The installed nscript does not run: $output" }
 Write-Host $output
+Write-Host ''
+Write-Host 'Summary:'
+foreach ($line in $notes) { Write-Host $line }
 Write-Host ''
 $where = if ($onWindows) { 'added to your user PATH; open a new terminal' } else { 'add it to your PATH' }
 Write-Host "ncc, nscript$(if (-not $NoLsp) { ' and nemerle-lsp' }) are in $bin ($where)."

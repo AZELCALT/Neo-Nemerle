@@ -35,10 +35,12 @@ for f in ('package.json', 'extension.js', 'language-configuration.json', 'README
 shutil.copytree(source / 'syntaxes', ext / 'syntaxes')
 shutil.copytree(source / 'images', ext / 'images')   # the icon (marketplace) and the .n file icon (responsive SVG)
 shutil.copy2(repo / 'LICENSES/GPL-2.0-or-later.txt', ext / 'LICENSE.txt')
-# the client library: the extension's one production dependency
-if not (source / 'node_modules/vscode-languageclient').is_dir():
-    subprocess.run(['npm', 'install', '--omit=dev', '--no-audit', '--no-fund'], cwd=source, check=True)
-shutil.copytree(source / 'node_modules', ext / 'node_modules')
+# the client library, the extension's one production dependency, and what it uses: as package-lock.json pins them,
+# from the npm registry (no npm needed); a node_modules already in the source folder (an npm install there) is used as is
+if (source / 'node_modules/vscode-languageclient').is_dir():
+    shutil.copytree(source / 'node_modules', ext / 'node_modules', ignore=shutil.ignore_patterns('.bin', '.package-lock.json'))
+else:
+    subprocess.run([sys.executable, str(repo / 'build/fetch-node-modules.py'), str(source / 'package-lock.json'), str(ext)], check=True)
 # the server, its toolchain and reference assemblies
 server = ext / 'server'
 shutil.copytree(a.server, server, ignore=shutil.ignore_patterns('*.log', 'nemerle-lsp'))

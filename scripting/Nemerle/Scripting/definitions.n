@@ -24,7 +24,7 @@ public sealed class ScriptDefinitionRegistry : IScriptDefinitionSelector
     mutable result = fallback;
     mutable length = 0;
     foreach (definition in definitions)
-      when (source.Path.EndsWith(definition.FileExtension, StringComparison.Ordinal)
+      when (definition.ExtensionLength(source.Path) >= 0
             && (definition.FilePathPattern == null || System.Text.RegularExpressions.Regex.IsMatch(source.Path, definition.FilePathPattern)))
       {
         def candidate = definition.FileExtension.Length;

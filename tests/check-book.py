@@ -28,9 +28,9 @@ FENCE = re.compile(r'^```([^\n]*)\n(.*?)^```\s*$', re.S | re.M)
 failures, count = [], 0
 
 
-def files_of(code):
+def files_of(code, first='main.n'):
     """[(relative path, text)] of a block; files split at `// file: path` lines."""
-    parts, name, lines = [], 'main.n', []
+    parts, name, lines = [], first, []
     def real(lines):   # a part holding only blank and comment lines (e.g. an `// ncc:` line) is not a file
         return any(l.strip() and not l.strip().startswith('//') for l in lines)
     for line in code.splitlines(keepends=True):
@@ -49,7 +49,7 @@ def check(chapter, line, tags, code, expected, folder):
     root = folder / ('example%d' % line)
     root.mkdir()
     paths = []
-    for name, text in files_of(code):
+    for name, text in files_of(code, 'main.ns' if kind == 'script' else 'main.n'):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)

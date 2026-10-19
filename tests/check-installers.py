@@ -6,7 +6,7 @@ Usage: check-installers.py
 install/install.sh (and install/install.ps1 when PowerShell 7 is on PATH) install the pinned toolchain into a temporary
 prefix with --editor none, and the .vsix each writes next to itself must pass tests/check-vscode-extension.py. The
 editor step runs against a stand-in editor command that records how it is called (no real editor is touched)."""
-import os, pathlib, shutil, subprocess, sys, tempfile
+import os, pathlib, shutil, subprocess, sys, tempfile, zipfile
 
 repo = pathlib.Path(__file__).resolve().parents[1]
 work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-installers-'))
@@ -31,9 +31,23 @@ try:
     # install.sh
     prefix = work / 'unix'
     vsix.unlink(missing_ok=True)
+    # the extension's dependencies come from the registry without npm: an npm on PATH that only records being called
+    nonpm = work / 'nonpm'; nonpm.mkdir()
+    (nonpm / 'npm').write_text('#!/bin/sh\necho called >> "%s/npm-called"\nexit 1\n' % work); (nonpm / 'npm').chmod(0o755)
     r = subprocess.run(['sh', str(repo / 'install/install.sh'), '--prefix', str(prefix), '--bin', str(prefix / 'bin'), '--editor', 'none'],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=dict(os.environ, PATH=str(nonpm) + os.pathsep + os.environ['PATH']))
     check(r.returncode == 0, 'install.sh: ' + r.stdout + r.stderr)
+    offline = 'could not be fetched' in r.stdout + r.stderr
+    if offline: print('SKIP: the npm-free dependencies (the registry cannot be reached)', flush=True)
+    else:
+        check(not (work / 'npm-called').exists(), 'install.sh fetches the extension\'s dependencies without npm: ' + r.stderr)
+        with zipfile.ZipFile(vsix) as z:
+            names = z.namelist()
+        check('extension/node_modules/vscode-languageclient/node.js' in names and 'extension/node_modules/semver/package.json' in names,
+              'the .vsix carries the dependencies the lock file pins')
+    summary = r.stdout[r.stdout.find('Summary:'):]
+    check('Summary:' in r.stdout and 'installed  the toolchain' in summary and 'skipped    installing the extension in an editor: --editor none' in summary,
+          'install.sh ends with what it installed and skipped: ' + summary)
     check(installed(prefix, 'nscript'), 'the commands install.sh installed run')
     check(vsix.exists(), 'install.sh writes ' + str(vsix))
     # the debugger it fetched (skipped, and said so, without the network)
@@ -77,9 +91,17 @@ console.log(require(process.argv[2])._test.debuggerPath({ get: () => undefined }
     if pwsh:
         prefix = work / 'ps'
         vsix.unlink(missing_ok=True)
+        (work / 'npm-called').unlink(missing_ok=True)
         r = subprocess.run([pwsh, '-NoProfile', '-File', str(repo / 'install/install.ps1'), '-Prefix', str(prefix), '-Editor', 'none'],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, env=dict(os.environ, PATH=str(nonpm) + os.pathsep + os.environ['PATH']))
         check(r.returncode == 0, 'install.ps1: ' + r.stdout + r.stderr)
+        if 'could not be fetched' not in r.stdout:
+            check(not (work / 'npm-called').exists(), 'install.ps1 fetches the extension\'s dependencies without npm: ' + r.stdout)
+            with zipfile.ZipFile(vsix) as z:
+                check('extension/node_modules/vscode-languageclient/node.js' in z.namelist(), 'the .vsix of install.ps1 carries the dependencies')
+        summary = r.stdout[r.stdout.find('Summary:'):]
+        check('installed  the toolchain' in summary and 'skipped    installing the extension in an editor: -Editor none' in summary,
+              'install.ps1 ends with what it installed and skipped: ' + summary)
         check(installed(prefix, 'nscript'), 'the commands install.ps1 installed run')
         if 'Skipping the debugger' not in r.stdout:
             v = subprocess.run([str(prefix / 'tools/netcoredbg/netcoredbg/netcoredbg'), '--version'], capture_output=True, text=True)

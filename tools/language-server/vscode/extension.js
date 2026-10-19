@@ -54,7 +54,8 @@ function debuggerPath(settings) {
   return settings.get('path') || onPath || installedDebugger();
 }
 
-/// The project in a folder: its .nproj file's name setting (the binary is out/<name>.exe).
+/// The project in a folder: its .nproj file's name, output and target settings (the binary is out/<name>.dll, or
+/// out/<name>.exe for a .NET Framework target).
 function projectOf(folder) {
   try {
     const file = fs.readdirSync(folder).find(f => f.endsWith('.nproj'));
@@ -62,22 +63,25 @@ function projectOf(folder) {
     const text = fs.readFileSync(path.join(folder, file), 'utf8');
     if (text.trimStart().startsWith('<')) {
       const m = /<AssemblyName>([^<]+)<\/AssemblyName>/.exec(text);
-      return { file: path.join(folder, file), name: m ? m[1].trim() : path.basename(file, '.nproj'), output: 'out' };
+      const framework = /<TargetFrameworkVersion>/.test(text);
+      return { file: path.join(folder, file), name: m ? m[1].trim() : path.basename(file, '.nproj'), output: 'out', framework };
     }
     const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(text);
     const output = /^\s*output\s*=\s*"([^"]+)"/m.exec(text);
-    return { file: path.join(folder, file), name: name ? name[1] : path.basename(file, '.nproj'), output: output ? output[1] : 'out' };
+    const target = /^\s*target\s*=\s*"([^"]+)"/m.exec(text);
+    const framework = !!target && /^net4\d+$/i.test(target[1]);
+    return { file: path.join(folder, file), name: name ? name[1] : path.basename(file, '.nproj'), output: output ? output[1] : 'out', framework };
   } catch { return null; }
 }
 
-/// A launch configuration completed for the folder's project: program (out/<name>.exe), cwd, and a build first.
+/// A launch configuration completed for the folder's project: program (out/<name>.dll), cwd, and a build first.
 function completeConfiguration(folder, config) {
   const project = folder ? projectOf(folder) : null;
   const filled = Object.assign({}, config);
   if (!filled.type) filled.type = 'nemerle';
   if (!filled.request) filled.request = 'launch';
   if (!filled.name) filled.name = 'Nemerle: run the project';
-  if (!filled.program && project) filled.program = path.join(folder, project.output, project.name + '.exe');
+  if (!filled.program && project) filled.program = path.join(folder, project.output, project.name + (project.framework ? '.exe' : '.dll'));
   if (!filled.cwd && folder) filled.cwd = folder;
   if (filled.build === undefined) filled.build = !!project;
   if (!filled.args) filled.args = [];

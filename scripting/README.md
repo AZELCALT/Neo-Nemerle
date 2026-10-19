@@ -4,15 +4,17 @@ This optional library compiles ordinary Nemerle syntax with the existing compile
 macros and CLR backend. Script mode adds a generated instance for supplied inputs,
 script fields and execution. It does not introduce an interpreter or another language.
 
-The .NET 10 toolchain includes `Nemerle.Scripting.dll` and `nscript`:
+The .NET 10 toolchain includes `Nemerle.Scripting.dll` and `nscript`. A script is a `.ns` file (as Kotlin's are
+`.kts`); `nscript` runs a plain `.n` file the same way, for running ordinary Nemerle directly. A kind's extension
+(`[ScriptDefinition(".build.n")]`) matches both `x.build.ns` and `x.build.n`.
 
 ```sh
-./toolchain/coreclr/nscript run demo.n -- first second
-./toolchain/coreclr/nscript compile demo.n demo.dll
+./toolchain/coreclr/nscript run demo.ns -- first second
+./toolchain/coreclr/nscript compile demo.ns demo.dll
 ./toolchain/coreclr/nscript run-compiled demo.dll -- first second
 ```
 
-Standalone scripts receive `args : array[string]`. For example, `demo.n` can contain:
+Standalone scripts receive `args : array[string]`. For example, `demo.ns` can contain:
 
 ```nemerle
 using System;

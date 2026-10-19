@@ -99,7 +99,7 @@ try:
     check('"netcoreapp3.1"' in config and '"3.1.0"' in config, 'the netcoreapp3.1 runtimeconfig: ' + config)
     runtimes = subprocess.run(['dotnet', '--list-runtimes'], capture_output=True, text=True).stdout
     if 'Microsoft.NETCore.App 8.' in runtimes:
-        out = subprocess.run(['dotnet', str(n8 / 'out/n8.exe')], capture_output=True, text=True).stdout
+        out = subprocess.run(['dotnet', str(n8 / 'out/n8.dll')], capture_output=True, text=True).stdout
         check('on .NET 8' in out, 'runs on .NET 8: ' + out)
         print('PASS: a net8.0 program runs on .NET 8')
     else:
@@ -113,7 +113,7 @@ try:
         if r.returncode != 0 and unreachable(out):
             print('SKIP: the %s reference pack cannot be fetched' % name); return None
         check(r.returncode == 0, name + ': ' + out)
-        data = (d / 'out' / (name + ('.exe' if 'program' in settings or 'kind' not in settings else '.dll'))).read_bytes()
+        data = (d / 'out' / (name + '.dll')).read_bytes()
         check(needs.encode() in data, name + ' references ' + needs)
         return d
     if platform('droid', 'kind = "library"\ntarget = "net10.0-android"\n',
@@ -128,6 +128,8 @@ try:
     if win:
         config = (win / 'out/win.runtimeconfig.json').read_text()
         check('Microsoft.WindowsDesktop.App' in config, 'a Windows program runs on the desktop runtime: ' + config)
+        launcher = (win / 'out/win.exe').read_bytes()
+        check(launcher[:2] == b'MZ' and b'win.dll\0' in launcher, 'a Windows program gets a Windows launcher for win.dll')
         print('PASS: a net10.0-windows program (WinForms) on the desktop runtime')
     print('PASS: %d target checks' % checks)
 finally:

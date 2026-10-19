@@ -98,7 +98,31 @@ public sealed class Project
   public OutputDirectory : string { get { Path.GetFullPath(Path.Combine(Root, Output)) } }
 
   /// The built binary.
-  public Binary : string { get { Path.Combine(OutputDirectory, Name + (if (IsProgram) ".exe" else ".dll")) } }
+  /// A .NET Framework target (net462 ... net481): its programs are .exe files Windows starts itself.
+  public FrameworkTarget : bool
+  {
+    get { Target != null && Target.StartsWith("net4", StringComparison.OrdinalIgnoreCase) && !Target.Contains(".") }
+  }
+
+  /// The built binary: a library's .dll; a program's .dll, started by its launcher (or `dotnet name.dll`); a .NET
+  /// Framework program's .exe.
+  public Binary : string { get { Path.Combine(OutputDirectory, Name + (if (IsProgram && FrameworkTarget) ".exe" else ".dll")) } }
+
+  /// A program's launcher (the .NET apphost: a native executable that starts the .dll on .NET): `name.exe` for
+  /// Windows, `name` elsewhere; null for a library or a .NET Framework program.
+  public Launcher : string
+  {
+    get
+    {
+      if (!IsProgram || FrameworkTarget) null
+      else
+      {
+        def windows = Environment.OSVersion.Platform == PlatformID.Win32NT
+                      || Target != null && Target.IndexOf("-windows", StringComparison.OrdinalIgnoreCase) >= 0;
+        Path.Combine(OutputDirectory, Name + (if (windows) ".exe" else ""))
+      }
+    }
+  }
 
   /// The references a build resolved (assemblies, projects' binaries, packages), one path per line: what a tool
   /// such as the language server compiles against without resolving packages itself.
@@ -148,7 +172,8 @@ public sealed class Project
     def output = OutputDirectory;
     def walk(dir : string) : void
     {
-      foreach (file in Directory.GetFiles(dir, "*.n")) result.Add(file);
+      // (.n only: a .ns file is a script, run by nscript, not part of the project)
+      foreach (file in Directory.GetFiles(dir, "*.n")) when (file.EndsWith(".n", StringComparison.Ordinal)) result.Add(file);
       foreach (sub in Directory.GetDirectories(dir))
       {
         def name = Path.GetFileName(sub);
