@@ -104,8 +104,11 @@ $env:Path = "$bin$([IO.Path]::PathSeparator)$env:Path"
 
 # --- the debugger: netcoredbg (MIT), which the extension debugs with; it looks in $Prefix\tools\netcoredbg ---
 if (-not $NoLsp -and -not $NoDebugger) {
-  $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-  $asset = if ($onWindows) { if ($arch -eq 'X64') { 'netcoredbg-win64.zip' } else { $null } }
+  # the machine's architecture: Windows says it in PROCESSOR_ARCHITECTURE (Windows PowerShell 5.1 on .NET Framework
+  # has no RuntimeInformation.OSArchitecture); PowerShell 7 elsewhere asks .NET
+  $arch = if ($onWindows) { if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
+          else { [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() }
+  $asset = if ($onWindows) { if ($arch -eq 'AMD64') { 'netcoredbg-win64.zip' } else { $null } }
            elseif ($IsMacOS) { 'netcoredbg-osx-amd64.tar.gz' }
            elseif ($arch -eq 'Arm64') { 'netcoredbg-linux-arm64.tar.gz' } else { 'netcoredbg-linux-amd64.tar.gz' }
   $dbg = Join-Path $Prefix 'tools\netcoredbg'
@@ -116,6 +119,8 @@ if (-not $NoLsp -and -not $NoDebugger) {
     $download = Join-Path $dbg $asset
     try {
       $ProgressPreference = 'SilentlyContinue'
+      # Windows PowerShell 5.1 may default to TLS versions GitHub refuses
+      [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
       Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/Samsung/netcoredbg/releases/latest/download/$asset" -OutFile $download
       if ($asset.EndsWith('.zip')) { Expand-Archive -Path $download -DestinationPath $dbg -Force } else { & tar -xzf $download -C $dbg }
       Remove-Item -Force $download
