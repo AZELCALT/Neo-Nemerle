@@ -365,7 +365,24 @@ run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + st
 source('init/worker.n', 'using T = System.Threading.Tasks.Task;\nHelper() : int { 2 }\ndef t = T.Run(() => Helper());\nt.Wait();')
 run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-deadlock.exe'), '-no-color',
      *modern_references], False, 'Task.Run runs work that uses this file while its top-level code waits for it')
-print('PASS: threads in an imported file\'s top-level code: warned, and a provable deadlock is an error', flush=True)
+# a wait is for the task it is called on: waiting for other work leaves the first start a warning
+source('init/worker.n', 'using T = System.Threading.Tasks.Task;\nHelper() : int { 2 }\ndef t = T.Run(() => Helper());\ndef u = T.Run(() => 1);\nu.Wait();')
+run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-other.exe'), '-no-color',
+     *modern_references], True, 'Task.Run in the top-level code of an imported file')
+# .Result waits, and so does a thread's Join
+source('init/worker.n', 'using T = System.Threading.Tasks.Task;\nHelper() : int { 2 }\ndef t = T.Run(() => Helper());\ndef r = t.Result;')
+run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-result.exe'), '-no-color',
+     *modern_references], False, 'runs work that uses this file while its top-level code waits for it')
+source('init/worker.n', 'Helper() : void { }\ndef th = System.Threading.Thread(() => Helper());\nth.Start();\nth.Join();')
+run([runtime, compiler, init / 'main.n', init / 'worker.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-join.exe'), '-no-color',
+     *modern_references], False, 'Thread.new runs work that uses this file while its top-level code waits for it')
+# work that reaches the file only through another file's function: followed across files
+source('init/worker.n', 'using T = System.Threading.Tasks.Task;\nusing relay;\npublic Value() : int { 1 }\ndef t = T.Run(() => relay.Call());\nt.Wait();')
+source('init/relay.n', 'using worker;\npublic Call() : int { worker.Value() + 1 }')
+run([runtime, compiler, init / 'main.n', init / 'worker.n', init / 'relay.n', '-source-root:' + str(init), '-out:' + str(work / 'thread-relay.exe'),
+     '-no-color', *modern_references], False, 'Task.Run runs work that uses this file while its top-level code waits for it')
+print('PASS: threads in an imported file\'s top-level code: warned; a provable deadlock is an error, for the task a wait is on '
+      '(Wait, .Result, Join) and for work that reaches the file through other files', flush=True)
 # `export` makes a type global: one type by that name everywhere, reached without a using; any other type of that
 # name contradicts it (the exporting file itself is the same origin)
 source('init/lib/shapes.n', 'export class Pen { public Name() : string { "global pen" } }')

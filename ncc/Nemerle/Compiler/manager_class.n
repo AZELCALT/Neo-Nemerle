@@ -247,6 +247,26 @@ using Nemerle.Compiler.XmlDump;
     /// from the framework is checked against them (an error at the code that uses what the target lacks).
     public mutable TargetContracts : Nemerle.Platform.ClrTargetContracts;
     public TargetReported : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+    /// For the thread check: what each typed method touches (file modules) and calls (methods of this compilation).
+    public MethodFiles : System.Collections.Generic.Dictionary[IMethod, System.Collections.Generic.HashSet[string]] = System.Collections.Generic.Dictionary();
+    public MethodCallees : System.Collections.Generic.Dictionary[IMethod, System.Collections.Generic.HashSet[IMethod]] = System.Collections.Generic.Dictionary();
+    /// Threads started in imported files' top-level code, judged once every method is typed.
+    public ThreadStarts : System.Collections.Generic.List[ThreadStart] = System.Collections.Generic.List();
+
+    public class ThreadStart
+    {
+      public mutable At : Location;
+      public What : string;
+      public ImplicitWait : bool;
+      public Home : string;
+      public Files : System.Collections.Generic.HashSet[string];
+      public Callees : System.Collections.Generic.HashSet[IMethod];
+      public mutable Waited : bool;
+      public mutable UntracedWait : bool;
+      public this(location : Location, what : string, implicitWait : bool, home : string,
+                  files : System.Collections.Generic.HashSet[string], callees : System.Collections.Generic.HashSet[IMethod])
+      { At = location; What = what; ImplicitWait = implicitWait; Home = home; Files = files; Callees = callees; }
+    }
     /// Per top-level value: "typed" (one type) or "content" (its type changes; the storage is a Content).
     public StateStorage : System.Collections.Generic.Dictionary[string, string] = System.Collections.Generic.Dictionary();
     /// Reads of a top-level value whose storage may be a Content: the type each one needs, checked after typing.
@@ -925,7 +945,11 @@ using Nemerle.Compiler.XmlDump;
         NameTree.CheckReferencedNamespaces ();
 
         Hierarchy.EmitDecls ();
-        when (Options.FileModules) Nemerle.Compiler.file_module_registry.StateMacro.CheckReads(this);
+        when (Options.FileModules)
+        {
+          Nemerle.Compiler.file_module_registry.StateMacro.CheckReads(this);
+          Nemerle.Compiler.file_module_registry.StateMacro.FinishThreads(this);
+        }
         Hierarchy.CompleteClrTypes();
         Message.MaybeBailout();
 

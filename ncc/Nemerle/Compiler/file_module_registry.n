@@ -530,35 +530,69 @@ internal sealed class StateMacro : IMacro
   /// Starting a thread or task there is warned; when the started work uses the file and the top-level code waits
   /// for it (Parallel always waits), it can never finish: an error. The calls are the resolved ones, whatever the
   /// spelling.
+  /// What a typed method touches, for the thread check's proof across files: the file modules it refers to (their
+  /// classes' full names) and the methods of this compilation it calls. Recorded while each method is typed (its
+  /// typed body is gone once it is emitted).
+  public static Summarize(typer : Typer, body : TExpr) : void
+  {
+    def manager = typer.Manager;
+    def method = typer.CurrentMethodBuilder;
+    when (method != null)
+    {
+      def (files, callees) = Touches(manager, [body]);
+      manager.MethodFiles[method] = files;
+      manager.MethodCallees[method] = callees;
+    }
+  }
+
+  /// The file module a type belongs to (the outermost file class around it), or null.
+  static FileOf(manager : ManagerClass, t : TypeInfo) : string
+  {
+    mutable at = t;
+    while (at != null && at.DeclaringType != null) at = at.DeclaringType;
+    if (at != null && manager.FileModuleRegistry.Usings.Contains(at.FullName)) at.FullName else null
+  }
+
+  static Touches(manager : ManagerClass, exprs : list[TExpr]) : System.Collections.Generic.HashSet[string] * System.Collections.Generic.HashSet[IMethod]
+  {
+    def files = System.Collections.Generic.HashSet();
+    def callees = System.Collections.Generic.HashSet();
+    def member(m : IMember) : void
+    {
+      when (m != null && m.DeclaringType != null)
+      {
+        match (FileOf(manager, m.DeclaringType)) { | null => () | f => _ = files.Add(f) }
+        match (m) { | b is MethodBuilder => _ = callees.Add(b) | _ => () }
+      }
+    }
+    foreach (e in exprs)
+      ExprWalker().Walk(e, info =>
+        match (info.Node)
+        {
+          | TExpr.StaticRef(_, m, _) => member(m)
+          | TExpr.MethodRef(_, m, _, _) => member(m)
+          | TExpr.FieldMember(_, f) => member(f)
+          | TExpr.PropertyMember(_, p) => member(p)
+          | TExpr.StaticPropertyRef(_, p) => member(p)
+          | _ => ()
+        });
+    (files, callees)
+  }
+
+  /// Threads started in an imported file's top-level code (its static constructor, which holds the type's lock):
+  /// each start is recorded with what its work touches, and whether the top-level code waits for that very task (or
+  /// thread); the verdict is given once every method is typed (FinishThreads), when the calls the work makes can be
+  /// followed into other files.
   public static CheckThreads(typer : Typer, body : TExpr) : void
   {
+    def manager = typer.Manager;
     def home = typer.CurrentTypeBuilder;
-    def inModule(t : TypeInfo) : bool
-    {
-      mutable at = t; mutable found = false;
-      while (at != null && !found) { found = at.Equals(home); at = at.DeclaringType; }
-      found
-    }
     def threading(owner : string) : bool
     {
       owner == "System.Threading.Thread" || owner == "System.Threading.ThreadPool" || owner == "System.Threading.Timer"
       || owner.StartsWith("System.Threading.Tasks.", System.StringComparison.Ordinal)
     }
     def waiting(name : string) : bool { ["Wait", "WaitAll", "WaitAny", "Join", "get_Result", "GetResult", "RunSynchronously"].Contains(name) }
-    def usesModule(e : TExpr) : bool
-    {
-      mutable uses = false;
-      ExprWalker().Walk(e, info =>
-        match (info.Node)
-        {
-          | TExpr.StaticRef(_, mem, _) when mem.DeclaringType != null && inModule(mem.DeclaringType) => uses = true
-          | TExpr.MethodRef(_, meth, _, _) when meth.DeclaringType != null && inModule(meth.DeclaringType) => uses = true
-          | _ => ()
-        });
-      uses
-    }
-    def starts = System.Collections.Generic.List.[Location * bool * bool * string]();
-    mutable waits = false;
     // the method a call resolves to (an overloaded call is a resolved delayed typing)
     def callee(f : TExpr) : IMethod
     {
@@ -566,6 +600,48 @@ internal sealed class StateMacro : IMacro
       | TExpr.MethodRef(_, m, _, _) => m
       | TExpr.Delayed(susp) when susp.IsResolved => callee(susp.ResolutionResult)
       | _ => null
+    }
+    def receiver(f : TExpr) : TExpr
+    {
+      | TExpr.MethodRef(obj, _, _, _) => obj
+      | TExpr.Delayed(susp) when susp.IsResolved => receiver(susp.ResolutionResult)
+      | _ => null
+    }
+    def strip(e : TExpr) : TExpr
+    {
+      | TExpr.DebugInfo(inner, _) => strip(inner)
+      | TExpr.TypeConversion(inner, _, _, _) => strip(inner)
+      | TExpr.MacroEnvelope(_, _, inner, _) => strip(inner)
+      | _ => e
+    }
+    def starts = System.Collections.Generic.List.[ManagerClass.ThreadStart]();
+    def startOf = System.Collections.Generic.Dictionary.[object, ManagerClass.ThreadStart](); // a start, by its call node
+    def boundTo = System.Collections.Generic.Dictionary.[object, TExpr]();                 // a local, by the value bound to it
+    def isStart(owner : string, name : string) : bool
+    {
+      threading(owner) && !waiting(name) && name != "GetAwaiter" && name != "Start" && name != "ConfigureAwait"
+      && !name.StartsWith("get_", System.StringComparison.Ordinal)
+    }
+    // the start a waited-on expression is: a local that holds one, a start call itself, or one reached through
+    // GetAwaiter / ConfigureAwait
+    def started(e : TExpr) : ManagerClass.ThreadStart
+    {
+      match (strip(e))
+      {
+        | TExpr.LocalRef(decl) => mutable v; if (boundTo.TryGetValue(decl, out v)) started(v) else null
+        // a top-level value is the file's state: a field written by its binding
+        | TExpr.StaticRef(_, field is IField, _) => mutable v; if (boundTo.TryGetValue(field, out v)) started(v) else null
+        | TExpr.Call(f, _, _) as call =>
+          mutable s;
+          if (startOf.TryGetValue(call, out s)) s
+          else match (callee(f)) { | m when m != null && (m.Name == "GetAwaiter" || m.Name == "ConfigureAwait") => started(receiver(f)) | _ => null }
+        | _ => null
+      }
+    }
+    mutable untraced = false; // a wait whose task is not one started here
+    def wait(on : TExpr) : void
+    {
+      match (started(on)) { | null => untraced = true | s => s.Waited = true }
     }
     def visit(node : object) : void
     {
@@ -576,23 +652,78 @@ internal sealed class StateMacro : IMacro
           when (meth != null && meth.DeclaringType != null)
           {
             def owner = meth.DeclaringType.FullName;
-            when (threading(owner) || owner == "System.Runtime.CompilerServices.TaskAwaiter")
-              if (waiting(meth.Name)) waits = true
-              else when (threading(owner))
-                starts.Add((call.Location, parms.Exists(p => usesModule(p.expr)), owner == "System.Threading.Tasks.Parallel",
-                            meth.DeclaringType.Name + "." + meth.Name));
+            if (owner == "System.Threading.Thread" && meth.Name == "Start") ()      // the thread's work came with its constructor
+            else if ((threading(owner) || owner == "System.Runtime.CompilerServices.TaskAwaiter") && waiting(meth.Name))
+            {
+              // Task.WaitAll(a, b) / WaitAny: its arguments; t.Wait(), th.Join(), awaiter.GetResult(): its receiver
+              if (meth.Name == "WaitAll" || meth.Name == "WaitAny")
+                foreach (p in parms)
+                  match (strip(p.expr))
+                  {
+                    | TExpr.Array(items, _) => foreach (i in items) wait(i)
+                    | other => wait(other)
+                  }
+              else wait(receiver(func))
+            }
+            else when (isStart(owner, meth.Name))
+            {
+              def (files, callees) = Touches(manager, parms.Map(p => p.expr));
+              def s = ManagerClass.ThreadStart(call.Location, meth.DeclaringType.Name + "." + (if (meth.Name == ".ctor") "new" else meth.Name),
+                                               owner == "System.Threading.Tasks.Parallel", home.FullName, files, callees);
+              starts.Add(s); startOf[call] = s;
+            }
           }
+        | TExpr.DefValIn(local, value, _) => boundTo[local] = value
+        | TExpr.Assign(target, value) =>
+          match (strip(target))
+          {
+            | TExpr.LocalRef(decl) => boundTo[decl] = value
+            | TExpr.StaticRef(_, field is IField, _) => boundTo[field] = value
+            | _ => ()
+          }
+        | TExpr.PropertyMember(obj, p) when p.Name == "Result" && p.DeclaringType != null && threading(p.DeclaringType.FullName) => wait(obj)
         | _ => ()
       }
     }
+    // in source order: a start before the wait on it, its local bound in between
     ExprWalker().Walk(body, info => visit(info.Node));
-    foreach ((at, uses, implicitWait, what) in starts)
-      if (uses && (implicitWait || waits))
-        Message.Error(at, $"$what runs work that uses this file while its top-level code waits for it; that code holds the "
-                          "file's type initializer lock, so the work can never run: move it out of the top-level code")
+    foreach (s in starts) { s.UntracedWait = untraced; manager.ThreadStarts.Add(s) }
+  }
+
+  /// The verdict on the threads of every imported file's top-level code, once every method is typed: work that uses
+  /// the file (directly, or through calls into other files that reach it) while the top-level code waits for that
+  /// very work can never run, an error; any other start is a warning.
+  public static FinishThreads(manager : ManagerClass) : void
+  {
+    def reaches(start : ManagerClass.ThreadStart) : bool
+    {
+      if (start.Files.Contains(start.Home)) true
       else
-        Message.Warning(at, $"$what in the top-level code of an imported file: that code runs in the file's type initializer, "
-                            "so work that calls into the file waits until the top-level code ends")
+      {
+        def seen = System.Collections.Generic.HashSet.[IMethod]();
+        def queue = System.Collections.Generic.Queue.[IMethod](start.Callees);
+        mutable found = false;
+        while (!found && queue.Count > 0)
+        {
+          def m = queue.Dequeue();
+          when (seen.Add(m))
+          {
+            mutable files; mutable callees;
+            when (manager.MethodFiles.TryGetValue(m, out files) && files.Contains(start.Home)) found = true;
+            when (manager.MethodCallees.TryGetValue(m, out callees)) foreach (c in callees) queue.Enqueue(c);
+          }
+        }
+        found
+      }
+    }
+    foreach (s in manager.ThreadStarts)
+      if (reaches(s) && (s.ImplicitWait || s.Waited))
+        Message.Error(s.At, $"$(s.What) runs work that uses this file while its top-level code waits for it; that code holds "
+                                  "the file's type initializer lock, so the work can never run: move it out of the top-level code")
+      else
+        Message.Warning(s.At, $"$(s.What) in the top-level code of an imported file: that code runs in the file's type initializer, "
+                                    "so work that calls into the file waits until the top-level code ends");
+    manager.ThreadStarts.Clear();
   }
 
   /// A top-level value that changes type is a Content; code that needs one of its earlier types depends on what is
