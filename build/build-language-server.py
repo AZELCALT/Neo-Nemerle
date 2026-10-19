@@ -21,9 +21,10 @@ for f in a.toolchain.iterdir():
     if f.is_file() and f.suffix in {'.dll', '.exe', '.json', '.nitrametadata', '.nitrametadata2'}:
         shutil.copy2(f, out / f.name)
 if a.nitra_compiler: shutil.copy2(a.nitra_compiler, out / 'Integrated.Nitra.Compiler.dll')
-refs = ['Nemerle.Compiler.dll', 'Integrated.Nitra.Runtime.dll', 'Integrated.Nitra.Grammar.dll', 'Integrated.Nitra.Compiler.dll', 'Integrated.DotNetLang.dll']
+refs = ['Nemerle.Compiler.dll', 'Integrated.Nitra.Runtime.dll', 'Integrated.Nitra.Grammar.dll', 'Integrated.Nitra.Compiler.dll', 'Integrated.DotNetLang.dll',
+        'Nemerle.Scripting.dll']
 # The server is written as file modules (server.n is module server) rooted at its directory.
-command = ['dotnet', str(out / 'ncc.exe'), '-source-root:' + str(repo / 'tools/language-server'), *map(str, sources), '-target:exe', '-out:' + str(out / 'nemerle-lsp.exe'),
+command = ['dotnet', str(out / 'ncc.exe'), '-source-root:' + str(repo / 'tools/language-server'), *map(str, sources), '-target:exe', '-out:' + str(out / 'nemerle-lsp.exe'), '-launcher-',
            '-target-references:' + str(a.references.resolve()), '-no-color'] + ['-r:' + str(out / r) for r in refs]
 result = subprocess.run(command, capture_output=True, text=True)
 sys.stdout.write(result.stdout + result.stderr)

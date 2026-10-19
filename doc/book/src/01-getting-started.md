@@ -34,8 +34,14 @@ Compile and run it:
 
 ```sh
 ncc hello.n -out:hello.exe
-dotnet hello.exe
+./hello            # Windows: hello.exe
 ```
+
+`-out:hello.exe` writes the program and a launcher for it, a small native executable that starts it on .NET (the one
+`dotnet build` gives a C# program). On Linux and macOS the launcher is `hello` and the program stays `hello.exe`,
+which `dotnet hello.exe` also runs. On Windows the launcher is `hello.exe`, since that is the name you start, and the
+program is `hello.dll` (`dotnet hello.dll`): Windows would start a .NET program named `.exe` on the old .NET Framework.
+`-launcher-` writes the program alone.
 
 Three things are worth noticing already:
 

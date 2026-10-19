@@ -85,7 +85,7 @@ if [ $lsp = 1 ]; then
   dotnet "$tc/ncc.exe" -source-root:"$repo/tools/language-server" "$@" \
     -target:exe -out:"$tc/nemerle-lsp.exe" -target-references:"$tc/references" -no-color \
     -r:"$tc/Nemerle.Compiler.dll" -r:"$tc/Integrated.Nitra.Runtime.dll" -r:"$tc/Integrated.Nitra.Grammar.dll" \
-    -r:"$tc/Integrated.Nitra.Compiler.dll" -r:"$tc/Integrated.DotNetLang.dll" >"$prefix/lsp-build.log" 2>&1 ||
+    -r:"$tc/Integrated.Nitra.Compiler.dll" -r:"$tc/Integrated.DotNetLang.dll" -r:"$tc/Nemerle.Scripting.dll" >"$prefix/lsp-build.log" 2>&1 ||
     fail "building the language server failed; see $prefix/lsp-build.log"
   cp "$tc/ncc.runtimeconfig.json" "$tc/nemerle-lsp.runtimeconfig.json"
   note installed "the language server (nemerle-lsp)"

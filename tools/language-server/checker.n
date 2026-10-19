@@ -24,13 +24,15 @@ using Nemerle.Compiler.CodeCompletionEngine;
 using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.fixed_type;
 using Nemerle.Compiler.Lexer;
+using scripts;
 
 /// `nemerle-lsp --check`: one typed compilation of the workspace files an editor needs, in a process of its own (the
 /// server starts it, and kills it when a newer edit arrives). It reads a request on stdin and writes the diagnostics,
 /// and the facts for hover and go-to-definition, on stdout, as JSON.
 ///
 /// The files are the open ones (with their unsaved text), the files they import (`using`, followed transitively), and
-/// every workspace file that exports a type. A script (it names `DependsOn`) needs the scripting host and is left out.
+/// every workspace file that exports a type. A script (`.ns`, or a `.n` file that names `DependsOn`) is left out of
+/// that compilation: the scripting host compiles each open one on its own (scripts.n).
 public module Checker
 {
   UsingLine : Regex = Regex(@"^\s*using\s+(?:[A-Za-z_]\w*\s*=\s*)?([A-Za-z_][\w.]*)\s*;", RegexOptions.Multiline);
@@ -78,6 +80,11 @@ public module Checker
         when (retry["completion"] != null && retry["completion"].AsArray().Count > 0) result = retry;
       }
     }
+    // the open scripts, which the workspace check leaves out: each compiled by the scripting host (a diagnostics run)
+    when (completing == null && request["renameType"] == null)
+      foreach (pair in overlay)
+        when (Scripts.IsScript(pair.Key, pair.Value))
+          foreach (d in Scripts.Check(pair.Key, pair.Value)) result["diagnostics"].AsArray().Add(d);
     output.Write(result.ToJsonString());
     output.Flush();
     0

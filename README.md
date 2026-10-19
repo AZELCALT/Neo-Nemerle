@@ -105,8 +105,8 @@ Details are in [tools/language-server/README.md](tools/language-server/README.md
 ```sh
 echo 'System.Console.WriteLine("Hello, world!")' > hello.n
 nscript run hello.n              # run it as a script
-ncc hello.n -out:hello.exe       # or compile it
-dotnet hello.exe
+ncc hello.n -out:hello.exe       # or compile it, with a launcher:
+./hello                          # (hello.exe on Windows, the program then in hello.dll)
 ```
 
 A compiled program needs `Nemerle.dll`, the standard library, next to it when it uses the library. Find it in the

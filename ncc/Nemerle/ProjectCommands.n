@@ -351,10 +351,14 @@ internal module Projects
     def references = Path.Combine(cache, folder.Replace('/', Path.DirectorySeparatorChar));
     unless (Directory.Exists(references))
     {
-      when (offline) throw project.Error("target", null, "the " + what + " (" + id + " " + version + ") are not in the cache, and --offline does not download them");
+      def fail(message : string) : Exception
+      {
+        if (project == null) ProjectException("", 1, 1, message) else project.Error("target", null, message)
+      }
+      when (offline) throw fail("the " + what + " (" + id + " " + version + ") are not in the cache, and --offline does not download them");
       def lower = id.ToLowerInvariant();
       def url = Feed + "/" + lower + "/" + version + "/" + lower + "." + version + ".nupkg";
-      Console.WriteLine(project.Name + ": fetching the " + what + " (" + id + " " + version + ")");
+      Console.WriteLine((if (project == null) "ncc" else project.Name) + ": fetching the " + what + " (" + id + " " + version + ")");
       def pending = cache + ".partial";
       try
       {
@@ -380,7 +384,7 @@ internal module Projects
       catch
       {
         | e is ProjectException => throw e
-        | e => throw project.Error("target", null, "could not fetch the " + what + " from " + url + ": " + e.Message)
+        | e => throw fail("could not fetch the " + what + " from " + url + ": " + e.Message)
       }
     }
     references
@@ -597,14 +601,14 @@ internal module Projects
   static AppPlaceholder : string = "c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2";
 
   /// The runtime identifier the launcher is built for: the target's platform (windows) or this machine's.
-  static LauncherRid(project : Project) : string
+  static LauncherRid(target : string) : string
   {
     def arch = match (Runtime.InteropServices.RuntimeInformation.OSArchitecture)
     {
       | Runtime.InteropServices.Architecture.Arm64 => "arm64" | Runtime.InteropServices.Architecture.X86 => "x86"
       | Runtime.InteropServices.Architecture.Arm => "arm" | _ => "x64"
     };
-    def os = if (project.Target != null && project.Target.IndexOf("-windows", StringComparison.OrdinalIgnoreCase) >= 0) "win"
+    def os = if (WindowsTarget(target)) "win"
              else if (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows)) "win"
              else if (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX)) "osx"
              else "linux";
@@ -648,20 +652,34 @@ internal module Projects
 
   /// Writes the program's launcher: the apphost template with the .dll's name in its placeholder (as the .NET SDK
   /// does), executable, re-signed on macOS. Without a template the program still runs with `dotnet name.dll`.
+  /// A target for Windows (`net10.0-windows`): its launcher is a Windows one, whatever builds it.
+  public static WindowsTarget(target : string) : bool
+  {
+    target != null && target.IndexOf("-windows", StringComparison.OrdinalIgnoreCase) >= 0
+  }
+
   static MakeLauncher(project : Project, binary : string, offline : bool) : void
   {
-    def launcher = project.Launcher;
-    def rid = LauncherRid(project);
+    WriteLauncher(project.Launcher, binary, project.Target, project, offline)
+  }
+
+  /// Writes `launcher` for the program `binary` (a .NET assembly, which the launcher names by its file name); a
+  /// warning instead when there is no template. `project` may be null (a single-file compile).
+  public static WriteLauncher(launcher : string, binary : string, target : string, project : Project, offline : bool) : void
+  {
+    def label = if (project == null) "ncc" else project.Name;
+    def rid = LauncherRid(target);
     match (LauncherTemplate(project, rid, offline))
     {
-      | null => Console.Error.WriteLine("warning: " + project.Name + ": no launcher for " + rid + " (no .NET SDK host pack here, and none could be fetched); run it with `dotnet " + Path.GetFileName(binary) + "`")
+      | null => Console.Error.WriteLine("warning: " + label + ": no launcher for " + rid + " (no .NET SDK host pack here, and none could be fetched); run it with `dotnet " + Path.GetFileName(binary) + "`")
       | template =>
         def bytes = File.ReadAllBytes(template);
         def placeholder = Text.Encoding.UTF8.GetBytes(AppPlaceholder);
         def name = Text.Encoding.UTF8.GetBytes(Path.GetFileName(binary));
         def at = IndexOf(bytes, placeholder);
-        when (at < 0) throw ProjectException(project.File, 1, 1, "the launcher template " + template + " has no app placeholder");
-        when (name.Length >= 1024) throw ProjectException(project.File, 1, 1, "the program's file name is too long for its launcher");
+        def file = if (project == null) "" else project.File;
+        when (at < 0) throw ProjectException(file, 1, 1, "the launcher template " + template + " has no app placeholder");
+        when (name.Length >= 1024) throw ProjectException(file, 1, 1, "the program's file name is too long for its launcher");
         for (mutable i = 0; i < placeholder.Length; i++) bytes[at + i] = 0;
         Array.Copy(name, 0, bytes, at, name.Length);
         // only rewrite a launcher that differs (an unchanged one keeps its time stamp)

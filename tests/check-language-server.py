@@ -268,6 +268,25 @@ try:
     check(len(here) == 2 and len(there) == 1, 'rename Pen -> Marker: the annotation and the call here, the declaration there (not the comment or string): %s' % renamed)
     edit(fixed)
     print('PASS: find-references and rename across files')
+    # a script (.ns) in the workspace: the scripting host checks it as nscript compiles it, at its own lines; it is
+    # not one of the workspace's modules, so its top-level names do not reach main.n and its errors are its own
+    script = 'def greeting = "hi";\nSystem.Console.WriteLine(greeting);\ndef n : int = "two";\n'
+    (work / 'tool.ns').write_text(script)
+    suri = (work / 'tool.ns').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': suri, 'languageId': 'nemerle-script', 'version': 1, 'text': script}})
+    found = c.pump(lambda m: m['params']['diagnostics'] if m.get('method') == 'textDocument/publishDiagnostics'
+                   and m['params']['uri'] == suri and any(d.get('source') == 'nemerle' for d in m['params']['diagnostics']) else None,
+                   'script diagnostics')
+    error = [d for d in found if d.get('source') == 'nemerle' and d['severity'] == 1]
+    check(len(error) == 1 and error[0]['range']['start']['line'] == 2, 'a .ns script\'s type error, at its line: %s' % found)
+    check(not any(d['severity'] == 1 for d in c.diagnostics[uri]['diagnostics']), 'the script does not affect main.n: %s' % c.diagnostics[uri])
+    clean = script.replace('"two"', '2')
+    c.notify('textDocument/didChange', {'textDocument': {'uri': suri, 'version': 2}, 'contentChanges': [{'text': clean}]})
+    deadline = time.time() + a.timeout
+    while time.time() < deadline and any(d['severity'] == 1 for d in c.diagnostics.get(suri, {}).get('diagnostics', [{'severity': 1}])):
+        c.pump(lambda m: True if m.get('method') == 'textDocument/publishDiagnostics' and m['params']['uri'] == suri else None, 'script recheck')
+    check(not any(d['severity'] == 1 for d in c.diagnostics[suri]['diagnostics']), 'the repaired script has no errors: %s' % c.diagnostics[suri])
+    print('PASS: a .ns script is checked by the scripting host (its errors at its lines, apart from the workspace)')
     c.request('shutdown', None); c.notify('exit', None)
     check(c.proc.wait(timeout=30) == 0, 'clean exit')
 finally:

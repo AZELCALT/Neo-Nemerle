@@ -32,6 +32,14 @@ $extension = 'neo-nemerle.nemerle-0.2.0'
 $oldExtension = 'nemerle.nemerle-nitra-0.1.0'
 $extensionRoots = @{ code = (Join-Path $HOME '.vscode\extensions'); codium = (Join-Path $HOME '.vscode-oss\extensions') }
 
+# Windows PowerShell 5.1 turns a native program's redirected stderr into errors, which 'Stop' makes fatal (a
+# warning would end the install): native calls whose output is redirected run with 'Continue', judged by exit code
+function Invoke-Native([scriptblock]$command) {
+  $saved = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $command } finally { $ErrorActionPreference = $saved }
+}
+
 # what was installed and what was skipped (and why), printed at the end
 $notes = New-Object Collections.Generic.List[string]
 function Note([string]$what, [string]$text) { $notes.Add(('  {0,-10} {1}' -f $what, $text)) }
@@ -82,11 +90,16 @@ Note 'installed' "the toolchain (ncc, nscript, Nitra) in $tc"
 if (-not $NoLsp) {
   Write-Host 'Building the language server'
   $serverSources = @(Get-ChildItem (Join-Path $repo 'tools\language-server') -Filter '*.n' | ForEach-Object { $_.FullName })
-  $references = @('Nemerle.Compiler', 'Integrated.Nitra.Runtime', 'Integrated.Nitra.Grammar', 'Integrated.Nitra.Compiler', 'Integrated.DotNetLang') |
+  $references = @('Nemerle.Compiler', 'Integrated.Nitra.Runtime', 'Integrated.Nitra.Grammar', 'Integrated.Nitra.Compiler', 'Integrated.DotNetLang', 'Nemerle.Scripting') |
     ForEach-Object { "-r:$(Join-Path $tc "$_.dll")" }
   $log = Join-Path $Prefix 'lsp-build.log'
-  & dotnet (Join-Path $tc 'ncc.exe') "-source-root:$(Join-Path $repo 'tools\language-server')" @serverSources -target:exe `
-    "-out:$(Join-Path $tc 'nemerle-lsp.exe')" "-target-references:$(Join-Path $tc 'references')" -no-color @references *> $log
+  # the server stays a .NET assembly run by dotnet (the .cmd launcher and the extension start it so): on Windows the
+  # compiler would otherwise make nemerle-lsp.exe a native launcher, with the server in nemerle-lsp.dll
+  $noLauncher = if ($onWindows) { @('-launcher-') } else { @() }
+  Invoke-Native {
+    & dotnet (Join-Path $tc 'ncc.exe') "-source-root:$(Join-Path $repo 'tools\language-server')" @serverSources -target:exe `
+      "-out:$(Join-Path $tc 'nemerle-lsp.exe')" @noLauncher "-target-references:$(Join-Path $tc 'references')" -no-color @references *> $log
+  }
   if ($LASTEXITCODE -ne 0) { throw "Building the language server failed; see $log" }
   Copy-Item (Join-Path $tc 'ncc.runtimeconfig.json') (Join-Path $tc 'nemerle-lsp.runtimeconfig.json')
   Note 'installed' 'the language server (nemerle-lsp)'
@@ -144,13 +157,52 @@ if (-not $NoLsp -and -not $NoDebugger) {
 } elseif (-not $NoLsp) { Note 'skipped' 'the debugger: -NoDebugger' }
 
 # --- the editor extension's JavaScript dependencies, as package-lock.json pins them ---
+function Expand-Package([byte[]]$tgz, [string]$target) {
+  # an npm package: a gzip'd tar whose entries sit under one top folder ("package/"), which is dropped. Read here
+  # with .NET's GZipStream (Windows PowerShell 5.1 included), so no tar is needed: Windows' own is missing before
+  # Windows 10 1803, and Git's GNU tar reads `C:\...' as a remote host.
+  $gzip = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(, $tgz)), [IO.Compression.CompressionMode]::Decompress)
+  $tar = New-Object IO.MemoryStream
+  try { $gzip.CopyTo($tar) } finally { $gzip.Dispose() }
+  $data = $tar.ToArray()
+  $text = { param($at, $length) [Text.Encoding]::UTF8.GetString($data, $at, $length).Split([char]0)[0] }
+  $longName = $null
+  $at = 0
+  while ($at + 512 -le $data.Length) {
+    $name = & $text $at 100
+    if (-not $name) { break }   # the end: blocks of zeros
+    $sizeText = (& $text ($at + 124) 12).Trim()
+    $size = if ($sizeText) { [int][Convert]::ToInt64($sizeText, 8) } else { 0 }
+    $type = [char]$data[$at + 156]
+    if ((& $text ($at + 257) 5) -eq 'ustar') {
+      $prefix = & $text ($at + 345) 155
+      if ($prefix) { $name = $prefix + '/' + $name }
+    }
+    $body = $at + 512
+    if ($type -eq 'x') {
+      # a pax header: its path= record names the next entry
+      foreach ($record in ([Text.Encoding]::UTF8.GetString($data, $body, $size) -split "`n")) {
+        if ($record -match '^\d+ path=(.*)$') { $longName = $Matches[1] }
+      }
+    } elseif ($type -eq '0' -or $type -eq [char]0) {
+      if ($longName) { $name = $longName; $longName = $null }
+      $relative = ($name -split '/', 2)[1]
+      if ($relative -and -not ($relative -split '/' | Where-Object { $_ -eq '..' })) {
+        $path = Join-Path $target ($relative.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        $file = [IO.File]::Create($path)
+        try { $file.Write($data, $body, $size) } finally { $file.Dispose() }
+      }
+    } else { $longName = $null }
+    $at = [int]($body + [Math]::Ceiling($size / 512.0) * 512)
+  }
+}
 function Get-NodeModules([string]$lock, [string]$folder) {
   # each "node_modules/..." entry: its registry tarball, checked against its sha512, unpacked without its top folder;
   # throws with the reason when it cannot. (The lock file's root entry is named ""; Windows PowerShell 5.1's
   # ConvertFrom-Json refuses an empty name, so it is renamed first.)
   $text = (Get-Content -Raw $lock) -replace '"packages": \{\s*"": \{', '"packages": { "(root)": {'
   $packages = (ConvertFrom-Json $text).packages
-  if (-not (Get-Command tar -ErrorAction SilentlyContinue)) { throw 'no tar to unpack the packages' }
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   $download = Join-Path ([IO.Path]::GetTempPath()) ("nemerle-package-" + [Guid]::NewGuid().ToString('N') + '.tgz')
@@ -160,13 +212,13 @@ function Get-NodeModules([string]$lock, [string]$folder) {
       $url = $entry.Value.resolved; $integrity = [string]$entry.Value.integrity
       if (-not $integrity.StartsWith('sha512-')) { throw "$($entry.Name) has no sha512 hash in the lock file" }
       try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $download } catch { throw "$url could not be downloaded ($($_.Exception.Message))" }
+      $bytes = [IO.File]::ReadAllBytes($download)
       $sha = [Security.Cryptography.SHA512]::Create()
-      try { $hash = [Convert]::ToBase64String($sha.ComputeHash([IO.File]::ReadAllBytes($download))) } finally { $sha.Dispose() }
+      try { $hash = [Convert]::ToBase64String($sha.ComputeHash($bytes)) } finally { $sha.Dispose() }
       if ($hash -ne $integrity.Substring(7)) { throw "$url does not match its hash in the lock file" }
       $target = Join-Path $folder ($entry.Name.Replace('/', [IO.Path]::DirectorySeparatorChar))
       New-Item -ItemType Directory -Force -Path $target | Out-Null
-      & tar -xzf $download -C $target --strip-components=1
-      if ($LASTEXITCODE -ne 0) { throw "$url could not be unpacked" }
+      try { Expand-Package $bytes $target } catch { throw "$url could not be unpacked ($($_.Exception.Message))" }
     }
   } finally { Remove-Item -Force $download -ErrorAction SilentlyContinue }
 }
@@ -198,7 +250,7 @@ function New-Vsix {
       Write-Host "The extension's dependencies could not be fetched directly ($why); using npm"
       Copy-Item $lock $ext
       Push-Location $ext
-      try { & npm ci --omit=dev --no-audit --no-fund --silent *> $null; $ok = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
+      try { Invoke-Native { & npm ci --omit=dev --no-audit --no-fund --silent *> $null }; $ok = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
       if (-not $ok) {
         Write-Host "Skipping the editor extension: its dependencies could not be fetched ($why), and npm ci failed."
         Note 'skipped' "the editor extension: its dependencies could not be fetched ($why), nor by npm"; return $null
@@ -267,7 +319,7 @@ function New-Vsix {
 function Install-Vsix([string]$editorName, [string]$vsix) {
   # the editor's own command installs it (the old copied-in folder goes first)
   foreach ($name in $extension, $oldExtension) { Remove-Item -Recurse -Force (Join-Path $extensionRoots[$editorName] $name) -ErrorAction SilentlyContinue }
-  & $editorName --install-extension $vsix --force *> $null
+  Invoke-Native { & $editorName --install-extension $vsix --force *> $null }
   if ($LASTEXITCODE -eq 0) { Write-Host "Installed the extension in $editorName"; Note 'installed' "the extension in $editorName" }
   else { Write-Host "$editorName could not install $vsix; install it by hand from the Extensions view."; Note 'skipped' "the extension in ${editorName}: --install-extension failed (install the .vsix by hand)" }
 }
@@ -293,7 +345,7 @@ if (-not $NoLsp) {
 $check = Join-Path ([IO.Path]::GetTempPath()) ("nemerle-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $check | Out-Null
 Set-Content -Path (Join-Path $check 'hello.n') -Value 'System.Console.WriteLine("Nemerle is installed")'
-$output = & (Join-Path $bin $(if ($onWindows) { 'nscript.cmd' } else { 'nscript' })) run (Join-Path $check 'hello.n') --no-cache 2>&1
+$output = Invoke-Native { & (Join-Path $bin $(if ($onWindows) { 'nscript.cmd' } else { 'nscript' })) run (Join-Path $check 'hello.n') --no-cache 2>&1 }
 $status = $LASTEXITCODE
 Remove-Item -Recurse -Force $check
 if ($status -ne 0) { throw "The installed nscript does not run: $output" }

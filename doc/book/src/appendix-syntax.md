@@ -72,7 +72,8 @@ compound `+= -= *= /=`, increment `++ --`, `::` for list cons. `@+` declares the
 
 | Option | Meaning |
 |---|---|
-| `-out:FILE` | output file (`.exe` or `.dll`) |
+| `-out:FILE` | output file (`.exe` or `.dll`); a program written as `NAME.exe` also gets a launcher |
+| `-launcher-` | no launcher: the program alone, as `NAME.exe` |
 | `-main:file` | start the program at `file` instead of `main.n` |
 | `-target:library` | build a library |
 | `-r:LIB.dll` | reference a library (and continue from its section) |

@@ -149,7 +149,8 @@ function activate(context) {
   const shell = process.platform === 'win32' && prefix.length === 0;
   const server = { command, args, transport: 0 /* stdio */, options: shell ? { shell: true } : undefined };
   client = new LanguageClient('nemerle', 'Nemerle', { run: server, debug: server },
-    { documentSelector: [{ scheme: 'file', language: 'nemerle' }, { scheme: 'untitled', language: 'nemerle' }] });
+    { documentSelector: [{ scheme: 'file', language: 'nemerle' }, { scheme: 'untitled', language: 'nemerle' },
+                         { scheme: 'file', language: 'nemerle-script' }, { scheme: 'untitled', language: 'nemerle-script' }] });
   client.start();
   context.subscriptions.push({ dispose: () => client && client.stop() });
 }

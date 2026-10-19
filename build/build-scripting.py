@@ -17,7 +17,7 @@ command = ['dotnet', str(toolchain / 'ncc.exe'), '-source-root:' + str(root),
 command += ['-r:' + str(toolchain / (name + '.dll')) for name in ('Nemerle.Compiler', 'Nemerle.Platform')]
 subprocess.run(command, check=True, timeout=120)
 subprocess.run(['dotnet', str(toolchain / 'ncc.exe'), str(repo / 'scripting-cli/main.n'), '-source-root:' + str(repo / 'scripting-cli'),
-    '-out:' + str(toolchain / 'nscript.exe'), '-r:' + str(toolchain / 'Nemerle.Scripting.dll'),
+    '-out:' + str(toolchain / 'nscript.exe'), '-launcher-', '-r:' + str(toolchain / 'Nemerle.Scripting.dll'),
     '-target-references:' + str(a.references.resolve()), '-no-color'], check=True, timeout=120)
 (toolchain / 'nscript.runtimeconfig.json').write_text((toolchain / 'ncc.runtimeconfig.json').read_text())
 (toolchain / 'nscript').write_text('#!/bin/sh\nexec dotnet "$(dirname "$0")/nscript.exe" "$@"\n')

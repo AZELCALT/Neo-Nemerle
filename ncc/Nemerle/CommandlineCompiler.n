@@ -51,6 +51,9 @@ using Nemerle.ProjectCommands;
   internal module MainClass
   {
     mutable stack_kilos : int = 0;
+    // a program's launcher (the .NET apphost, a native executable that starts it on .NET): -launcher- writes none
+    mutable makeLauncher : bool = true;
+    mutable launcherPath : string;
     mutable Manager : ManagerClass;
     mutable Options : CompilationOptions;
 
@@ -98,6 +101,7 @@ using Nemerle.ProjectCommands;
       Manager = ManagerClass(Options);
       Manager.InitOutput(Console.Out);
       parse_command_line();
+      plan_launcher();
       when (Options.ParseGrammarSpaces) Manager.InitOutput(Console.Error);
 
       def runInAppropriateProcess(processName : string) : void
@@ -185,6 +189,29 @@ using Nemerle.ProjectCommands;
       }
 
       Message.MaybeBailout();
+      when (launcherPath != null && IO.File.Exists(Options.OutputFileName))
+        try { Projects.WriteLauncher(launcherPath, Options.OutputFileName, Options.TargetFramework, null, false) }
+        catch { | e => Console.Error.WriteLine("warning: no launcher written for " + Options.OutputFileName + ": " + e.Message) }
+    }
+
+    /// A program for .NET written as `-out:hello.exe` gets a launcher: on Windows (or for a -windows target) the
+    /// launcher is hello.exe, the name a user starts, and the program goes to hello.dll, since Windows would start a
+    /// .NET assembly named .exe on .NET Framework; elsewhere the program stays hello.exe and the launcher is hello.
+    plan_launcher() : void
+    {
+      def target = Options.TargetFramework;
+      def netcore = target == null || (try { Nemerle.Platform.ClrTarget.Parse(target).Family == "netcore" } catch { | _ => false });
+      def output = Options.OutputFileName;
+      when (makeLauncher && !Options.TargetIsLibrary && netcore && output != null && output.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+      {
+        def windows = Environment.OSVersion.Platform == PlatformID.Win32NT || Projects.WindowsTarget(target);
+        def bare = output.Substring(0, output.Length - 4);
+        // never over a file that is not a launcher (a shell script of that name, as the toolchain's own `ncc')
+        def taken = !windows && IO.File.Exists(bare) && { def head = array(2) : array[byte]; using (f = IO.File.OpenRead(bare)) _ = f.Read(head, 0, 2); head[0] == '#' :> byte && head[1] == '!' :> byte };
+        if (taken) ()
+        else if (windows) { launcherPath = output; Options.OutputFileName = bare + ".dll" }
+        else launcherPath = bare
+      }
     }
 
     bomb(e : Exception, msg : string, exitValue : int = 2) : void
@@ -231,6 +258,11 @@ using Nemerle.ProjectCommands;
                      aliases = [],
                      help = "NOHELP",
                      handler = fun (k) { stack_kilos = k; }),
+        Getopt.CliOption.Boolean (name = "-launcher",
+                     aliases = [],
+                     help = "Write a launcher for a .NET program written as -out:NAME.exe (default +): NAME elsewhere, "
+                            "NAME.exe on Windows (with the program in NAME.dll)",
+                     handler = fun (x) { makeLauncher = x }),
         Getopt.CliOption.Flag (name = "-version",
                      aliases = ["-V"],
                      help = "Output version information and exit",

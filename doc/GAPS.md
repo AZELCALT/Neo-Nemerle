@@ -32,5 +32,10 @@ unless it says so. These edges will be closed, which can change what happens the
   not offered (keywords and syntax forms always are). A type is renamed only when its short name is unique (in the
   workspace and among the referenced libraries' types), and find-references and rename compile the whole workspace
   each time.
-- **Windows installer:** `install.ps1` and `install.cmd` were run on Windows once; a .NET assembly version mismatch
-  there still needs a small fix. The VS Code extension's Windows launch (`shell: true`) is untested.
+- **Scripts in the editor get diagnostics, not types.** An open `.ns` file is compiled by the scripting host for its
+  errors; hover, go-to-definition and typed completion work in the workspace's modules only (a script gets keywords
+  and syntax forms).
+- **Windows is checked by running it there, not in `./bootstrap`.** `install.ps1` runs whole under PowerShell 7 in
+  `./bootstrap`'s installer check, and is written for Windows PowerShell 5.1 (its native calls, its zip and tar
+  reading), but 5.1 itself and the launchers' Windows side (`hello.exe` starting `hello.dll`) are run on Windows by
+  hand. The VS Code extension's Windows launch (`shell: true`) is untested.

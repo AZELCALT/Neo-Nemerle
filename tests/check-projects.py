@@ -266,6 +266,25 @@ try:
     check('net48 reference assemblies' in out, 'TargetFrameworkVersion v4.8 is the target net48: ' + out)
     print('PASS: MSBuild projects (upstream format): sources, references, defines, used by and using declarative projects, framework versions')
     print('PASS: project file errors located (setting, value, section, list item, package), cycles, compile errors')
+    # a single-file program, -out:NAME.exe: a launcher next to it (NAME elsewhere; NAME.exe on Windows, with the
+    # program in NAME.dll), so it starts directly on .NET; -launcher- writes none
+    single = work / 'single'; single.mkdir()
+    (single / 'hello.n').write_text('System.Console.WriteLine("launched");\n')
+    run(single / 'hello.n', '-out:' + str(single / 'hello.exe'), '-no-color', cwd=single)
+    program = single / ('hello.dll' if os.name == 'nt' else 'hello.exe')
+    launcher = single / ('hello.exe' if os.name == 'nt' else 'hello')
+    shutil.copy2(tc / 'Nemerle.dll', single / 'Nemerle.dll')
+    check(program.exists() and launcher.exists(), 'ncc -out:hello.exe writes the program and a launcher: %s' % sorted(p.name for p in single.iterdir()))
+    out = subprocess.run([str(launcher)], capture_output=True, text=True).stdout
+    check(out.strip() == 'launched', 'the single-file launcher starts the program: ' + out)
+    out = subprocess.run(['dotnet', str(program)], capture_output=True, text=True).stdout
+    check(out.strip() == 'launched', 'dotnet runs the program itself: ' + out)
+    plain = work / 'plain'; plain.mkdir()
+    (plain / 'hello.n').write_text('System.Console.WriteLine("plain");\n')
+    run(plain / 'hello.n', '-out:' + str(plain / 'hello.exe'), '-launcher-', '-no-color', cwd=plain)
+    check((plain / 'hello.exe').exists() and not (plain / 'hello').exists() and not (plain / 'hello.dll').exists(),
+          '-launcher- writes the program only: %s' % sorted(p.name for p in plain.iterdir()))
+    print('PASS: a single-file program gets a launcher (-out:NAME.exe), and -launcher- leaves it out')
     print('PASS: %d project checks' % checks)
 finally:
     shutil.rmtree(work, ignore_errors=True)

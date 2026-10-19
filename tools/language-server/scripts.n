@@ -1,0 +1,71 @@
+using System;
+using System.IO;
+using System.Reflection;
+using System.Text.Json.Nodes;
+using SCG = System.Collections.Generic;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.dependencies;
+using Nemerle.Scripting.definitions;
+using Nemerle.Scripting.host;
+using Nemerle.Scripting.kinds;
+
+/// The check of a script (a `.ns` file, or a `.n` file that declares its dependencies): compiled by the scripting
+/// host as `nscript compile` compiles it (its kind by file name, its DependsOn, Import and packages), not run. A script
+/// is not a module of the workspace, so the workspace check leaves it out and this one gives its diagnostics.
+public module Scripts
+{
+  /// Whether `path` (with its text) is a script.
+  public IsScript(path : string, text : string) : bool
+  {
+    path.EndsWith(".ns", StringComparison.Ordinal) || path.EndsWith(".n", StringComparison.Ordinal) && text != null && text.Contains("DependsOn(")
+  }
+
+  /// The diagnostics of the script at `path` with the (unsaved) `text`, as the checker writes them.
+  public Check(path : string, text : string) : SCG.List[JsonObject]
+  {
+    def found = SCG.List();
+    def report(file : string, line : int, column : int, message : string, error : bool) : void
+    {
+      def d = JsonObject();
+      d["path"] = JsonValue.Create(if (string.IsNullOrEmpty(file) || file == "command line") path else Path.GetFullPath(file));
+      d["line"] = JsonValue.Create(Math.Max(1, line)); d["column"] = JsonValue.Create(Math.Max(1, column));
+      d["endLine"] = JsonValue.Create(Math.Max(1, line)); d["endColumn"] = JsonValue.Create(Math.Max(1, column) + 1);
+      d["severity"] = JsonValue.Create(if (error) 1 else 2); d["message"] = JsonValue.Create(message);
+      found.Add(d);
+    }
+    try
+    {
+      // the definition nscript starts from: `args', and the reference assemblies next to the toolchain
+      def definition = ScriptDefinition();
+      definition.Properties.Add("args", typeof(array[string]));
+      def references = Path.Combine(AppContext.BaseDirectory, "references");
+      when (Directory.Exists(references)) definition.TargetReferenceDirectory = references;
+      def settings = ScriptHostOptions();
+      // packages (DependsOn with a version) resolve as nscript resolves them, from its cache
+      def adapter = Path.Combine(AppContext.BaseDirectory, "Nemerle.Scripting.NuGet.dll");
+      when (File.Exists(adapter))
+      {
+        def cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nemerle", "scripting", "packages");
+        def type = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true);
+        def resolver = Activator.CreateInstance(type, array[cache : object, definition.Repositories.ToArray() : object]);
+        settings.Resolver = resolver :> IScriptDependencyResolver;
+      }
+      def source = ScriptSource(text, path);
+      // the kind (a library's [ScriptDefinition(".x.n")] class), by file name, from where nscript looks
+      def registry = ScriptDefinitionRegistry(definition);
+      ScriptKinds.Register(registry, definition, ScriptKinds.SearchPath(path));
+      def selected = registry.Select(source);
+      def name = Path.GetFileName(path);
+      def length = selected.ExtensionLength(name);
+      def stem = if (length >= 0) name.Substring(0, name.Length - length) else name;
+      if (stem.Contains("."))
+        report(path, 1, 1, $"no script kind declares the extension $(name.Substring(stem.IndexOf('.'))) of $name "
+                           "(nscript looks next to itself, in NEMERLE_SCRIPT_PATH and next to the script)", true)
+      else
+        foreach (d in ScriptHost(settings).Compile(source, selected).Diagnostics)
+          report(d.File, d.Line, d.Column, d.Message, d.IsError)
+    }
+    catch { | e => report(path, 1, 1, "the script could not be checked: " + e.Message, true) }
+    found
+  }
+}
