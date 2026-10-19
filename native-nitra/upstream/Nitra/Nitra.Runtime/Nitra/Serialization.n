@@ -284,7 +284,11 @@ public sealed class MetadataReader : IMetadataReader, IDisposable
         def node   =
           if (hasNamespaceSymbol)
           {
-            def ([parentNs]) = parent.GetSymbol.[NamespaceSymbol](); // parent must be NamespaceSymbol
+            def parentNs = match (parent.GetSymbol.[NamespaceSymbol]())
+              {
+                | [ns] => ns
+                | _ => throw System.InvalidOperationException("the parent of a namespace part must be one NamespaceSymbol")
+              };
 
             match (parent.BindMany.[NamespaceSymbol](partName))
             {

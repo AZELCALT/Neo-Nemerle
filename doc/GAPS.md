@@ -4,12 +4,6 @@ Open edges of the current design, each with what happens today. None of them let
 unless it says so. These edges will be closed, which can change what happens there: do not rely on them (see
 [HOW-IT-IS-BUILT.md](HOW-IT-IS-BUILT.md#what-is-supported)).
 
-## Top-level code and state
-
-- **Other patterns at the top level stay local.** `def (a, b) = ...` declares `a` and `b` as the file's state, but
-  a pattern that can fail to match (`def [x, y] = list`, a variant pattern) binds locals of the top-level code, which
-  functions cannot see; use `match` there, or a tuple.
-
 ## Scopes and spaces
 
 - **A slot shared across copies of `Nemerle.dll` holds values, not types.** Scope storage is the process's, whichever
@@ -22,9 +16,10 @@ unless it says so. These edges will be closed, which can change what happens the
   by the platform's .NET workload; a Nemerle library goes into such an app project. Platform outputs are compiled
   here but not run (no device or Windows in `./bootstrap`).
 - **Platform reference assemblies are read through stand-in copies.** The runtime does not load reference
-  assemblies, so the compiler reads a cached copy without the reference marks, whose attribute types return
-  defaults (`/tmp/nemerle-reference-copies`). An attribute whose value the compiler needs from its constructor
-  would read as a default.
+  assemblies, so the compiler reads a cached copy without the reference marks (`/tmp/nemerle-reference-copies`).
+  The attributes the compiler reads (`Obsolete`, `DefaultMember`, `Conditional`, `InternalsVisibleTo`) are the
+  core library's and come through whole; an attribute type defined inside such a copy returns defaults if the
+  compiler ever constructs one.
 - **Targets not reached:** .NET Framework before 4.6.2 (the .NET Standard 2.0 `Nemerle.dll` needs 4.6.1+),
   .NET Standard 1.x, UWP and older dead platforms, and any .NET newer than the one the compiler runs on.
 - **Older .NET is checked by its reference assemblies, not run** in `./bootstrap` unless that runtime is installed

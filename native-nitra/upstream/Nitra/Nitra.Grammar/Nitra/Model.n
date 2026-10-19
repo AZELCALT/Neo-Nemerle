@@ -456,12 +456,12 @@ public module FSMTransform
 
   public Xor(fsm1 : FSM, fsm2 : FSM) : FSM
   {
-    Product([fsm1, fsm2], fun(([ok1, ok2])) { set => set.Contains(ok1) ^ set.Contains(ok2) })
+    Product([fsm1, fsm2], fun(oks) { match (oks) { | [ok1, ok2] => set => set.Contains(ok1) ^ set.Contains(ok2) | _ => throw System.ArgumentException("two states expected") } })
   }
 
   public Sub(fsm1 : FSM, fsm2 : FSM) : FSM
   {
-    Product([fsm1, fsm2], fun(([ok, fail])) { set => set.Contains(ok) && !set.Contains(fail) })
+    Product([fsm1, fsm2], fun(oks) { match (oks) { | [ok, fail] => set => set.Contains(ok) && !set.Contains(fail) | _ => throw System.ArgumentException("two states expected") } })
   }
 
   public Product(fsms : list[FSM], makeIsOkState : list[int] -> (Set[int] -> bool)) : FSM

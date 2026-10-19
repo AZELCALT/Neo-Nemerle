@@ -2841,17 +2841,42 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
     TypeDefPattern (pattern : PExpr, value : PExpr) : TExpr
     {
-      def res = FreshTypeVar ();
-      def matched_value = TypeExpr (value, res);
-      def pats = TypePatterns (res, [pattern]);
-      def case = Match_case (pats, null, true);
+      match ((pattern, value))
+      {
+        // the shape is written out on both sides: each part is its own definition, as in a tuple
+        | (PExpr.ListLiteral (parts), PExpr.ListLiteral (values)) when parts.Length == values.Length && parts.Length > 0 =>
+          if (parts.Length == 1) TypeDefPattern (parts.Head, values.Head)
+          else TypeDefPattern (PExpr.Tuple (pattern.Location, parts), PExpr.Tuple (value.Location, values))
+        | _ =>
+          def res = FreshTypeVar ();
+          def matched_value = TypeExpr (value, res);
+          def pats = TypePatterns (res, [pattern]);
+          def case = Match_case (pats, null, true);
 
-      when (messenger.SeenError) {
-        when (messenger.NeedMessage)
-          DecisionTreeBuilder.CheckMatching ([case]);
-        FixupMatchCase (case)
+          when (messenger.SeenError) {
+            when (messenger.NeedMessage)
+              DecisionTreeBuilder.CheckMatching ([case]);
+            FixupMatchCase (case)
+          }
+          // a definition declares its names, which the rest of the scope uses: its pattern must fit every value the
+          // type allows (a tuple, a class taken apart by its fields), or nothing would be bound when it does not. The
+          // match is checked once its types are known (a constructor pattern's type may be inferred later).
+          def plain (p : PExpr) : bool
+          {
+            | PExpr.Ref | PExpr.Wildcard => true
+            | PExpr.TypeEnforcement (p, _) => plain (p)
+            | PExpr.Tuple (parts) => parts.ForAll (plain)
+            | _ => false
+          }
+          unless (plain (pattern))
+          {
+            // the names as written (a top-level declaration binds fresh locals named after them)
+            case.def_pattern = System.Text.RegularExpressions.Regex.Replace (pattern.ToString (), @"_N_bound_(\w+?)_\d+\b", "$1");
+            case.def_list_length = match (pattern) { | PExpr.ListLiteral (parts) => parts.Length | _ => -1 };
+            case.def_location = pattern.Location + value.Location;
+          }
+          TExpr.Match (matched_value, [case])
       }
-      TExpr.Match (matched_value, [case])
     }
 
 

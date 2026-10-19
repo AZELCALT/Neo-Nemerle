@@ -354,6 +354,44 @@ run([runtime, compiler, tuples / 'main.n', '-source-root:' + str(tuples), '-out:
      *modern_references], False, "symbol `main.w', which is read-only")
 print('PASS: a top-level `def (w, h)` declares w and h as the file\'s state (mutable, nested, typed, public, taken apart once)', flush=True)
 
+# a def declares its names, so its pattern must always match: one that can fail (a list, a variant) is an error, in a
+# function and at the top level, unless the shape is written out or an `else` (which must leave) takes the rest
+for name, text in (('function', 'F(l : list[int]) : int { def [x, y] = l; x + y }\nSystem.Console.WriteLine(F([1, 2]));'),
+                   ('top-level', 'def l = [1, 2];\ndef [x, y] = l;\nSystem.Console.WriteLine(x + y);'),
+                   ('cons', 'def l : list[int] = [1, 2];\ndef (first :: _) = l;\nSystem.Console.WriteLine(first);')):
+    source('shapes/main.n', text)
+    run([runtime, compiler, work / 'shapes/main.n', '-source-root:' + str(work / 'shapes'), '-out:' + str(work / ('shapes-' + name + '.exe')),
+         '-no-color', *modern_references], False, 'does not fit every value')
+source('shapes/main.n', '''using System;
+def [a, b] = [1, 2];
+Two(l : list[int]) : list[int] { l }
+def [p, q] = Two([3, 4]) else throw ArgumentException("need two");
+def (v :: _) = Two([5]) else throw ArgumentException("need a value");
+Sum() : int { a + b + p + q + v }
+Pair(l : list[int]) : string
+{
+  def [x, y] = l else throw ArgumentException($"need two, got $(l.Length)");
+  $"$x and $y"
+}
+Console.WriteLine(Sum());
+Console.WriteLine(Pair([7, 8]));
+try { Console.WriteLine(Pair([1, 2, 3])) } catch { | e is ArgumentException => Console.WriteLine(e.Message) }''')
+run([runtime, compiler, work / 'shapes/main.n', '-source-root:' + str(work / 'shapes'), '-out:' + str(work / 'shapes.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'shapes.runtimeconfig.json')
+ran = run([runtime, work / 'shapes.exe'])
+if ran.stdout.splitlines() != ['15', '7 and 8', 'need two, got 3']:
+    raise RuntimeError('def patterns with a shape written out or an else: ' + ran.stdout)
+print('PASS: a def whose pattern can fail is an error (function, top level, a cons); a shape written out, or `def P = v else E`, '
+      'declares its names for the whole scope', flush=True)
+
+# an obsolete type of a library is reported where it is constructed, not only where it is named
+source('obsolete/old.n', '[System.Obsolete("use New")] public class Old { public this() {} }')
+run([runtime, compiler, work / 'obsolete/old.n', '-source-root:' + str(work / 'obsolete'), '-target:library',
+     '-out:' + str(work / 'old.dll'), '-no-color', *modern_references])
+source('obsolete/main.n', 'def o = old.Old();\nSystem.Console.WriteLine(o != null);')
+run([runtime, compiler, work / 'obsolete/main.n', '-source-root:' + str(work / 'obsolete'), '-r:' + str(work / 'old.dll'),
+     '-out:' + str(work / 'obsolete.exe'), '-no-color', *modern_references], True, "old.Old is obsolete: 'use New'")
+print('PASS: constructing an obsolete library type is warned', flush=True)
 if run([runtime, work / 'init-other.exe']).stdout.split() != ['other']: raise RuntimeError('-main:other')
 # a variable declared without a value and given one before it is read is fine
 source('init/main.n', 'mutable x;\nx = 10;\nSystem.Console.WriteLine(x);')

@@ -140,7 +140,8 @@ config
 A tuple on the left declares several values at once: `def (w, h) = (800, 600);` is `def w = 800; def h = 600;`, two
 values of the file, each its own state. The tuple itself has no name, so there is nothing else to keep. With a value
 that is not written out as a tuple (`def (w, h) = Size();`), the value is computed once and taken apart. `mutable (x, y)`
-declares both mutable, and `public def (a, b)` both public:
+declares both mutable, and `public def (a, b)` both public. Any other pattern declares its names the same way, and
+must fit every value or have an `else` ([Patterns in `def`](04-variants-and-matching.md#patterns-in-def)):
 
 ```nemerle
 def (w, h) = (800, 600);

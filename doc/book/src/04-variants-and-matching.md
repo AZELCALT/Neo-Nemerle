@@ -131,6 +131,49 @@ something else
 - **`x is T`** matches when the value has type `T`, and names it with that type.
 - **`as`** names the whole of a matched part: `| (_, y) as pair => ...`.
 
+### Patterns in `def`
+
+`def` takes a pattern as well, and declares the names it binds for the rest of the scope: `def (x, y) = point;`. A
+definition's names are used from then on, so its pattern must fit every value its type allows. A tuple always does,
+and so does a list written out to the same length (`def [a, b] = [1, 2];`). A pattern that can fail, such as a list of
+some length or one shape of a variant, is an error, unless an `else` takes the values it does not fit:
+
+```nemerle
+using System;
+
+Pair(items : list[int]) : string
+{
+  def [x, y] = items else throw ArgumentException($"two items expected, got $(items.Length)");
+  $"$x and $y"
+}
+
+Console.WriteLine(Pair([7, 8]));
+try { Console.WriteLine(Pair([1, 2, 3])) }
+catch { | e is ArgumentException => Console.WriteLine(e.Message) }
+```
+
+```text
+7 and 8
+two items expected, got 3
+```
+
+The `else` must leave, by throwing or returning, since nothing would be bound after it. Without it, the compiler names
+a value the pattern misses:
+
+```nemerle,fail
+First(items : list[int]) : int
+{
+  def (first :: _) = items;
+  first
+}
+```
+
+```text
+does not fit every value
+```
+
+For several shapes that each mean something, write a `match`.
+
 ## `option`
 
 `option[T]` is the standard variant for "a value or nothing", with the shapes `Some(value)` and `None()`. It replaces

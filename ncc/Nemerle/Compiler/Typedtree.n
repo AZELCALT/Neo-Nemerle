@@ -602,6 +602,12 @@ using Nemerle.Compiler.Utility;
     public mutable patterns : list [Pattern * TExpr * list [LocalValue * TExpr]];
     public mutable body : TExpr;
     public mutable disable_warnings : bool;
+    /// The case of a `def` with a pattern that may not match (as written, for the message), checked to always match
+    /// once its types are known; null for any other case.
+    [RecordIgnore] public mutable def_pattern : string;
+    /// For `def [a, b] = ...`: the list's length (its shape); -1 otherwise.
+    [RecordIgnore] public mutable def_list_length : int = -1;
+    [RecordIgnore] public mutable def_location : Location;
   }
 
   public variant ConversionKind

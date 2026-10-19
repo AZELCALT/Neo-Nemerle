@@ -950,4 +950,27 @@ using Nemerle.Compiler.Utility;
       def builder = DecisionTreeBuilder (cases);
       builder.CheckMatching ();
     }
+
+    /** A value the cases do not match (as text), when there is one: a `def` with a pattern declares names, so its
+        pattern must fit every value. */
+    public FirstUnmatched () : option [string]
+    {
+      mutable found = None ();
+      def traverse (path, n)
+      {
+        when (found.IsNone)
+          match (n)
+          {
+            | Decision.Success => ()
+            | Decision.Failure =>
+              found = try { Some (BuildCounterExample (path).ToString ()) } catch { | _ is IgnoreCounterExample => Some ("") }
+            | Decision.Assign (_, _, dtree) => traverse (path, dtree)
+            | Decision.IfEq (access, con, n1, n2) =>
+              traverse ((access, con) :: path, n1);
+              traverse ((access, Con.Not ([con])) :: path, n2);
+          }
+      }
+      traverse ([], decision);
+      found
+    }
   }

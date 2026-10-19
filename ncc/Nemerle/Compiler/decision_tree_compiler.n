@@ -136,6 +136,20 @@ using Nemerle.Compiler.Utility;
       when (!disable_warnings && Manager.Solver.CurrentMessenger.NeedMessage)
          builder.CheckMatching();
 
+      // a `def` declares its names, so its pattern must fit every value (see Typer.TypeDefPattern)
+      foreach (mc in mcs)
+        when (mc.def_pattern != null)
+        match (builder.FirstUnmatched ())
+        {
+          | Some (example) =>
+            def shown = if (mc.def_list_length >= 0) $" (a list of another length than $(mc.def_list_length) does not)"
+                        else if (example == "") "" else $" ($example does not)";
+            Message.Error (mc.def_location,
+              $"`def $(mc.def_pattern)' does not fit every value$shown: a def declares its names, so its pattern must "
+              "always match; add `else' for the other values (it must leave: throw or return), or write a match")
+          | None => ()
+        }
+
       foreach (mc in mcs)
         Typer.FixupMatchCase(mc);
 
@@ -527,21 +541,27 @@ using Nemerle.Compiler.Utility;
 
         def casesDescending = cases.Sort(((a, _), (b, _)) => b.CompareTo(a));
         casesDescending.Tail.FoldLeft([[casesDescending.Head]],
-          fun(case, (((nextCase :: _) as cases) :: otherClusters))
+          fun(case, clusters)
           {
-            match(unchecked(nextCase[0] - case[0]))
+            // the clusters start as [[head]] and only grow, so the first is never empty
+            match (clusters)
             {
-              | 1 =>
-                // cases should differ by one
-                (case :: cases) :: otherClusters
-              | 2 =>
-                // fill single missing slot, 'null' will be interpreted as goto to default block
-                (case :: (case[0] + 1, null) :: cases) :: otherClusters
-              | 3 =>
-                // fill two missing slots
-                (case :: (case[0] + 1, null) :: (case[0] + 2, null) :: cases) :: otherClusters
-              | _ =>
-                [case] :: cases :: otherClusters
+              | ((nextCase :: _) as cases) :: otherClusters =>
+                match(unchecked(nextCase[0] - case[0]))
+                {
+                  | 1 =>
+                    // cases should differ by one
+                    (case :: cases) :: otherClusters
+                  | 2 =>
+                    // fill single missing slot, 'null' will be interpreted as goto to default block
+                    (case :: (case[0] + 1, null) :: cases) :: otherClusters
+                  | 3 =>
+                    // fill two missing slots
+                    (case :: (case[0] + 1, null) :: (case[0] + 2, null) :: cases) :: otherClusters
+                  | _ =>
+                    [case] :: cases :: otherClusters
+                }
+              | _ => Util.ice ("case clusters start non-empty")
             }
           })
       }
