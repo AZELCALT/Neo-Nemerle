@@ -23,6 +23,7 @@ using Nemerle.Compiler.global_env;
 using Nemerle.Compiler.CodeCompletionEngine;
 using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.Lexer;
 
 /// `nemerle-lsp --check`: one typed compilation of the workspace files an editor needs, in a process of its own (the
 /// server starts it, and kills it when a newer edit arrives). It reads a request on stdin and writes the diagnostics,
@@ -58,7 +59,8 @@ public module Checker
       overlay[path] = text;
       completion = prefix; completing = path;
     }
-    mutable result = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion);
+    mutable result = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion,
+                           str(request["renameType"]));
     // an unfinished line elsewhere in the file stops the compiler before the cursor: without the lines its errors are
     // on (blanked, so lines keep their numbers), the typer gets to the cursor
     when (completing != null && (result["completion"] == null || result["completion"].AsArray().Count == 0))
@@ -147,9 +149,14 @@ public module Checker
                fileNameNamespaces : bool) : JsonObject
   { Check(root, overlay, references, libraries, fileNameNamespaces, false, null) }
 
-  /// `completion` (the prefix at the marker) asks for what can be written at the marker instead of diagnostics.
   public Check(root : string, overlay : SCG.Dictionary[string, string], references : string, libraries : list[string],
                fileNameNamespaces : bool, all : bool, completion : string) : JsonObject
+  { Check(root, overlay, references, libraries, fileNameNamespaces, all, completion, null) }
+
+  /// `completion` (the prefix at the marker) asks for what can be written at the marker instead of diagnostics;
+  /// `renameType` (a type's name) for the places to edit to rename that type of the workspace.
+  public Check(root : string, overlay : SCG.Dictionary[string, string], references : string, libraries : list[string],
+               fileNameNamespaces : bool, all : bool, completion : string, renameType : string) : JsonObject
   {
     def files = Files(root, overlay, all);
     def diagnostics = JsonArray();
@@ -296,8 +303,17 @@ public module Checker
             | _ => ()
           });
       }
+      // the workspace's types (the compiler clears its type tree at the end of a run)
+      def types = SCG.List.[string * string * Location]();
       manager.TypeTreeBuildFinish += fun(_)
       {
+        try
+          manager.Hierarchy.Iter(tb =>
+            when (tb.Location.FileIndex > 0 && files.Contains(Location.GetFileName(tb.Location.FileIndex))
+                  && !manager.FileModuleRegistry.Usings.Contains(tb.FullName))
+              types.Add((tb.Name, tb.FullName, tb.Location)))
+        catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + e.ToString()) }
+        when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + string.Join(", ", types.Select(x => { def (n, f, _) = x; n + "=" + f }).ToArray()));
         manager.Hierarchy.Iter(tb => tb.MethodBeforeStage2 += fun(_, args)
           {
             match (args.Typer.CurrentFunction.Body)
@@ -312,8 +328,91 @@ public module Checker
       catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("run: " + e.ToString()) } // the errors were reported; the facts gathered so far still help (and completion stops here)
       finally { ManagerClass.Instance = previous; }
       when (completer != null) result["completion"] = completer.Items;
+      when (renameType != null) RenameType(manager, files, overlay, facts, types, renameType, result);
     }
     result
+  }
+
+  /// The places to edit to rename the workspace type `name`: every identifier token with its name in the workspace's
+  /// files (the compiler's lexer: not strings or comments), except those a fact shows to be something else (a local,
+  /// a member of that name). Only a type whose name is unique, in the workspace and among the referenced libraries'
+  /// types, is renamed this way; otherwise the reason is given.
+  RenameType(manager : ManagerClass, files : SCG.List[string], overlay : SCG.Dictionary[string, string], facts : JsonArray,
+             types : SCG.List[string * string * Location], name : string, result : JsonObject) : void
+  {
+    // the workspace's types of that name (not the classes of the files themselves)
+    def declared = SCG.List.[string]();
+    foreach ((n, full, _) in types) when (n == name) declared.Add(full);
+    _ = files;
+    def refuse(why : string) : void { result["typeRenameError"] = JsonValue.Create(why) }
+    if (declared.Count == 0) ()   // not a type of the workspace: nothing to say
+    else if (declared.Count > 1)
+      refuse("`" + name + "' names " + declared.Count.ToString() + " types in the workspace (" + string.Join(", ", declared.ToArray()) + "); rename them by hand")
+    else
+    {
+      // a type of a referenced library with that short name: its uses could not be told apart by name
+      mutable clash = null;
+      def walk(node : NamespaceTree.Node, depth : int) : void
+      {
+        when (clash == null && depth < 12 && node.Children != null)
+          foreach (child in node.Children.Values)
+          {
+            match (child.Value)
+            {
+              | NamespaceTree.TypeInfoCache.Cached(ti) when ti.Name == name && !(ti is TypeBuilder) && !declared.Contains(ti.FullName) => clash = ti.FullName
+              | NamespaceTree.TypeInfoCache.NotLoaded(e) when e.SystemType.Name == name => clash = e.SystemType.FullName
+              | _ => ()
+            }
+            walk(child, depth + 1)
+          }
+      }
+      try { walk(manager.NameTree.NamespaceTree, 0) } catch { | _ => () }
+      if (clash != null) refuse("`" + name + "' is also the name of " + clash + " in a referenced library; rename it by hand")
+      else
+      {
+        // what facts show is something else of that name (a local, a member)
+        def others = SCG.HashSet.[string]();
+        foreach (f in facts)
+          when (f["name"] != null && f["name"].GetValue.[string]() == name && f["kind"].GetValue.[string]() != "constructor" && f["nameLine"] != null)
+            _ = others.Add(f["path"].GetValue.[string]() + ":" + f["nameLine"].GetValue.[int]().ToString() + ":" + f["nameColumn"].GetValue.[int]().ToString());
+        def spans = JsonArray();
+        def previous = ManagerClass.Instance;
+        ManagerClass.Instance = manager;
+        try
+          foreach (path in files)
+          {
+            def text = Text(path, overlay);
+            when (text != null && text.Contains(name))
+              try
+              {
+                def fileIndex = Location.GetFileIndex(path);
+                def lexer = LexerString(manager, text, Location(fileIndex, 1, 1));
+                lexer.Keywords = if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex).Keywords else manager.CoreEnv.Keywords;
+                mutable token = lexer.GetToken();
+                while (!(token is Token.EndOfFile))
+                {
+                  match (token)
+                  {
+                    | Token.Identifier(id) when id == name =>
+                      def at = token.Location;
+                      unless (others.Contains(path + ":" + at.Line.ToString() + ":" + at.Column.ToString()))
+                      {
+                        def s = JsonObject();
+                        s["path"] = JsonValue.Create(path); s["line"] = JsonValue.Create(at.Line);
+                        s["column"] = JsonValue.Create(at.Column); s["endColumn"] = JsonValue.Create(at.Column + name.Length);
+                        spans.Add(s);
+                      }
+                    | _ => ()
+                  }
+                  token = lexer.GetToken();
+                }
+              }
+              catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("lex " + path + ": " + e.ToString()) }
+          }
+        finally { ManagerClass.Instance = previous; }
+        result["typeRename"] = spans;
+      }
+    }
   }
 }
 

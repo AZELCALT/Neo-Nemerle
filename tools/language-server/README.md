@@ -37,7 +37,7 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   state, what the `using`s open, and keywords).
 - **Find-references and rename** run a check of the whole workspace and use its facts: every use of the declaration
   under the cursor (or of the one a use names). Rename edits the names alone, for locals, fields, properties,
-  methods and events.
+  methods, events and types (with their annotations and constructor calls).
 
 Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
 `semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`, `references`,
@@ -92,7 +92,9 @@ Measured on this machine:
 
 - Typed completion types the file with the marker at the cursor; when another unfinished line stops the compiler,
   the lines with errors are blanked and it types again, so names bound only there are missing.
-- Types (and their constructors) are not renamed yet; type annotations are not facts, so a rename would miss them.
+- Renaming a type edits every identifier token with its name in the workspace (the compiler's lexer: not strings or
+  comments) that no fact shows to be something else; so it is offered only for a type whose short name is unique,
+  in the workspace and among the referenced libraries' types (otherwise the reason is given).
 - Find-references and rename compile the whole workspace each time (a few seconds for a small one).
 - Hover and go-to-definition come from the latest finished check: right after an edit they describe the previous text
   until the next check ends, and positions can be off by the edit in between.

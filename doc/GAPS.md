@@ -35,7 +35,8 @@ unless it says so.
 
 - **Typed completion skips broken lines elsewhere.** When an unfinished line elsewhere in the file stops the
   compiler, the lines with errors are blanked and the file is typed again, so names bound only on those lines are
-  not offered (keywords and syntax forms always are). Types are not renamed yet (type annotations are not facts),
-  and find-references and rename compile the whole workspace each time.
+  not offered (keywords and syntax forms always are). A type is renamed only when its short name is unique (in the
+  workspace and among the referenced libraries' types), and find-references and rename compile the whole workspace
+  each time.
 - **Windows installer:** `install.ps1` and `install.cmd` were run on Windows once; a .NET assembly version mismatch
   there still needs a small fix. The VS Code extension's Windows launch (`shell: true`) is untested.

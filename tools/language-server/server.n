@@ -546,6 +546,25 @@ public sealed class Server
 
   /// The symbol at a position, from a whole-workspace check: its declaration (target), its name and kind, and the
   /// facts of the check; null when there is none.
+  /// The identifier at a position (for a type: its name), with its range.
+  static WordAt(doc : Document, position : JsonNode) : string * JsonObject
+  {
+    def lines = doc.Text.Split('\n');
+    def line = Int(position["line"]);
+    if (line < 0 || line >= lines.Length) (null, null)
+    else
+    {
+      def l = lines[line]; def at = Math.Min(Int(position["character"]), l.Length);
+      def ident(c : char) { char.IsLetterOrDigit(c) || c == '_' }
+      mutable start = at; while (start > 0 && ident(l[start - 1])) start--;
+      mutable stop = at; while (stop < l.Length && ident(l[stop])) stop++;
+      if (stop == start) (null, null) else (l.Substring(start, stop - start), RangeOf(line + 1, start + 1, line + 1, stop + 1))
+    }
+  }
+
+  /// The latest whole-workspace check, with the type-rename places of the word at the position.
+  mutable lastWorkspaceCheck : JsonObject;
+
   Symbol(doc : Document, position : JsonNode) : JsonObject * string * string * JsonArray
   {
     def path = PathOf(doc.Uri);
@@ -553,7 +572,11 @@ public sealed class Server
     else
     {
       def request = CheckRequest(); request["all"] = JsonValue.Create(true);
-      match (RunChecker(request, false))
+      // the word at the cursor, in case it names a type of the workspace (a type has no facts of its own)
+      match (WordAt(doc, position)) { | (null, _) => () | (word, _) => request["renameType"] = JsonValue.Create(word) }
+      def answer = RunChecker(request, false);
+      lastWorkspaceCheck = answer;
+      match (answer)
       {
         | null => (null, null, null, null)
         | answer =>
@@ -597,9 +620,33 @@ public sealed class Server
 
   static Renamable : array[string] = array["local", "field", "property", "method", "event"];
 
+  /// A type of the workspace at the position: its rename places (or why not), from the latest workspace check.
+  TypeAt(doc : Document, position : JsonNode) : JsonArray * string
+  {
+    def answer = lastWorkspaceCheck;
+    if (answer == null) (null, null)
+    else if (answer["typeRenameError"] != null) (null, Str(answer["typeRenameError"]))
+    else if (answer["typeRename"] != null && answer["typeRename"].AsArray().Count > 0)
+    {
+      // the word must be one of the places (on a use or the declaration of the type)
+      def path = PathOf(doc.Uri); def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
+      def places = answer["typeRename"].AsArray();
+      if (places.Any(s => Str(s["path"]) == path && Int(s["line"]) == line && column >= Int(s["column"]) && column <= Int(s["endColumn"]))) (places, null)
+      else (null, null)
+    }
+    else (null, null)
+  }
+
   PrepareRename(doc : Document, position : JsonNode) : JsonNode
   {
-    match (Symbol(doc, position))
+    def symbol = Symbol(doc, position);
+    def (word, range) = WordAt(doc, position);
+    match (TypeAt(doc, position))
+    {
+      | (places, _) when places != null =>
+        def x = JsonObject(); x["range"] = range; x["placeholder"] = JsonValue.Create(word); x
+      | _ =>
+    match (symbol)
     {
       | (null, _, _, _) => null
       | (target, name, kind, facts) when Renamable.Contains(kind) && target["nameLine"] != null =>
@@ -613,6 +660,7 @@ public sealed class Server
         def x = JsonObject(); x["range"] = range; x["placeholder"] = JsonValue.Create(name); x
       | _ => null
     }
+    }
   }
 
   static Identifier : Text.RegularExpressions.Regex = Text.RegularExpressions.Regex(@"^[A-Za-z_][A-Za-z0-9_']*$");
@@ -625,10 +673,28 @@ public sealed class Server
   Rename(doc : Document, position : JsonNode, newName : string) : JsonNode * string
   {
     if (newName == null || !Identifier.IsMatch(newName) || Keywords.Contains(newName)) (null, "`" + newName + "' is not a name")
-    else match (Symbol(doc, position))
+    else
+    {
+    def symbol = Symbol(doc, position);
+    match (TypeAt(doc, position))
+    {
+      | (null, why) when why != null => (null, why)
+      | (places, _) when places != null =>
+        // a type: every place its name is written
+        def changes = JsonObject();
+        foreach (s in places)
+        {
+          def uri = UriOf(Str(s["path"]));
+          unless (changes.ContainsKey(uri)) changes[uri] = JsonArray();
+          def e = JsonObject(); e["range"] = RangeOf(Int(s["line"]), Int(s["column"]), Int(s["line"]), Int(s["endColumn"]));
+          e["newText"] = JsonValue.Create(newName); changes[uri].AsArray().Add(e);
+        }
+        def x = JsonObject(); x["changes"] = changes; (x, null)
+      | _ =>
+    match (symbol)
     {
       | (null, _, _, _) => (null, "there is nothing to rename here")
-      | (_, _, kind, _) when !Renamable.Contains(kind) => (null, "a " + kind + " cannot be renamed yet (only locals, fields, properties, methods and events)")
+      | (_, _, kind, _) when !Renamable.Contains(kind) => (null, "a " + kind + " cannot be renamed here")
       | (target, _, _, _) when target["nameLine"] == null => (null, "the declaration's name is not found in its source")
       | (target, _, _, facts) =>
         def key = Key(target);
@@ -652,6 +718,8 @@ public sealed class Server
           foreach (pair in edits) changes[UriOf(pair.Key)] = pair.Value;
           def x = JsonObject(); x["changes"] = changes; (x, null)
         }
+    }
+    }
     }
   }
 
