@@ -156,6 +156,17 @@ the pinned compiler that every build starts from; update it only when a bootstra
 The original upstream README (Windows installer, Mono, Visual Studio) is kept in
 [doc/ORIGINAL-README.md](doc/ORIGINAL-README.md). Those instructions are for the original .NET Framework tree.
 
+## How it is built, and what is supported
+
+The language is designed by azelcalt and built with an AI assistant (Claude): the design, the architecture and
+every decision are the maintainer's, the AI implements, and nothing lands without `./bootstrap` passing (the
+toolchain rebuilt from source, checked to rebuild itself, and every test suite and book example run).
+[doc/HOW-IT-IS-BUILT.md](doc/HOW-IT-IS-BUILT.md) gives the details.
+
+**What is supported is what is declared** in the book and the documentation. The open edges in
+[doc/GAPS.md](doc/GAPS.md), undocumented behaviour and the compiler's internals may change or break without notice:
+code that relies on them may not work in a later version.
+
 ## The people behind Nemerle
 
 Everything here stands on the work of the original team, and the revival exists because that work was good enough

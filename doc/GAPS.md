@@ -1,7 +1,8 @@
 # Known gaps
 
 Open edges of the current design, each with what happens today. None of them lets an invalid program through silently
-unless it says so.
+unless it says so. These edges will be closed, which can change what happens there: do not rely on them (see
+[HOW-IT-IS-BUILT.md](HOW-IT-IS-BUILT.md#what-is-supported)).
 
 ## Top-level code and state
 
