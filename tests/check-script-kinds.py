@@ -127,6 +127,16 @@ if run([T / 'nscript', 'run', here / 'plain.ns', '--no-cache'], cwd=here).stdout
 r = run([T / 'nscript', 'run', missing / 'deploy.build.ns', '--no-cache'], cwd=missing, ok=False)
 if 'no script kind declares the extension .build.ns' not in r.stderr:
     raise SystemExit('FAILED: undeclared .ns kind message\n' + r.stderr)
-print('PASS: .ns scripts: plain, of a kind (.build.n covers x.build.ns), and an undeclared kind reported', flush=True)
+# patterns in a script are taken apart as in a module: a written-out shape or `else` declares the names, anything
+# that can fail to match is an error
+(here / 'shapes.ns').write_text('def [a, b] = [1, 2];\nTwo() : list[int] { [3, 4] }\ndef (c :: _) = Two() else 9;\n'
+                                'def (d, (e, _)) = (5, (6, 7));\nSystem.Console.WriteLine(a + b + c + d + e);\n')
+if run([T / 'nscript', 'run', here / 'shapes.ns', '--no-cache'], cwd=here).stdout.strip() != '17':
+    raise SystemExit('FAILED: patterns in a script')
+(here / 'refutable.ns').write_text('def l : list[int] = [1];\ndef [x] = l;\nSystem.Console.WriteLine(x);\n')
+r = run([T / 'nscript', 'run', here / 'refutable.ns', '--no-cache'], cwd=here, ok=False)
+if 'does not fit every value' not in r.stdout + r.stderr:
+    raise SystemExit('FAILED: a script pattern that can fail\n' + r.stdout + r.stderr)
+print('PASS: .ns scripts: plain, of a kind (.build.n covers x.build.ns), and an undeclared kind reported; patterns as in modules', flush=True)
 shutil.rmtree(w, ignore_errors=True)
 print('PASS: library-declared script kinds', flush=True)

@@ -175,6 +175,7 @@ using Nemerle.Compiler.Utility;
 
     static mutable boundCount : int;
 
+
     /// `def P = v` with the names of P declared in the enclosing scope: `def (x, y) = { match (v) { | P' => (x', y')
     /// | _ => orElse } }`, where P' binds fresh locals. With no `orElse`, the match has the one case (the typer
     /// requires that it always matches).
@@ -1131,6 +1132,13 @@ using Nemerle.Compiler.Utility;
       }
       def addExpression(expression : PExpr) : void
       {
+        def plainNames(p : PExpr) : bool
+        {
+          | PExpr.Ref | PExpr.Wildcard => true
+          | PExpr.TypeEnforcement(p, _) => plainNames(p)
+          | PExpr.Tuple(parts) => parts.ForAll(plainNames)
+          | _ => false
+        }
         def binding(pattern : PExpr, value : PExpr, mutableBinding : bool) : void
         {
           mutable ty = <[ _ ]>;
@@ -1152,25 +1160,15 @@ using Nemerle.Compiler.Utility;
               when (initializer != null) initializer.Location = value.Location;
               def field = ClassMember.Field(expression.Location, Splicable.Name(name), mods, ty, initializer);
               add([field], "", true);
-            | PExpr.Tuple as tuple
-            | PExpr.Call as tuple
-            | PExpr.ListLiteral as tuple
-            | PExpr.As as tuple
-            | PExpr.Is as tuple
-            | PExpr.Where as tuple =>
+            // a tuple of names: each a field, given its part (the script's storage: fields of the script class)
+            | PExpr.Tuple as tuple when plainNames(tuple) =>
               def assignments : SCG.List[PExpr] = SCG.List();
               def collect(part : PExpr) : void
               {
                 match (part)
                 {
                   | PExpr.Tuple(parts) => foreach (part in parts) collect(part);
-                  | PExpr.TypeEnforcement(part, _) | PExpr.Is(part, _) => collect(part);
-                  | PExpr.Call(_, arguments) => foreach (part in arguments) collect(part);
-                  | PExpr.ListLiteral(elements) => foreach (part in elements) collect(part);
-                  | PExpr.As(part, name) => collect(part); collect(PExpr.Ref(part.Location, name.GetName()));
-                  | PExpr.Where(_, fields) => collect(fields);
-                  | PExpr.Assign(_, part) => collect(part);
-                  | PExpr.Literal | PExpr.Member => ();
+                  | PExpr.TypeEnforcement(part, _) => collect(part);
                   | PExpr.Ref(name) =>
                     def mods = AttributesAndModifiers(NemerleModifiers.Public |
                       (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
@@ -1178,13 +1176,20 @@ using Nemerle.Compiler.Utility;
                     data.InferredInitializers[name.Id] = <[ { def $pattern = $value; $read } ]>;
                     add([ClassMember.Field(part.Location, Splicable.Name(name), mods, <[ _ ]>, null)], "", true);
                     assignments.Add(<[ this.$(name.Id : usesite) = $read ]>);
-                  | PExpr.Wildcard => ();
-                  | _ => Message.Error(part.Location, "Unsupported top-level script binding pattern");
+                  | _ => ();
                 }
               }
               collect(tuple);
               expressions.Add(if (mutableBinding) <[ { mutable $pattern = $value; ..$(assignments.NToList()) } ]>
                 else <[ { def $pattern = $value; ..$(assignments.NToList()) } ]>);
+            | PExpr.Wildcard => expressions.Add(expression);
+            // any other pattern: taken apart as a module's is (DeclarePattern), its names then declared as above
+            | _ when !(identifier is PExpr.Ref) =>
+              match (DeclarePattern(expression.Location, pattern, value, null))
+              {
+                | PExpr.Define(target, matched) when !(target is PExpr.Wildcard) => binding(target, matched, mutableBinding)
+                | other => expressions.Add(other)
+              }
             | _ => expressions.Add(expression);
           }
         }

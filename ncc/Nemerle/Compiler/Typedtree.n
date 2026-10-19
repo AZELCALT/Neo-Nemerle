@@ -608,6 +608,8 @@ using Nemerle.Compiler.Utility;
     /// For `def [a, b] = ...`: the list's length (its shape); -1 otherwise.
     [RecordIgnore] public mutable def_list_length : int = -1;
     [RecordIgnore] public mutable def_location : Location;
+    /// The pattern was written as a parameter (`fun ((a, b)) ...').
+    [RecordIgnore] public mutable def_parameter : bool;
   }
 
   public variant ConversionKind

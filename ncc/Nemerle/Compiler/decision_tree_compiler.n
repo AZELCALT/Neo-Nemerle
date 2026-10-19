@@ -144,9 +144,14 @@ using Nemerle.Compiler.Utility;
           | Some (example) =>
             def shown = if (mc.def_list_length >= 0) $" (a list of another length than $(mc.def_list_length) does not)"
                         else if (example == "") "" else $" ($example does not)";
-            Message.Error (mc.def_location,
-              $"`def $(mc.def_pattern)' does not fit every value$shown: a def declares its names, so its pattern must "
-              "always match; add `else' for the other values (it must leave: throw or return), or write a match")
+            if (mc.def_parameter)
+              Message.Error (mc.def_location,
+                $"the parameter pattern `$(mc.def_pattern)' does not fit every value$shown: a parameter's pattern names its "
+                "parts, so it must always match; take the parameter whole and write a match for the other shapes")
+            else
+              Message.Error (mc.def_location,
+                $"`def $(mc.def_pattern)' does not fit every value$shown: a def declares its names, so its pattern must "
+                "always match; add `else' with their values for the others (or one that leaves: throw, return), or write a match")
           | None => ()
         }
 

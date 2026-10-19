@@ -1168,7 +1168,8 @@ public class MethodBuilder : MemberBuilder, IMethod
     set {
       base.HasBeenUsed = value;
       m_has_been_used = true;
-      declaring_type.HasBeenUsed = value && MemberKind == MemberKinds.Constructor; // trigger obsoletion warning only if we are ctor
+      // a constructor or a static method names its type (`Old()`, `Old.Helper()`): an obsolete type is reported there
+      declaring_type.HasBeenUsed = value && (MemberKind == MemberKinds.Constructor || IsStatic);
     }
   }
 

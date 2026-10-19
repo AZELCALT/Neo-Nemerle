@@ -439,6 +439,13 @@ using Nemerle.Compiler.Utility;
         set_attributes ();
       }
 
+      // a static field names its type, `Old.Count': an obsolete type is reported there
+      public override HasBeenUsed : bool
+      {
+        get { base.HasBeenUsed }
+        set { base.HasBeenUsed = value; when (value && handle.IsStatic) DeclaringType.HasBeenUsed = true }
+      }
+
       set_attributes () : void
       {
         attributes = NemerleModifiers.None;
@@ -643,15 +650,15 @@ using Nemerle.Compiler.Utility;
       protected fun_header  : TFunHeader;
       protected is_var_args : bool;
 
-      // using a constructor uses its type (as for a type built here), so an obsolete type is reported where it is
-      // constructed, `SHA1Managed()`, not only where it is named
+      // using a constructor or a static member uses its type (it is named there), so an obsolete type is reported
+      // where it is constructed, `SHA1Managed()`, or reached, `Old.Helper()`, not only where it is written as a type
       public override HasBeenUsed : bool
       {
         get { base.HasBeenUsed }
         set
         {
           base.HasBeenUsed = value;
-          when (value && handle.IsConstructor) DeclaringType.HasBeenUsed = true
+          when (value && (handle.IsConstructor || handle.IsStatic)) DeclaringType.HasBeenUsed = true
         }
       }
       
@@ -838,6 +845,13 @@ using Nemerle.Compiler.Utility;
       protected setter     : ExternalMethodInfo;
       protected any_method : ExternalMethodInfo;
       protected mem_type   : FixedType;
+
+      // a static property names its type, `Old.Current': an obsolete type is reported there
+      public override HasBeenUsed : bool
+      {
+        get { base.HasBeenUsed }
+        set { base.HasBeenUsed = value; when (value && any_method != null && any_method.IsStatic) DeclaringType.HasBeenUsed = true }
+      }
 
       public this (tenv : Map [string, StaticTypeVar], lib : LibraryReference, h : SR.PropertyInfo)
       {

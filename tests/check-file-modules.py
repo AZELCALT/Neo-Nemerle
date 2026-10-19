@@ -381,17 +381,36 @@ if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'),
 ran = run([runtime, work / 'shapes.exe'])
 if ran.stdout.splitlines() != ['15', '7 and 8', 'need two, got 3']:
     raise RuntimeError('def patterns with a shape written out or an else: ' + ran.stdout)
-print('PASS: a def whose pattern can fail is an error (function, top level, a cons); a shape written out, or `def P = v else E`, '
+source('shapes/main.n', 'F() : list[int] -> int { fun (([a, b])) { a + b } }\nSystem.Console.WriteLine(F()([1, 2]));')
+run([runtime, compiler, work / 'shapes/main.n', '-source-root:' + str(work / 'shapes'), '-out:' + str(work / 'shapes-parameter.exe'),
+     '-no-color', *modern_references], False, "the parameter pattern `[a, b]' does not fit every value")
+source('shapes/main.n', '''F(l : list[int]) : int
+{
+  def [x, y] = l else (0, 0);
+  x + y
+}
+System.Console.WriteLine(F([3, 4]));
+System.Console.WriteLine(F([1, 2, 3]));''')
+run([runtime, compiler, work / 'shapes/main.n', '-source-root:' + str(work / 'shapes'), '-out:' + str(work / 'shapes-values.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'shapes-values.runtimeconfig.json')
+ran = run([runtime, work / 'shapes-values.exe'])
+if ran.stdout.split() != ['7', '0']:
+    raise RuntimeError('def ... else with values: ' + ran.stdout)
+print('PASS: a def whose pattern can fail is an error (function, top level, a cons, a parameter pattern said as one); a shape written out, or `def P = v else E`, '
       'declares its names for the whole scope', flush=True)
 
 # an obsolete type of a library is reported where it is constructed, not only where it is named
-source('obsolete/old.n', '[System.Obsolete("use New")] public class Old { public this() {} }')
+source('obsolete/old.n', '[System.Obsolete("use New")] public class Old { public this() {} public static Helper() : int { 1 } public static Count : int = 2; }')
 run([runtime, compiler, work / 'obsolete/old.n', '-source-root:' + str(work / 'obsolete'), '-target:library',
      '-out:' + str(work / 'old.dll'), '-no-color', *modern_references])
 source('obsolete/main.n', 'def o = old.Old();\nSystem.Console.WriteLine(o != null);')
 run([runtime, compiler, work / 'obsolete/main.n', '-source-root:' + str(work / 'obsolete'), '-r:' + str(work / 'old.dll'),
      '-out:' + str(work / 'obsolete.exe'), '-no-color', *modern_references], True, "old.Old is obsolete: 'use New'")
-print('PASS: constructing an obsolete library type is warned', flush=True)
+for name, text in (('static-method', 'System.Console.WriteLine(old.Old.Helper());'), ('static-field', 'System.Console.WriteLine(old.Old.Count);')):
+    source('obsolete/main.n', text)
+    run([runtime, compiler, work / 'obsolete/main.n', '-source-root:' + str(work / 'obsolete'), '-r:' + str(work / 'old.dll'),
+         '-out:' + str(work / ('obsolete-' + name + '.exe')), '-no-color', *modern_references], True, "old.Old is obsolete: 'use New'")
+print('PASS: an obsolete library type is warned where it is constructed and where a static member is reached through it', flush=True)
 if run([runtime, work / 'init-other.exe']).stdout.split() != ['other']: raise RuntimeError('-main:other')
 # a variable declared without a value and given one before it is read is fine
 source('init/main.n', 'mutable x;\nx = 10;\nSystem.Console.WriteLine(x);')

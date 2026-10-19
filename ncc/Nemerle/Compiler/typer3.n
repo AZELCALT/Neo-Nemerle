@@ -1406,7 +1406,7 @@ using Nemerle.Compiler.Utility;
                cs.Map(x =>
                {
                  def copy = Match_case (x.patterns, inject (x.body), x.disable_warnings);
-                 copy.def_pattern = x.def_pattern; copy.def_list_length = x.def_list_length; copy.def_location = x.def_location;
+                 copy.def_pattern = x.def_pattern; copy.def_list_length = x.def_list_length; copy.def_location = x.def_location; copy.def_parameter = x.def_parameter;
                  copy
                }))
 

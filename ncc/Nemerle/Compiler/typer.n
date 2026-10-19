@@ -2874,6 +2874,12 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             case.def_pattern = System.Text.RegularExpressions.Regex.Replace (pattern.ToString (), @"_N_bound_(\w+?)_\d+\b", "$1");
             case.def_list_length = match (pattern) { | PExpr.ListLiteral (parts) => parts.Length | _ => -1 };
             case.def_location = pattern.Location + value.Location;
+            // a parameter written as a pattern (`fun ((a, b)) ...') is this def in the body, reading the parameter
+            case.def_parameter = match (value)
+              {
+                | PExpr.Ref (name) => current_fun != null && current_fun.Parameters.Exists (p => p.name == name.Id && p.PatternHack != null)
+                | _ => false
+              };
           }
           TExpr.Match (matched_value, [case])
       }

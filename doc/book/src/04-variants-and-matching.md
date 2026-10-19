@@ -136,7 +136,8 @@ something else
 `def` takes a pattern as well, and declares the names it binds for the rest of the scope: `def (x, y) = point;`. A
 definition's names are used from then on, so its pattern must fit every value its type allows. A tuple always does,
 and so does a list written out to the same length (`def [a, b] = [1, 2];`). A pattern that can fail, such as a list of
-some length or one shape of a variant, is an error, unless an `else` takes the values it does not fit:
+some length or one shape of a variant, is an error, unless an `else` takes the values it does not fit. The `else`
+gives the names their values instead (in the order they are written), or it leaves, by throwing or returning:
 
 ```nemerle
 using System;
@@ -157,8 +158,7 @@ catch { | e is ArgumentException => Console.WriteLine(e.Message) }
 two items expected, got 3
 ```
 
-The `else` must leave, by throwing or returning, since nothing would be bound after it. Without it, the compiler names
-a value the pattern misses:
+With values: `def [x, y] = items else (0, 0);`. Without an `else`, the compiler names a value the pattern misses:
 
 ```nemerle,fail
 First(items : list[int]) : int
@@ -172,7 +172,9 @@ First(items : list[int]) : int
 does not fit every value
 ```
 
-For several shapes that each mean something, write a `match`.
+For several shapes that each mean something, write a `match`. A pattern that starts with a constructor or a cons is
+written in parentheses, `def (Some(v)) = found else 0;` or `def (first :: _) = items`, since `def Name(...)` is a
+local function.
 
 ## `option`
 

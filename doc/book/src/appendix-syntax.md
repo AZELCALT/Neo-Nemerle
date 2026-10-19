@@ -7,7 +7,7 @@
 | `def x = e;` | immutable binding |
 | `mutable x = e;` | mutable binding |
 | `def (x, y) = e;` | declares `x` and `y` (the pattern must fit every value) |
-| `def [x, y] = e else E;` | declares `x` and `y`; `E` (which must leave) runs when `e` does not fit |
+| `def [x, y] = e else E;` | declares `x` and `y`; when `e` does not fit, `E` gives their values or leaves |
 | `def f(a, b) { ... }` | local function |
 | `Name(a : T) : R { ... }` | function (a member of the file module or type) |
 | `class C : Base, IFace { ... }` | class |
