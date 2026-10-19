@@ -1,0 +1,18 @@
+The Nemerle logo
+
+Copyright 2026 azelcalt. All rights reserved, except as set out below.
+
+This applies to the logo and the images made from it: the files in doc/assets/logo/ and
+the editor icons in tools/language-server/vscode/images/. The code of this repository is
+licensed separately (see REUSE.toml and LICENSES/).
+
+Permitted use. You may use the logo to refer to Nemerle: in articles, posts, talks,
+documentation, packages, and in projects about or built with Nemerle. You may recolour it
+or show it in one colour to suit where it appears, and resize it.
+
+Not permitted. You may not use the logo, or a design confusingly similar to it (in
+particular in the same purple and shading), as the logo, icon or identity of another
+project, product or organisation, or in a way that suggests an official connection with
+Nemerle that does not exist.
+
+The copyright holder may withdraw permission from a use that does not follow these terms.

@@ -520,10 +520,21 @@ internal module Projects
     when (project.License != null) _ = nuspec.Append("    <license type=\"expression\">").Append(escape(project.License)).Append("</license>\n");
     when (project.Repository != null) _ = nuspec.Append("    <repository type=\"git\" url=\"").Append(escape(project.Repository)).Append("\" />\n");
     _ = nuspec.Append("    <tags>").Append(escape(string.Join(" ", ("nemerle" :: project.Tags.NToList()).ToArray()))).Append("</tags>\n");
+    // the package's icon, from the [package] section
+    mutable icon = null;
+    when (project.Icon != null)
+    {
+      icon = Path.GetFullPath(Path.Combine(project.Root, project.Icon));
+      unless (File.Exists(icon)) throw project.Error("package.icon", null, "the icon `" + project.Icon + "' does not exist");
+      unless ([".png", ".jpg", ".jpeg"].Contains(Path.GetExtension(icon).ToLowerInvariant()))
+        throw project.Error("package.icon", null, "a package icon is a PNG or JPEG file");
+      _ = nuspec.Append("    <icon>").Append(escape(Path.GetFileName(icon))).Append("</icon>\n");
+    }
     _ = nuspec.Append("    <dependencies>\n      <group targetFramework=\"").Append(tfm).Append("\">\n").Append(dependencies.ToString()).Append("      </group>\n    </dependencies>\n");
     _ = nuspec.Append("  </metadata>\n</package>\n");
     def files = SCG.List.[string * string](); // (path in the package, file)
     files.Add(("lib/" + tfm + "/" + Path.GetFileName(binary), binary));
+    when (icon != null) files.Add((Path.GetFileName(icon), icon));
     def pdb = Path.ChangeExtension(binary, ".pdb");
     when (File.Exists(pdb)) files.Add(("lib/" + tfm + "/" + Path.GetFileName(pdb), pdb));
     def output = Path.Combine(project.OutputDirectory, project.Name + "." + project.Version + ".nupkg");
@@ -537,11 +548,15 @@ internal module Projects
       lib.Add(("lib/" + Nemerle.Platform.ClrTarget.Host.Name + "/Nemerle.dll", Path.Combine(toolchain, "Nemerle.dll")));
       def standard = Path.Combine(toolchain, "netstandard2.0", "Nemerle.dll");
       when (File.Exists(standard)) lib.Add(("lib/netstandard2.0/Nemerle.dll", standard));
+      // Nemerle's logo, which the toolchain carries
+      def logo = Path.Combine(toolchain, "nemerle-icon.png");
+      def hasLogo = File.Exists(logo);
+      when (hasLogo) lib.Add(("icon.png", logo));
       def spec = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\n  <metadata>\n"
                + "    <id>" + RuntimePackage + "</id>\n    <version>" + runtimeVersion + "</version>\n    <authors>Neo-Nemerle</authors>\n"
                + "    <description>The Nemerle runtime library (Nemerle.dll), which libraries and programs written in Nemerle use.</description>\n"
                + "    <license type=\"expression\">BSD-3-Clause</license>\n    <repository type=\"git\" url=\"https://github.com/AZELCALT/Neo-Nemerle\" />\n"
-               + "    <tags>nemerle runtime</tags>\n  </metadata>\n</package>\n";
+               + "    <tags>nemerle runtime</tags>\n" + (if (hasLogo) "    <icon>icon.png</icon>\n" else "") + "  </metadata>\n</package>\n";
       WritePackage(runtime, RuntimePackage, spec, lib);
       Console.WriteLine(project.Name + ": packed " + Path.GetRelativePath(Environment.CurrentDirectory, runtime) + " (the runtime it depends on)");
     }

@@ -66,6 +66,8 @@ public sealed class Project
   public mutable License : string;
   public mutable Repository : string;
   public Tags : SCG.List[string] = SCG.List();
+  /// The package's icon: a PNG or JPEG (relative to the root).
+  public mutable Icon : string;
   internal places : SCG.Dictionary[string, int * int] = SCG.Dictionary();
   /// "toml" for the declarative file, "msbuild" for an MSBuild project as upstream Nemerle wrote them.
   public mutable Format : string = "toml";
@@ -251,10 +253,11 @@ public sealed class Project
           | "package.license" => project.License = str(value, "license")
           | "package.repository" => project.Repository = str(value, "repository")
           | "package.tags" => project.Tags.AddRange(strings(value, "tags"))
+          | "package.icon" => project.Icon = str(value, "icon")
           | _ =>
             def known = if (section == "") "name, version, kind, main, output, target"
                         else if (section == "references") "assemblies, projects, packages, repositories"
-                        else if (section == "package") "authors, description, license, repository, tags"
+                        else if (section == "package") "authors, description, license, repository, tags, icon"
                         else "options";
             throw ProjectException(file, reader.Line, reader.Column, "unknown setting `" + full + "'; " + (if (section == "") "the settings are " else "[" + section + "] has ") + known)
         }
@@ -293,6 +296,7 @@ public sealed class Project
       _ = b.Append("# authors = \"you\"\n");
       _ = b.Append("# description = \"what it does\"\n");
       _ = b.Append("# license = \"MIT\"\n");
+      _ = b.Append("# icon = \"icon.png\"\n");
     }
     b.ToString()
   }

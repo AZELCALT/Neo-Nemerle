@@ -96,7 +96,8 @@ try:
     run('init', 'shapes', '--lib')
     shapes = work / 'shapes'
     (shapes / 'shapes.n').write_text('public Area(w : int, h : int) : int { w * h }\npublic Names() : list[string] { ["square", "strip"] }\n')
-    meta = (shapes / 'shapes.nproj').read_text().replace('# authors = "you"', 'authors = "tester"').replace('# license = "MIT"', 'license = "MIT"')
+    meta = (shapes / 'shapes.nproj').read_text().replace('# authors = "you"', 'authors = "tester"').replace('# license = "MIT"', 'license = "MIT"\nicon = "shapes.png"')
+    shutil.copy2(tc / 'nemerle-icon.png', shapes / 'shapes.png') if (tc / 'nemerle-icon.png').exists() else (shapes / 'shapes.png').write_bytes(b'\x89PNG\r\n\x1a\n')
     (shapes / 'shapes.nproj').write_text(meta)
     out = run('pack', shapes)
     check('packed' in out and (shapes / 'out/shapes.0.1.0.nupkg').exists(), 'pack writes the package: ' + out)
@@ -104,10 +105,12 @@ try:
     check(len(runtime) == 1, 'and the runtime package')
     with zipfile.ZipFile(shapes / 'out/shapes.0.1.0.nupkg') as z:
         spec = z.read('shapes.nuspec').decode()
+        check('shapes.png' in z.namelist() and '<icon>shapes.png</icon>' in spec, 'the package icon: ' + spec)
         check('lib/net10.0/shapes.dll' in z.namelist() and '<authors>tester</authors>' in spec and 'Neo.Nemerle.Runtime' in spec
               and '<license type="expression">MIT</license>' in spec, 'the package layout and nuspec: ' + spec)
     with zipfile.ZipFile(runtime[0]) as z:
         check('lib/net10.0/Nemerle.dll' in z.namelist(), 'the runtime package carries Nemerle.dll')
+        check('icon.png' in z.namelist() and '<icon>icon.png</icon>' in z.read('Neo.Nemerle.Runtime.nuspec').decode(), 'and Nemerle\'s logo')
     check('packs libraries' in run('pack', hello, ok=False), 'a program is not packed')
     feed2 = work / 'feed2'; feed2.mkdir()
     for f in (shapes / 'out').glob('*.nupkg'): shutil.copy2(f, feed2 / f.name)

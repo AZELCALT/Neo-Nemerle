@@ -74,7 +74,7 @@ def finish():
     if a.update_boot:
         target = repo / 'boot/coreclr'
         keep = [f for f in toolchain.iterdir()
-                if f.name in ('references', 'netstandard2.0') or f.suffix in ('.dll', '.nitrametadata', '.nitrametadata2', '.exe', '.json', '.txt', '.rtf')
+                if f.name in ('references', 'netstandard2.0') or f.suffix in ('.dll', '.nitrametadata', '.nitrametadata2', '.exe', '.json', '.txt', '.rtf', '.png')
                 or f.name in ('ncc', 'nscript')]
         keep = [f for f in keep if not f.name.endswith('-STATUS.json') and not f.name.startswith('_N_')]
         shutil.rmtree(target); target.mkdir()
@@ -102,6 +102,7 @@ text = step('nitra', [py, build / 'build-nitra-core.py', '--snapshot', 'Nitra', 
 nitra = pathlib.Path(re.findall(r'(/tmp/nemerle-nitra-core-\w+/output)', text)[-1])
 for f in nitra.glob('Integrated.*'): shutil.copy2(f, toolchain / f.name)
 # 4. tools
+shutil.copy2(repo / 'doc/assets/logo/nemerle-128.png', toolchain / 'nemerle-icon.png')  # the runtime package's icon
 step('runtime-netstandard', [py, build / 'build-netstandard-runtime.py', '--toolchain', toolchain])
 step('scripting-build', [py, build / 'build-scripting.py', '--toolchain', toolchain, '--references', toolchain / 'references'])
 step('lsp-build', [py, build / 'build-language-server.py', '--toolchain', toolchain, '--references', refs, '--output', out / 'lsp'])

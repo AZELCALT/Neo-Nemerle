@@ -115,6 +115,7 @@ description = "what it does"
 license = "MIT"                  # an SPDX expression
 repository = "https://github.com/you/shapes"
 tags = ["geometry"]
+icon = "icon.png"                # a PNG or JPEG, shown by NuGet
 ```
 
 ## Targets

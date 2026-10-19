@@ -1,3 +1,5 @@
+<p align="center"><img src="doc/assets/logo/nemerle.svg" width="160" alt="Nemerle logo"></p>
+
 # Nemerle (revived)
 
 Nemerle is a statically typed language for .NET. It combines functional, object-oriented and imperative programming,

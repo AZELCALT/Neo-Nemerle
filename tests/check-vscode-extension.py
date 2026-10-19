@@ -17,7 +17,8 @@ with zipfile.ZipFile(a.vsix) as z:
     names = z.namelist()
     for required in ('extension.vsixmanifest', '[Content_Types].xml', 'extension/package.json', 'extension/extension.js',
                      'extension/syntaxes/nemerle.tmLanguage.json', 'extension/server/nemerle-lsp.exe',
-                     'extension/node_modules/vscode-languageclient/package.json'):
+                     'extension/node_modules/vscode-languageclient/package.json', 'extension/images/icon.png',
+                     'extension/images/nemerle.svg'):
         if required not in names:
             raise SystemExit('FAILED: the .vsix has no ' + required)
     if not any(n.startswith('extension/server/references/') for n in names):
@@ -27,7 +28,11 @@ ext = w / 'unpacked/extension'
 manifest = json.loads((ext / 'package.json').read_text())
 assert manifest['contributes']['grammars'][0]['language'] == 'nemerle'
 json.loads((ext / 'syntaxes/nemerle.tmLanguage.json').read_text())
-print('PASS: the .vsix holds the extension, its grammar, the client library, the server and reference assemblies', flush=True)
+# the icons: the marketplace one is a PNG the manifest names, the file icon the responsive SVG
+assert manifest['icon'] == 'images/icon.png' and (ext / manifest['icon']).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+assert manifest['contributes']['languages'][0]['icon']['dark'] == './images/nemerle.svg'
+assert '<Icon>extension/images/icon.png</Icon>' in (w / 'unpacked/extension.vsixmanifest').read_text()
+print('PASS: the .vsix holds the extension, its grammar, its icons, the client library, the server and reference assemblies', flush=True)
 
 harness = w / 'harness.js'
 harness.write_text(r'''

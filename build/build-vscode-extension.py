@@ -33,6 +33,7 @@ ext.mkdir()
 for f in ('package.json', 'extension.js', 'language-configuration.json', 'README.md'):
     shutil.copy2(source / f, ext / f)
 shutil.copytree(source / 'syntaxes', ext / 'syntaxes')
+shutil.copytree(source / 'images', ext / 'images')   # the icon (marketplace) and the .n file icon (responsive SVG)
 shutil.copy2(repo / 'LICENSES/GPL-2.0-or-later.txt', ext / 'LICENSE.txt')
 # the client library: the extension's one production dependency
 if not (source / 'node_modules/vscode-languageclient').is_dir():
@@ -53,6 +54,7 @@ description = escape(manifest['description'])
     <Tags>{','.join(manifest.get('keywords', []))}</Tags>
     <Categories>{','.join(manifest['categories'])}</Categories>
     <GalleryFlags>Public</GalleryFlags>
+    <Icon>extension/images/icon.png</Icon>
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="{manifest['engines']['vscode']}" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
@@ -71,11 +73,13 @@ description = escape(manifest['description'])
     <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
     <Asset Type="Microsoft.VisualStudio.Services.Content.Details" Path="extension/README.md" Addressable="true" />
     <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE.txt" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/images/icon.png" Addressable="true" />
   </Assets>
 </PackageManifest>
 ''')
 files = sorted(f for f in work.rglob('*') if f.is_file())
 kinds = {'.json': 'application/json', '.js': 'application/javascript', '.md': 'text/markdown', '.txt': 'text/plain',
+         '.png': 'image/png', '.svg': 'image/svg+xml',
          '.vsixmanifest': 'text/xml', '.xml': 'text/xml'}
 extensions = sorted({f.suffix.lower() for f in files if f.suffix})
 types = ''.join('<Default Extension="%s" ContentType="%s" />' % (e, kinds.get(e, 'application/octet-stream')) for e in extensions)

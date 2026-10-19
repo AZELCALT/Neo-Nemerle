@@ -4,6 +4,7 @@
   "description": "Nemerle for VS Code and VSCodium: highlighting, diagnostics, outline and folding through nemerle-lsp, with grammar and space blocks parsed by Nitra.",
   "version": "0.2.0",
   "publisher": "neo-nemerle",
+  "icon": "images/icon.png",
   "license": "GPL-2.0-or-later",
   "repository": { "type": "git", "url": "https://github.com/AZELCALT/Neo-Nemerle" },
   "engines": { "vscode": "^1.82.0" },
@@ -33,7 +34,8 @@
       "configurationSnippets": [{ "label": "Nemerle: run the project", "description": "Build the folder's project and debug it",
                                   "body": { "type": "nemerle", "request": "launch", "name": "Nemerle: run the project" } }]
     }],
-    "languages": [{ "id": "nemerle", "aliases": ["Nemerle", "nemerle"], "extensions": [".n"], "configuration": "./language-configuration.json" }],
+    "languages": [{ "id": "nemerle", "aliases": ["Nemerle", "nemerle"], "extensions": [".n"], "configuration": "./language-configuration.json",
+                   "icon": { "light": "./images/nemerle.svg", "dark": "./images/nemerle.svg" } }],
     "grammars": [{ "language": "nemerle", "scopeName": "source.nemerle", "path": "./syntaxes/nemerle.tmLanguage.json" }],
     "configuration": {
       "title": "Nemerle",

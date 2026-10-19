@@ -38,3 +38,10 @@ SPDX-FileCopyrightText = [
   "James Newton-King (Newtonsoft.Json)",
 ]
 SPDX-License-Identifier = "GPL-2.0-or-later AND LicenseRef-Nemerle-Output-Exception AND BSD-3-Clause AND MIT AND Apache-2.0"
+
+# The logo: for referring to Nemerle, not to be reused as another project's logo (LICENSES/LicenseRef-Nemerle-Logo.txt).
+[[annotations]]
+path = ["doc/assets/logo/**", "tools/language-server/vscode/images/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 azelcalt"
+SPDX-License-Identifier = "LicenseRef-Nemerle-Logo"
