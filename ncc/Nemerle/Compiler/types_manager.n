@@ -554,6 +554,8 @@ using Nemerle.Compiler.Utility;
         when (man.Options.TargetFramework != null) ClrEmitter.Target = Nemerle.Platform.ClrTarget.Parse(man.Options.TargetFramework);
         def target = ClrEmitter.EffectiveTarget;
         ClrEmitter.Target = target;
+        when (!target.SameAs(Nemerle.Platform.ClrTarget.Host) && man.Options.TargetReferenceDirectory != null)
+          man.TargetContracts = Nemerle.Platform.ClrTargetContracts(man.Options.TargetReferenceDirectory, target);
         when (!man.Options.TargetIsLibrary && !target.Executables)
           Message.Error($"$target has libraries only: build a library (-target:library), or target a runtime such as net8.0 or net48");
       }

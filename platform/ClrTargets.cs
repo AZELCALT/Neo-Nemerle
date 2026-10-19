@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 
 namespace Nemerle.Platform
 {
@@ -150,5 +151,106 @@ namespace Nemerle.Platform
         public IList<string> Problems { get; private set; }
         public ClrTargetException(string target, IList<string> problems)
             : base(problems.Count + " use(s) of what " + target + " does not have") { Problems = problems; }
+    }
+}
+
+namespace Nemerle.Platform
+{
+    /// The target's reference assemblies, read once (metadata only): which framework types and members the target
+    /// has. The compiler asks while it types, so a member the target lacks is an error at the code that uses it.
+    public sealed class ClrTargetContracts
+    {
+        readonly ClrTarget target;
+        readonly string host = Path.GetDirectoryName(typeof(object).Assembly.Location);
+        readonly Dictionary<string, Mono.Cecil.TypeDefinition> types = new Dictionary<string, Mono.Cecil.TypeDefinition>(StringComparer.Ordinal);
+        readonly List<Mono.Cecil.AssemblyDefinition> opened = new List<Mono.Cecil.AssemblyDefinition>();
+
+        public ClrTargetContracts(string referenceDirectory, ClrTarget target)
+        {
+            this.target = target;
+            foreach (var path in Directory.GetFiles(Path.GetFullPath(referenceDirectory), "*.dll"))
+            {
+                Mono.Cecil.AssemblyDefinition definition;
+                try { definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(path); }
+                catch (Exception) { continue; }
+                opened.Add(definition);
+                foreach (var t in definition.MainModule.GetTypes())
+                    if (t.IsPublic || t.IsNestedPublic) types[t.FullName] = t;
+            }
+        }
+
+        public string TargetName { get { return target.Name; } }
+
+        bool Framework(Type type) { return type != null && Path.GetDirectoryName(type.Assembly.Location) == host; }
+
+        static string Name(Type type)
+        {
+            var t = type.IsGenericType && !type.IsGenericTypeDefinition ? type.GetGenericTypeDefinition() : type;
+            return (t.FullName ?? t.Name).Replace('+', '/');
+        }
+
+        /// What the target lacks of a framework type: a description, or null when the target has it (or it is not
+        /// a framework type).
+        public string MissingType(Type type)
+        {
+            while (type != null && (type.IsArray || type.IsByRef || type.IsPointer)) type = type.GetElementType();
+            if (type == null || type.IsGenericParameter || !Framework(type)) return null;
+            if (type.IsGenericType && !type.IsGenericTypeDefinition)
+                foreach (var argument in type.GetGenericArguments()) { var missing = MissingType(argument); if (missing != null) return missing; }
+            return types.ContainsKey(Name(type)) ? null : "the type " + Name(type).Replace('/', '.') + " is not in " + target.Name;
+        }
+
+        /// What the target lacks of a framework member: a description, or null when the target has it.
+        public string Missing(MemberInfo member)
+        {
+            if (member == null || member.DeclaringType == null || !Framework(member.DeclaringType)) return null;
+            var missingType = MissingType(member.DeclaringType);
+            if (missingType != null) return missingType;
+            // the member as declared (on a generic type definition, its parameters in terms of the type's parameters)
+            MemberInfo open = member;
+            try { if (member.DeclaringType.IsGenericType) open = member.Module.ResolveMember(member.MetadataToken); } catch (Exception) { }
+            Mono.Cecil.TypeDefinition definition;
+            if (!types.TryGetValue(Name(member.DeclaringType), out definition)) return null;
+            for (var t = definition; t != null; )
+            {
+                if (Has(t, open)) return null;
+                Mono.Cecil.TypeDefinition next = null;
+                if (t.BaseType != null) types.TryGetValue(t.BaseType.GetElementType().FullName, out next);
+                t = next;
+            }
+            var method = open as MethodBase;
+            string what = member is FieldInfo ? "field" : member is PropertyInfo ? "property" : member is EventInfo ? "event"
+                        : member is ConstructorInfo ? "constructor" : "method";
+            string shown = Name(member.DeclaringType).Replace('/', '.') + (member is ConstructorInfo ? "" : "." + member.Name);
+            if (method != null) shown += "(" + string.Join(", ", method.GetParameters().Select(p => p.ParameterType.FullName ?? p.ParameterType.Name)) + ")";
+            return "the " + what + " " + shown + " is not in " + target.Name;
+        }
+
+        static bool Has(Mono.Cecil.TypeDefinition t, MemberInfo member)
+        {
+            var field = member as FieldInfo;
+            if (field != null) return t.Fields.Any(f => f.Name == field.Name);
+            var property = member as PropertyInfo;
+            if (property != null) return t.Properties.Any(p => p.Name == property.Name);
+            var ev = member as EventInfo;
+            if (ev != null) return t.Events.Any(e => e.Name == ev.Name);
+            var method = member as MethodBase;
+            if (method == null) return true;
+            var parameters = method.GetParameters();
+            int generic = method.IsGenericMethod ? method.GetGenericArguments().Length : 0;
+            foreach (var m in t.Methods)
+            {
+                if (m.Name != method.Name || m.Parameters.Count != parameters.Length || m.GenericParameters.Count != generic) continue;
+                bool same = true;
+                for (int i = 0; same && i < parameters.Length; i++)
+                {
+                    var a = m.Parameters[i].ParameterType; var b = parameters[i].ParameterType;
+                    if (a.ContainsGenericParameter || b.ContainsGenericParameters || b.IsGenericType) continue;
+                    same = a.FullName == (b.FullName ?? b.Name).Replace('+', '/');
+                }
+                if (same) return true;
+            }
+            return false;
+        }
     }
 }

@@ -243,6 +243,10 @@ using Nemerle.Compiler.XmlDump;
     public mutable QuietErrors : int;
     /// Per top-level value (`module.name`): the type of each of its bindings, learned by the inference pass.
     public StateTypes : System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[int, Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
+    /// The target's reference assemblies, when the target is not the compiler's own .NET: what the typed code uses
+    /// from the framework is checked against them (an error at the code that uses what the target lacks).
+    public mutable TargetContracts : Nemerle.Platform.ClrTargetContracts;
+    public TargetReported : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
     /// Per top-level value: "typed" (one type) or "content" (its type changes; the storage is a Content).
     public StateStorage : System.Collections.Generic.Dictionary[string, string] = System.Collections.Generic.Dictionary();
     /// Reads of a top-level value whose storage may be a Content: the type each one needs, checked after typing.

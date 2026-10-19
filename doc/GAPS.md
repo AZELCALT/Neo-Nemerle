@@ -30,8 +30,6 @@ unless it says so.
 
 ## Targets
 
-- **The target check names a line only with debug information.** Without `-debug+`, a member the target lacks is
-  reported with the method that uses it, not its line.
 - **Unused references to .NET 10 assemblies stay in the output.** After the output is moved to the target's
   assemblies, references nothing uses any more are kept (removing them corrupts lazily read signatures). They are
   never loaded, so the binary runs; a strict checker (Unity's) may still list them.

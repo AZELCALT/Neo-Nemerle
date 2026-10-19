@@ -395,6 +395,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                   | _ => ()
                 }
 
+              // a target other than the compiler's .NET: what the code uses from the framework must be in it
+              when (Manager.TargetContracts != null)
+                match (current_fun.body) { | FunBody.Typed(body) => CheckTarget(body) | _ => () }
+
               when (errorCount == Message.ErrorCount)
               {
                 RunSecondPass(current_method_builder);
@@ -654,6 +658,43 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           | Some (p) => p.BadnessAllowed
         }
       }
+    }
+
+    /// Reports what a typed body uses from the framework that the target framework lacks, where it is used.
+    CheckTarget(body : TExpr) : void
+    {
+      def contracts = Manager.TargetContracts;
+      def report(at : Location, problem : string) : void
+      {
+        when (problem != null && Manager.TargetReported.Add(at.ToString() + problem)) Message.Error(at, problem)
+      }
+      def member(at : Location, m : IMember) : void
+      {
+        def handle = try { m.GetHandle() } catch { | _ => null };
+        report(at, try { contracts.Missing(handle) } catch { | _ => null })
+      }
+      def typeOf(at : Location, t : TypeVar) : void
+      {
+        match (try { t.Hint } catch { | _ => None() })
+        {
+          | Some(FixedType.Class(ti, _)) when ti.SystemType != null =>
+            report(at, try { contracts.MissingType(ti.SystemType) } catch { | _ => null })
+          | _ => ()
+        }
+      }
+      ExprWalker().Walk(body, info =>
+        match (info.Node)
+        {
+          | TExpr.StaticRef(_, m, _) as e => member(e.Location, m)
+          | TExpr.FieldMember(_, f) as e => member(e.Location, f)
+          | TExpr.PropertyMember(_, p) as e => member(e.Location, p)
+          | TExpr.StaticPropertyRef(_, p) as e => member(e.Location, p)
+          | TExpr.MethodRef(_, m, _, _) as e => member(e.Location, m)
+          | TExpr.EventMember(_, ev) as e => member(e.Location, ev)
+          | TExpr.StaticEventRef(_, ev) as e => member(e.Location, ev)
+          | e is TExpr => typeOf(e.Location, e.Type)
+          | _ => ()
+        })
     }
 
     protected virtual RunDelayedTypings() : void

@@ -58,6 +58,10 @@ try:
     out = run('build', bad, ok=False)
     check('System.String.Contains(System.Char) is not in netstandard2.0' in out and 'bad.n:3' in out, 'a member the target lacks, at its line: ' + out)
     check(not (bad / 'out/bad.dll').exists(), 'no binary for it')
+    # without debug information too: the compiler reports it while typing, at the line and column
+    nodebug = project('nodebug', 'kind = "library"\ntarget = "netstandard2.0"\n', {'nodebug.n': 'public Has(s : string) : bool\n{\n  s.Contains(\'x\')\n}\n'})
+    out = run('build', nodebug, ok=False)
+    check('nodebug.n:3:' in out and 'System.String.Contains(System.Char) is not in netstandard2.0' in out, 'the target error at its line without -debug+: ' + out)
     exe = project('exe', 'target = "netstandard2.1"\n', {'main.n': 'System.Console.WriteLine(1);\n'})
     check('has libraries only' in run('build', exe, ok=False), '.NET Standard has no programs')
     old = project('old', 'target = "net48"\n[references]\nprojects = ["../app"]\n', {'main.n': '()\n'})
