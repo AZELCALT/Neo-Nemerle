@@ -5,10 +5,6 @@ unless it says so.
 
 ## Top-level code and state
 
-- **The inference pass expands macros twice.** It types a copy of the top-level code, so macros used there expand once
-  for it and once for the real code. The compiler's own macros (spaces, scopes, dials) are safe to repeat; a user
-  macro with side effects sees both expansions. When the pass fails, a value's type falls back to its first
-  initializer, as before the pass existed.
 - **Tuple destructuring stays local.** `def (a, b) = ...` at the top level binds locals, not state; `def pair = (a, b)`
   is the form functions can reach. A nicer way to reference tuple parts is not designed yet.
 

@@ -30,6 +30,7 @@ using Nemerle.Collections;
 using Nemerle.Utility;
 using Nemerle.IO;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
 using Nemerle.CompilerMacros;
 using Nemerle.Compiler.global_env;
 using Nemerle.Compiler.MacroClassGen;
@@ -100,6 +101,21 @@ public class MacroRegistry
     }
   }
 
+  /// A macro of a library of the user's (not the compiler's own, nor the standard macros).
+  static UserMacro(m : IMacro) : bool
+  {
+    def assembly = m.GetType().Assembly.GetName().Name;
+    assembly != "Nemerle.Compiler" && assembly != "Nemerle.Macros" && assembly != "Nemerle"
+  }
+
+  /// While the compiler types the quiet copy of a file's top-level code that infers its values' types, a user's
+  /// macro is not expanded (it expands once, in the real code: a macro with side effects sees one expansion); it
+  /// stands there as a value of open type, which the real code's expansion then gives its type.
+  static Deferred(ctx : Typer, m : IMacro) : PExpr
+  {
+    if (ctx.Manager.StateInference > 0 && UserMacro(m)) <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]> else null
+  }
+
   internal static expand_one_macro (ctx : Typer, expr : PExpr) : PExpr * option [IMacro * PExpr] {
     try
     {
@@ -108,6 +124,7 @@ public class MacroRegistry
           match (Util.QidOfExpr (name)) {
             | Some ((namepath, name)) =>
               match (name.GetEnv (ctx.Env).LookupMacro (namepath)) {
+                | Some (x) when Deferred(ctx, x) != null => (Deferred(ctx, x), Some((x, expr)))
                 | Some (x) =>
                   def expanded =
                     try {
@@ -125,6 +142,7 @@ public class MacroRegistry
         | PExpr.MacroCall (name, namespc, parms) =>
           match (namespc.Value)
           {
+            | NamespaceTree.TypeInfoCache.MacroCall(m) when Deferred(ctx, m) != null => (Deferred(ctx, m), Some((m, expr)))
             | NamespaceTree.TypeInfoCache.MacroCall(m) =>
               def expanded = 
                 try

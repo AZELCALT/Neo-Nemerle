@@ -247,6 +247,8 @@ using Nemerle.Compiler.XmlDump;
     /// from the framework is checked against them (an error at the code that uses what the target lacks).
     public mutable TargetContracts : Nemerle.Platform.ClrTargetContracts;
     public TargetReported : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+    /// Above 0 while the quiet copy of a file's top-level code is typed to infer its values' types.
+    public mutable StateInference : int;
     /// For the thread check: what each typed method touches (file modules) and calls (methods of this compilation).
     public MethodFiles : System.Collections.Generic.Dictionary[IMethod, System.Collections.Generic.HashSet[string]] = System.Collections.Generic.Dictionary();
     public MethodCallees : System.Collections.Generic.Dictionary[IMethod, System.Collections.Generic.HashSet[IMethod]] = System.Collections.Generic.Dictionary();

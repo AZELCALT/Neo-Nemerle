@@ -670,13 +670,14 @@ using Nemerle.Compiler.Utility;
         foreach (key in keys) _ = Manager.StateTypes.Remove(key);
         def quietErrors = Manager.QuietErrors;
         Manager.QuietMessages++;
+        Manager.StateInference++;
         try
         {
           def typer = Manager.ComponentsFactory.CreateTyper(inference);
           typer.StopAfterPhase = 1;
           try { typer.RunFullTyping() } catch { | _ => Manager.QuietErrors++ }
         }
-        finally { Manager.QuietMessages--; }
+        finally { Manager.QuietMessages--; Manager.StateInference--; }
         inference.SkipEmiting = true;
         when (Manager.QuietErrors == quietErrors)
         {

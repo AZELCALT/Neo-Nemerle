@@ -355,6 +355,19 @@ for name, text, expected in cases + [(n + '-debug', t, e) for (n, t, e) in cases
 source('init/main.n', 'def y = 5;\ndef y = y.ToString();\nBad() : int { y + 1 }\nSystem.Console.WriteLine(Bad());')
 run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-bad.exe'), '-no-color', *modern_references],
     False, 'changes type here (from int to string), but line 3 uses it as int')
+# a user's macro in the top-level code expands once (the inference pass that types a quiet copy of the code leaves
+# it for the real code): a macro that counts its expansions sees one
+counter = work / 'counter'; counter.mkdir()
+(counter / 'counting.n').write_text('using Nemerle.Compiler;\nmodule Counter { public mutable Count : int; }\n'
+                                     'macro Expansions() { Counter.Count++; <[ $(Counter.Count : int) ]> }\n')
+run([runtime, compiler, counter / 'counting.n', '-source-root:' + str(counter), '-target:library', '-out:' + str(work / 'counting.dll'),
+     '-r:' + str(compiler.with_name('Nemerle.Compiler.dll')), '-no-color', *modern_references])
+source('init/main.n', 'using counting;\ndef n = Expansions();\nSystem.Console.WriteLine(n);')
+run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-macro.exe'), '-no-color',
+     '-r:' + str(work / 'counting.dll'), *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'state-macro.runtimeconfig.json')
+got = run([runtime, work / 'state-macro.exe']).stdout.split()
+if got != ['1']: raise RuntimeError('a user macro in the top-level code expanded %s times' % got)
 print('PASS: top-level values: lambdas read the storage, later uses refine the type, rebinding keeps or retypes the storage', flush=True)
 # an imported file's top-level code runs in its type initializer: starting work there is warned, and work that uses
 # the file while the top-level code waits for it is a deadlock, an error (the calls are the resolved ones)
