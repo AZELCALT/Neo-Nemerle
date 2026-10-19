@@ -460,8 +460,23 @@ internal sealed class StateMacro : IMacro
       foreach (f is FieldBuilder in ctx.CurrentType.LookupMember(short)) found = f;
       found
     }
+    // a read of a top-level value by its name is the value unless a local of that name is in scope there: a
+    // parameter, a lambda's parameter or a local of the function (the local of the top-level binding itself, in the
+    // top-level code, is the value)
+    def shadowing(key : string) : PExpr
+    {
+      def short = key.Substring(key.LastIndexOf('.') + 1);
+      def method = ctx.CurrentMethodBuilder;
+      def topLevelCode = method != null && (method.Name == "Main" || method.Name == ".cctor");
+      def header = if (method != null) method.GetHeader() else null;
+      mutable found = null;
+      foreach ((n, v) in ctx.CurrentLocalContext.GetLocals())
+        when (found == null && n.Id == short && !(topLevelCode && v.DefinedIn : object == header)) found = v;
+      if (found == null) null else <[ $(TExpr.LocalRef(found.Type, found) : typed) ]>
+    }
     match (name, exprs)
     {
+      | ("__state_read", PExpr.Literal(Literal.String(key)) :: _) when shadowing(key) != null => shadowing(key)
       | ("__state_hole", []) =>
         <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]>
       | ("__state_type", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), value]) =>
