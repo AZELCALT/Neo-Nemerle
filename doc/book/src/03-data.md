@@ -106,7 +106,8 @@ WriteLine($"$low to $high")
 1 to 9
 ```
 
-The type of a tuple is written with `*`: `int * string`. A function can return several values that way.
+The type of a tuple is written with `*`: `int * string`. A function can return several values that way. At the top
+of a file, `def (number, word) = ...` declares `number` and `word` as two values of the file (chapter 7).
 
 ## Arrays
 

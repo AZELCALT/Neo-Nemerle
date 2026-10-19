@@ -6,8 +6,9 @@ unless it says so. These edges will be closed, which can change what happens the
 
 ## Top-level code and state
 
-- **Tuple destructuring stays local.** `def (a, b) = ...` at the top level binds locals, not state; `def pair = (a, b)`
-  is the form functions can reach. A nicer way to reference tuple parts is not designed yet.
+- **Other patterns at the top level stay local.** `def (a, b) = ...` declares `a` and `b` as the file's state, but
+  a pattern that can fail to match (`def [x, y] = list`, a variant pattern) binds locals of the top-level code, which
+  functions cannot see; use `match` there, or a tuple.
 
 ## Scopes and spaces
 

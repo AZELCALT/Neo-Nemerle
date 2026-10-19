@@ -137,6 +137,24 @@ config
 3
 ```
 
+A tuple on the left declares several values at once: `def (w, h) = (800, 600);` is `def w = 800; def h = 600;`, two
+values of the file, each its own state. The tuple itself has no name, so there is nothing else to keep. With a value
+that is not written out as a tuple (`def (w, h) = Size();`), the value is computed once and taken apart. `mutable (x, y)`
+declares both mutable, and `public def (a, b)` both public:
+
+```nemerle
+def (w, h) = (800, 600);
+mutable (x, y) = (0, 0);
+Area() : int { w * h }
+Move() : void { x += 10; y += 5 }
+Move();
+System.Console.WriteLine($"$(Area()) at $x, $y")
+```
+
+```text
+480000 at 10, 5
+```
+
 A top-level value's type comes from the whole top-level code: `mutable items = [];` is a list whose element type a
 later `items ::= 1` gives. A function, a lambda or a local function reads the value's storage, so it may be written
 above the value's binding and sees whatever the storage holds when it runs. Binding a name again writes the same

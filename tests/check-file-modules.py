@@ -328,6 +328,32 @@ run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.
 run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.n', '-main:other', '-source-root:' + str(init), '-out:' + str(work / 'init-other.exe'),
      '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-other.runtimeconfig.json')
+
+# `def (w, h) = ...` at the top level declares w and h (the tuple has no name, only its parts): each is the file's
+# state, as `def w`, so functions read it; `mutable (x, y)` makes both mutable; nested parts, types and `_` work; a
+# value that is not written out as a tuple is taken apart once; `public def (a, b)` makes both public
+tuples = work / 'tuples'
+source('tuples/sizes.n', 'public def (pw, ph) = (3, 4);')
+source('tuples/main.n', '''using sizes;
+mutable calls = 0;
+def (w, h) = (800, 600);
+mutable (x, y) = Size();
+def (_, (a, b : string)) = (0, (1, "two"));
+Size() : int * int { calls++; (2, 5) }
+Area() : int { w * h }
+Move() : void { x += 10; y += 1 }
+Move();
+System.Console.WriteLine($"$(Area()) $x $y $a $b $calls $(sizes.pw + sizes.ph)");''')
+run([runtime, compiler, tuples / 'main.n', tuples / 'sizes.n', '-source-root:' + str(tuples), '-out:' + str(work / 'tuples.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'tuples.runtimeconfig.json')
+ran = run([runtime, work / 'tuples.exe'])
+if ran.stdout.split() != ['480000', '12', '6', '1', 'two', '1', '7']:
+    raise RuntimeError('top-level tuple declarations: ' + ran.stdout)
+source('tuples/main.n', 'def (w, h) = (1, 2);\nRun() : int { w + h }\nw = 3;')
+run([runtime, compiler, tuples / 'main.n', '-source-root:' + str(tuples), '-out:' + str(work / 'tuples-readonly.exe'), '-no-color',
+     *modern_references], False, "symbol `main.w', which is read-only")
+print('PASS: a top-level `def (w, h)` declares w and h as the file\'s state (mutable, nested, typed, public, taken apart once)', flush=True)
+
 if run([runtime, work / 'init-other.exe']).stdout.split() != ['other']: raise RuntimeError('-main:other')
 # a variable declared without a value and given one before it is read is fine
 source('init/main.n', 'mutable x;\nx = 10;\nSystem.Console.WriteLine(x);')

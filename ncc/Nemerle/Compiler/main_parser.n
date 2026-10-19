@@ -590,6 +590,75 @@ using Nemerle.Compiler.Utility;
           }
           topstream = topstream.Next :> Token.LooseGroup;
         }
+        // `def (w, h) = (800, 600)` at the top level declares w and h: the tuple has no name, only its parts do, so
+        // it is one declaration per name (as `def w = 800; def h = 600`), each the file's state. A value that is not
+        // a tuple written out (`def (w, h) = Size()`) is taken apart once, into locals the declarations read.
+        mutable partCount = 0;
+        def declarations(declaration : PExpr, isPublic : bool, into : SCG.List[PExpr * bool]) : void
+        {
+          def names(pattern : PExpr, acc : SCG.HashSet[string]) : void
+          {
+            match (pattern)
+            {
+              | PExpr.Ref(n) => _ = acc.Add(n.Id)
+              | PExpr.TypeEnforcement(p, _) => names(p, acc)
+              | PExpr.Tuple(parts) => foreach (p in parts) names(p, acc)
+              | _ => ()
+            }
+          }
+          def mentions(e : PExpr, bound : SCG.HashSet[string]) : bool
+          {
+            mutable found = false;
+            _ = Macros.TraverseExpr(None(), e, false, (_, _, node) => { match (node) { | PExpr.Ref(n) when bound.Contains(n.Id) => found = true | _ => () } node });
+            found
+          }
+          def tuple(pattern : PExpr) : bool
+          {
+            match (pattern) { | PExpr.Tuple(parts) => parts.ForAll(p => p is PExpr.Ref || p is PExpr.Wildcard || p is PExpr.Tuple
+                                                                      || p is PExpr.TypeEnforcement(PExpr.Ref, _)) | _ => false }
+          }
+          def split(pattern : PExpr, value : PExpr, isMutable : bool) : void
+          {
+            def make(part : PExpr, v : PExpr) : PExpr
+            {
+              def made = if (isMutable) PExpr.DefMutable(declaration.Location, part, v) else PExpr.Define(declaration.Location, part, v);
+              made
+            }
+            match (pattern)
+            {
+              | PExpr.Tuple(parts) when tuple(pattern) =>
+                def bound = SCG.HashSet();
+                names(pattern, bound);
+                match (value)
+                {
+                  // the parts written out, none naming what this declares: each name gets its own part
+                  | PExpr.Tuple(values) when values.Length == parts.Length && !values.Exists(v => mentions(v, bound)) =>
+                    foreach ((part, v) in parts.Zip(values)) split(part, v, isMutable)
+                  | _ =>
+                    // taken apart once into locals, then each name declared from its local
+                    def locals = parts.Map(part =>
+                      {
+                        partCount++;
+                        if (part is PExpr.Wildcard) part else PExpr.Ref(part.Location, Name("_N_part_" + partCount.ToString()))
+                      });
+                    into.Add((PExpr.Define(declaration.Location, PExpr.Tuple(pattern.Location, locals), value), false));
+                    foreach ((part, local) in parts.Zip(locals)) unless (local is PExpr.Wildcard) split(part, local, isMutable)
+                }
+              | PExpr.Wildcard => into.Add((PExpr.Define(declaration.Location, pattern, value), false))   // `def _ = part`: evaluated, unused
+              | _ => into.Add((make(pattern, value), isPublic))
+            }
+          }
+          match (declaration)
+          {
+            | PExpr.Define(pattern, value) when tuple(pattern) => split(pattern, value, false)
+            | PExpr.DefMutable(pattern, value) when value != null && tuple(pattern) => split(pattern, value, true)
+            | _ => into.Add((declaration, isPublic))
+          }
+        }
+        def spread = SCG.List();
+        foreach ((expression, isPublic) in collected) declarations(expression, isPublic, spread);
+        collected.Clear();
+        collected.AddRange(spread);
         // a name bound once at the top level is the module's state; one bound again keeps classic shadowing, a local
         foreach ((expression, _) in collected)
           match (expression)
