@@ -2,10 +2,14 @@
 
 # Nemerle (revived)
 
+**Nemerle, revived and extended: a complete language for the whole .NET ecosystem, so you don't have to write C#.**
+
 Nemerle is a statically typed language for .NET. It combines functional, object-oriented and imperative programming,
 infers types, and has a macro system strong enough to grow the language itself. It was well ahead of its time when the
-University of Wroclaw created it in 2003. This repository brings it back on **.NET 10**, with its compiler, a language
-server, scripting and grammars built into the language.
+University of Wroclaw created it in 2003. This repository brings it back on **.NET 10** and carries its ideas further:
+grammars and spaces built into the language, scripting a host can extend, projects and NuGet packages, output for
+older .NET, .NET Framework, Mono and the mobile and desktop platforms, and an editor and debugger of its own. Every
+.NET library is yours to use, and what you write in Nemerle is an ordinary .NET library to everyone else.
 
 ```nemerle
 using System.Console;
