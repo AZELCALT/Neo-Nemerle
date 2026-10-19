@@ -116,6 +116,7 @@ using Nemerle.Compiler.Utility;
       {
         | FunBody.Typed(body) =>
           debugBody = body;
+          _block_depth = 0;
           
           _is_ctor   = is_ctor(_method_builder);
           _is_lambda = _method_builder.DeclaringType.is_lambda;
@@ -1734,6 +1735,10 @@ using Nemerle.Compiler.Utility;
       }
     }
     
+    // How deep in blocks the emitter is: the block that closes at depth 0 is the method's body, whose closing
+    // sequence point is the method's last step.
+    mutable _block_depth : int;
+
     private emit_debug_info(di : TExpr.DebugInfo) : void
     {
       if (_debug_doc == null)
@@ -1755,6 +1760,7 @@ using Nemerle.Compiler.Utility;
         {
           | Sequence =>
             emit_debug (expr_doc, l.Line, l.Column, l.Line,    l.Column + 1);
+            _block_depth++;
             _ilg.BeginScope ();
 
           | _ => emit_debug (expr_doc, l.Line, l.Column, l.EndLine, l.EndColumn);
@@ -1763,8 +1769,19 @@ using Nemerle.Compiler.Utility;
         unless (di.expr == null)
           emit (di.expr);
 
+        def outermost = match (di.pexpr) { | Sequence => _block_depth--; _block_depth == 0 | _ => false };
         match (di.pexpr)
         {
+          | Sequence when outermost && di.expr != null && !di.expr.Throws =>
+            // the method's closing brace: the runtime stops only where the evaluation stack is empty, so the
+            // result waits in a local there (as C# does), and a nop gives the step an instruction of its own
+            def result = if (is_void(di.expr.Type)) null else _ilg.DeclareLocal(di.expr.GetSystemType());
+            when (result != null) _ilg.Emit(OpCodes.Stloc, result);
+            emit_debug (expr_doc, l.EndLine, l.EndColumn - 1, l.EndLine, l.EndColumn);
+            _ilg.Emit(OpCodes.Nop);
+            when (result != null) _ilg.Emit(OpCodes.Ldloc, result);
+            _ilg.EndScope ();
+
           | Sequence =>
             emit_debug (expr_doc, l.EndLine, l.EndColumn - 1, l.EndLine, l.EndColumn);
             _ilg.EndScope ();

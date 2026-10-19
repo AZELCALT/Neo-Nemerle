@@ -124,7 +124,12 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
         return found
     local = values(frames[0])
     check(local.get('n') == '1' and local.get('result') == '1', 'the parameter and the local: %s' % local)
-    print('PASS: a breakpoint in a function: its line, the call stack with lines, parameters and locals')
+    # a step past the function's last line stops at its closing brace (the result is kept out of the stack there)
+    request('next', {'threadId': thread})
+    stepped = wait(lambda m: m.get('event') == 'stopped', 'the step to the closing brace')
+    frame = request('stackTrace', {'threadId': stepped['body']['threadId']})['stackFrames'][0]
+    check(frame['line'] == 5 and 'Square' in frame['name'], 'a step past `result` lands on the closing brace (main.n:5): %s' % frame)
+    print('PASS: a breakpoint in a function: its line, the call stack with lines, parameters and locals; stepping to its end')
     request('setBreakpoints', {'source': {'path': str(prog / 'main.n')}, 'breakpoints': [{'line': 9}]})
     request('continue', {'threadId': thread})
     stopped = wait(lambda m: m.get('event') == 'stopped', 'the top-level breakpoint')

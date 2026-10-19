@@ -51,8 +51,6 @@ unless it says so.
 
 ## Tooling
 
-- **Stepping out of a function shows its first line.** The end of a function body is placed at its opening line
-  (`{`), where C# places it at the closing one; a step past `result` lands there before returning.
 - **Debugging needs netcoredbg installed.** The extension finds it on `PATH` (or `nemerle.debugger.path`) and
   points to its releases otherwise; the installers do not fetch it.
 
