@@ -94,7 +94,8 @@ Open edges of the current design are listed in [doc/GAPS.md](doc/GAPS.md).
   assemblies, other projects and NuGet packages, compiler options) is a project; its sources are every `.n` file
   under it. `ncc init`, `ncc build`, `ncc run` and `ncc clean` make, build (incrementally, used projects first) and
   run it, and the language server reads it. Upstream's MSBuild `.nproj` files are read too (sources, references,
-  project and package references, defines), into the same model.
+  project and package references, defines), into the same model. `ncc pack` writes a library's NuGet package
+  (and `Neo.Nemerle.Runtime`, the package of `Nemerle.dll` it depends on), which C# and Nemerle projects both use.
 - **Build:** `./bootstrap` builds everything from the pinned compiler in `boot/coreclr` and runs every test suite.
   `--update-boot` refreshes the pinned compiler once everything passes.
 

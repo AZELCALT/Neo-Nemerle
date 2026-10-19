@@ -91,6 +91,49 @@ try:
     check('greet: built' in out and 'Hi, engine!' in out, 'an edit in the used project rebuilds both: ' + out)
     print('PASS: project, assembly and package references, compiler options')
 
+    # 2b. `ncc pack`: a NuGet package of a library, with the runtime package it depends on; used by a Nemerle project
+    # from a folder feed, and by C# through the .NET SDK's own NuGet client
+    run('init', 'shapes', '--lib')
+    shapes = work / 'shapes'
+    (shapes / 'shapes.n').write_text('public Area(w : int, h : int) : int { w * h }\npublic Names() : list[string] { ["square", "strip"] }\n')
+    meta = (shapes / 'shapes.nproj').read_text().replace('# authors = "you"', 'authors = "tester"').replace('# license = "MIT"', 'license = "MIT"')
+    (shapes / 'shapes.nproj').write_text(meta)
+    out = run('pack', shapes)
+    check('packed' in out and (shapes / 'out/shapes.0.1.0.nupkg').exists(), 'pack writes the package: ' + out)
+    runtime = list((shapes / 'out').glob('Neo.Nemerle.Runtime.*.nupkg'))
+    check(len(runtime) == 1, 'and the runtime package')
+    with zipfile.ZipFile(shapes / 'out/shapes.0.1.0.nupkg') as z:
+        spec = z.read('shapes.nuspec').decode()
+        check('lib/net10.0/shapes.dll' in z.namelist() and '<authors>tester</authors>' in spec and 'Neo.Nemerle.Runtime' in spec
+              and '<license type="expression">MIT</license>' in spec, 'the package layout and nuspec: ' + spec)
+    with zipfile.ZipFile(runtime[0]) as z:
+        check('lib/net10.0/Nemerle.dll' in z.namelist(), 'the runtime package carries Nemerle.dll')
+    check('packs libraries' in run('pack', hello, ok=False), 'a program is not packed')
+    feed2 = work / 'feed2'; feed2.mkdir()
+    for f in (shapes / 'out').glob('*.nupkg'): shutil.copy2(f, feed2 / f.name)
+    run('init', 'user')
+    user = work / 'user'
+    (user / 'user.nproj').write_text('name = "user"\n[references]\npackages = { "shapes" = "0.1.0" }\nrepositories = ["../feed2"]\n')
+    (user / 'main.n').write_text('using shapes;\nSystem.Console.WriteLine(Area(6, 7));\n')
+    check('42' in run('run', user, '--offline'), 'a Nemerle project uses the package')
+    if shutil.which('dotnet') and subprocess.run(['dotnet', '--list-sdks'], capture_output=True, text=True).stdout.strip():
+        cs = work / 'cs'; cs.mkdir()
+        (cs / 'cs.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
+                                      '<RestorePackagesPath>../nugetcache</RestorePackagesPath></PropertyGroup>'
+                                      '<ItemGroup><PackageReference Include="shapes" Version="0.1.0" /></ItemGroup></Project>')
+        (cs / 'Program.cs').write_text('System.Console.WriteLine(shapes.Area(6, 7));\nSystem.Console.WriteLine(shapes.Names());\n')
+        (cs / 'nuget.config').write_text('<configuration><packageSources><clear /><add key="local" value="../feed2" />'
+            '<add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources><packageSourceMapping>'
+            '<packageSource key="local"><package pattern="shapes" /><package pattern="Neo.Nemerle.Runtime" /></packageSource>'
+            '<packageSource key="nuget.org"><package pattern="*" /></packageSource></packageSourceMapping></configuration>')
+        r = subprocess.run(['dotnet', 'run'], cwd=cs, capture_output=True, text=True, env=dict(env, DOTNET_CLI_TELEMETRY_OPTOUT='1'))
+        if r.returncode != 0 and ('NU1301' in r.stdout or 'Unable to load the service index' in r.stdout):
+            print('SKIP: C# consumption (the SDK needs nuget.org, which is unreachable)')
+        else:
+            check(r.returncode == 0 and r.stdout.split()[-3:] == ['42', '[square,', 'strip]'], 'C# uses the package through the SDK: ' + r.stdout[-2000:])
+            print('PASS: C# uses the package through the .NET SDK (dotnet run)')
+    print('PASS: ncc pack (package, runtime package, metadata), used from a Nemerle project')
+
     # 3. a main file other than main.n, and program arguments
     run('init', 'tool')
     tool = work / 'tool'

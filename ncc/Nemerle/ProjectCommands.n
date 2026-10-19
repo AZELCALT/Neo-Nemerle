@@ -13,7 +13,7 @@ using Nemerle.Compiler.project;
 
 internal module Projects
 {
-  Commands : list[string] = ["init", "build", "run", "clean"];
+  Commands : list[string] = ["init", "build", "run", "pack", "clean"];
 
   /// A failed step, already reported.
   class Failed : Exception { public Code : int; public this(code : int) { Code = code } }
@@ -31,6 +31,7 @@ internal module Projects
   Usage : string = "usage: ncc init [folder] [--lib] [--name NAME]\n"
                  + "       ncc build [project] [compiler options] [--offline]\n"
                  + "       ncc run [project] [compiler options] [--offline] [-- program arguments]\n"
+                 + "       ncc pack [project] [compiler options] [--offline]\n"
                  + "       ncc clean [project]\n"
                  + "A project is a folder with one .nproj file; [project] is that folder or file (default: the current folder).";
 
@@ -67,6 +68,7 @@ internal module Projects
           {
             | "clean" => Clean(Project.Load(file))
             | "build" => _ = Build(file, before + options, offline, []); 0
+            | "pack" => Pack(file, before + options, offline)
             | _ =>
               def project = Project.Load(file);
               unless (project.IsProgram)
@@ -479,6 +481,98 @@ internal module Projects
     }
   }
 
+  // ---- pack ----
+
+  /// The id of the package that carries the runtime library (upstream's packages took Nemerle and Nemerle.Runtime).
+  RuntimePackage : string = "Neo.Nemerle.Runtime";
+
+  /// Builds a library project and writes its NuGet package (and the runtime package it depends on) into out/.
+  Pack(file : string, options : list[string], offline : bool) : int
+  {
+    def project = Project.Load(file);
+    when (project.IsProgram)
+      throw ProjectException(project.File, 1, 1, project.Name + " is a program; `ncc pack' packs libraries (kind = \"library\")");
+    def binary = Build(file, options, offline, []);
+    def toolchain = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
+    def runtimeVersion = AssemblyName.GetAssemblyName(Path.Combine(toolchain, "Nemerle.dll")).Version.ToString();
+    def target = TargetOf(project);
+    def tfm = if (target == null) Nemerle.Platform.ClrTarget.Host.Name else target.Name;
+    def escape(s : string) { Security.SecurityElement.Escape(s) }
+    // dependencies: the runtime, the NuGet packages, and the projects it uses (as their packages)
+    def dependencies = Text.StringBuilder();
+    def dependency(id : string, version : string) : void
+    {
+      _ = dependencies.Append("        <dependency id=\"").Append(escape(id)).Append("\" version=\"").Append(escape(version)).Append("\" exclude=\"Build,Analyzers\" />\n")
+    }
+    dependency(RuntimePackage, runtimeVersion);
+    foreach (p in project.Packages) dependency(p.Id, p.Version);
+    foreach (reference in project.Projects)
+    {
+      def used = Project.Load(Project.Find(Path.Combine(project.Root, reference)));
+      dependency(used.Name, used.Version)
+    }
+    def nuspec = Text.StringBuilder();
+    _ = nuspec.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\n  <metadata>\n");
+    _ = nuspec.Append("    <id>").Append(escape(project.Name)).Append("</id>\n");
+    _ = nuspec.Append("    <version>").Append(escape(project.Version)).Append("</version>\n");
+    _ = nuspec.Append("    <authors>").Append(escape(project.Authors ?? project.Name)).Append("</authors>\n");
+    _ = nuspec.Append("    <description>").Append(escape(project.Description ?? project.Name + ", a Nemerle library")).Append("</description>\n");
+    when (project.License != null) _ = nuspec.Append("    <license type=\"expression\">").Append(escape(project.License)).Append("</license>\n");
+    when (project.Repository != null) _ = nuspec.Append("    <repository type=\"git\" url=\"").Append(escape(project.Repository)).Append("\" />\n");
+    _ = nuspec.Append("    <tags>").Append(escape(string.Join(" ", ("nemerle" :: project.Tags.NToList()).ToArray()))).Append("</tags>\n");
+    _ = nuspec.Append("    <dependencies>\n      <group targetFramework=\"").Append(tfm).Append("\">\n").Append(dependencies.ToString()).Append("      </group>\n    </dependencies>\n");
+    _ = nuspec.Append("  </metadata>\n</package>\n");
+    def files = SCG.List.[string * string](); // (path in the package, file)
+    files.Add(("lib/" + tfm + "/" + Path.GetFileName(binary), binary));
+    def pdb = Path.ChangeExtension(binary, ".pdb");
+    when (File.Exists(pdb)) files.Add(("lib/" + tfm + "/" + Path.GetFileName(pdb), pdb));
+    def output = Path.Combine(project.OutputDirectory, project.Name + "." + project.Version + ".nupkg");
+    WritePackage(output, project.Name, nuspec.ToString(), files);
+    Console.WriteLine(project.Name + ": packed " + Path.GetRelativePath(Environment.CurrentDirectory, output));
+    // the runtime package, for every target the toolchain has a Nemerle.dll for
+    def runtime = Path.Combine(project.OutputDirectory, RuntimePackage + "." + runtimeVersion + ".nupkg");
+    unless (File.Exists(runtime))
+    {
+      def lib = SCG.List.[string * string]();
+      lib.Add(("lib/" + Nemerle.Platform.ClrTarget.Host.Name + "/Nemerle.dll", Path.Combine(toolchain, "Nemerle.dll")));
+      def standard = Path.Combine(toolchain, "netstandard2.0", "Nemerle.dll");
+      when (File.Exists(standard)) lib.Add(("lib/netstandard2.0/Nemerle.dll", standard));
+      def spec = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\">\n  <metadata>\n"
+               + "    <id>" + RuntimePackage + "</id>\n    <version>" + runtimeVersion + "</version>\n    <authors>Neo-Nemerle</authors>\n"
+               + "    <description>The Nemerle runtime library (Nemerle.dll), which libraries and programs written in Nemerle use.</description>\n"
+               + "    <license type=\"expression\">BSD-3-Clause</license>\n    <repository type=\"git\" url=\"https://github.com/AZELCALT/Neo-Nemerle\" />\n"
+               + "    <tags>nemerle runtime</tags>\n  </metadata>\n</package>\n";
+      WritePackage(runtime, RuntimePackage, spec, lib);
+      Console.WriteLine(project.Name + ": packed " + Path.GetRelativePath(Environment.CurrentDirectory, runtime) + " (the runtime it depends on)");
+    }
+    0
+  }
+
+  /// A .nupkg: an Open Packaging zip with the nuspec at its root.
+  WritePackage(path : string, id : string, nuspec : string, files : SCG.IEnumerable[string * string]) : void
+  {
+    when (File.Exists(path)) File.Delete(path);
+    using (archive = IO.Compression.ZipFile.Open(path, IO.Compression.ZipArchiveMode.Create))
+    {
+      def text(name : string, content : string) : void
+      {
+        def entry = archive.CreateEntry(name);
+        def bytes = Text.UTF8Encoding(false).GetBytes(content);
+        using (stream = entry.Open()) stream.Write(bytes, 0, bytes.Length);
+      }
+      text(id + ".nuspec", nuspec);
+      foreach ((name, file) in files)
+        _ = IO.Compression.ZipFileExtensions.CreateEntryFromFile(archive, file, name);
+      def extensions = files.Map(f => Path.GetExtension(f[0]).TrimStart('.')).Distinct().ToArray();
+      text("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+           + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\" />"
+           + "<Default Extension=\"nuspec\" ContentType=\"application/octet\" />"
+           + string.Concat(extensions.Map(e => "<Default Extension=\"" + e + "\" ContentType=\"application/octet\" />")) + "</Types>\n");
+      text("_rels/.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+           + "<Relationship Type=\"http://schemas.microsoft.com/packaging/2010/07/manifest\" Target=\"/" + id + ".nuspec\" Id=\"R1\" /></Relationships>\n");
+    }
+  }
+
   ReadList(path : string) : SCG.IEnumerable[string]
   {
     if (File.Exists(path)) File.ReadAllLines(path).Filter(l => l.Length > 0) else []
@@ -547,8 +641,10 @@ internal module Projects
           throw project.Error("references.packages", if (named != null) named.Id else null, "packages: " + message)
       };
     def list(field : string) : SCG.List[string] { result.GetType().GetField(field).GetValue(result) :> SCG.List[string] }
-    compile.AddRange(list("CompilationReferences"));
-    runtime.AddRange(list("RuntimeReferences"));
+    // the runtime library is the toolchain's own (a package of a Nemerle library depends on Neo.Nemerle.Runtime)
+    def own(path : string) { Path.GetFileName(path) == "Nemerle.dll" }
+    compile.AddRange(list("CompilationReferences").Filter(p => !own(p)));
+    runtime.AddRange(list("RuntimeReferences").Filter(p => !own(p)));
     runtime.AddRange(list("NativeReferences"));
   }
 }

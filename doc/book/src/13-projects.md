@@ -32,6 +32,7 @@ code is `Main`. A library gets a `NAME.n` instead, with one public function to s
 | `ncc init [folder] [--lib] [--name NAME]` | makes a project in the folder (default: the current one) |
 | `ncc build [project] [options]` | builds the project, after the projects it uses, into `out/` |
 | `ncc run [project] [options] [-- arguments]` | builds a program and runs it with the arguments after `--` |
+| `ncc pack [project] [options]` | builds a library and writes its NuGet package (see below) |
 | `ncc clean [project]` | removes `out/` |
 
 `[project]` is the project's folder or its `.nproj` file; the default is the current folder. Options given to
@@ -85,6 +86,35 @@ Settings the file does not know are errors, not ignored, and every error points 
 ```text
 hello.nproj:3:1: error: unknown setting `verison'; the settings are name, version, kind, main, output, target
 hello.nproj:7:3: error: `../app' is a program; a project uses libraries only
+```
+
+## Publishing a library
+
+`ncc pack` builds a library project and writes a NuGet package of it into `out/`:
+
+```sh
+ncc pack shapes
+```
+
+```text
+shapes: built shapes/out/shapes.dll (1 file, 1.1 s)
+shapes: packed shapes/out/shapes.0.1.0.nupkg
+shapes: packed shapes/out/Neo.Nemerle.Runtime.1.2.0.665.nupkg (the runtime it depends on)
+```
+
+The package holds the library under `lib/<target>/` (with its `.pdb` when it is built with `-debug+`), and depends
+on the packages and projects in `[references]` and on `Neo.Nemerle.Runtime`, the package of `Nemerle.dll`, which
+`ncc pack` writes next to it. Publish both (`dotnet nuget push`), or put them in a folder feed: C# projects use the
+library with an ordinary `PackageReference`, Nemerle projects with `packages`. The `[package]` section fills in the
+package's metadata:
+
+```toml
+[package]
+authors = "you"
+description = "what it does"
+license = "MIT"                  # an SPDX expression
+repository = "https://github.com/you/shapes"
+tags = ["geometry"]
 ```
 
 ## Targets

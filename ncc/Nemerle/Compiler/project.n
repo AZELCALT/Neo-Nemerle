@@ -59,6 +59,13 @@ public sealed class Project
   public Repositories : SCG.List[string] = SCG.List();
   /// Further compiler options, as on the command line (`-define:X`, `-debug+`, ...).
   public Options : SCG.List[string] = SCG.List();
+  /// The [package] section: what `ncc pack` writes into the package's metadata.
+  public mutable Authors : string;
+  public mutable Description : string;
+  /// An SPDX license expression (`GPL-2.0-or-later`, `MIT`).
+  public mutable License : string;
+  public mutable Repository : string;
+  public Tags : SCG.List[string] = SCG.List();
   internal places : SCG.Dictionary[string, int * int] = SCG.Dictionary();
   /// "toml" for the declarative file, "msbuild" for an MSBuild project as upstream Nemerle wrote them.
   public mutable Format : string = "toml";
@@ -200,8 +207,8 @@ public sealed class Project
       {
         | null => ()
         | s =>
-          unless (s == "references" || s == "compiler")
-            throw ProjectException(file, reader.Line, reader.Column, "unknown section [" + s + "]; the sections are [references] and [compiler]");
+          unless (s == "references" || s == "compiler" || s == "package")
+            throw ProjectException(file, reader.Line, reader.Column, "unknown section [" + s + "]; the sections are [references], [compiler] and [package]");
           section = s
       }
       when (reader.Key != null)
@@ -239,9 +246,15 @@ public sealed class Project
               | other => throw ProjectException(file, other.Line, other.Column, "packages is a table of exact versions, as { \"Newtonsoft.Json\" = \"13.0.3\" }")
             }
           | "compiler.options" => project.Options.AddRange(strings(value, "options"))
+          | "package.authors" => project.Authors = str(value, "authors")
+          | "package.description" => project.Description = str(value, "description")
+          | "package.license" => project.License = str(value, "license")
+          | "package.repository" => project.Repository = str(value, "repository")
+          | "package.tags" => project.Tags.AddRange(strings(value, "tags"))
           | _ =>
             def known = if (section == "") "name, version, kind, main, output, target"
                         else if (section == "references") "assemblies, projects, packages, repositories"
+                        else if (section == "package") "authors, description, license, repository, tags"
                         else "options";
             throw ProjectException(file, reader.Line, reader.Column, "unknown setting `" + full + "'; " + (if (section == "") "the settings are " else "[" + section + "] has ") + known)
         }
@@ -274,6 +287,13 @@ public sealed class Project
     _ = b.Append("# repositories = [\"https://my.feed/v3/index.json\"]\n\n");
     _ = b.Append("[compiler]\n");
     _ = b.Append("# options = [\"-debug+\", \"-define:TRACE\"]\n");
+    when (library)
+    {
+      _ = b.Append("\n[package]                     # what `ncc pack` writes into the .nupkg\n");
+      _ = b.Append("# authors = \"you\"\n");
+      _ = b.Append("# description = \"what it does\"\n");
+      _ = b.Append("# license = \"MIT\"\n");
+    }
     b.ToString()
   }
 }
