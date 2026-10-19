@@ -11,9 +11,10 @@ unless it says so. These edges will be closed, which can change what happens the
 
 ## Scopes and spaces
 
-- **Scope storage is per runtime copy of `Nemerle.dll`.** Scripts share the host's storage because the script loader
-  takes `Nemerle.dll` from the host. A plugin loaded by other means with its own copy of `Nemerle.dll` gets its own,
-  empty storage.
+- **A slot shared across copies of `Nemerle.dll` holds values, not types.** Scope storage is the process's, whichever
+  copy of `Nemerle.dll` a plugin was loaded with. A value of a type the plugin loaded itself (its own copy of a
+  library) is another type to the host, as anywhere in .NET; numbers, strings, framework types and the slots' own
+  boxes are shared as they are.
 ## Targets
 
 - **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time

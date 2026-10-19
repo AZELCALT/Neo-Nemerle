@@ -457,6 +457,49 @@ if a.stage == 'E6':
     print('PASS: P plugins run in the host application read its scope storage (a plugin with no space as well), use '
           'its grammar (space G [A] / as Name), dial into their own spaces and into the host\'s, call a dial member '
           'the host stored in a slot, and write the storage back to the host', flush=True)
+    # a plugin with its own copy of Nemerle.dll (an isolated load context) shares the process's scope storage
+    copies = w / 'copies'; (copies / 'plugin').mkdir(parents=True)
+    (copies / 'plugin/plug.n').write_text(
+        'public Run() : string\n{\n  def s = Nemerle.Scopes.Scope.Of("app.A");\n  def v = s.Read.[int]("value");\n'
+        '  s.Set("value", v + 29);\n  s.Read.[string]("box") + " " + v.ToString() + " " + typeof(Nemerle.Scopes.Scope).Assembly.Location\n}\n')
+    run([T / 'ncc', copies / 'plugin/plug.n', '-source-root:' + str(copies / 'plugin'), '-target:library',
+         '-out:' + str(copies / 'plugin/plug.dll'), '-no-color'])
+    shutil.copy2(T / 'Nemerle.dll', copies / 'plugin/Nemerle.dll')
+    (copies / 'host.n').write_text('''using System.IO;
+using System.Reflection;
+using System.Runtime.Loader;
+
+class PluginContext : AssemblyLoadContext
+{
+  dir : string;
+  public this(dir : string) { base("plugin", true); this.dir = dir }
+  protected override Load(name : AssemblyName) : Assembly
+  {
+    def path = Path.Combine(dir, name.Name + ".dll");
+    if (File.Exists(path)) LoadFromAssemblyPath(path) else null
+  }
+}
+
+def s = Nemerle.Scopes.Scope.Of("app.A");
+s.Set("value", 21);
+s.Set("box", Nemerle.Scopes.Content.Of("boxed"));
+def dir = Path.Combine(System.AppContext.BaseDirectory, "plugin");
+def plugin = PluginContext(dir).LoadFromAssemblyPath(Path.Combine(dir, "plug.dll"));
+mutable run : MethodInfo = null;
+foreach (t in plugin.GetTypes()) when (run == null) run = t.GetMethod("Run");
+def said = run.Invoke(null, null) :> string;
+def own = said.EndsWith(Path.Combine("plugin", "Nemerle.dll"));
+System.Console.WriteLine(said.Substring(0, said.LastIndexOf(' ')) + (if (own) " (its own Nemerle.dll)" else " (the host's Nemerle.dll)"));
+System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
+''')
+    run([T / 'ncc', copies / 'host.n', '-source-root:' + str(copies), '-out:' + str(copies / 'host.exe'), '-no-color'])
+    shutil.copy2(T / 'Nemerle.dll', copies / 'Nemerle.dll')
+    shutil.copy2(T / 'ncc.runtimeconfig.json', copies / 'host.runtimeconfig.json')
+    output = [l for l in run(['dotnet', copies / 'host.exe'], cwd=copies).stdout.split('\n') if l.strip()]
+    if output != ['boxed 21 (its own Nemerle.dll)', 'host 50']:
+        raise SystemExit('FAILED: a plugin with its own Nemerle.dll printed %r, expected it to share the scope storage' % output)
+    print('PASS: a plugin loaded with its own copy of Nemerle.dll shares the process\'s scope storage (reads 21 and a '
+          'Content, writes 50 back)', flush=True)
     plain = w / 'plainspace'
     plain.mkdir()
     for f in ('app.exe', 'res.dll'):

@@ -7,17 +7,34 @@ using System.Collections.Generic;
 /// appends a slot; any value fits, and the compiler checks the types where the slots are used.
 public sealed class Scope
 {
-  static stores : Dictionary[string, Scope] = Dictionary();
-  slots : Dictionary[string, object] = Dictionary();
+  /// The process's scopes, by name: kept with the process (an AppDomain slot) in types of the core library only, so
+  /// every copy of Nemerle.dll in the process (a plugin loaded with its own) finds the same storage.
+  static stores : Dictionary[string, Dictionary[string, object]] = Stores();
+  slots : Dictionary[string, object];
+  this(slots : Dictionary[string, object]) { this.slots = slots }
+
+  static Stores() : Dictionary[string, Dictionary[string, object]]
+  {
+    def domain = AppDomain.CurrentDomain;
+    lock (domain)
+      match (domain.GetData("Nemerle.Scopes"))
+      {
+        | shared is Dictionary[string, Dictionary[string, object]] => shared
+        | _ =>
+          def shared = Dictionary();
+          domain.SetData("Nemerle.Scopes", shared);
+          shared
+      }
+  }
 
   /// The storage of scope `name`.
   public static Of(name : string) : Scope
   {
     lock (stores)
     {
-      mutable scope;
-      unless (stores.TryGetValue(name, out scope)) { scope = Scope(); stores[name] = scope; }
-      scope
+      mutable slots;
+      unless (stores.TryGetValue(name, out slots)) { slots = Dictionary(); stores[name] = slots; }
+      Scope(slots)
     }
   }
 
@@ -51,6 +68,7 @@ public sealed class Scope
     {
       | null => Default(typeof(T)) :> T
       | content is Content => content.As.[T]()
+      | value when Content.Foreign(value) => Content.Of(value).As.[T]()
       | value => value :> T
     }
   }
@@ -75,7 +93,19 @@ public sealed class Content
   /// `value` as a content (a content stays itself).
   public static Of(value : object) : Content
   {
-    match (value) { | content is Content => content | _ => Content(value) }
+    match (value)
+    {
+      | content is Content => content
+      // the Content of another copy of Nemerle.dll (a plugin's own): its value, in this copy's Content
+      | other when Foreign(other) => Content(other.GetType().GetField("Value").GetValue(other))
+      | _ => Content(value)
+    }
+  }
+
+  /// A Content of another copy of Nemerle.dll in the process: the same type by name, not by identity.
+  internal static Foreign(value : object) : bool
+  {
+    value != null && !(value is Content) && value.GetType().FullName == typeof(Content).FullName
   }
 
   public Is[T]() : bool { typeof(T).IsInstanceOfType(Value) }
