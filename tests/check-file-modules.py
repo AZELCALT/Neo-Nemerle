@@ -343,9 +343,11 @@ cases = [
     ('splice-using', 'using System.Math;\nF() : string { $"$(Abs(-3))" }\nSystem.Console.WriteLine($"$(Abs(-4)) $(F())");', ['4', '3']),
     ('tuple', 'def pair = (1, 2);\nSum() : int { def (a, b) = pair; a + b }\nSystem.Console.WriteLine(Sum());', ['3']),
 ]
-for name, text, expected in cases:
+for name, text, expected in cases + [(n + '-debug', t, e) for (n, t, e) in cases]:
     source('init/main.n', text)
-    run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / ('state-' + name + '.exe')), '-no-color', *modern_references])
+    # each case also with debug information, which wraps the compiler's own writes
+    run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / ('state-' + name + '.exe')), '-no-color', *modern_references,
+         *(['-debug+'] if name.endswith('-debug') else [])])
     if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / ('state-' + name + '.runtimeconfig.json'))
     got = run([runtime, work / ('state-' + name + '.exe')]).stdout.split()
     if got != expected: raise RuntimeError('top-level state ' + name + ': ' + ' '.join(got))

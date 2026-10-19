@@ -976,7 +976,11 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             e.SkipWriteCheck && mem.Attributes %&& NemerleModifiers.CompilerMutable
 
         | TExpr.CacheRef (desc)    => IsLValue (desc.TExpr, need_ref)
-        | TExpr.DebugInfo(expr, _) => IsLValue (expr,       need_ref)
+        | TExpr.DebugInfo(expr, _) =>
+          // with debug information the compiler's own write (top-level state) wraps its target; the mark that
+          // allows that write belongs to the target inside
+          when (e.SkipWriteCheck) expr.SkipWriteCheck = true;
+          IsLValue (expr, need_ref)
 
         | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
         | TExpr.Call (TExpr.PropertyMember (_, p), _, _) when !need_ref => p.IsMutable
