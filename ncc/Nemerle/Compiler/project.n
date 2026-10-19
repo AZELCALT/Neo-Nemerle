@@ -68,6 +68,8 @@ public sealed class Project
   public Tags : SCG.List[string] = SCG.List();
   /// The package's icon: a PNG or JPEG (relative to the root).
   public mutable Icon : string;
+  /// What reading the project file noticed but did not refuse (shown by the commands).
+  public Warnings : SCG.List[string] = SCG.List();
   internal places : SCG.Dictionary[string, int * int] = SCG.Dictionary();
   /// "toml" for the declarative file, "msbuild" for an MSBuild project as upstream Nemerle wrote them.
   public mutable Format : string = "toml";
@@ -572,9 +574,18 @@ module MsBuild
         }
     }
     when (property("Version") != null) project.Version = property("Version");
-    // an SDK-style TargetFramework (net48, netstandard2.0, ...); the old TargetFrameworkVersion (v3.5) named
-    // frameworks this toolchain does not target, so it is left out
-    when (property("TargetFramework") != null) project.Target = property("TargetFramework");
+    // an SDK-style TargetFramework (net48, netstandard2.0, ...), else the old TargetFrameworkVersion (v4.8): from
+    // 4.6.2 on it is that .NET Framework; older ones (v3.5, v4.0) are not targets of this toolchain
+    if (property("TargetFramework") != null) project.Target = property("TargetFramework")
+    else when (property("TargetFrameworkVersion") != null)
+    {
+      def given = property("TargetFrameworkVersion");
+      mutable v;
+      if (Version.TryParse(given.TrimStart('v', 'V'), out v) && v.Major == 4 && v >= Version(4, 6, 2))
+        project.Target = "net" + v.Major.ToString() + v.Minor.ToString() + (if (v.Build > 0) v.Build.ToString() else "")
+      else
+        project.Warnings.Add(file + ": TargetFrameworkVersion " + given + " is older than .NET Framework 4.6.2, which this toolchain targets from; the project builds for the compiler's .NET instead");
+    }
     when (property("DefineConstants") != null)
       foreach (symbol in property("DefineConstants").Split(array[';', ','], StringSplitOptions.RemoveEmptyEntries))
         project.Options.Add("-define:" + symbol.Trim());

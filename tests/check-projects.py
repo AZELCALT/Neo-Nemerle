@@ -246,7 +246,17 @@ try:
         (bad / 'bad.nproj').write_text(text)
         out = run('build', bad, ok=False)
         check(place in out and message in out, 'MSBuild error %r at %s: %s' % (message, place, out))
-    print('PASS: MSBuild projects (upstream format): sources, references, defines, used by and using declarative projects')
+    # the old TargetFrameworkVersion: 4.6.2 and later is that target, older is noted and left out
+    fx = work / 'oldfx'; fx.mkdir(); (fx / 'main.n').write_text('System.Console.WriteLine("v3.5 project");\n')
+    (fx / 'OldFx.nproj').write_text('<Project><PropertyGroup><OutputType>Exe</OutputType><AssemblyName>OldFx</AssemblyName>'
+                                    '<TargetFrameworkVersion>v3.5</TargetFrameworkVersion></PropertyGroup>'
+                                    '<ItemGroup><Compile Include="main.n" /></ItemGroup></Project>')
+    out = run('run', fx)
+    check('v3.5 project' in out and 'older than .NET Framework 4.6.2' in out, 'TargetFrameworkVersion v3.5 is noted and left out: ' + out)
+    (fx / 'OldFx.nproj').write_text((fx / 'OldFx.nproj').read_text().replace('v3.5', 'v4.8'))
+    out = run('build', fx, '--offline', ok=False)  # (offline: no 113 MB download in a check; the message names the target)
+    check('net48 reference assemblies' in out, 'TargetFrameworkVersion v4.8 is the target net48: ' + out)
+    print('PASS: MSBuild projects (upstream format): sources, references, defines, used by and using declarative projects, framework versions')
     print('PASS: project file errors located (setting, value, section, list item, package), cycles, compile errors')
     print('PASS: %d project checks' % checks)
 finally:

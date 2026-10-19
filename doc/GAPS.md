@@ -35,8 +35,6 @@ unless it says so.
 - **Unused references to .NET 10 assemblies stay in the output.** After the output is moved to the target's
   assemblies, references nothing uses any more are kept (removing them corrupts lazily read signatures). They are
   never loaded, so the binary runs; a strict checker (Unity's) may still list them.
-- **Old MSBuild `TargetFrameworkVersion` is not read.** `v3.5`/`v4.0` name frameworks this toolchain does not
-  target; an SDK-style `TargetFramework` is read.
 - **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time
   by the platform's .NET workload; a Nemerle library goes into such an app project. Platform outputs are compiled
   here but not run (no device or Windows in `./bootstrap`).

@@ -156,8 +156,9 @@ Upstream Nemerle wrote its `.nproj` files as MSBuild XML. `ncc` reads those too:
 reader (XML starts with `<`), and both give the same project, so a declarative project can use an MSBuild one and
 the other way round. From the XML it takes what such a project says plainly:
 
-- `AssemblyName` (or `Name`), `OutputType` (`Exe`, `WinExe`, `Library`), `Version`, `TargetFramework` and
-  `DefineConstants`, from property groups without a condition;
+- `AssemblyName` (or `Name`), `OutputType` (`Exe`, `WinExe`, `Library`), `Version`, `TargetFramework` (or the old
+  `TargetFrameworkVersion`: `v4.6.2` and later is that .NET Framework, an older one is noted and the project builds for
+  the compiler's .NET) and `DefineConstants`, from property groups without a condition;
 - `Compile` items: the sources, which are then only the listed files;
 - `Reference` items: a `HintPath` that exists, a toolchain assembly (`Nemerle.Compiler`), or a .NET one (`System.*`);
 - `ProjectReference` items to other `.nproj` projects, and `PackageReference` items with a `Version`.

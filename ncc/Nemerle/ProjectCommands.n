@@ -171,6 +171,7 @@ internal module Projects
   Build(file : string, options : list[string], offline : bool, building : list[string]) : string
   {
     def project = Project.Load(file);
+    foreach (w in project.Warnings) Console.Error.WriteLine("warning: " + w);
     when (building.Contains(project.File))
       throw ProjectException(project.File, 1, 1, "the projects use each other in a cycle: " + string.Join(" -> ", (project.File :: building).Reverse().Map(Path.GetFileName).ToArray()));
     def compileReferences = SCG.List.[string]();
