@@ -1009,6 +1009,84 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
     /// For an unbound plain name: where a well-known static member of that name lives (`WriteLine' is
     /// System.Console.WriteLine), as a hint.
+    /// Whether this is the top-level code of a file module itself (its static constructor, or the start file's Main),
+    /// not a function or lambda in it.
+    InFileTopLevel() : bool
+    {
+      current_type != null && current_method_builder != null && current_fun : object == current_method_builder.Header : object
+      && (current_method_builder.Name == ".cctor" || current_method_builder.Name == "Main")
+      && Manager.TopLevelCallModules.Contains(current_type.FullName)
+    }
+
+    /// A macro's expansion at a file's top level, its declarations made the file's state: `def x = e' (or `mutable x
+    /// = e') becomes a field x of the file given e's value, a pattern's names each one (a name the file already has
+    /// keeps that member, and the declaration stays a local).
+    LiftDeclarations(e : PExpr) : PExpr
+    {
+      def field(name : Name, at : Location, isMutable : bool, ty : TypeVar) : void
+      {
+        def mods = AttributesAndModifiers(NemerleModifiers.Static | NemerleModifiers.Private
+                                          | (if (isMutable) NemerleModifiers.Mutable else NemerleModifiers.CompilerMutable), []);
+        _ = current_type.DefineAndReturn(ClassMember.Field(at, Splicable.Name(name), mods, PExpr.TypedType(at, ty.Fix()), null));
+        _ = Manager.FileModuleRegistry.State.Add(current_type.FullName + "." + name.Id);
+      }
+      // a name the user wrote (passed to the macro, colour 1), which the file does not have yet: the macro's own names
+      // (its temporaries, hygienic: another colour) stay locals of the expansion
+      def free(name : Name) : bool { name.color == 1 && current_type.LookupMember(name.Id).IsEmpty }
+      def lift(pattern : PExpr, value : PExpr, isMutable : bool, at : Location) : PExpr
+      {
+        match (pattern)
+        {
+          | PExpr.Ref(name) when free(name) =>
+            def typed = TypeExpr(value);
+            field(name, at, isMutable, typed.Type);
+            <[ _N_skip_write_check($(name.Id : usesite)) = $(typed : typed) ]>
+          | PExpr.TypeEnforcement(PExpr.Ref(name), ty) when free(name) =>
+            def typed = TypeExpr(<[ ($value : $ty) ]>);
+            field(name, at, isMutable, typed.Type);
+            <[ _N_skip_write_check($(name.Id : usesite)) = $(typed : typed) ]>
+          | PExpr.Ref | PExpr.TypeEnforcement(PExpr.Ref, _) | PExpr.Wildcard => if (isMutable) PExpr.DefMutable(at, pattern, value) else PExpr.Define(at, pattern, value)
+          | _ =>
+            // a pattern: matched once into fresh locals, its names then made state from them
+            def names = Nemerle.Compiler.main_parser.MainParser.PatternNames(pattern).Filter(r => free((r :> PExpr.Ref).name));
+            if (names.IsEmpty) PExpr.Define(at, pattern, value)
+            else
+            {
+              match (Nemerle.Compiler.main_parser.MainParser.DeclarePattern(at, pattern, value, null))
+              {
+                | PExpr.Define(PExpr.Ref as single, matched) => lift(single, matched, isMutable, at)
+                | PExpr.Define(PExpr.Tuple(parts), matched) =>
+                  def typed = TypeExpr(matched);
+                  def tuple = Macros.NewSymbol("parts");
+                  def assigns = SCG.List.[PExpr]();
+                  mutable i = 0;
+                  foreach (p in parts)
+                  {
+                    match (p)
+                    {
+                      | PExpr.Ref(name) when free(name) =>
+                        assigns.Add(<[ _N_skip_write_check($(name.Id : usesite)) = $(tuple : name)[$(i : int)] ]>);
+                        // the part's type: the tuple's, once it is typed below
+                        field(name, at, isMutable, match (typed.Type.Fix()) { | FixedType.Tuple(args) when i < args.Length => args.Nth(i) | _ => FreshTypeVar() })
+                      | _ => ()
+                    }
+                    i++
+                  }
+                  <[ { def $(tuple : name) = $(typed : typed); ..$(assigns.NToList()) } ]>
+                | other => other
+              }
+            }
+        }
+      }
+      match (e)
+      {
+        | PExpr.Sequence(items) => PExpr.Sequence(e.Location, items.Map(LiftDeclarations))
+        | PExpr.Define(pattern, value) => lift(pattern, value, false, e.Location)
+        | PExpr.DefMutable(pattern, value) when value != null => lift(pattern, value, true, e.Location)
+        | _ => e
+      }
+    }
+
     WhereNameIs(expr : PExpr) : string
     {
       match (expr)
@@ -1722,6 +1800,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
                 | (e, Some ((orig, im))) =>
                   log (MACRO_EXPANSIONS, e.loc, $ "after expansion: $e");
+                  // a macro called as a statement of a file's top-level code writes top-level code: what it declares
+                  // is the file's state, as if written there
+                  def e = if (Manager.TopLevelCalls.Contains(ManagerClass.CallKey(expr.Location)) && InFileTopLevel()) LiftDeclarations(e) else e;
 
                   def (pexpr, debugLocation) =
                     if (Manager.Options.EmitDebug && expr.Location.IsSourceAvailable)

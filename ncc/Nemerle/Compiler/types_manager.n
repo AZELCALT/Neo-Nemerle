@@ -1002,9 +1002,11 @@ using Nemerle.Compiler.Utility;
       when (!aux_phase) InImportOrder(InferModuleState);
       // a file module's top-level bindings infer from their initializers the same way: type its top-level code
       // (the static constructor, or the start file's Main) before the field declarations are emitted
-      when (!aux_phase && Manager.ModuleBindings.Count > 0)
+      // (and a file whose top-level code calls macros, whose declarations there become its fields)
+      when (!aux_phase && (Manager.ModuleBindings.Count > 0 || Manager.TopLevelCallModules.Count > 0))
         InImportOrder(ti =>
-          when ({ mutable has = false; foreach (k in Manager.ModuleBindings.Keys) when (k.StartsWith(ti.FullName + ".", System.StringComparison.Ordinal)) has = true; has })
+          when (Manager.TopLevelCallModules.Contains(ti.FullName)
+                || { mutable has = false; foreach (k in Manager.ModuleBindings.Keys) when (k.StartsWith(ti.FullName + ".", System.StringComparison.Ordinal)) has = true; has })
           {
             foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
               constructor.RunBodyTyper();

@@ -4,12 +4,6 @@ Open edges of the current design, each with what happens today. None of them let
 unless it says so. These edges will be closed, which can change what happens there: do not rely on them (see
 [HOW-IT-IS-BUILT.md](HOW-IT-IS-BUILT.md#what-is-supported)).
 
-## Top-level code and state
-
-- **Declarations a macro writes at the top level are not the file's state.** `counter(hits)` expanding to
-  `mutable hits = 0` declares a value of the top-level code itself: it works there and in its lambdas, but the file's
-  functions do not see it. State is decided when the file is read, before macros expand.
-
 ## Scopes and spaces
 
 - **A slot shared across copies of `Nemerle.dll` holds values, not types.** Scope storage is the process's, whichever

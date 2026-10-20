@@ -23,7 +23,7 @@ public static class InMemoryHost
 
         // hello.n is the file module hello; its top-level statements are hello.Main.
         compiler.GeneratedAssembly.GetType("hello").GetMethod("Main")
-            .Invoke(null, null);
+            .Invoke(null, new object[] { new string[0] });   // a program's Main takes its arguments
         return 0;
     }
 }

@@ -249,6 +249,14 @@ using Nemerle.Compiler.XmlDump;
     public TargetReported : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
     /// Above 0 while the quiet copy of a file's top-level code is typed to infer its values' types.
     public mutable StateInference : int;
+    /// The calls written as statements of a file's top-level code (where they are), and the files that have them: a
+    /// macro's expansion there is top-level code too, so what it declares is the file's state (Typer.LiftDeclarations),
+    /// and such a file's top-level code is typed before its fields are emitted.
+    public TopLevelCalls : SCG.HashSet[string] = SCG.HashSet();
+    /// The key of a location in TopLevelCalls.
+    public static CallKey(at : Location) : string
+    { at.FileIndex.ToString() + ":" + at.Line.ToString() + ":" + at.Column.ToString() + ":" + at.EndLine.ToString() + ":" + at.EndColumn.ToString() }
+    public TopLevelCallModules : SCG.HashSet[string] = SCG.HashSet();
     /// For the thread check: what each typed method touches (file modules) and calls (methods of this compilation).
     public MethodFiles : System.Collections.Generic.Dictionary[IMethod, System.Collections.Generic.HashSet[string]] = System.Collections.Generic.Dictionary();
     public MethodCallees : System.Collections.Generic.Dictionary[IMethod, System.Collections.Generic.HashSet[IMethod]] = System.Collections.Generic.Dictionary();

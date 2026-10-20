@@ -178,15 +178,24 @@ public class LibraryReferenceManager
 
     when (methods != null)
       foreach (method in methods.ToArray())
-        when (env.IsOpenNamespace(method.DeclaringType.NamespaceNode.Parent))
+        when (ExtensionOpen(method, env))
           yield method;
+  }
+
+  /// An extension method is usable where the namespace of its type is open (as in C#), or its type itself: `using
+  /// geo.shapes;' opens a file module, whose extension methods come with its functions (a file at the root is in the
+  /// root namespace, always open; one in a folder is not).
+  static ExtensionOpen(method : IMethod, env : GlobalEnv) : bool
+  {
+    def node = method.DeclaringType.NamespaceNode;
+    env.IsOpenNamespace(node.Parent) || env.IsOpenNamespace(node)
   }
 
   public GetExtensionMethodsForCompletion(pattern : string, env : GlobalEnv) : SCG.IEnumerable[IMethod]
   {
     foreach ((name, methods) in _extension_methods.KeyValuePairs)
       when (Completion.MatchName(name, pattern))
-        foreach (method when env.IsOpenNamespace(method.DeclaringType.NamespaceNode.Parent) in methods)
+        foreach (method when ExtensionOpen(method, env) in methods)
           yield method;
   }
 

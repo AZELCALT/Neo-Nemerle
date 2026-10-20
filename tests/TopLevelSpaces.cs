@@ -56,8 +56,9 @@ public static class TopLevelSpaces
     {
         foreach (var type in assembly.GetTypes().Where(t => t.Name == name))
         {
-            var main = type.GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, Type.EmptyTypes);
-            if (main != null) main.Invoke(null, null);
+            var main = type.GetMethod("Main", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            // (a program's Main takes its command-line arguments, unless the file binds `args' itself)
+            if (main != null) main.Invoke(null, main.GetParameters().Length == 0 ? null : new object[] { new string[0] });
             else System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(type.TypeHandle);
         }
     }

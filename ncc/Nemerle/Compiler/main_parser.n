@@ -730,6 +730,15 @@ using Nemerle.Compiler.Utility;
             | _ => into.Add((declaration, isPublic))
           }
         }
+        // the calls among the top-level statements that may be macros (a plain name, not one of the file's functions):
+        // a macro's expansion there declares the file's state (TopLevelCalls)
+        foreach ((expression, _) in collected)
+          match (expression)
+          {
+            | PExpr.Call(PExpr.Ref(callee), _) when !members.Exists(m => m.Name == callee.Id) =>
+              _ = lex.Manager.TopLevelCalls.Add(ManagerClass.CallKey(expression.Location)); _ = lex.Manager.TopLevelCallModules.Add(moduleName)
+            | _ => ()
+          }
         def spread = SCG.List();
         foreach ((expression, isPublic) in collected) declarations(expression, isPublic, spread);
         collected.Clear();
@@ -890,8 +899,13 @@ using Nemerle.Compiler.Utility;
           // the imported modules' top-level code runs first, at the `using`s
           def imports = <[ Nemerle.Compiler.__module_init($(moduleName : string), ..$(usings.NToList().Map(u => <[ $(u : string) ]>))) ]>;
           def body = imports :: statements.NToList();
+          // a program's top-level code has its command-line arguments, `args' (as a script has, and C#'s top-level
+          // statements), unless the file binds a value of that name itself
+          def withArgs = !bindings.ContainsKey("args") && !members.Exists(m => m.Name == "args");
           members.Add(Nemerle.Compiler.UtilMacros.locate(statementsLocation,
-            if (start) <[ decl: public Main() : void { ..$body } ]> else <[ decl: static this() { ..$body } ]>));
+            if (start && withArgs) <[ decl: public Main(args : array[string]) : void { _ = args; ..$body } ]>
+            else if (start) <[ decl: public Main() : void { ..$body } ]>
+            else <[ decl: static this() { ..$body } ]>));
           when (bindings.Count > 0)
             members.Add(Nemerle.Compiler.UtilMacros.locate(statementsLocation,
               <[ decl: private static _N_state_types() : void { ..$(inference()) } ]>));
@@ -4217,6 +4231,18 @@ using Nemerle.Compiler.Utility;
                   }
               }
 
+            // `top name': this file's top-level `name' (its state or function), past a closer one of that name. Two names
+            // side by side are no other expression, so `top' stays an ordinary name (`top.x', `top' alone)
+            | Token.Identifier("top") when env.Manager.FileModuleRegistry.IsModule(loc.FileIndex) && peek_token() is Token.Identifier =>
+              match (get_token())
+              {
+                | Token.Identifier(name) as at =>
+                  def parts = NString.Split(env.Manager.FileModuleRegistry.Name(loc.FileIndex), '.');
+                  def file = parts.Tail.FoldLeft(PExpr.Ref(loc, Name.Global(env.Manager, parts.Head)) : PExpr,
+                                                 (part, acc) => PExpr.Member(loc, acc, Splicable.Name(loc, Name(part, loc))));
+                  PExpr.Member(loc + at.Location, file, Splicable.Name(at.Location, MkName(name, at.Location)))
+                | _ => PExpr.Ref(loc, MkName("top", loc))
+              }
             | Token.Identifier(i) => PExpr.Ref(loc, MkName(i, loc))
             | Token.IdentifierToComplete(i) => PExpr.ToComplete(loc, MkName(i, loc))
             | Token.Keyword(k) =>

@@ -367,6 +367,51 @@ if run([runtime, work / 'order.exe']).stdout.strip() != '2':
     raise RuntimeError('values inferred in import order')
 print('PASS: top-level values are inferred in import order, not command-line order', flush=True)
 
+# a file in a folder is a module in a namespace: `using geo.shapes;' brings its extension methods, as a root file's
+source('ext/geo/shapes.n', 'public Doubled(this s : string) : string { s + s }\npublic module Inner { public Tripled(this s : string) : string { s + s + s } }')
+source('ext/main.n', 'using geo.shapes;\nusing geo.shapes.Inner;\nSystem.Console.WriteLine("ab".Doubled() + " " + "c".Tripled());')
+run([runtime, compiler, work / 'ext/main.n', work / 'ext/geo/shapes.n', '-source-root:' + str(work / 'ext'), '-out:' + str(work / 'ext.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'ext.runtimeconfig.json')
+if run([runtime, work / 'ext.exe']).stdout.strip() != 'abab ccc':
+    raise RuntimeError('extension methods of a module in a folder')
+print('PASS: extension methods of a module in a folder (and of a module in it) come with its using', flush=True)
+
+# a program's top-level code has its command-line arguments, as a script's has
+source('argv/main.n', 'System.Console.WriteLine(args.Length.ToString() + " " + string.Join("+", args));')
+run([runtime, compiler, work / 'argv/main.n', '-source-root:' + str(work / 'argv'), '-out:' + str(work / 'argv.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'argv.runtimeconfig.json')
+if run([runtime, work / 'argv.exe', 'one', 'two']).stdout.strip() != '2 one+two':
+    raise RuntimeError('args in a program')
+print('PASS: a program\'s top-level code has args', flush=True)
+
+# what a macro declares at the top level is the file's state, as if written there: the file's functions see it;
+# `top name' reaches the file's top level past a closer name, and `top' stays an ordinary name otherwise
+source('macros/gen.n', '''using Nemerle.Compiler;
+macro counter(name) { <[ mutable $name = 0 ]> }
+macro bump(name) { <[ $name += 1 ]> }
+macro pairOf(a, b, x, y) { <[ def ($a, $b) = ($x, $y) ]> }''')
+run([runtime, compiler, work / 'macros/gen.n', '-source-root:' + str(work / 'macros'), '-target:library',
+     '-out:' + str(work / 'gen.dll'), '-no-color', *modern_references, '-r:' + str(compiler.with_name('Nemerle.Compiler.dll'))])
+source('macros/main.n', '''using gen;
+counter(hits);
+bump(hits);
+bump(hits);
+pairOf(w, h, 3, 4);
+Hits() : int { hits }
+Area() : int { w * h }
+Shadowed(hits : int) : int { hits + top hits }
+Local() : int { def Area() { 1 }; Area() + top Area() }
+Named() : int { def top = 40; top + 2 }
+System.Console.WriteLine($"$(Hits()) $(Area()) $(Shadowed(10)) $(Local()) $(Named())");''')
+run([runtime, compiler, work / 'macros/main.n', '-source-root:' + str(work / 'macros'), '-out:' + str(work / 'macros.exe'), '-no-color',
+     *modern_references, '-r:' + str(work / 'gen.dll')])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'macros.runtimeconfig.json')
+shutil.copy2(work / 'gen.dll', work / 'macros' / 'gen.dll')
+ran = run([runtime, work / 'macros.exe'])
+if ran.stdout.split() != ['2', '12', '12', '13', '42']:
+    raise RuntimeError('macro declarations as state, top name: ' + ran.stdout)
+print('PASS: a macro\'s top-level declarations are the file\'s state; `top name` reaches the top level past a closer name', flush=True)
+
 # a def declares its names, so its pattern must always match: one that can fail (a list, a variant) is an error, in a
 # function and at the top level, unless the shape is written out or an `else` (which must leave) takes the rest
 for name, text in (('function', 'F(l : list[int]) : int { def [x, y] = l; x + y }\nSystem.Console.WriteLine(F([1, 2]));'),

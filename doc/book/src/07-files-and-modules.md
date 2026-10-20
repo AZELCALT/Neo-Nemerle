@@ -91,6 +91,9 @@ Combination
 Statements written at the top of a file, in source order, are the file's top-level code. Members may sit between
 them. In a statement, `mutable x = ...` is a top-level value; `mutable x : T` declares a field of the module.
 
+In the file a program starts at, the top-level code has the command-line arguments as `args` (an `array[string]`),
+as a script has: `ncc run -- one two` or `./hello one two` gives `args` the two words.
+
 The program starts at `main.n`: its top-level code is the program's `Main`, as in classic Nemerle and C#. A program
 with a single source file starts there whatever it is called, and `-main:file` names another file to start at.
 
@@ -155,6 +158,28 @@ System.Console.WriteLine($"$(Area()) at $x, $y")
 ```text
 480000 at 10, 5
 ```
+
+What a macro declares at the top level is the file's state too, as if written there: a macro `counter(name)` that
+expands to `mutable $name = 0` makes `counter(hits);` a value `hits` of the file, which its functions see. (The macro's
+own names, its temporaries, stay its own.)
+
+A name is found from the closest scope out: a function's parameter or local first, then the file's top level, then
+what the file imports. When a closer name hides a top-level one, `top name` reaches the top level:
+
+```nemerle
+mutable count = 1;
+Add(count : int) : int { count + top count }       // the parameter, then the file's count
+Name() : string { "file" }
+Show() : string { def Name() { "local" }; Name() + " and " + top Name() }
+System.Console.WriteLine($"$(Add(10)): $(Show())")
+```
+
+```text
+11: local and file
+```
+
+`top` is no keyword: `top name` is the only meaning of two names side by side, so a variable called `top` (`top.x`,
+`top + 1`) is as before.
 
 A top-level value's type comes from the whole top-level code: `mutable items = [];` is a list whose element type a
 later `items ::= 1` gives. A function, a lambda or a local function reads the value's storage, so it may be written
