@@ -133,6 +133,9 @@ using Nemerle.Compiler.Utility;
     mutable closure_fields : Hashtable [int, IField];
     // or just through parms
     mutable closure_parms : Hashtable [int, LocalValue];
+    /// In the MoveNext of a local function that is an iterator (an async lambda's): the fields of the enumerator that
+    /// keep the closures of the functions around it (its own closure is the enumerator, `this').
+    mutable enumerator_parents : Hashtable [int, IField];
 
     /* Given:
          static foo[A,B] () {
@@ -506,6 +509,13 @@ using Nemerle.Compiler.Utility;
       // locals are in the loop's object, not in this
       else if (current_method.is_in_closure_of != 0 && hd.ConvertToLoopWithClosure && GetClosure(hd.id) != null)
         ClosureValueRef(GetClosure(hd.id))
+      // (a local of an iterator around it is in that iterator's function's closure, its enumerator)
+      else if (current_method.is_in_closure_of != 0 && enumerator_parents != null
+               && enumerator_parents.Contains (if (hd.Name == "_N_yielding_function") hd.decl.DefinedIn.id else hd.id))
+      {
+        def field = enumerator_parents [if (hd.Name == "_N_yielding_function") hd.decl.DefinedIn.id else hd.id];
+        TExpr.FieldMember (field.GetMemType (), TExpr.This (local_function_type.GetMemType ()), field)
+      }
       else if (current_method.is_in_closure_of != 0)
       {
         //Message.Debug ($ "lookup $(hd.name) from $(current_method.name)");
@@ -1147,7 +1157,7 @@ using Nemerle.Compiler.Utility;
     }
 
 
-    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string]) : void
+    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string], parent_fields : Hashtable [int, IField]) : void
     {
       match (current_local_fun.body) {
         | FunBody.Typed (DefValIn (_, _, DefValIn (_, _, DefFunctionsIn ([fh], _)))) =>
@@ -1158,6 +1168,7 @@ using Nemerle.Compiler.Utility;
           meth.PrepareForEmission (fh, subst);
           def child = Typer3 (this, meth);
           child.current_subst = subst;
+          child.enumerator_parents = parent_fields;
           child.Run ();
 
           def meth = SingleMemberLookup (clo_type, "Dispose") :> MethodBuilder;
@@ -1165,6 +1176,7 @@ using Nemerle.Compiler.Utility;
           meth.GetHeader ().is_in_closure_of = fh.id;
           def child = Typer3 (this, meth);
           child.current_subst = subst;
+          child.enumerator_parents = parent_fields;
           child.Run ();
 
           unless (parm_field_names.IsEmpty) {
@@ -1299,8 +1311,27 @@ using Nemerle.Compiler.Utility;
         //clo_type.MarkWithSpecialName ();
         Manager.MarkAsUsed (clo_type);
 
+        // a local function that is an iterator (an async lambda's) keeps the closures around it, which it gets as
+        // parameters, in its enumerator: its MoveNext runs after the function has returned
+        mutable parent_fields = null;
+        mutable parent_stores = [];
+        when (uses_yield && closure_parms != null && !current_local_fun.used_closures.IsEmpty && current_local_fun.decl != null)
+        {
+          def table = Hashtable ();
+          def len = current_local_fun.used_closures.Length;
+          NList.Iter2 (current_local_fun.Parameters.FirstN (len), current_local_fun.used_closures, fun (parm, header) {
+            def name = Macros.NewSymbol (header.Name + "_closure");
+            def field = clo_type.DefineAndReturn (<[ decl: internal mutable $(name : name) : $(fix_type (parm.decl.Type) : typed); ]>) :> IField;
+            Manager.MarkAsAssigned (field);
+            table [header.id] = field;
+            when (is_enumerable) parm_field_names ::= name.Id;
+            parent_stores ::= TExpr.Assign (InternalType.Void, TExpr.FieldMember (field.GetMemType (), PlainRef (closure_val), field), PlainRef (parm.decl))
+          });
+          parent_fields = table;
+        }
+
         when (uses_yield)
-          SetEnumeratorBody (clo_type, subst, parm_field_names);
+          SetEnumeratorBody (clo_type, subst, parm_field_names, parent_fields);
 
 
         clo_type.Compile ();
@@ -1308,7 +1339,7 @@ using Nemerle.Compiler.Utility;
         if (kept_by_enumerator)
           [TExpr.Assign (InternalType.Void, ClosureValueRef (closure_val), ctor_call)]
         else
-          [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
+          parent_stores + [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
       }
     }
 

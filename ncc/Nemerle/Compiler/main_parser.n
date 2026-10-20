@@ -3592,6 +3592,26 @@ using Nemerle.Compiler.Utility;
               _op_context = OpContext.Postfix;
               loop ()
 
+            // `async fun (...) {...}', `async (x) => ...', `async x => ...', `async def f(...) {...}': a lambda or local
+            // function that is async (its body, parsed where `await' waits, is lowered by Nemerle.AsyncMacros)
+            | Token.Identifier ("async") when tok.Next is Token.Keyword ("fun") || tok.Next is Token.Keyword ("def")
+                                              || (tok.Next is Token.RoundGroup || tok.Next is Token.Identifier) && tok.Next.Next is Token.Operator ("=>") =>
+              shift ();
+              def wasAsync = in_async;
+              in_async = true;
+              def lambda = try { parse_expr (stop) } finally { in_async = wasAsync };
+              _expr_stack = PExpr.Call (loc + lambda.Location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.AsyncMacros.__async_lambda"), [lambda]) :: _expr_stack;
+              _op_context = OpContext.Postfix;
+              loop ()
+
+            // `await foreach (x in stream) ...' and `await using (x = ...) ...': over an IAsyncEnumerable, an IAsyncDisposable
+            | Token.Identifier ("await") when in_async && (tok.Next is Token.Keyword ("foreach") || tok.Next is Token.Keyword ("using")) =>
+              shift ();
+              def construct = parse_expr (stop);
+              _expr_stack = PExpr.Call (loc + construct.Location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.AsyncMacros.__await_each"), [construct]) :: _expr_stack;
+              _op_context = OpContext.Postfix;
+              loop ()
+
             | Token.Identifier ("await") when in_async && starts_operand (tok.Next) =>
               shift ();
               rpn_op_stack = (OperatorInfo.Await, loc) :: rpn_op_stack;

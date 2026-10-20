@@ -579,7 +579,7 @@ public class Typer2
       match (v.ValKind)
       {
         | LocalValue.Kind.Function(h, _) =>
-          when (h.usage == FunctionUsage.UsedJustOnce || (inside_yielding_function && top_fun.id == current_fun.id))
+          when (h.usage == FunctionUsage.UsedJustOnce || (inside_yielding_function && top_fun.id == current_fun.id) || current_fun.yield_type != null)
             if (h.TypeParameters is [] && !h.ConvertToLoopWithClosure)
             {
               current_fun.closure_vars += h.closure_vars;
@@ -595,7 +595,9 @@ public class Typer2
     {
       // FIXME: this is wrong (performance problems) if we're inside
       // some real local function in yielding function
-      mutable in_clo = inside_yielding_function && !v.NeverClosurise;
+      // (in an iterator, or in a local function that is one, an async lambda's: its locals live between its steps)
+      def in_local_iterator(h : TFunHeader) { h != null && (h.yield_type != null || h.GetParents().Exists(p => p.yield_type != null)) }
+      mutable in_clo = (inside_yielding_function || in_local_iterator(v.DefinedIn)) && !v.NeverClosurise;
 
       foreach (h in v.UsedIn)
       {
@@ -977,7 +979,7 @@ public class Typer2
                     // from the outer function
                     if (decl.DefinedIn.id == current_fun.id
                       && (! hd.uses_try_block || ctx %&& Context.AllowTryAtFuncLev)
-                      && !hd.cannot_inline)
+                      && !hd.cannot_inline && hd.yield_type == null)
                     {
                       //Message.Debug($ "mark $(hd.name) just once");
                       hd.usage = FunctionUsage.UsedJustOnce

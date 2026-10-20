@@ -39,8 +39,57 @@ IsPlain(e : PExpr) : bool
 /// expression, in the order they are evaluated: `f(a(), await b)' is `{ def x = a(); def y = await b; f(x, y) }'. An
 /// `await' then stands where its state machine can wait (a statement, a `def' value, a branch), and its value
 /// stays one value, evaluated once. A loop's condition is not moved out of its loop.
-Spill(body : PExpr) : PExpr
+Spill(body : PExpr, stream : PExpr = null) : PExpr
 {
+  // `await foreach' and `await using' are waits on MoveNextAsync and DisposeAsync, made here (before the rest)
+  def body = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+    {
+      match (node)
+      {
+        | PExpr.Call(PExpr.Member(_, name), [construct]) when after && name.ToString() == "__await_each" => AwaitEach(construct)
+        | _ => node
+      }
+    });
+  // an async lambda in the body is its own async code (lowered where it is typed): set aside meanwhile
+  def nested = System.Collections.Generic.Dictionary();
+  def body = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+    {
+      match (node)
+      {
+        | PExpr.Call(PExpr.Member(_, name), [_]) when after && name.ToString() == "__async_lambda" =>
+          def key = Macros.NewSymbol("async_lambda");
+          nested[key.Id] = node;
+          <[ $(key : name) ]>
+        | _ => node
+      }
+    });
+  // `yield x' produces an item of an async stream (one that returns IAsyncEnumerable[T]); any other async function
+  // returns one Task
+  def body = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+    {
+      match (node)
+      {
+        | PExpr.MacroCall(name, ns, [SyntaxElement.Expression(item)]) when after && name.Id == "yield" =>
+          if (stream == null)
+          {
+            Message.Error(node.Location, "`yield' in an async function that returns a task: an async function yields when it returns IAsyncEnumerable[T]");
+            node
+          }
+          else PExpr.MacroCall(node.Location, name, ns, [SyntaxElement.Expression(<[ ($stream).Produce($item) ]>)])
+        | _ => node
+      }
+    });
+  def restore(e : PExpr) : PExpr
+  {
+    Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+      {
+        match (node)
+        {
+          | PExpr.Ref(name) when after && nested.ContainsKey(name.Id) => restore(nested[name.Id])
+          | _ => node
+        }
+      })
+  }
   def part(e : PExpr, defs : System.Collections.Generic.List[PExpr]) : PExpr
   {
     match (e)
@@ -197,7 +246,7 @@ Spill(body : PExpr) : PExpr
         | _ => node
       }
     });
-  Macros.TraverseExpr(None(), body, false, visit)
+  restore(Macros.TraverseExpr(None(), body, false, visit))
 }
 
 /// Whether a catch case's handler has an `await'.
@@ -250,9 +299,12 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
     }
   }
   def returned = m.header.ReturnType;
+  // an async stream: what it yields
+  def item = match (returned) { | PExpr.Indexer(s, [t]) when taskName(s) == "IAsyncEnumerable" => t | _ => null };
   def (result, finish) : PExpr * (PExpr -> PExpr) =
     match (returned)
     {
+      | _ when item != null => (null, run => run)
       | PExpr.Indexer(task, [t]) when taskName(task) == "Task" => (t, run => run)
       | PExpr.Indexer(task, [t]) when taskName(task) == "ValueTask" => (t, run => <[ System.Threading.Tasks.ValueTask.[$t]($run) ]>)
       | _ when taskName(returned) == "Task" => (null, run => run)
@@ -267,6 +319,26 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
     when (p.Type is PExpr.ParmByRef || p.Type is PExpr.ParmOut)
       Message.Error(p.Location, "an async function takes no ref or out parameter: it returns before its body ends");
   def iterator = Macros.NewSymbol("async_" + m.Name);
+  if (item != null)
+  {
+    // an async stream: F returns an AsyncStream, each enumeration of which runs the iterator
+    def stream = Macros.NewSymbol("stream");
+    def body = Spill(m.Body, <[ $(stream : name) ]>);
+    def parameters = <[ parameter: $(stream : name) : Nemerle.Async.AsyncStream[$item] ]>
+                     :: m.header.Parameters.Map(p => <[ parameter: $(p.PName : name) : $(p.Type) ]>);
+    def arguments = <[ $(stream : name) ]> :: m.header.Parameters.Map(p => <[ $(p.PName : name) ]>);
+    def body = <[ when ($(stream : name) == null) yield null; $body; () ]>;
+    def ienumerable = <[ System.Collections.Generic.IEnumerable[object] ]>;
+    def method = if (m.Attributes %&& NemerleModifiers.Static)
+                   <[ decl: private static $(iterator : name) (..$parameters) : $ienumerable { $body } ]>
+                 else
+                   <[ decl: private $(iterator : name) (..$parameters) : $ienumerable { $body } ]>;
+    (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
+    tb.Define(method);
+    m.Body = Nemerle.Compiler.UtilMacros.locate(loc,
+      <[ Nemerle.Async.AsyncStream.[$item](fun ($(stream : name) : Nemerle.Async.AsyncStream[$item]) { $(iterator : name) (..$arguments) }) ]>);
+  }
+  else {
   m.Body = Spill(m.Body);
   // an async file's top-level code: its bindings' values are typed apart, where it assigns them
   when (m.Name == "_N_top_level")
@@ -300,6 +372,7 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
       <[ def $(driver : name) = Nemerle.Async.AsyncDriver.[object](); $(driver : name).RunAndForget($start) ]>
     else
       <[ def $(driver : name) = Nemerle.Async.AsyncDriver.[$t](); $(finish(<[ $(driver : name).Run($start) ]>)) ]>);
+  }
 }
 
 /// `await e': waits for e (anything with GetAwaiter(), as a Task) and is what it ends with.
@@ -310,7 +383,8 @@ macro __await(e)
   if (typer.CurrentMethodBuilder.Name == "_N_state_types" || typer.CurrentMethodBuilder.Name == "_N_state_flow")
     // a copy of top-level code that only gives the file's state its types (never run)
     <[ ($e).GetAwaiter().GetResult() ]>
-  else if (!typer.CurrentMethodBuilder.Name.StartsWith("_N_async_"))
+  else if (!typer.CurrentMethodBuilder.Name.StartsWith("_N_async_")
+           && !(typer.CurrentFunction :: typer.CurrentFunction.GetParents()).Exists(h => h.Name.StartsWith("_N_async_local_")))
   {
     Message.Error(e.Location, "`await' waits in an async function only");
     <[ ($e).GetAwaiter().GetResult() ]>
@@ -321,4 +395,144 @@ macro __await(e)
       unless (awaiter.IsCompleted) yield (awaiter : object);
       awaiter.GetResult()
     ]>
+}
+
+/// The kind of task an async local function's declared return type asks for: what its driver's Task becomes.
+Finished(returned : PExpr) : PExpr -> PExpr
+{
+  def last(ty : PExpr) { | PExpr.Ref(n) => n.Id | PExpr.Member(_, n) => n.ToString() | _ => null }
+  match (returned)
+  {
+    | PExpr.Indexer(task, [t]) when last(task) == "ValueTask" => run => <[ System.Threading.Tasks.ValueTask.[$t]($run) ]>
+    | _ when last(returned) == "ValueTask" => run => <[ System.Threading.Tasks.ValueTask($run) ]>
+    | PExpr.Void => Message.Error(returned.Location, "an async local function returns Task, Task[T], ValueTask or ValueTask[T]: its caller waits for that"); run => run
+    | _ => run => run
+  }
+}
+
+/// `async fun (...) {...}', `async (x) => ...', `async def f(...) {...}': the body becomes a local iterator (its state
+/// machine) run by an AsyncDriver; the lambda returns its Task (a Task[T] when the body has a value).
+macro __async_lambda(e)
+{
+  def lower(body : PExpr, finish : PExpr -> PExpr) : PExpr
+  {
+    def driver = Macros.NewSymbol("driver");
+    def iterator = Macros.NewSymbol("async_local");   // _N_async_local_<n>: typed as an iterator
+    def body = Spill(body);
+    Nemerle.Compiler.UtilMacros.locate(body.Location, <[
+      def $(driver : name) = Nemerle.Async.AsyncDriver();
+      def $(iterator : name)() : System.Collections.Generic.IEnumerable[object]
+      {
+        when ($(driver : name) == null) yield null;
+        Nemerle.AsyncMacros.__async_result($(driver : name), $body)
+      }
+      $(finish(<[ Nemerle.AsyncMacros.__async_task($(driver : name), $(driver : name).Run($(iterator : name)())) ]>))
+    ]>)
+  }
+  match (e)
+  {
+    | PExpr.Lambda(decl) => decl.body = lower(decl.body, run => run); e
+    | PExpr.Call(PExpr.Ref(arrow) as f, [parameters, body]) when arrow.Id == "=>" => PExpr.Call(e.Location, f, [parameters, lower(body, run => run)])
+    | PExpr.DefFunctions(functions) =>
+      foreach (f in functions) f.body = lower(f.body, Finished(f.header.ReturnType));
+      e
+    | _ =>
+      Message.Error(e.Location, "`async' makes a lambda (`async fun', `async (x) => ...') or a local function (`async def') async");
+      e
+  }
+}
+
+/// The end of an async lambda's body: its value is the task's result, or, when it has none (void), the task is a Task.
+macro __async_result(driver, body)
+{
+  def typer = Macros.ImplicitCTX();
+  def typed = typer.TypeExpr(body);
+  // a body that ends by throwing has no value: its task is a Task, as in C#
+  def throws(t : Nemerle.Compiler.Typedtree.TExpr) : bool
+  {
+    | Nemerle.Compiler.Typedtree.TExpr.Throw => true
+    | Nemerle.Compiler.Typedtree.TExpr.Sequence(_, last)
+    | Nemerle.Compiler.Typedtree.TExpr.DefValIn(_, _, last)
+    | Nemerle.Compiler.Typedtree.TExpr.DebugInfo(last, _) => throws(last)
+    | _ => false
+  }
+  def isVoid = match (typed.Type.Hint) { | Some(t) => t.Equals(typer.Manager.InternalType.Void) | _ => false };
+  if (isVoid || throws(typed))
+  {
+    match (driver) { | PExpr.Ref(name) => typer.Manager.UserData["Nemerle.AsyncMacros.void:" + name.Id] = true | _ => () }
+    <[ $(typed : typed); _ = ($driver : Nemerle.Async.AsyncDriver[object]) ]>
+  }
+  else
+    <[ def value = $(typed : typed); $driver.Result = value ]>
+}
+
+/// An async lambda's task: a Task when its body has no value (__async_result, typed before this), else its Task[T].
+macro __async_task(driver, run)
+{
+  def manager = Macros.ImplicitCTX().Manager;
+  match (driver)
+  {
+    | PExpr.Ref(name) when manager.UserData.Contains("Nemerle.AsyncMacros.void:" + name.Id) => <[ ($run : System.Threading.Tasks.Task) ]>
+    | _ => run
+  }
+}
+
+/// `await foreach (x in stream) body' (an IAsyncEnumerable's enumerator, disposed at the end) and `await using (x = e)
+/// body' (an IAsyncDisposable, disposed at the end), as waits on MoveNextAsync and DisposeAsync.
+AwaitEach(construct : PExpr) : PExpr
+{
+  def parts = match (construct) { | PExpr.MacroCall(_, _, parms) => parms.Map(fun (p) { | SyntaxElement.Expression(e) => e | _ => null }) | _ => [] };
+  def binding(e : PExpr) { e is PExpr.Assign || e is PExpr.Define || e is PExpr.DefMutable }
+  Nemerle.Compiler.UtilMacros.locate(construct.Location,
+    match (construct)
+    {
+      | PExpr.MacroCall(name, _, _) when name.Id == "foreach" =>
+        match (parts.Find(p => p is <[ $_ in $_ ]>), parts.Find(p => p != null && !(p is <[ $_ in $_ ]>)))
+        {
+          | (Some(<[ $item in $stream ]>), Some(body)) =>
+            def enumerator = Macros.NewSymbol("enumerator");
+            def more = Macros.NewSymbol("more");
+            <[
+              def $(enumerator : name) = ($stream).GetAsyncEnumerator();
+              try
+              {
+                mutable $(more : name) = Nemerle.AsyncMacros.__await($(enumerator : name).MoveNextAsync());
+                while ($(more : name))
+                {
+                  def $item = $(enumerator : name).Current;
+                  $body;
+                  $(more : name) = Nemerle.AsyncMacros.__await($(enumerator : name).MoveNextAsync())
+                }
+              }
+              finally { Nemerle.AsyncMacros.__await($(enumerator : name).DisposeAsync()) }
+            ]>
+          | _ => Message.Error(construct.Location, "expected `await foreach (x in stream) body'"); construct
+        }
+      | PExpr.MacroCall(name, _, _) when name.Id == "using" =>
+        def bindings = parts.Filter(p => p != null && binding(p));
+        match (parts.Find(p => p != null && !binding(p)))
+        {
+          | Some(body) =>
+            bindings.FoldRight(body, fun (b, inner)
+              {
+                def (target, value) = match (b) { | PExpr.Assign(t, v) | PExpr.Define(t, v) | PExpr.DefMutable(t, v) => (t, v) | _ => (null, null) };
+                <[
+                  def $target = $value;
+                  try { $inner }
+                  finally { when (($target : object) != null) Nemerle.AsyncMacros.__await($target.DisposeAsync()) }
+                ]>
+              })
+          | _ => Message.Error(construct.Location, "expected `await using (x = value) body'"); construct
+        }
+      | _ =>
+        Message.Error(construct.Location, "`await' before a `foreach' or a `using' only: `await foreach (x in stream)', `await using (x = value)'");
+        construct
+    })
+}
+
+/// `await foreach' or `await using' where no spill pass made it (a copy of top-level code typed for its state, or code
+/// that is not async, where its `await's are reported).
+macro __await_each(construct)
+{
+  AwaitEach(construct)
 }

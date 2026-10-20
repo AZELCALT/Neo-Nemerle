@@ -163,8 +163,52 @@ An `async` function cannot have `ref` or `out` parameters, and the compiler refu
 
 - in a `lock`: the rest of the body may run on another thread, which cannot release the lock (wait with
   `SemaphoreSlim.WaitAsync()` instead);
-- in a lambda or local function: only the async function itself waits (an async lambda is not supported yet);
+- in a lambda or local function that is not async (write it `async`, below);
 - with a span in the function: its locals are kept between its waits, where a ref struct cannot be.
+
+A lambda or local function is async when written so: `async (x) => ...`, `async x => ...`, `async fun (x) { ... }`
+and `async def f(x) : Task[T] { ... }`. Its body waits as an async function's does, and it returns a `Task[T]`, or a
+`Task` when its body has no value.
+
+```nemerle
+using System;
+using System.Threading.Tasks;
+
+def slowly = async (x : int) => { await Task.Delay(10); x * 2 };
+def total = await Task.WhenAll(Task.Run(async () => await slowly(1)), slowly(2));
+Console.WriteLine(total[0] + total[1])
+```
+
+```text
+6
+```
+
+An async function that returns `IAsyncEnumerable[T]` is an *async stream*: it waits with `await` and produces its
+items with `yield`, and `await foreach (x in stream)` goes over one, waiting for each item. `await using (x = value)`
+disposes an `IAsyncDisposable` at the end, waiting for it. (Async streams need .NET Core 3.0 or later.)
+
+```nemerle
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+async Squares(count : int) : IAsyncEnumerable[int]
+{
+  for (mutable i = 1; i <= count; i++)
+  {
+    await Task.Delay(1);
+    yield i * i
+  }
+}
+
+mutable sum = 0;
+await foreach (n in Squares(4)) sum += n;
+Console.WriteLine(sum)
+```
+
+```text
+30
+```
 
 A program's top-level code can `await` as well, and so can any file's: a file whose top-level code waits is an *async
 file*, and so is a file that imports one. Its top-level code runs once, as any file's does, where a file imports it,

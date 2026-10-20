@@ -2923,6 +2923,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       // check for mutable symbol redefinitions
       match (local_context.FindLocal (name)) {
+        // (a state machine's own locals, as an async lambda's inside an async function's, each its own)
+        | Some (l) when l.Name == "_N_current" || l.Name == "_N_state" => ()
         | Some (l) =>
           def warn (was_of_kind, is_of_kind) {
               Message.Warning ($ "redefinition of a local $was_of_kind "
@@ -3064,7 +3066,16 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                        is_mutable = false);
         // TODO: VladD2: не надо ли ассоциировать local с АСТ?
         header.decl = local;
-        header.body = FunBody.Parsed (fn.body);
+        // a local function the async macros make (an async lambda's or local function's body) is an iterator, as an
+        // iterator method is: its own state machine, never inlined
+        if (name_obj.Id.StartsWith ("_N_async_local_"))
+        {
+          header.yield_type = InternalType.Object;
+          header.cannot_inline = true;
+          header.body = FunBody.Parsed (Nemerle.Compiler.UtilMacros.locate (fn.body.Location, WrapYieldingFunction (fn.body, InternalType.Object)));
+        }
+        else
+          header.body = FunBody.Parsed (fn.body);
         AddLocal (name_obj, local);
         headers = header :: headers;
       }
@@ -3073,6 +3084,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
       foreach (hd in headers) {
         def typer = Manager.ComponentsFactory.CreateTyper (this, hd);
+        when (hd.yield_type != null) typer.inside_yielding_function = true;
         typer.RunTyper ();
       }
 
@@ -4982,9 +4994,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     #endregion
 
     #region yield handling
-    WrapYieldingFunction (body : PExpr) : PExpr
+    WrapYieldingFunction (body : PExpr, yield_type : TypeVar = null) : PExpr
     {
-      def yield_type = GetYieldType ();
+      def yield_type = if (yield_type == null) GetYieldType () else yield_type;
 
       def new_body =
         <[

@@ -520,12 +520,178 @@ fired True, canceled True
             ('lock', 'using System.Threading.Tasks;\nasync F() : Task { def o = object(); lock (o) { await Task.Delay(1) } }', "`await' in a `lock'"),
             ('lambda', 'using System.Threading.Tasks;\nasync F() : Task[int] { def f = () => await Task.FromResult(1); f() }', "`await' in a lambda"),
             ('span', 'using System;\nusing System.Threading.Tasks;\nasync F() : Task[int] { def s = "abc".AsSpan(); await Task.Delay(1); s.Length }', 'keeps its locals between its steps'),
-            ('return type', 'using System.Threading.Tasks;\nasync F() : int { await Task.Delay(1); 1 }', 'an async function returns Task')):
+            ('return type', 'using System.Threading.Tasks;\nasync F() : int { await Task.Delay(1); 1 }', 'an async function returns Task'),
+            ('yield', 'using System.Threading.Tasks;\nasync F() : Task { await Task.Delay(1); yield 1 }', "`yield' in an async function that returns a task")):
         source('async/rule.n', text)
         run([runtime, compiler, work / 'async/rule.n', '-source-root:' + str(work / 'async'), '-target:library', '-out:' + str(work / ('async-' + name.replace(' ', '-') + '.dll')),
              '-no-color', *modern_references], False, diagnostic)
+    source('async/lambdas.n', '''using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+Later[T](v : T) : Task[T] { Task.Run(() => v) }
+
+Twice(f : int -> Task[int], x : int) : Task[int] { f(x) }
+
+// an async lambda in a plain (not async) function
+Run() : int
+{
+  def add = async (x : int) => { def y = await Later(x); y + 1 };
+  def logged = List();
+  def log = async fun (s : string) { await Task.Delay(1); logged.Add(s) };
+  log("one").Wait();
+  add(41).Result + logged.Count
+}
+
+async Outer() : Task[string]
+{
+  mutable total = 0;
+  def bump = async (n : int) => { await Task.Yield(); total += n; total };   // captures the outer function's local
+  _ = await bump(2);
+  def again = await bump(3);
+  async def twice(s : string) : Task[string] { def a = await Later(s); a + a }
+  def tasks = [1, 2, 3].Map(i => Task.Run(async () => { await Task.Delay(i); i * 10 }));
+  mutable sum = 0;
+  foreach (t in tasks) sum += await t;
+  def ab = await twice("ab");
+  $"$again $ab $sum $(await Twice(async x => await Later(x * 2), 21))"
+}
+
+async Throws() : Task
+{
+  def f = async () => { await Task.Delay(1); throw InvalidOperationException("from a lambda") };
+  try { await f() } catch { | e => Console.WriteLine("caught " + e.Message) }
+}
+
+Console.WriteLine(Run());
+Console.WriteLine(await Outer());
+await Throws();
+// a top-level async lambda
+def square = async (x : int) => { await Task.Delay(1); x * x };
+Console.WriteLine(await square(9))
+''')
+    run([runtime, compiler, work / 'async/lambdas.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-lambdas.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-lambdas.runtimeconfig.json')
+    got = run([runtime, work / 'async-lambdas.exe']).stdout.strip()
+    if got != '''43
+5 abab 60 42
+caught from a lambda
+81''':
+        raise RuntimeError('async lambdas: got\n' + got)
+    source('async/each.n', '''using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+
+mutable log : list[string] = [];
+
+class Countdown : IAsyncEnumerable[int]
+{
+  from : int;
+  public this(from : int) { this.from = from }
+  public GetAsyncEnumerator(_token : CancellationToken = default(CancellationToken)) : IAsyncEnumerator[int] { Steps(from) }
+  class Steps : IAsyncEnumerator[int]
+  {
+    mutable left : int;
+    public this(from : int) { left = from + 1 }
+    public Current : int { get { left } }
+    public MoveNextAsync() : ValueTask[bool] { left--; ValueTask(Task.Run(() => left > 0)) }
+    public DisposeAsync() : ValueTask { log ::= "disposed"; ValueTask(Task.Delay(1)) }
+  }
+}
+
+class Resource : IAsyncDisposable
+{
+  name : string;
+  public this(name : string) { this.name = name }
+  public DisposeAsync() : ValueTask { log ::= "closed " + name; ValueTask(Task.Delay(1)) }
+}
+
+async Sum() : Task[int]
+{
+  mutable total = 0;
+  await foreach (x in Countdown(4)) { await Task.Yield(); total += x }
+  total
+}
+
+async Use() : Task[string]
+{
+  await using (a = Resource("a"), b = Resource("b")) { await Task.Delay(1); log ::= "using" }
+  "used"
+}
+
+Console.WriteLine(await Sum());
+Console.WriteLine(await Use());
+Console.WriteLine(log.Rev());
+''')
+    run([runtime, compiler, work / 'async/each.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-each.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-each.runtimeconfig.json')
+    got = run([runtime, work / 'async-each.exe']).stdout.strip()
+    if got != '''10
+used
+[disposed, using, closed b, closed a]''':
+        raise RuntimeError('async each: got\n' + got)
+    source('async/streams.n', '''using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+mutable log : list[string] = [];
+
+async Numbers(count : int) : IAsyncEnumerable[int]
+{
+  try
+  {
+    for (mutable i = 1; i <= count; i++)
+    {
+      await Task.Delay(1);
+      yield i * i
+    }
+  }
+  finally { log ::= "numbers done" }
+}
+
+async Words() : IAsyncEnumerable[string]
+{
+  await foreach (n in Numbers(3)) yield $"#$n";
+  yield "end"
+}
+
+async Fails() : IAsyncEnumerable[int]
+{
+  yield 1;
+  await Task.Delay(1);
+  throw InvalidOperationException("stream broke")
+}
+
+async Read() : Task[string]
+{
+  mutable seen = [];
+  await foreach (w in Words()) seen ::= w;
+  // stop early: the stream's finally runs when the enumeration is disposed
+  $"$(seen.Rev())"
+}
+
+async Broken() : Task[string]
+{
+  mutable got = [];
+  try { await foreach (n in Fails()) got ::= n } catch { | e => got ::= -1; log ::= e.Message }
+  $"$(got.Rev())"
+}
+
+Console.WriteLine(await Read().ContinueWith(t => if (t.IsCanceled) "canceled" else t.Result));
+Console.WriteLine(await Broken());
+Console.WriteLine(log.Rev());
+''')
+    run([runtime, compiler, work / 'async/streams.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-streams.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-streams.runtimeconfig.json')
+    got = run([runtime, work / 'async-streams.exe']).stdout.strip()
+    if got != '''[#1, #4, #9, end]
+[1, -1]
+[numbers done, stream broke]''':
+        raise RuntimeError('async streams: got\n' + got)
     print('PASS: async functions and await (in loops, expressions, try/catch/finally and handlers, ValueTask, void, '
-          'cancellation), top-level await and async files in import order; and their rules as errors', flush=True)
+          'cancellation), async lambdas and local functions, await foreach and await using, async streams, top-level '
+          'await and async files in import order; and their rules as errors', flush=True)
 
 # what a macro declares at the top level is the file's state, as if written there: the file's functions see it;
 # `top name' reaches the file's top level past a closer name, and `top' stays an ordinary name otherwise

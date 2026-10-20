@@ -48,7 +48,7 @@ runtime = pathlib.Path(row[2].strip('[]')) / row[1]
 out = tc / 'netstandard2.0'
 out.mkdir(exist_ok=True)
 command = ['dotnet', str(tc / 'ncc.exe'), *map(str, sorted((repo / 'lib/Nemerle').rglob('*.n'))),
-           '-out:' + str(out / 'Nemerle.dll'), '-define:NET_4_0', '-define:MODERN_CLR',
+           '-out:' + str(out / 'Nemerle.dll'), '-define:NET_4_0', '-define:MODERN_CLR', '-define:NETSTANDARD2_0',
            '-target-references:' + str(refs), '-target-framework:netstandard2.0',
            '-keyfile:' + str(repo / 'misc/keys/Nemerle.snk'), '-no-color', '-target:library', '-no-stdlib',
            '-source-root:' + str(repo / 'lib'), '-assembly-version:' + match.group(1),

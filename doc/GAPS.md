@@ -12,10 +12,9 @@ unless it says so. These edges will be closed, which can change what happens the
   boxes are shared as they are.
 ## Async
 
-- **No async lambdas or local functions.** `await` waits in an `async` function (a member or a file's top-level
-  code); in a lambda or local function it is an error that says so. Write the code as an async function and call it.
-- **No async streams.** `IAsyncEnumerable[T]` is used through its methods, but there is no `await foreach`, no
-  `await using` (`IAsyncDisposable`), and no `yield` in an async function.
+- **Async streams are not on .NET Standard 2.0** (nor .NET Framework): it has no `IAsyncEnumerable[T]`, so the
+  .NET Standard `Nemerle.dll` has no `AsyncStream`. An async lambda returns a `Task` or `Task[T]` (not a
+  `ValueTask`, not `void` for an event handler: wrap it, `(s, e) => { _ = handler(s, e) }`), and is not an async stream.
 - **An async file's functions do not wait for its top-level code.** Its state is ready once a file importing it has
   awaited it (at the `using`); a function of the file called before that, from a file that does not import it (by
   reflection, from C#), sees the state unset.

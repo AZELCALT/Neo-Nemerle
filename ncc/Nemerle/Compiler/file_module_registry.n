@@ -251,11 +251,13 @@ public sealed class FileModuleRegistry
   public static HasAwait(e : PExpr) : bool
   {
     mutable found = false;
+    mutable lambdas = 0;   // (an async lambda's `await' is its own)
     _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), e, false, (_, after, node) =>
       {
         match (node)
         {
-          | PExpr.Call(PExpr.Member(_, name), [_]) when !after && name.ToString() == "__await" => found = true
+          | PExpr.Call(PExpr.Member(_, name), [_]) when name.ToString() == "__async_lambda" => lambdas += if (after) -1 else 1
+          | PExpr.Call(PExpr.Member(_, name), [_]) when !after && lambdas == 0 && (name.ToString() == "__await" || name.ToString() == "__await_each") => found = true
           | _ => ()
         }
         node

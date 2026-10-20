@@ -65,3 +65,75 @@ public sealed class AsyncDriver[T]
     }
   }
 }
+
+#if !NETSTANDARD2_0   // (async streams are .NET Core 3.0's and later: .NET Standard 2.0 has no IAsyncEnumerable)
+/// Runs the body of an async function that returns an IAsyncEnumerable[T] (an async stream): the body is an iterator,
+/// as an async function's is, that yields the awaiters it waits for and, for each item it produces (`yield x'),
+/// Produce(x). Each enumeration runs the body afresh; MoveNextAsync completes when the next item is there (true) or
+/// the body ends (false), with what the body throws.
+public sealed class AsyncStream[T] : IAsyncEnumerable[T], IAsyncEnumerator[T]
+{
+  static produced : object = object();
+  start : AsyncStream[T] -> IEnumerable[object];
+  mutable steps : IEnumerator[object];
+  mutable pending : TaskCompletionSource[bool];
+  mutable resume : Action;
+  mutable current : T;
+
+  public this(start : AsyncStream[T] -> IEnumerable[object]) { this.start = start }
+
+  /// The token the enumeration was started with (GetAsyncEnumerator's, as WithCancellation passes it).
+  public Token : System.Threading.CancellationToken { get; private set; }
+
+  public Current : T { get { current } }
+
+  /// What the body yields for an item: the item is then the enumerator's Current.
+  public Produce(item : T) : object { current = item; produced }
+
+  public GetAsyncEnumerator(token : System.Threading.CancellationToken = default(System.Threading.CancellationToken)) : IAsyncEnumerator[T]
+  {
+    def run = AsyncStream(start);
+    run.Token = token;
+    run.resume = Action(run.Step);
+    run.steps = start(run).GetEnumerator();
+    run
+  }
+
+  public MoveNextAsync() : ValueTask[bool]
+  {
+    pending = TaskCompletionSource.[bool](TaskCreationOptions.RunContinuationsAsynchronously);
+    Step();
+    ValueTask.[bool](pending.Task)
+  }
+
+  Step() : void
+  {
+    try
+    {
+      if (steps.MoveNext())
+        match (steps.Current)
+        {
+          | null => Step()   // the body's first step, which only makes it an iterator
+          | item when object.ReferenceEquals(item, produced) => _ = pending.TrySetResult(true)
+          // (OnCompleted carries the ExecutionContext over, so AsyncLocal values flow into the rest of the body)
+          | awaiter is INotifyCompletion => awaiter.OnCompleted(resume)
+          | other => throw InvalidOperationException($"await: $(other.GetType()) is not an awaiter (it has no OnCompleted)")
+        }
+      else
+        _ = pending.TrySetResult(false)
+    }
+    catch
+    {
+      | e is OperationCanceledException => _ = pending.TrySetCanceled(e.CancellationToken)
+      | e => _ = pending.TrySetException(e)
+    }
+  }
+
+  /// Ends the enumeration: the body's `finally' blocks run (as an iterator's do when it is disposed).
+  public DisposeAsync() : ValueTask
+  {
+    when (steps != null) steps.Dispose();
+    ValueTask()
+  }
+}
+#endif
