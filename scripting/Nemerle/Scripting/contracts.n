@@ -216,9 +216,13 @@ public sealed class ScriptHostOptions
   public mutable SourceResolver : IScriptSourceResolver = null;
   public mutable ImportedInputProvider : IScriptImportedInputProvider = null;
   public mutable ConfigurationVersion : string = "1";
+  /// For tools (an editor's checker): makes the compiler of each compilation from its options (a CompilationOptions
+  /// to a ManagerClass), which the tool may instrument (its events, the typed bodies) or replace with a subclass (code
+  /// completion); null makes a plain one. Typed as objects so that running a compiled script needs no compiler.
+  public mutable CreateManager : System.Func[object, object] = null;
   public Snapshot() : ScriptHostOptions
   {
-    def result = ScriptHostOptions(); result.Cache = Cache; result.Resolver = Resolver;
+    def result = ScriptHostOptions(); result.Cache = Cache; result.Resolver = Resolver; result.CreateManager = CreateManager;
     result.DefinitionSelector = DefinitionSelector; result.ConfigurationVersion = ConfigurationVersion;
     result.SourceResolver = SourceResolver; result.ImportedInputProvider = ImportedInputProvider; result.ExecutionWrapper = ExecutionWrapper;
     result.CompilationRefiners.AddRange(CompilationRefiners); result.EvaluationRefiners.AddRange(EvaluationRefiners);

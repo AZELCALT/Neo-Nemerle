@@ -61,8 +61,15 @@ public module Checker
       overlay[path] = text;
       completion = prefix; completing = path;
     }
-    mutable result = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion,
-                           str(request["renameType"]));
+    // a script is checked by the scripting host (scripts.n), a workspace file by the workspace's compilation
+    def completingScript = completing != null && Scripts.IsScript(completing, overlay[completing]);
+    def checkOnce() : JsonObject
+    {
+      if (completingScript) Scripts.Check(completing, overlay, completion)
+      else Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion,
+                 str(request["renameType"]))
+    }
+    mutable result = checkOnce();
     // an unfinished line elsewhere in the file stops the compiler before the cursor: without the lines its errors are
     // on (blanked, so lines keep their numbers), the typer gets to the cursor
     when (completing != null && (result["completion"] == null || result["completion"].AsArray().Count == 0))
@@ -76,15 +83,20 @@ public module Checker
         def lines = overlay[completing].Split('\n');
         foreach (l when l >= 1 && l <= lines.Length in broken) lines[l - 1] = string(' ', lines[l - 1].Length);
         overlay[completing] = string.Join("\n", lines);
-        def retry = Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion);
+        def retry = checkOnce();
         when (retry["completion"] != null && retry["completion"].AsArray().Count > 0) result = retry;
       }
     }
-    // the open scripts, which the workspace check leaves out: each compiled by the scripting host (a diagnostics run)
+    // the open scripts, which the workspace check leaves out: each compiled by the scripting host, for its diagnostics
+    // and the facts of its typed code (hover, go-to-definition)
     when (completing == null && request["renameType"] == null)
-      foreach (pair in overlay)
+      foreach (pair in overlay.ToArray())
         when (Scripts.IsScript(pair.Key, pair.Value))
-          foreach (d in Scripts.Check(pair.Key, pair.Value)) result["diagnostics"].AsArray().Add(d);
+        {
+          def script = Scripts.Check(pair.Key, overlay, null);
+          foreach (d in script["diagnostics"].AsArray().ToArray()) { _ = script["diagnostics"].AsArray().Remove(d); result["diagnostics"].AsArray().Add(d) }
+          foreach (f in script["facts"].AsArray().ToArray()) { _ = script["facts"].AsArray().Remove(f); result["facts"].AsArray().Add(f) }
+        }
     output.Write(result.ToJsonString());
     output.Flush();
     0
@@ -199,139 +211,8 @@ public module Checker
       options.Sources = files.Select(f => StringSource(Location.GetFileIndex(f), Text(f, overlay)) : ISource).NToList();
       def completer = if (completion != null) CompletionManager(options, completion) else null;
       def manager = if (completer != null) completer : ManagerClass else ManagerClass(options);
-      manager.InitOutput(StringWriter());
-      def place(node : JsonObject, loc : Location) : void
-      {
-        node["path"] = JsonValue.Create(Location.GetFileName(loc.FileIndex));
-        node["line"] = JsonValue.Create(loc.Line); node["column"] = JsonValue.Create(loc.Column);
-        node["endLine"] = JsonValue.Create(loc.EndLine); node["endColumn"] = JsonValue.Create(loc.EndColumn);
-      }
-      def report(loc : Location, message : string, severity : int) : void
-      {
-        when (loc.FileIndex > 0 && loc.Line > 0)
-        {
-          def d = JsonObject(); place(d, loc); d["severity"] = JsonValue.Create(severity); d["message"] = JsonValue.Create(message);
-          diagnostics.Add(d);
-        }
-      }
-      manager.ErrorOccured += fun(loc, msg) { report(loc, msg, 1) };
-      manager.WarningOccured += fun(loc, msg) { report(loc, msg, 2) };
-      // facts: each typed reference, with its type or member and where that is declared
-      // a `using` line holds no code of its own: what is located there is the import's generated initializer call
-      def lines = SCG.Dictionary.[string, array[string]]();
-      def onUsing(at : Location) : bool
-      {
-        def path = Location.GetFileName(at.FileIndex);
-        mutable text;
-        unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
-        at.Line <= text.Length && text[at.Line - 1].TrimStart().StartsWith("using ", StringComparison.Ordinal)
-      }
-      def lineOf(path : string, line : int) : string
-      {
-        mutable text;
-        unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
-        if (line >= 1 && line <= text.Length) text[line - 1].TrimEnd('\r') else ""
-      }
-      // the span of `name` itself in a reference (`p.Width` ends with it, `Square(...)` starts with it) or in a
-      // declaration (its first whole-word occurrence on the declaration's line)
-      def nameSpan(loc : Location, name : string, declaration : bool) : option[int * int * int]
-      {
-        def path = Location.GetFileName(loc.FileIndex);
-        def word(l : string, from : int) : option[int * int * int]
-        {
-          def m = Regex.Match(if (from <= l.Length) l.Substring(from) else "", @"(?<![\w])" + Regex.Escape(name) + @"(?![\w])");
-          if (m.Success) Some((loc.Line, from + m.Index + 1, from + m.Index + 1 + name.Length)) else None()
-        }
-        if (name.Length == 0) None()
-        else if (declaration) word(lineOf(path, loc.Line), Math.Max(0, loc.Column - 1))
-        else
-        {
-          def last = lineOf(path, loc.EndLine);
-          def first = lineOf(path, loc.Line);
-          if (loc.EndColumn - 1 <= last.Length && loc.EndColumn - 1 >= name.Length && last.Substring(loc.EndColumn - 1 - name.Length, name.Length) == name)
-            Some((loc.EndLine, loc.EndColumn - name.Length, loc.EndColumn))
-          else if (loc.Column - 1 + name.Length <= first.Length && first.Substring(loc.Column - 1, name.Length) == name)
-            Some((loc.Line, loc.Column, loc.Column + name.Length))
-          else None()
-        }
-      }
-      def span(node : JsonObject, prefix : string, s : option[int * int * int]) : void
-      {
-        | (_, _, Some((l, c, e))) => node[prefix + "Line"] = JsonValue.Create(l); node[prefix + "Column"] = JsonValue.Create(c); node[prefix + "EndColumn"] = JsonValue.Create(e)
-        | _ => ()
-      }
-      def fact(at : Location, hover : string, target : Location, name : string, kind : string) : void
-      {
-        when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at))
-        {
-          def f = JsonObject(); place(f, at); f["hover"] = JsonValue.Create(hover);
-          f["name"] = JsonValue.Create(name); f["kind"] = JsonValue.Create(kind);
-          span(f, "name", nameSpan(at, name, false));
-          when (target.FileIndex > 0 && target.Line > 0 && target.IsSourceAvailable)
-          {
-            def t = JsonObject(); place(t, target);
-            span(t, "name", nameSpan(target, name, true));
-            f["target"] = t;
-          }
-          facts.Add(f);
-        }
-      }
-      def member(at : Location, m : IMember, ty : object) : void
-      {
-        def owner = if (m.DeclaringType != null) m.DeclaringType.FullName else "";
-        def shown = if (ty != null) ty.ToString() else m.GetMemType().ToString();
-        if (m.Name == ".ctor")
-        {
-          // a constructor without source of its own (the default one) leads to its type
-          def target = if (m.Location.Line > 0 && !m.Location.IsGenerated || m.DeclaringType == null) m.Location else m.DeclaringType.Location;
-          def parameters = if (shown.Contains(" -> ")) shown.Substring(0, shown.LastIndexOf(" -> ")) else "";
-          fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target, if (m.DeclaringType != null) m.DeclaringType.Name else "", "constructor")
-        }
-        else
-        {
-          // a member's declaration is named where its name is (its whole span starts at its modifiers)
-          // (a generated member, as a top-level value's field, has no declaration of its own: NameLocation throws)
-          def nameLocation(b : MemberBuilder) { try { b.NameLocation } catch { | _ => Location.Default } }
-          def declared = match (m) { | b is MemberBuilder when nameLocation(b).Line > 0 => nameLocation(b) | _ => m.Location };
-          def kind = match (m.MemberKind) { | MemberKinds.Field => "field" | MemberKinds.Property => "property" | MemberKinds.Event => "event" | _ => "method" };
-          fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, declared, m.Name, kind)
-        }
-      }
-      def walk(body : TExpr) : void
-      {
-        ExprWalker().Walk(body, info =>
-          match (info.Node)
-          {
-            | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
-            | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
-            | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
-            | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
-            | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)
-            | TExpr.MethodRef(_, m, _, _) as e => member(e.Location, m, e.Type)
-            | TExpr.EventMember(_, ev) as e => member(e.Location, ev, e.Type)
-            | _ => ()
-          });
-      }
-      // the workspace's types (the compiler clears its type tree at the end of a run)
       def types = SCG.List.[string * string * Location]();
-      manager.TypeTreeBuildFinish += fun(_)
-      {
-        try
-          manager.Hierarchy.Iter(tb =>
-            when (tb.Location.FileIndex > 0 && files.Contains(Location.GetFileName(tb.Location.FileIndex))
-                  && !manager.FileModuleRegistry.Usings.Contains(tb.FullName))
-              types.Add((tb.Name, tb.FullName, tb.Location)))
-        catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + e.ToString()) }
-        when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + string.Join(", ", types.Select(x => { def (n, f, _) = x; n + "=" + f }).ToArray()));
-        manager.Hierarchy.Iter(tb => tb.MethodBeforeStage2 += fun(_, args)
-          {
-            match (args.Typer.CurrentFunction.Body)
-            {
-              | FunBody.Typed(body) => try { walk(body) } catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("walk: " + e.ToString()) }
-              | _ => ()
-            }
-          });
-      };
+      Instrument(manager, files, overlay, diagnostics, facts, types, true);
       def previous = ManagerClass.Instance;
       try { manager.Run() }
       catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("run: " + e.ToString()) } // the errors were reported; the facts gathered so far still help (and completion stops here)
@@ -340,6 +221,150 @@ public module Checker
       when (renameType != null) RenameType(manager, files, overlay, facts, types, renameType, result);
     }
     result
+  }
+
+  /// Hooks a compilation for the editor: its diagnostics (with `reportDiagnostics`), the facts of its typed code (for
+  /// hover and go-to-definition), and the types `files` declare (into `types`). The workspace check and the check of
+  /// a script (scripts.n, whose compilation the scripting host runs) both use it.
+  public Instrument(manager : ManagerClass, files : SCG.List[string], overlay : SCG.Dictionary[string, string],
+                    diagnostics : JsonArray, facts : JsonArray, types : SCG.List[string * string * Location],
+                    reportDiagnostics : bool) : void
+  {
+    manager.InitOutput(StringWriter());
+    def place(node : JsonObject, loc : Location) : void
+    {
+      node["path"] = JsonValue.Create(Location.GetFileName(loc.FileIndex));
+      node["line"] = JsonValue.Create(loc.Line); node["column"] = JsonValue.Create(loc.Column);
+      node["endLine"] = JsonValue.Create(loc.EndLine); node["endColumn"] = JsonValue.Create(loc.EndColumn);
+    }
+    def report(loc : Location, message : string, severity : int) : void
+    {
+      when (loc.FileIndex > 0 && loc.Line > 0)
+      {
+        def d = JsonObject(); place(d, loc); d["severity"] = JsonValue.Create(severity); d["message"] = JsonValue.Create(message);
+        diagnostics.Add(d);
+      }
+    }
+    when (reportDiagnostics)
+    {
+      manager.ErrorOccured += fun(loc, msg) { report(loc, msg, 1) };
+      manager.WarningOccured += fun(loc, msg) { report(loc, msg, 2) };
+    }
+    // facts: each typed reference, with its type or member and where that is declared
+    // a `using` line holds no code of its own: what is located there is the import's generated initializer call
+    def lines = SCG.Dictionary.[string, array[string]]();
+    def onUsing(at : Location) : bool
+    {
+      def path = Location.GetFileName(at.FileIndex);
+      mutable text;
+      unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
+      at.Line <= text.Length && text[at.Line - 1].TrimStart().StartsWith("using ", StringComparison.Ordinal)
+    }
+    def lineOf(path : string, line : int) : string
+    {
+      mutable text;
+      unless (lines.TryGetValue(path, out text)) { text = (Text(path, overlay) ?? "").Split('\n'); lines[path] = text; }
+      if (line >= 1 && line <= text.Length) text[line - 1].TrimEnd('\r') else ""
+    }
+    // the span of `name` itself in a reference (`p.Width` ends with it, `Square(...)` starts with it) or in a
+    // declaration (its first whole-word occurrence on the declaration's line)
+    def nameSpan(loc : Location, name : string, declaration : bool) : option[int * int * int]
+    {
+      def path = Location.GetFileName(loc.FileIndex);
+      def word(l : string, from : int) : option[int * int * int]
+      {
+        def m = Regex.Match(if (from <= l.Length) l.Substring(from) else "", @"(?<![\w])" + Regex.Escape(name) + @"(?![\w])");
+        if (m.Success) Some((loc.Line, from + m.Index + 1, from + m.Index + 1 + name.Length)) else None()
+      }
+      if (name.Length == 0) None()
+      else if (declaration) word(lineOf(path, loc.Line), Math.Max(0, loc.Column - 1))
+      else
+      {
+        def last = lineOf(path, loc.EndLine);
+        def first = lineOf(path, loc.Line);
+        if (loc.EndColumn - 1 <= last.Length && loc.EndColumn - 1 >= name.Length && last.Substring(loc.EndColumn - 1 - name.Length, name.Length) == name)
+          Some((loc.EndLine, loc.EndColumn - name.Length, loc.EndColumn))
+        else if (loc.Column - 1 + name.Length <= first.Length && first.Substring(loc.Column - 1, name.Length) == name)
+          Some((loc.Line, loc.Column, loc.Column + name.Length))
+        else None()
+      }
+    }
+    def span(node : JsonObject, prefix : string, s : option[int * int * int]) : void
+    {
+      | (_, _, Some((l, c, e))) => node[prefix + "Line"] = JsonValue.Create(l); node[prefix + "Column"] = JsonValue.Create(c); node[prefix + "EndColumn"] = JsonValue.Create(e)
+      | _ => ()
+    }
+    def fact(at : Location, hover : string, target : Location, name : string, kind : string) : void
+    {
+      when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at))
+      {
+        def f = JsonObject(); place(f, at); f["hover"] = JsonValue.Create(hover);
+        f["name"] = JsonValue.Create(name); f["kind"] = JsonValue.Create(kind);
+        span(f, "name", nameSpan(at, name, false));
+        when (target.FileIndex > 0 && target.Line > 0 && target.IsSourceAvailable)
+        {
+          def t = JsonObject(); place(t, target);
+          span(t, "name", nameSpan(target, name, true));
+          f["target"] = t;
+        }
+        facts.Add(f);
+      }
+    }
+    def member(at : Location, m : IMember, ty : object) : void
+    {
+      def owner = if (m.DeclaringType != null) m.DeclaringType.FullName else "";
+      def shown = if (ty != null) ty.ToString() else m.GetMemType().ToString();
+      if (m.Name == ".ctor")
+      {
+        // a constructor without source of its own (the default one) leads to its type
+        def target = if (m.Location.Line > 0 && !m.Location.IsGenerated || m.DeclaringType == null) m.Location else m.DeclaringType.Location;
+        def parameters = if (shown.Contains(" -> ")) shown.Substring(0, shown.LastIndexOf(" -> ")) else "";
+        fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target, if (m.DeclaringType != null) m.DeclaringType.Name else "", "constructor")
+      }
+      else
+      {
+        // a member's declaration is named where its name is (its whole span starts at its modifiers)
+        // (a generated member, as a top-level value's field, has no declaration of its own: NameLocation throws)
+        def nameLocation(b : MemberBuilder) { try { b.NameLocation } catch { | _ => Location.Default } }
+        def declared = match (m) { | b is MemberBuilder when nameLocation(b).Line > 0 => nameLocation(b) | _ => m.Location };
+        def kind = match (m.MemberKind) { | MemberKinds.Field => "field" | MemberKinds.Property => "property" | MemberKinds.Event => "event" | _ => "method" };
+        fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, declared, m.Name, kind)
+      }
+    }
+    def walk(body : TExpr) : void
+    {
+      ExprWalker().Walk(body, info =>
+        match (info.Node)
+        {
+          | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
+          | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
+          | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
+          | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
+          | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)
+          | TExpr.MethodRef(_, m, _, _) as e => member(e.Location, m, e.Type)
+          | TExpr.EventMember(_, ev) as e => member(e.Location, ev, e.Type)
+          | _ => ()
+        });
+    }
+    // the workspace's types (the compiler clears its type tree at the end of a run)
+    manager.TypeTreeBuildFinish += fun(_)
+    {
+      try
+        manager.Hierarchy.Iter(tb =>
+          when (tb.Location.FileIndex > 0 && files.Contains(Location.GetFileName(tb.Location.FileIndex))
+                && !manager.FileModuleRegistry.Usings.Contains(tb.FullName))
+            types.Add((tb.Name, tb.FullName, tb.Location)))
+      catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + e.ToString()) }
+      when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + string.Join(", ", types.Select(x => { def (n, f, _) = x; n + "=" + f }).ToArray()));
+      manager.Hierarchy.Iter(tb => tb.MethodBeforeStage2 += fun(_, args)
+        {
+          match (args.Typer.CurrentFunction.Body)
+          {
+            | FunBody.Typed(body) => try { walk(body) } catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("walk: " + e.ToString()) }
+            | _ => ()
+          }
+        });
+    };
   }
 
   /// The places to edit to rename the workspace type `name`: every identifier token with its name in the workspace's

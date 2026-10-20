@@ -286,7 +286,28 @@ try:
     while time.time() < deadline and any(d['severity'] == 1 for d in c.diagnostics.get(suri, {}).get('diagnostics', [{'severity': 1}])):
         c.pump(lambda m: True if m.get('method') == 'textDocument/publishDiagnostics' and m['params']['uri'] == suri else None, 'script recheck')
     check(not any(d['severity'] == 1 for d in c.diagnostics[suri]['diagnostics']), 'the repaired script has no errors: %s' % c.diagnostics[suri])
-    print('PASS: a .ns script is checked by the scripting host (its errors at its lines, apart from the workspace)')
+    # hover, go-to-definition and typed completion in the script, from the scripting host's compilation
+    deadline = time.time() + a.timeout; hover = None
+    l, ch = position(clean, offset_of(clean, 'greeting', 1))
+    while time.time() < deadline:
+        hover = c.request('textDocument/hover', {'textDocument': {'uri': suri}, 'position': {'line': l, 'character': ch}})
+        if hover and 'greeting' in hover['contents']['value'] and 'string' in hover['contents']['value']: break
+        time.sleep(0.5)
+    check(hover and 'string' in hover['contents']['value'], 'hover on a script value: %s' % hover)
+    target = c.request('textDocument/definition', {'textDocument': {'uri': suri}, 'position': {'line': l, 'character': ch}})
+    check(target and target['uri'] == suri and target['range']['start']['line'] == 0, 'definition of a script value is its binding: %s' % target)
+    typing = clean + 'def size = greeting.\n'
+    c.notify('textDocument/didChange', {'textDocument': {'uri': suri, 'version': 3}, 'contentChanges': [{'text': typing}]})
+    l, ch = position(typing, len(typing) - 1)
+    items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': suri}, 'position': {'line': l, 'character': ch}})['items']]
+    check('Length' in items and 'Substring' in items, 'typed completion after `greeting.` in a script: %s' % items[:20])
+    typing = clean + 'def other = gree\n'
+    c.notify('textDocument/didChange', {'textDocument': {'uri': suri, 'version': 4}, 'contentChanges': [{'text': typing}]})
+    l, ch = position(typing, len(typing) - 1)
+    items = [i['label'] for i in c.request('textDocument/completion', {'textDocument': {'uri': suri}, 'position': {'line': l, 'character': ch}})['items']]
+    check('greeting' in items, 'a script\'s own names are completed: %s' % items[:20])
+    print('PASS: a .ns script is checked by the scripting host (its errors at its lines, apart from the workspace; hover, '
+          'definition and typed completion)')
     c.request('shutdown', None); c.notify('exit', None)
     check(c.proc.wait(timeout=30) == 0, 'clean exit')
 finally:

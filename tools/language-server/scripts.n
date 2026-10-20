@@ -8,6 +8,12 @@ using Nemerle.Scripting.dependencies;
 using Nemerle.Scripting.definitions;
 using Nemerle.Scripting.host;
 using Nemerle.Scripting.kinds;
+using Nemerle.Compiler;
+using Nemerle.Compiler.compilation_options;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.Source;
+using checker;
 
 /// The check of a script (a `.ns` file, or a `.n` file that declares its dependencies): compiled by the scripting
 /// host as `nscript compile` compiles it (its kind by file name, its DependsOn, Import and packages), not run. A script
@@ -20,10 +26,16 @@ public module Scripts
     path.EndsWith(".ns", StringComparison.Ordinal) || path.EndsWith(".n", StringComparison.Ordinal) && text != null && text.Contains("DependsOn(")
   }
 
-  /// The diagnostics of the script at `path` with the (unsaved) `text`, as the checker writes them.
-  public Check(path : string, text : string) : SCG.List[JsonObject]
+  /// The check of the script at `path` (its unsaved text in `overlay`), as the checker writes it: its diagnostics, the
+  /// facts of its typed code (hover, go-to-definition), and with `completion` (the prefix at the marker the text
+  /// holds) what can be written there.
+  public Check(path : string, overlay : SCG.Dictionary[string, string], completion : string) : JsonObject
   {
-    def found = SCG.List();
+    def text = overlay[path];
+    def diagnostics = JsonArray();
+    def facts = JsonArray();
+    def result = JsonObject();
+    result["diagnostics"] = diagnostics; result["facts"] = facts;
     def report(file : string, line : int, column : int, message : string, error : bool) : void
     {
       def d = JsonObject();
@@ -31,8 +43,9 @@ public module Scripts
       d["line"] = JsonValue.Create(Math.Max(1, line)); d["column"] = JsonValue.Create(Math.Max(1, column));
       d["endLine"] = JsonValue.Create(Math.Max(1, line)); d["endColumn"] = JsonValue.Create(Math.Max(1, column) + 1);
       d["severity"] = JsonValue.Create(if (error) 1 else 2); d["message"] = JsonValue.Create(message);
-      found.Add(d);
+      diagnostics.Add(d);
     }
+    mutable completer : CompletionManager = null;
     try
     {
       // the definition nscript starts from: `args', and the reference assemblies next to the toolchain
@@ -50,6 +63,25 @@ public module Scripts
         def resolver = Activator.CreateInstance(type, array[cache : object, definition.Repositories.ToArray() : object]);
         settings.Resolver = resolver :> IScriptDependencyResolver;
       }
+      // every compilation the host runs (the script, the scripts it imports) gives its facts; the script itself, when
+      // completing, is compiled by the completion compiler
+      def types = SCG.List();
+      def files = SCG.List([path]);
+      def make(options : CompilationOptions) : ManagerClass
+      {
+        def mine = options.Sources.Exists(s => Path.GetFullPath(Location.GetFileName(s.FileIndex)) == path);
+        def manager = if (completion != null && mine) { completer = CompletionManager(options, completion); completer : ManagerClass }
+                      else ManagerClass(options);
+        Checker.Instrument(manager, files, overlay, JsonArray(), facts, types, false);
+        manager
+      }
+      // set by name: an installer builds this server with the toolchain it installs, whose scripting host may
+      // predate the hook (the script then gets its diagnostics only)
+      match (typeof(ScriptHostOptions).GetField("CreateManager"))
+      {
+        | null => ()
+        | field => field.SetValue(settings, System.Func.[object, object](options => make(options :> CompilationOptions)))
+      }
       def source = ScriptSource(text, path);
       // the kind (a library's [ScriptDefinition(".x.n")] class), by file name, from where nscript looks
       def registry = ScriptDefinitionRegistry(definition);
@@ -62,10 +94,13 @@ public module Scripts
         report(path, 1, 1, $"no script kind declares the extension $(name.Substring(stem.IndexOf('.'))) of $name "
                            "(nscript looks next to itself, in NEMERLE_SCRIPT_PATH and next to the script)", true)
       else
-        foreach (d in ScriptHost(settings).Compile(source, selected).Diagnostics)
-          report(d.File, d.Line, d.Column, d.Message, d.IsError)
+        try
+          foreach (d in ScriptHost(settings).Compile(source, selected).Diagnostics)
+            report(d.File, d.Line, d.Column, d.Message, d.IsError)
+        catch { | _ is CompletionManager.Found => () }   // completion stops the compiler where it has its answer
     }
     catch { | e => report(path, 1, 1, "the script could not be checked: " + e.Message, true) }
-    found
+    when (completer != null) result["completion"] = completer.Items;
+    result
   }
 }

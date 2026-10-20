@@ -479,7 +479,7 @@ public sealed class ScriptHost
           when (assembly.Location != "" && !references.Contains(assembly.Location)) references.Add(assembly.Location);
         options.ReferencedLibraries = NList.FromArray(references.ToArray());
         options.Sources = NList.FromArray(array[StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), source.Text) : ISource]);
-        def manager = ManagerClass(options);
+        def manager = if (settings.CreateManager != null) settings.CreateManager(options) :> ManagerClass else ManagerClass(options);
         manager.InitOutput(StringWriter());
         manager.ErrorOccured += (loc, message) => diagnostics.Add(ScriptDiagnostic(loc.File, loc.Line, loc.Column, message, true));
         manager.WarningOccured += (loc, message) => diagnostics.Add(ScriptDiagnostic(loc.File, loc.Line, loc.Column, message, false));

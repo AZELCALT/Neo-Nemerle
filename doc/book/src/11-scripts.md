@@ -6,8 +6,8 @@ next to `.n` ones. Scripts are ordinary Nemerle, they can declare what they depe
 of script with their own base class and imports.
 
 The extension keeps the two apart: a project compiles its `.n` files and leaves `.ns` files alone, and the editor
-shows a script with the yellow logo and checks it as `nscript` compiles it (its kind, its `DependsOn`), so its errors
-show while it is edited. `nscript` runs a plain `.n` file too, the same way: that is for running ordinary
+shows a script with the yellow logo and checks it as `nscript` compiles it (its kind, its `DependsOn`): its errors show
+while it is edited, with hover, go-to-definition and typed completion as in any other file. `nscript` runs a plain `.n` file too, the same way: that is for running ordinary
 Nemerle directly, wherever that is needed. A `.ns` file is the same job in its own format, a file that is a script and
 nothing else.
 
