@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Trace the logo's source drawing into the responsive SVG (doc/assets/logo/nemerle.svg).
 
-    build/trace-logo.py [--source doc/assets/logo/nemerle-source.png] [--output doc/assets/logo/nemerle.svg]
+    doc/assets/logo/legacy/trace-logo.py [--source .../legacy/nemerle-source.png] [--output .../legacy/nemerle.svg]
+
+How the first logo (this folder) was made from its drawing; the current logo is drawn as SVG.
 
 Needs OpenCV and Pillow (pip install opencv-python-headless pillow); run it again after a new drawing. The drawing's
 shapes become straight-edged polygons, its disc a true circle, and its purple a gradient fitted to its pixels. Three
@@ -13,10 +15,10 @@ import argparse, pathlib
 import cv2, numpy as np
 from PIL import Image
 
-repo = pathlib.Path(__file__).resolve().parents[1]
+repo = pathlib.Path(__file__).resolve().parents[4]
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-p.add_argument('--source', type=pathlib.Path, default=repo / 'doc/assets/logo/nemerle-source.png')
-p.add_argument('--output', type=pathlib.Path, default=repo / 'doc/assets/logo/nemerle.svg')
+p.add_argument('--source', type=pathlib.Path, default=repo / 'doc/assets/logo/legacy/nemerle-source.png')
+p.add_argument('--output', type=pathlib.Path, default=repo / 'doc/assets/logo/legacy/nemerle.svg')
 a = p.parse_args()
 
 rgba = np.array(Image.open(a.source).convert('RGBA'))

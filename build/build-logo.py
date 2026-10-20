@@ -1,59 +1,46 @@
 #!/usr/bin/env python3
-"""Render the logo's PNGs from the responsive SVG (doc/assets/logo/nemerle.svg), and its script variant.
+"""Render the logo's PNGs and the social preview from its SVGs (doc/assets/logo/nemerle.svg and nemerle-script.svg).
 
     build/build-logo.py
 
-Where an SVG cannot be used (a VS Code extension's marketplace icon, a NuGet package's icon), a PNG is. The SVG picks
-its level of detail by CSS media queries, which browsers and VS Code honour but rsvg-convert (which renders here) does
-not, so each PNG is rendered with the level its size calls for. The PNGs are committed: building does not need this.
-
-The script variant (nemerle-script.svg, the icon of .ns files) is the same drawing in yellow: each gradient stop keeps
-its lightness and saturation and the distance in hue between the stops, turned from purple to yellow.
+Where an SVG cannot be used (a VS Code extension's marketplace icon, a NuGet package's icon), a PNG is. The script
+variant (nemerle-script.svg, the icon of .ns files) is the same drawing in yellow, drawn as its own file. The outputs
+are committed: building does not need this. The first logo, and how it was traced, is in doc/assets/logo/legacy.
 """
-import colorsys, pathlib, re, subprocess, tempfile
+import pathlib, re, subprocess, tempfile
 
 repo = pathlib.Path(__file__).resolve().parents[1]
 logo = repo / 'doc/assets/logo'
+images = repo / 'tools/language-server/vscode/images'
 svg = (logo / 'nemerle.svg').read_text()
+script = (logo / 'nemerle-script.svg').read_text()
 
-def yellow(text):
-    """The script variant: the purple gradient's stops turned to yellow (the first stop's hue to 44.5 degrees, the
-    others as far from it as they were), lightness and saturation kept."""
-    stops = re.findall(r'stop-color="#([0-9a-fA-F]{6})"', text)
-    hls = [colorsys.rgb_to_hls(*(int(s[i:i + 2], 16) / 255 for i in (0, 2, 4))) for s in stops]
-    turn = 44.5 / 360 - hls[0][0]
-    for s, (h, l, s_) in zip(stops, hls):
-        rgb = colorsys.hls_to_rgb((h + turn) % 1, l, s_)
-        text = text.replace('stop-color="#%s"' % s, 'stop-color="#%02x%02x%02x"' % tuple(round(c * 255) for c in rgb), 1)
-    return text.replace('<title>Nemerle</title>', '<title>Nemerle script</title>').replace('id="purple"', 'id="yellow"').replace('url(#purple)', 'url(#yellow)')
+# the extension's file icons are the SVGs themselves
+images.mkdir(parents=True, exist_ok=True)
+(images / 'nemerle.svg').write_text(svg)
+(images / 'nemerle-script.svg').write_text(script)
 
-script = yellow(svg)
-
-def level(size):
-    return 'small' if size <= 40 else 'medium' if size <= 96 else 'full'
-
-def only(name, source=svg):
-    """The SVG with only one level: the others and the media queries removed."""
-    text = re.sub(r'<style>.*?</style>\s*', '', source, flags=re.S)
-    for other in ('full', 'medium', 'small'):
-        if other != name: text = re.sub(r'  <g class="%s".*?</g>\n' % other, '', text, flags=re.S)
-    return text
-
-outputs = {
-    logo / 'nemerle-512.png': 512,                                       # README fallback, social images
-    logo / 'nemerle-128.png': 128,                                       # NuGet package icon
-    repo / 'tools/language-server/vscode/images/icon.png': 128,          # the extension's marketplace icon
-}
-# the extension's file icon is the SVG itself (it picks its level in VS Code)
-(repo / 'tools/language-server/vscode/images').mkdir(parents=True, exist_ok=True)
-(repo / 'tools/language-server/vscode/images/nemerle.svg').write_text(svg)
-# and the script variant: the icon of .ns files
-(logo / 'nemerle-script.svg').write_text(script)
-(repo / 'tools/language-server/vscode/images/nemerle-script.svg').write_text(script)
-outputs[logo / 'nemerle-script-128.png'] = 128
-for path, size in outputs.items():
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile('w', suffix='.svg', delete=False) as f: f.write(only(level(size), script if 'script' in path.name else svg))
-    subprocess.run(['rsvg-convert', '-w', str(size), '-h', str(size), '-o', str(path), f.name], check=True)
+def render(source, path, width, height=None):
+    with tempfile.NamedTemporaryFile('w', suffix='.svg', delete=False) as f: f.write(source)
+    subprocess.run(['rsvg-convert', '-w', str(width), '-h', str(height or width), '-o', str(path), f.name], check=True)
     pathlib.Path(f.name).unlink()
-    print('%s (%d px, %s detail)' % (path.relative_to(repo), size, level(size)))
+    print('%s (%dx%d)' % (path.relative_to(repo), width, height or width))
+
+render(svg, logo / 'nemerle-512.png', 512)             # README fallback, social images
+render(svg, logo / 'nemerle-128.png', 128)             # NuGet package icon
+render(svg, images / 'icon.png', 128)                  # the extension's marketplace icon
+render(script, logo / 'nemerle-script-128.png', 128)
+
+# the GitHub social preview (1280x640): the logo, then the name
+viewbox = re.search(r'viewBox="([^"]*)"', svg).group(1)
+inner = re.sub(r'^.*?<svg[^>]*>\s*(<title>.*?</title>\s*)?', '', svg, flags=re.S).rsplit('</svg>', 1)[0]
+preview = '''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#17151f"/>
+  <svg x="110" y="140" width="360" height="360" viewBox="%s">
+%s  </svg>
+  <text x="540" y="330" font-family="Roboto" font-weight="500" font-size="132" fill="#ffffff">Nemerle</text>
+  <text x="546" y="400" font-family="Roboto" font-weight="300" font-size="40" fill="#b8a6ff">The revived Nemerle, for .NET</text>
+</svg>
+''' % (viewbox, inner)
+(logo / 'social-preview.svg').write_text(preview)
+render(preview, logo / 'social-preview.png', 1280, 640)
