@@ -325,6 +325,8 @@ source('init/main.n', 'System.Console.WriteLine("main");')
 source('init/other.n', 'System.Console.WriteLine("other");')
 run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.n', '-source-root:' + str(init), '-out:' + str(work / 'init-nostart.exe'),
      '-no-color', *modern_references], False, 'a program starts at main.n')
+if (work / 'init-nostart.exe').exists():
+    raise RuntimeError('a failed compilation left its output behind (init-nostart.exe)')
 run([runtime, compiler, init / 'other.n', init / 'helper.n', init / 'lib/config.n', '-main:other', '-source-root:' + str(init), '-out:' + str(work / 'init-other.exe'),
      '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'init-other.runtimeconfig.json')
@@ -353,6 +355,17 @@ source('tuples/main.n', 'def (w, h) = (1, 2);\nRun() : int { w + h }\nw = 3;')
 run([runtime, compiler, tuples / 'main.n', '-source-root:' + str(tuples), '-out:' + str(work / 'tuples-readonly.exe'), '-no-color',
      *modern_references], False, "symbol `main.w', which is read-only")
 print('PASS: a top-level `def (w, h)` declares w and h as the file\'s state (mutable, nested, typed, public, taken apart once)', flush=True)
+
+# a file's values are inferred after those of the files it imports, whatever the order on the command line: here
+# main.n (first) uses a member of lib's value while its own `items' gets its type from a later binding
+source('order/lib.n', 'public def name = "x";')
+source('order/main.n', 'using lib;\nmutable items = [];\nitems ::= 3;\nSystem.Console.WriteLine(lib.name.Length + items.Length);')
+run([runtime, compiler, work / 'order/main.n', work / 'order/lib.n', '-source-root:' + str(work / 'order'), '-out:' + str(work / 'order.exe'),
+     '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'order.runtimeconfig.json')
+if run([runtime, work / 'order.exe']).stdout.strip() != '2':
+    raise RuntimeError('values inferred in import order')
+print('PASS: top-level values are inferred in import order, not command-line order', flush=True)
 
 # a def declares its names, so its pattern must always match: one that can fail (a list, a variant) is an error, in a
 # function and at the top level, unless the shape is written out or an `else` (which must leave) takes the rest

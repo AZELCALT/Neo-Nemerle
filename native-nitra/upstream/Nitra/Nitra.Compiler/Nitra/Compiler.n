@@ -10082,7 +10082,18 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
         {
           def text=String.Join("\n",source.Value.ToArray());
           def selected=NitraSyntax.Structure(grammar,"NitraSyntax.Start",text,null);
-          unless(selected.Success) throw ArgumentException(String.Join("\n",selected.Diagnostics.ToArray()));
+          // a grammar that does not parse is reported where it stops parsing (the offset is the file's: the text is
+          // the file's, other code blanked), not at the file's start
+          unless(selected.Success)
+          {
+            def furthest=if(selected.Recognition!=null) selected.Recognition.Furthest else 0;
+            def parts=SCG.List.[string]();
+            foreach(m in selected.Diagnostics) parts.Add(System.Text.RegularExpressions.Regex.Replace(m," at offset [0-9]+$",""));
+            def message=String.Join("\n",parts.ToArray());
+            def near=if(furthest>=0 && furthest<text.Length) text.Substring(furthest,Math.Min(24,text.Length-furthest)).Split('\n')[0].Trim() else "";
+            throw Nemerle.Compiler.NitraShared.NitraSourceException(source.Key,text,furthest,
+              "the grammar does not parse here"+(if(near!="") ", at `"+near+"'" else "")+" ("+message+")");
+          }
           _=project.AddRecognizedFile(Nemerle.Compiler.AST.Location.GetFileIndex(source.Key),text,
             Func(provider => registry.Create("NitraSyntax.Start",provider,selected.Root) :> NitraSyntaxParseTree.Start));
         }

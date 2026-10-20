@@ -216,7 +216,12 @@ internal sealed class NitraSourceSession
                    else r.Name();
           when(definitions.ContainsKey(name)) throw ArgumentException("duplicate source grammar: "+name);
           def block=r.Block();
-          def nativeSource="namespace "+name+" {"+text.Substring(block.Start+1,block.End-block.Start-2)+"}";
+          // the grammar as the native compiler reads it: `namespace Name {' in place of `grammar Name {', on the same
+          // line as in the file (the line breaks before it and between the name and `{' kept), so a position in it is
+          // the file's line and column
+          def breaks(from : int, to : int) : string { mutable n=0; for(mutable i=from;i<to;++i) when(text[i]=='\n') ++n; string('\n',n) }
+          def prefix=breaks(0,t.Start)+"namespace "+name+breaks(t.Start,block.Start)+" {";
+          def nativeSource=prefix+text.Substring(block.Start+1,block.End-block.Start-2)+"}";
           def document=if(configuration.CreateContext!=null) NitraSyntax.ReadSourceGrammar(nativeSource,file)
                        else
                        {
@@ -230,13 +235,13 @@ internal sealed class NitraSourceSession
           foreach(c in document.InactiveConstructs)
           {
             def record=NitraInactiveConstruct(); record.Kind=c.Kind; record.File=file; record.Text=c.Text;
-            record.Start=block.Start+1+c.Start-("namespace "+name+" {").Length;
+            record.Start=block.Start+1+c.Start-prefix.Length;
             record.End=record.Start+c.End-c.Start; configuration.InactiveConstructs.Add(record);
           }
           // the continuation's mark trace needs every declaration's span, read textually (cheap) and
           // moved from the wrapped grammar text to positions in the source file
           when(manager.Options.ContinuationSection || !manager.ContinueFrom.IsEmpty)
-            markSources[name]=(Nemerle.Compiler.NitraDeclarations.NitraDeclarationReader(nativeSource,file).Read(),block.Start+1-("namespace "+name+" {").Length,block.Start+1);
+            markSources[name]=(Nemerle.Compiler.NitraDeclarations.NitraDeclarationReader(nativeSource,file).Read(),block.Start+1-prefix.Length,block.Start+1);
           definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
         }
         else if(!t.Quoted && previous!="." && t.Text=="space" && IsBlockHeader(text,file,t.Start,"space"))

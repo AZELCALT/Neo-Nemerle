@@ -4,6 +4,12 @@ Open edges of the current design, each with what happens today. None of them let
 unless it says so. These edges will be closed, which can change what happens there: do not rely on them (see
 [HOW-IT-IS-BUILT.md](HOW-IT-IS-BUILT.md#what-is-supported)).
 
+## Top-level code and state
+
+- **Declarations a macro writes at the top level are not the file's state.** `counter(hits)` expanding to
+  `mutable hits = 0` declares a value of the top-level code itself: it works there and in its lambdas, but the file's
+  functions do not see it. State is decided when the file is read, before macros expand.
+
 ## Scopes and spaces
 
 - **A slot shared across copies of `Nemerle.dll` holds values, not types.** Scope storage is the process's, whichever
@@ -27,11 +33,10 @@ unless it says so. These edges will be closed, which can change what happens the
 
 ## Tooling
 
-- **Typed completion skips broken lines elsewhere.** When an unfinished line elsewhere in the file stops the
-  compiler, the lines with errors are blanked and the file is typed again, so names bound only on those lines are
-  not offered (keywords and syntax forms always are). A type is renamed only when its short name is unique (in the
-  workspace and among the referenced libraries' types), and find-references and rename compile the whole workspace
-  each time.
+- **Completion after a broken line elsewhere** offers the names of the file's last good check (and keywords and
+  syntax forms), not names written since. A type is renamed only when its short name is unique (in the workspace and
+  among the referenced libraries' types); renaming a type still checks the workspace (members and locals are renamed
+  from the symbol index).
 - **Windows is checked by running it there, not in `./bootstrap`.** `install.ps1` runs whole under PowerShell 7 in
   `./bootstrap`'s installer check, and is written for Windows PowerShell 5.1 (its native calls, its zip and tar
   reading), but 5.1 itself and the launchers' Windows side (`hello.exe` starting `hello.dll`) are run on Windows by

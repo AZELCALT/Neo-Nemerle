@@ -167,6 +167,22 @@ using Nemerle.ProjectCommands;
 
     main_with_catching() : void
     {
+      // a compilation with errors leaves no output behind (a program without an entry point is written before that
+      // error is known, and would not run): only what this run wrote is removed, never an earlier good build. At the
+      // process's exit, as the compiler ends the process itself when it has reported errors.
+      def started = DateTime.UtcNow;
+      AppDomain.CurrentDomain.ProcessExit += fun (_, _)
+      {
+        try
+        {
+          // (the messages of this compilation's manager, which may no longer be the current one)
+          ManagerClass.Instance = Manager;
+          when (Message.ErrorCount > 0 && Options.OutputFileName != null)
+            foreach (path in [Options.OutputFileName, IO.Path.ChangeExtension(Options.OutputFileName, ".pdb")])
+              when (IO.File.Exists(path) && IO.File.GetLastWriteTimeUtc(path) >= started) IO.File.Delete(path)
+        }
+        catch { | _ => () }
+      };
       try
       {
         Options.LibraryPaths ::= IO.Path.GetDirectoryName

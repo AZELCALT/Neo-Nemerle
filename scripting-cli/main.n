@@ -108,7 +108,8 @@ public class ScriptRunner
       def references = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "references");
       when (Directory.Exists(references)) definition.TargetReferenceDirectory = references;
       def settings = ScriptHostOptions();
-      mutable cacheDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nemerle", "scripting");
+      // (made if missing: a data folder that does not exist yet would read as "", a relative path, the current folder)
+      mutable cacheDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create), "Nemerle", "scripting");
       mutable historyPath : string = null;
       mutable useCache = true;
       mutable offline = false;

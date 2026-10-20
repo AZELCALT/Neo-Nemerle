@@ -659,6 +659,27 @@ using Nemerle.Compiler.Utility;
       catch { | e => Message.Error("Could not write native resource: " + e.Message) }
     }
 
+    /// Runs `f` on every type, a file module after the file modules it imports (`using`), each once.
+    InImportOrder(f : TypeBuilder -> void) : void
+    {
+      def all = System.Collections.Generic.List.[TypeBuilder]();
+      Iter(ti => all.Add(ti));
+      def byName = System.Collections.Generic.Dictionary.[string, TypeBuilder]();
+      foreach (ti in all) byName[ti.FullName] = ti;
+      def done = System.Collections.Generic.HashSet.[string]();
+      def visit(ti : TypeBuilder) : void
+      {
+        when (done.Add(ti.FullName))
+        {
+          when (Manager.FileModuleRegistry.Usings.Contains(ti.FullName))
+            foreach (imported in Manager.FileModuleRegistry.Usings[ti.FullName])
+              when (byName.ContainsKey(imported)) visit(byName[imported]);
+          f(ti)
+        }
+      }
+      foreach (ti in all) visit(ti);
+    }
+
     /// The inference pass of a file module's top-level values (see compile_all_tyinfos).
     InferModuleState(ti : TypeBuilder) : void
     {
@@ -976,11 +997,13 @@ using Nemerle.Compiler.Utility;
       // a file module's top-level values: the inference pass types the inference copy of its top-level code
       // quietly and only to learn types (no code), then gives each value's field its type, or a Content when its
       // bindings differ in type
-      when (!aux_phase) Iter(InferModuleState);
+      // (in import order: a file's values are inferred after those of the files it imports, whose types its code may
+      // use, so the outcome does not depend on the order of the files on the command line)
+      when (!aux_phase) InImportOrder(InferModuleState);
       // a file module's top-level bindings infer from their initializers the same way: type its top-level code
       // (the static constructor, or the start file's Main) before the field declarations are emitted
       when (!aux_phase && Manager.ModuleBindings.Count > 0)
-        Iter(ti =>
+        InImportOrder(ti =>
           when ({ mutable has = false; foreach (k in Manager.ModuleBindings.Keys) when (k.StartsWith(ti.FullName + ".", System.StringComparison.Ordinal)) has = true; has })
           {
             foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))

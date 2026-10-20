@@ -516,6 +516,17 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         raise SystemExit('FAILED: scope declaration and access printed %r' % output)
     print('PASS: `scope A;` creates the scope where it is written, every use is access to it (a use before it, or of a '
           'scope nobody declared, fails instead of making an empty copy)', flush=True)
+    # a grammar that does not parse is reported at its own line and column, with the text there (it was the
+    # file's 1:1 with an offset), also below other code in the file
+    badgrammar = w / 'badgrammar'; badgrammar.mkdir()
+    (badgrammar / 'bad.n').write_text('using System;\n\ngrammar Bad\n{\n  using Nemerle.Compiler.Parsetree;\n  syntax module M\n  {\n'
+        '    using Nitra.Core;\n    [StartRule] syntax Start = Expr { map PExpr = <[ () ]>; }\n    syntax Expr\n    {\n      map PExpr;\n'
+        '      | Sum = Expr "+" Expr precedence 10 { map PExpr = <[ 1 ]>; }\n    }\n  }\n}\n')
+    r = subprocess.run([str(T / 'ncc'), str(badgrammar / 'bad.n'), '-source-root:' + str(badgrammar), '-target:library',
+                        '-out:' + str(badgrammar / 'bad.dll'), '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll')], capture_output=True, text=True)
+    if r.returncode == 0 or 'bad.n:13:40' not in r.stdout + r.stderr or "at `10 {" not in r.stdout + r.stderr:
+        raise SystemExit('FAILED: a grammar error is located at its line and column\n' + r.stdout + r.stderr)
+    print('PASS: a grammar that does not parse is reported at its line and column, with the text there', flush=True)
     plain = w / 'plainspace'
     plain.mkdir()
     for f in ('app.exe', 'res.dll'):
