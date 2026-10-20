@@ -1073,6 +1073,14 @@ using Nemerle.Compiler.Utility;
 
 
         /* assignment to an array element */
+        // a store through a returned reference (Span's indexer): the address the call returns, then the value at it
+        | Assign (target, val) when ReturnsReference(target) =>
+          def call = Unwrapped(target);
+          _address_of = call;
+          emit (call);
+          emit (val);
+          _ilg.Emit (OpCodes.Stobj, call.GetSystemType ());
+
         | Assign (ArrayIndexer (array_obj, [index]) as target, val) =>
           def type_of_val = val.GetSystemType ();
           if (index.NeedsEmptyStack || val.NeedsEmptyStack) {
@@ -2114,6 +2122,27 @@ using Nemerle.Compiler.Utility;
      * If it is a tail call (which is checked based on [expr]), then we emit
      * tail modifier.
      */
+    // the call whose returned reference is the place a store writes (its address is left, not read)
+    mutable _address_of : TExpr;
+
+    /// A call to a method that returns a reference (`ref T').
+    static ReturnsReference(e : TExpr) : bool
+    {
+      def handle(m : IMember) : bool
+      {
+        try { match (m.GetHandle()) { | mi is System.Reflection.MethodInfo => mi.ReturnType.IsByRef | _ => false } }
+        catch { | _ => false }
+      }
+      match (Unwrapped(e))
+      {
+        | TExpr.Call(TExpr.MethodRef(_, m, _, _), _, _) => handle(m)
+        | TExpr.Call(TExpr.StaticRef(_, m, _), _, _) => handle(m)
+        | _ => false
+      }
+    }
+
+    static Unwrapped(e : TExpr) : TExpr { match (e) { | TExpr.DebugInfo(inner, _) => Unwrapped(inner) | _ => e } }
+
     private emit_method_call (expr : TExpr,
                               base_is_value_type_or_static : bool,
                               method : MethodInfo,
@@ -2121,6 +2150,10 @@ using Nemerle.Compiler.Utility;
                               from : FixedType = null) : void
     {
       // Message.Debug ($"emc: $(method.Name)");
+      // a call returning a reference (`ref T'): no tail call, as its value is read after it
+      // (a method of a generic type this compilation builds may not tell its return type: it returns no reference)
+      def byRef = try { method.ReturnType.IsByRef } catch { | _ => false };
+      when (byRef) expr.GenerateTail = false;
       when (expr.GenerateTail)
         _ilg.Emit (OpCodes.Tailcall);
 
@@ -2137,6 +2170,10 @@ using Nemerle.Compiler.Utility;
       {
         _ilg.Emit (OpCodes.Callvirt, method);
       }
+
+      // its value, read at the reference it returns, unless the address is what is wanted (a store through it)
+      when (byRef && !(expr : object == _address_of : object))
+        _ilg.Emit (OpCodes.Ldobj, method.ReturnType.GetElementType ());
 
       when (imethod != null)
         emit_tuple_function_conversion (expr.FixedType(), from, imethod);

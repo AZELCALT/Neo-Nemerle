@@ -1013,6 +1013,18 @@ using Nemerle.Compiler.Utility;
             foreach (main is MethodBuilder in ti.LookupMember("Main")) main.RunBodyTyper();
           });
 
+      // a ref struct (Span[T]) lives on the stack only: no field holds one, and top-level values are fields
+      when (!aux_phase)
+        Iter(ti =>
+          foreach (field is FieldBuilder in ti.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance
+                                                          | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            when (Nemerle.Compiler.typer.Typer.IsSpanType(field.GetMemType()))
+              Message.Error(field.Location,
+                if (Manager.FileModuleRegistry.State.Contains(ti.FullName + "." + field.Name))
+                  $"`$(field.Name)' would be a top-level value holding a $(field.GetMemType()) (a ref struct, which lives on the stack only): "
+                  "a top-level value is the file's state, kept in a field; use it inside a function, or keep the array or string it views"
+                else $"the field `$(field.Name)' cannot hold a $(field.GetMemType()) (a ref struct, which lives on the stack only)"));
+
       when (!aux_phase)
         _cgil_phase = 2;
 

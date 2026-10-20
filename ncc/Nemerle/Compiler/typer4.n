@@ -55,6 +55,14 @@ using Nemerle.Compiler.Utility;
 [ManagerAccess]
 internal class Typer4
 {
+  /// A library's method returning a reference (`ref T').
+  static ReturnsReference(m : IMember) : bool
+  {
+    if (m.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) false
+    else try { match (m.GetHandle()) { | mi is System.Reflection.MethodInfo => mi.ReturnType.IsByRef | _ => false } }
+    catch { | _ => false }
+  }
+
   current_fun : TFunHeader;
   current_type : TypeBuilder;
   messenger : Messenger;
@@ -139,6 +147,10 @@ internal class Typer4
 
   static Box (target_type : FixedType, expr : TExpr) : TExpr
   {
+    // a ref struct (Span[T]) lives on the stack only: it is never boxed
+    when (expr.ty != null && match (expr.ty.Hint) { | Some(t) => Nemerle.Compiler.typer.Typer.IsSpanType(t) | _ => false })
+      Message.Error(expr.Location, $"a $(expr.ty) (a ref struct, which lives on the stack only) cannot be made a $target_type: "
+                                   "it cannot be boxed; use its ToString(), ToArray() or its members");
     TExpr.TypeConversion (target_type, expr, target_type,
                           ConversionKind.Boxing ())
   }
@@ -718,14 +730,25 @@ internal class Typer4
               e.Type.Fix ()
               
             | MacroEnvelope (_, _, expanded, _) => get_real_type(expanded)
+            // a call returning a reference (Span's indexer): the value is written at its address
+            | Call (MethodRef (_, m, _, _), _, _) when ReturnsReference (m) => e.Type.Fix ()
+            | Call (StaticRef (_, m, _), _, _) when ReturnsReference (m) => e.Type.Fix ()
             | _ => Nemerle.Compiler.UtilMacros.ice ($ "wrong assignment target $e")
           }
           
           def real_type = get_real_type(e1);
           def e1 = Walk(e1);
           def e2 = Walk(e2);
-          
-          if (e1.Type.Fix ().IsValueType && ! e1.IsAddressable)
+          // a call returning a reference is the address itself (the emitter stores at it)
+          def throughReference = match (e1)
+            {
+              | Call (MethodRef (_, m, _, _), _, _) => ReturnsReference (m)
+              | Call (StaticRef (_, m, _), _, _) => ReturnsReference (m)
+              | _ => false
+            };
+
+          if (throughReference) ()
+          else if (e1.Type.Fix ().IsValueType && ! e1.IsAddressable)
             Message.Error ("this expression is not a proper lvalue: "
                            "cannot load value type address");
           else

@@ -37,6 +37,8 @@ using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
 using Nemerle.Compiler.fixed_type;
 using Nemerle.Compiler.local_value;
+using Nemerle.Compiler.expr_walker;
+using SCG = System.Collections.Generic;
 using Nemerle.Compiler.messenger;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.type_builder;
@@ -140,6 +142,8 @@ public class Typer2
         def e = Walk(Context.TopLevel, expr);
         unless (Message.SeenError)
           e.CheckAfterT2();
+        unless (Message.SeenError)
+          CheckRefStructs(e);
         current_fun.body = FunBody.Typed(e);
         FixupCurrentFunction();
 
@@ -151,6 +155,69 @@ public class Typer2
   Walk(expr : TExpr) : TExpr
   {
     Walk(Context.Clean, expr)
+  }
+
+  /// The rules of a ref struct (Span[T], ReadOnlySpan[T]): it lives on the stack only, so it is never boxed (made an
+  /// object or an interface) or put inside another type (capture by a closure is checked where a local gets its
+  /// closure field) (a generic argument,
+  /// an array, a tuple). The runtime refuses code that breaks them; here they are errors at the code.
+  CheckRefStructs(body : TExpr) : void
+  {
+    def span(t : TypeVar) : bool { t != null && match (t.Hint) { | Some(f) => Typer.IsSpanType(f) | _ => false } }
+    def inside(t : TypeVar) : bool
+    {
+      t != null && match (t.Hint)
+      {
+        | Some(FixedType.Class(_, args)) => args.Exists(a => span(a) || inside(a))
+        | Some(FixedType.Array(e, _)) => span(e) || inside(e)
+        | Some(FixedType.Tuple(parts)) => parts.Exists(p => span(p) || inside(p))
+        | _ => false   // (a function type is a signature, as a method's: a span parameter or result is allowed there)
+      }
+    }
+    def reported = SCG.HashSet.[string]();
+    def report(at : Location, message : string) : void
+    {
+      when (reported.Add(at.ToString() + message)) Message.Error(at, message)
+    }
+    ExprWalker().Walk(body, info =>
+      match (info.Node)
+      {
+        | TExpr.TypeConversion(inner, target, _, _) as e when span(inner.Type) && !span(target) =>
+          report(e.Location, $"a $(inner.Type) (a ref struct) cannot be made a $target: it cannot be boxed; use its ToString(), "
+                             "ToArray() or its members")
+        | e is TExpr when e.ty != null && inside(e.Type) =>
+          report(e.Location, $"a ref struct (Span[T], ReadOnlySpan[T]) cannot be inside $(e.Type): not as a generic argument, "
+                             "in an array or a tuple")
+        | _ => ()
+      });
+  }
+
+  /// Whether a member is a method returning a reference (`ref T').
+  static ReturnsReference(m : IMember) : bool
+  {
+    // (a library's method: this compilation's own return no reference, and their handles are made later)
+    if (m.DeclaringType is TypeBuilder) false
+    else try { match (m.GetHandle()) { | mi is System.Reflection.MethodInfo => mi.ReturnType.IsByRef | _ => false } }
+    catch { | _ => false }
+  }
+
+  /// A property's getter when it returns a reference (Span's indexer): what an assignment writes through.
+  static RefGetter(prop : IProperty) : IMethod
+  {
+    def getter = prop.GetGetter();
+    if (getter != null && ReturnsReference(getter)) getter else null
+  }
+
+  /// Whether `e' calls a method that returns a reference (an address to store at, for an assignment).
+  static RefReturningCall(e : TExpr) : bool
+  {
+    match (e)
+    {
+      | TExpr.DebugInfo(inner, _) => RefReturningCall(inner)
+      | TExpr.Call(TExpr.MethodRef(_, m, _, _), _, _) => ReturnsReference(m)
+      | TExpr.Call(TExpr.StaticRef(_, m, _), _, _) => ReturnsReference(m)
+      | _ => false
+    }
   }
 
 
@@ -1047,7 +1114,8 @@ public class Typer2
         | TExpr.PropertyMember(obj, prop) =>
           MarkAsUsed(prop, expr.Location);
           def obj2 = Walk(obj);
-          def meth =  if (ctx %&& Context.NeedLValue) prop.GetSetter()
+          // written without a setter: through the reference its getter returns (Span's indexer)
+          def meth =  if (ctx %&& Context.NeedLValue) prop.GetSetter() ?? RefGetter(prop)
                       else                            prop.GetGetter();
           when (meth == null)
           {
@@ -1387,6 +1455,8 @@ public class Typer2
               };
 
             def target = Walk(Context.NeedLValue, target);
+            // a store through a returned reference stays an assignment to the call (the emitter stores at its address)
+            def transform_call = transform_call && !RefReturningCall(target);
             def src_ctx =
               match (target)
               {

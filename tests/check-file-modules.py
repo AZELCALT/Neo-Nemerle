@@ -384,6 +384,39 @@ if run([runtime, work / 'argv.exe', 'one', 'two']).stdout.strip() != '2 one+two'
     raise RuntimeError('args in a program')
 print('PASS: a program\'s top-level code has args', flush=True)
 
+# Span[T] and the other ref structs: their members (an indexer returning a reference, read and written through it;
+# AsSpan, Slice, Memory.Span, foreach), and the rules of a value that lives on the stack only, each an error where it
+# is broken (not boxed, captured, put inside another type, or kept in a field: a top-level value is a field)
+if runtime != 'mono':   # (Span[T] is .NET's; the Mono run checks .NET Framework references)
+    source('spans/main.n', '''using System;
+    Sum(s : Span[int]) : int { mutable total = 0; foreach (x in s) total += x; total }
+    Use() : string
+    {
+      def data = array[1, 2, 3, 4];
+      def s = Span.[int](data);
+      s[0] = 10;
+      def words = "hello world".AsSpan();
+      def at = words.IndexOf(" ".AsSpan());
+      def bytes = Memory.[byte](array[1b, 2b, 3b]);
+      $"$(data[0]) $(s[1]) $(Sum(s.Slice(1, 2))) $(words.Slice(at + 1).ToString()) $(bytes.Span.Slice(1).ToArray().Length)"
+    }
+    Console.WriteLine(Use());''')
+    run([runtime, compiler, work / 'spans/main.n', '-source-root:' + str(work / 'spans'), '-out:' + str(work / 'spans.exe'), '-no-color', *modern_references])
+    if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'spans.runtimeconfig.json')
+    if run([runtime, work / 'spans.exe']).stdout.strip() != '10 2 5 world 2':
+        raise RuntimeError('spans')
+    for name, text, diagnostic in (
+            ('top-level', 'using System;\ndef s = "abc".AsSpan();\nConsole.WriteLine(s.Length);', 'would be a top-level value holding'),
+            ('captured', 'using System;\nF() : int { def s = "abc".AsSpan(); def g = () => s.Length; g() }', 'a lambda or local function cannot use it'),
+            ('boxed', 'using System;\nF() : object { def s = "abc".AsSpan(); s }', 'cannot be boxed'),
+            ('interpolated', 'using System;\nF() : string { def s = "abc".AsSpan(); $"$s" }', 'cannot be boxed'),
+            ('in a tuple', 'using System;\nF() : int { def s = "abc".AsSpan(); def t = (s, 1); t[1] }', 'cannot be inside')):
+        source('spans/rule.n', text)
+        run([runtime, compiler, work / 'spans/rule.n', '-source-root:' + str(work / 'spans'), '-target:library', '-out:' + str(work / ('spans-' + name.replace(' ', '-') + '.dll')),
+             '-no-color', *modern_references], False, diagnostic)
+    print('PASS: Span[T]: indexer read and write, AsSpan, Slice, IndexOf, Memory.Span, foreach; and its rules (top level, '
+          'capture, boxing, interpolation, inside a tuple) as errors', flush=True)
+
 # what a macro declares at the top level is the file's state, as if written there: the file's functions see it;
 # `top name' reaches the file's top level past a closer name, and `top' stays an ordinary name otherwise
 source('macros/gen.n', '''using Nemerle.Compiler;

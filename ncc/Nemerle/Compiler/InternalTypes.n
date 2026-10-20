@@ -672,9 +672,19 @@ public class InternalTypeClass
       match (mem) {
         | meth is IMethod =>
             def parms = meth.GetParameters ();
+        // (a ref struct overload, Concat(ReadOnlySpan[char], ReadOnlySpan[char]), is not the one meant)
+        def spanParameter(p : TParameter) : bool
+        {
+          match (p.ty.Hint)
+          {
+            | Some(FixedType.Class(ti, _)) => try { Nemerle.Platform.ClrMetadata.IsByRefLike(ti.SystemType) } catch { | _ => false }
+            | _ => false
+          }
+        }
         meth.IsStatic &&
         parms.Length == 2 &&
-        ! parms.Head.ty.Equals (Object)
+        ! parms.Head.ty.Equals (Object) &&
+        ! parms.Exists(spanParameter)
         | _ => false
       }
     }

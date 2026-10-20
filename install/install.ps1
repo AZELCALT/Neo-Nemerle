@@ -95,11 +95,13 @@ if (-not $NoLsp) {
   $log = Join-Path $Prefix 'lsp-build.log'
   # the server stays a .NET assembly run by dotnet (the .cmd launcher and the extension start it so): on Windows the
   # compiler would otherwise make nemerle-lsp.exe a native launcher, with the server in nemerle-lsp.dll
-  $noLauncher = if ($onWindows) { @('-launcher-') } else { @() }
-  Invoke-Native {
-    & dotnet (Join-Path $tc 'ncc.exe') "-source-root:$(Join-Path $repo 'tools\language-server')" @serverSources -target:exe `
-      "-out:$(Join-Path $tc 'nemerle-lsp.exe')" @noLauncher "-target-references:$(Join-Path $tc 'references')" -no-color @references *> $log
-  }
+  # one argument list, with no empty entries: Windows PowerShell 5.1 passes a splatted $null (an empty option list)
+  # to a native program as an empty argument, which ncc refuses
+  $nccArgs = @("-source-root:$(Join-Path $repo 'tools\language-server')") + $serverSources + @('-target:exe',
+    "-out:$(Join-Path $tc 'nemerle-lsp.exe')", "-target-references:$(Join-Path $tc 'references')", '-no-color') + @($references)
+  if ($onWindows) { $nccArgs += '-launcher-' }
+  $nccArgs = @($nccArgs | Where-Object { $_ })
+  Invoke-Native { & dotnet (Join-Path $tc 'ncc.exe') $nccArgs *> $log }
   if ($LASTEXITCODE -ne 0) { throw "Building the language server failed; see $log" }
   Copy-Item (Join-Path $tc 'ncc.runtimeconfig.json') (Join-Path $tc 'nemerle-lsp.runtimeconfig.json')
   Note 'installed' 'the language server (nemerle-lsp)'

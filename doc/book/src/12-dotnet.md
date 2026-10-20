@@ -75,6 +75,49 @@ using static geometry.shapes;
 System.Console.WriteLine(Area(2.0));
 ```
 
+## Spans
+
+`Span[T]`, `ReadOnlySpan[T]` and `Memory[T]` are used as in C#: a span views part of an array or a string without
+copying it, its indexer reads and writes through the view, and `foreach` goes over it.
+
+```nemerle
+using System;
+
+Sum(values : Span[int]) : int
+{
+  mutable total = 0;
+  foreach (x in values) total += x;
+  total
+}
+
+Show() : string
+{
+  def data = array[1, 2, 3, 4];
+  def view = Span.[int](data);
+  view[0] = 10;                                  // writes data[0]
+  def words = "hello world".AsSpan();
+  $"$(data[0]) $(Sum(view.Slice(1, 2))) $(words.Slice(words.IndexOf(' ') + 1).ToString())"
+}
+
+Console.WriteLine(Show())
+```
+
+```text
+10 5 world
+```
+
+A span is a *ref struct*: it lives on the stack only, so it is a parameter or a local of a function, and the compiler
+refuses, where it is written, what the runtime would refuse:
+
+- a top-level value holding one (a top-level value is the file's state, a field);
+- a lambda or local function using one (it would keep it in its closure);
+- boxing it, making it an `object` or an interface (`$"$span"` does: write `span.ToString()`);
+- putting it inside another type: a list, an `option`, a tuple, an array.
+
+When a method has both a span overload and another (`WriteLine(string)` and `WriteLine(ReadOnlySpan[char])`), a call
+uses the other one, and an extension method on spans applies to a span itself, not to an array or string that would
+convert to one: `array.Contains(x)` is LINQ's.
+
 ## Older .NET, .NET Framework and Mono
 
 The compiler runs on .NET 10, and builds for it by default. `-target-framework:NAME` with that target's reference

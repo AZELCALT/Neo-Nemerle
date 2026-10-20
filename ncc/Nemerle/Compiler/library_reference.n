@@ -662,6 +662,10 @@ using Nemerle.Compiler.Utility;
         }
       }
       
+      /// The method returns a reference (`ref T'): its call leaves an address, which a use reads and an assignment
+      /// writes.
+      public ReturnsByRef : bool { get { match (handle) { | m is SR.MethodInfo => m.ReturnType.IsByRef | _ => false } } }
+
       public this (tenv : Map [string, StaticTypeVar], lib : LibraryReference, h : SR.MethodBase)
       {
         handle = h;
@@ -669,10 +673,12 @@ using Nemerle.Compiler.Utility;
 
         def (tyvars, tenv) = TyCodec.ReflectTyparms (lib, tenv, h);
         
+        // a `ref T' return (Span's indexer, MemoryMarshal.GetReference) is a T to its caller: read through the
+        // reference where it is used, written through it where it is assigned (see ReturnsByRef)
         def ret_type =
           match (handle)
           {
-            | m is SR.MethodInfo => library.TypeOfType (tenv, m.ReturnType)
+            | m is SR.MethodInfo => library.TypeOfType (tenv, if (m.ReturnType.IsByRef) m.ReturnType.GetElementType() else m.ReturnType)
             | _ => InternalType.Void // it is ctor
           };
         
@@ -871,7 +877,7 @@ using Nemerle.Compiler.Utility;
 
         assert(any_method != null);
 
-        def ret_type = library.TypeOfType (tenv, handle.PropertyType);
+        def ret_type = library.TypeOfType (tenv, if (handle.PropertyType.IsByRef) handle.PropertyType.GetElementType() else handle.PropertyType);
 
         def (args, ret_type) =
           if (getter != null)
@@ -904,7 +910,8 @@ using Nemerle.Compiler.Utility;
       
       public Name       : string      { get { handle.Name } }
       public MemberKind : MemberKinds { get { MemberKinds.Property } }
-      public IsMutable  : bool        { get { handle.CanWrite } }
+      // a property whose getter returns a reference (Span's indexer) is written through that reference
+      public IsMutable  : bool        { get { handle.CanWrite || handle.PropertyType.IsByRef && getter != null } }
 
       public GetGetter()                  : IMethod         { getter }
       public GetSetter()                  : IMethod         { setter }
@@ -1262,8 +1269,10 @@ using Nemerle.Compiler.Utility;
 
         decode_extension_methods(lib.LibRefManager);
 
+        // (a ref struct carries [Obsolete("Types with embedded references are not supported in this version of your
+        // compiler.")] for compilers that cannot keep it where the runtime allows: this one can, so it is not obsolete)
         when (InternalType.Obsolete_tc != null)
-          is_obsolete = HasAttribute(InternalType.Obsolete_tc);
+          is_obsolete = HasAttribute(InternalType.Obsolete_tc) && !Nemerle.Platform.ClrMetadata.IsByRefLike(system_type);
 
         _declaredTypeParametersCount = system_type.GetGenericArguments().Length;
 

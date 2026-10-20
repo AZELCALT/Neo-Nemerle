@@ -1009,6 +1009,42 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
     /// For an unbound plain name: where a well-known static member of that name lives (`WriteLine' is
     /// System.Console.WriteLine), as a hint.
+    /// Whether an extension method's `this' parameter is a ref struct (Span[T], ReadOnlySpan[T]).
+    internal static ExtendsSpan(meth : IMethod) : bool
+    {
+      // (a library's method: asking this compilation's own for its handle would make its emitted form too early)
+      if (meth.DeclaringType is TypeBuilder) false
+      else try
+      {
+        match (meth.GetHandle())
+        {
+          | m is System.Reflection.MethodInfo =>
+            def parameters = m.GetParameters();
+            parameters.Length > 0 && Nemerle.Platform.ClrMetadata.IsByRefLike(parameters[0].ParameterType)
+          | _ => false
+        }
+      }
+      catch { | _ => false }
+    }
+
+    /// Whether a type is a ref struct of a library (Span[T], ReadOnlySpan[T]). Its definition is asked, never the
+    /// instantiated type: that would fix type arguments still being inferred (list[?] would become list[object]).
+    internal static IsSpanType(type : FixedType) : bool
+    {
+      match (type)
+      {
+        | FixedType.Class(ti, _) when !(ti is TypeBuilder) =>
+          try { Nemerle.Platform.ClrMetadata.IsByRefLike(ti.SystemType) } catch { | _ => false }
+        | _ => false
+      }
+    }
+
+    /// Whether an expression's type is a ref struct (as far as it is known).
+    static IsSpanValue(e : TExpr) : bool
+    {
+      match (e.Type.Hint) { | Some(t) => IsSpanType(t) | _ => false }
+    }
+
     /// Whether this is the top-level code of a file module itself (its static constructor, or the start file's Main),
     /// not a function or lambda in it.
     InFileTopLevel() : bool
@@ -3755,6 +3791,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         {
           when (meth.Attributes %&& NemerleModifiers.Private && !current_type.Equals(meth.DeclaringType))
             continue;
+          // an extension method on a ref struct (MemoryExtensions.Contains(Span[T], T)) applies to a span itself,
+          // not to an array or string it would convert from: `array.Contains(x)' stays Enumerable's
+          when (ExtendsSpan(meth) && !IsSpanValue(obj))
+            continue;
           
           foreach (over in ConstructMethodOverload(null, meth, maybe_varargs = true))
           {
@@ -6127,8 +6167,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       public HasExtentionMethods(type : FixedType, name : PT.Name) : bool
       {
         foreach (method in Manager.LibrariesManager.GetExtensionMethods(name.Id, name.GetEnv(typer.Env)))
-          when (method.GetFreshType() is (FixedType.Fun(FixedType.Tuple(firstParamType :: _), _), _))
-            return type.TryRequire(firstParamType);
+          // (a span's extension method is for a span: asking whether another type fits it would bind that type)
+          unless (Typer.ExtendsSpan(method) && !Typer.IsSpanType(type))
+            when (method.GetFreshType() is (FixedType.Fun(FixedType.Tuple(firstParamType :: _), _), _))
+              return type.TryRequire(firstParamType);
               
         false
       }
@@ -7378,10 +7420,13 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           def res3 = res2.FilterIfExists(AintVarArgs);
           def res4 = res3.FilterIfExists(DidntMamboJumbo);
           def res5 = res4.FilterIfExists(AintGeneric);
-            
-          // Message.Debug ($"gbo: $parms ---> $res5");
+          // (as in C#: a candidate that needs no default arguments filled in beats one that does, so IndexOf(span,
+          // value) wins over IndexOf(span, value, comparer = null))
+          def res6 = res5.FilterIfExists(o => !o.UsedDefaultParms);
 
-          res5
+          // Message.Debug ($"gbo: $parms ---> $res6");
+
+          res6
       }
     }
 

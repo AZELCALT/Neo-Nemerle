@@ -617,15 +617,26 @@ syntax ("foreach", "(", inexpr, ")", body)
     {
       def init_body = decide_enumerator_pattern (tc);
 
-      def (is_disposable, isValueType) = typer.JustTry(
+      def (is_disposable, isValueType, byRefLike) = typer.JustTry(
         fun ()
         {
           def expr = typer.TypeExpr(init_body);
-          (expr.Type.Require(<[ ttype: System.IDisposable ]>), expr.Type.IsValueType)
+          // a ref struct enumerator (Span's) lives on the stack only: it is not boxed to be disposed (it has nothing
+          // to dispose, as C# finds by its members)
+          def byRefLike = expr.Type.IsValueType && match (expr.Type.Hint)
+            {
+              | Some(FixedType.Class(ti, _)) when ti.SystemType != null =>
+                System.Linq.Enumerable.Any(ti.SystemType.GetCustomAttributesData(),
+                  fun (a : System.Reflection.CustomAttributeData) { a.AttributeType.FullName == "System.Runtime.CompilerServices.IsByRefLikeAttribute" })
+              | _ => false
+            };
+          (!byRefLike && expr.Type.Require(<[ ttype: System.IDisposable ]>), expr.Type.IsValueType, byRefLike)
         });
 
       def finally_body =
-        if (is_disposable)
+        if (byRefLike)
+          <[ () ]>
+        else if (is_disposable)
           <[ (enumerator : System.IDisposable).Dispose() ]>
         else if (isValueType)
           <[ () ]>

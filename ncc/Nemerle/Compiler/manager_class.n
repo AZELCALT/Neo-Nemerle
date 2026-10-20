@@ -489,6 +489,8 @@ using Nemerle.Compiler.XmlDump;
     /// initialize pipelines with default values
     public this (options : CompilationOptions)
     {
+      // this compiler types ref structs and `ref' returns (Span<T>): the platform offers their members
+      Nemerle.Platform.ClrMetadata.ByRefMembers = true;
       ResetCompilerState(options);
     }
 
