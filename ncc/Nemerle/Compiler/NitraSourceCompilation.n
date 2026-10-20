@@ -119,8 +119,8 @@ internal sealed class NitraSourceSession
   imports(file : int) : SCG.List[string]
   { unless(importsOf.ContainsKey(file)) importsOf[file]=SCG.List(); importsOf[file] }
   /// The full name (`file.A`) of the scope that `path` names in `file`: the file's own scope, else one of the files
-  /// it imports (`using`), or `path` itself when it is a full name. With `create`, a scope nothing names yet is the
-  /// file's own (the first `registery` creates it).
+  /// it imports (`using`), or `path` itself when it is a full name. With `create` (a binding is being added), a scope
+  /// nothing declares is reported as undeclared.
   internal ScopeKey(file : int, path : string, create : bool) : string
   {
     def dialects=configuration.Dialects;
@@ -133,8 +133,9 @@ internal sealed class NitraSourceSession
       foreach(name in imports(file)) when(dialects.HasScope(name+"."+path) && !found.Contains(name+"."+path)) found.Add(name+"."+path);
       if(found.Count==1) found[0]
       else if(found.Count>1) throw ArgumentException("scope "+path+" is declared in "+String.Join(" and ",found.ToArray())+"; name one, as scope."+found[0]+".x")
-      else if(create) { _=dialects.RegisterScope(local); local }
-      else throw ArgumentException("unknown shared scope: "+path)
+      // a scope is created by its declaration only: a binding on one nothing declares says to declare it
+      else if(create) throw ArgumentException("scope "+path+" is not declared: write `scope "+path+";' at the top level of this file (the declaration creates the scope), or `using' the file that declares it")
+      else throw ArgumentException("unknown shared scope: "+path+" (a scope is created by its declaration, `scope "+path+";', in this file or one it imports with `using')")
     }
   }
   /// The grammars a handler `grammar (A, B)` brings together, or null when `name` is not a handler (a continued
@@ -169,6 +170,11 @@ internal sealed class NitraSourceSession
     }
     catch { | _ is ArgumentException => false }
   }
+  // the scopes the sources declare, by (file, short name): their full names, for the declarations' macro
+  declaredScopes : SCG.Dictionary[int*string,string]=SCG.Dictionary();
+  /// The full name (`file.A') of the scope `name' declared in a file; null when it declares none of that name.
+  public DeclaredScope(file : int, name : string) : string
+  { mutable full; if(declaredScopes.TryGetValue((file,name),out full)) full else null }
   private Blank(chars : array[char], start : int, end : int) : void
   { for(mutable i=start;i<end;++i) unless(chars[i]=='\n' || chars[i]=='\r') chars[i]=' '; }
   private Insert(chars : array[char], start : int, end : int, tokens : array[string]) : void
@@ -255,9 +261,11 @@ internal sealed class NitraSourceSession
         }
         else if(!t.Quoted && previous!="." && t.Text=="scope" && depth==0 && !r.Is("."))
         {
-          def name=r.Name(); _=configuration.Dialects.RegisterScope(FileOwner(source.FileIndex)+"."+name);
+          def name=r.Name(); def full=FileOwner(source.FileIndex)+"."+name; _=configuration.Dialects.RegisterScope(full);
           def end=if(r.Eat(";")) r.Pos else { def block=r.Block(); when(block.End-block.Start>2 && !String.IsNullOrWhiteSpace(text.Substring(block.Start+1,block.End-block.Start-2))) r.Fail("scope declarations must be empty; use scope.name.registery to add bindings"); block.End };
-          Blank(chars,t.Start,end);
+          // the declaration creates the scope, where it is written: `__s(A);' (never longer than `scope A;')
+          declaredScopes[(source.FileIndex,name)]=full;
+          Blank(chars,t.Start,end); Insert(chars,t.Start,end,array["__s","(",name,")",";"]);
         }
         else
         {
@@ -499,6 +507,7 @@ internal sealed class NitraSourceSession
     unless(IndexOnly)
     {
       manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
+      manager.MacrosRegistry.RegisterMacro(NitraScopeMacro(this));
       manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
     }
   }
@@ -889,7 +898,7 @@ internal sealed class NitraSourceSession
               def body=member(true,arguments);
               forms = <[ (System.Func.[..$delegateTypes](fun (..$parameters) : $result { $body }) : System.Delegate) ]> :: forms;
             }
-            <[ $(scope.RegisterCode(name,typer)); Nemerle.Scopes.Scope.Of($(scope.Name : string)).Set($(name : string), Nemerle.Scopes.Content(array[..$(forms.Rev())] : array[System.Delegate])) ]>
+            <[ $(scope.RegisterCode(name,typer)); Nemerle.Scopes.Scope.Access($(scope.Name : string)).Set($(name : string), Nemerle.Scopes.Content(array[..$(forms.Rev())] : array[System.Delegate])) ]>
           }
         | _ => throw ArgumentException("expected scope.A.registery(\"name\", type(\"type\")) or a dialect member reference");
       }
@@ -917,6 +926,34 @@ internal sealed class NitraSourceSession
         | expression is PExpr => if(b.IsCall) PExpr.Call(expression,args) else expression
         | _ => throw ArgumentException("scope binding cannot be read: scope."+b.Owner+"."+b.Member);
       }
+    }
+  }
+}
+/// `__s(A)', what `scope A;' becomes: the creation of the file's scope A where the declaration is written.
+internal sealed class NitraScopeMacro : IMacro
+{
+  session : NitraSourceSession;
+  public this(session : NitraSourceSession) { this.session=session; }
+  public GetName() : string { "__s" }
+  public GetNamespace() : string { "Nemerle.Core" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null,null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(_ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    match(args)
+    {
+      | [SyntaxElement.Expression(PExpr.Ref(name) as at)] =>
+        match(session.DeclaredScope(at.Location.FileIndex,name.Id))
+        {
+          | null => Message.Error(at.Location,"invalid internal scope declaration"); PExpr.Error(at.Location)
+          | full => <[ _ = Nemerle.Scopes.Scope.Declare($(full : string)) ]>
+        }
+      | _ => Message.Error("invalid internal scope declaration"); PExpr.Error()
     }
   }
 }

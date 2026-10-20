@@ -197,7 +197,8 @@ public sealed class NitraSharedScope : NitraSemanticScope
     || Nemerle.Compiler.manager_class.ManagerClass.Instance!=null && token.Length>0 && char.IsLetter(token[0]) && !token.Contains(" ")
        && Nemerle.Compiler.manager_class.ManagerClass.Instance.CoreEnv.LookupType(NList.FromArray(token.Split('.'))).IsSome
   }
-  storage() : PExpr { <[ Nemerle.Scopes.Scope.Of($(Name : string)) ]> }
+  // every use reaches the one storage that the declaration (`scope A;', Declare) created: access, never a new one
+  storage() : PExpr { <[ Nemerle.Scopes.Scope.Access($(Name : string)) ]> }
   static typeExpr(type : string) : PExpr
   { Nemerle.Compiler.main_parser.MainParser.ParseExpr(Nemerle.Compiler.manager_class.ManagerClass.Instance.CoreEnv,type,Location.Default,false) }
   /// The code that appends slot `name` to the storage (with its type's default value).

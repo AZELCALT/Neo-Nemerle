@@ -500,6 +500,22 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         raise SystemExit('FAILED: a plugin with its own Nemerle.dll printed %r, expected it to share the scope storage' % output)
     print('PASS: a plugin loaded with its own copy of Nemerle.dll shares the process\'s scope storage (reads 21 and a '
           'Content, writes 50 back)', flush=True)
+    # `scope A;' creates the scope where it is written; every use is access to that one: a use before the declaration
+    # has run fails (no empty copy is made), and a scope nobody declared cannot be reached
+    declared = w / 'declared'; declared.mkdir()
+    (declared / 'main.n').write_text(
+        'try { System.Console.WriteLine(scope.S.n) } catch { | e is System.InvalidOperationException => System.Console.WriteLine(e.Message) }\n'
+        'scope S;\nscope.S.registery("n", type("int"));\nscope.S.n = 5;\nSystem.Console.WriteLine(scope.S.n);\n'
+        'try { _ = Nemerle.Scopes.Scope.Access("nowhere.A") } catch { | e is System.InvalidOperationException => System.Console.WriteLine(e.Message) }\n')
+    run([T / 'ncc', declared / 'main.n', '-source-root:' + str(declared), '-out:' + str(declared / 'main.exe'), '-launcher-', '-no-color'])
+    shutil.copy2(T / 'Nemerle.dll', declared / 'Nemerle.dll')
+    shutil.copy2(T / 'ncc.runtimeconfig.json', declared / 'main.runtimeconfig.json')
+    output = [l for l in run(['dotnet', declared / 'main.exe'], cwd=declared).stdout.split('\n') if l.strip()]
+    if not (len(output) == 3 and output[0].startswith('scope main.S is not set up in this process') and output[1] == '5'
+            and output[2].startswith('scope nowhere.A is not set up in this process')):
+        raise SystemExit('FAILED: scope declaration and access printed %r' % output)
+    print('PASS: `scope A;` creates the scope where it is written, every use is access to it (a use before it, or of a '
+          'scope nobody declared, fails instead of making an empty copy)', flush=True)
     plain = w / 'plainspace'
     plain.mkdir()
     for f in ('app.exe', 'res.dll'):

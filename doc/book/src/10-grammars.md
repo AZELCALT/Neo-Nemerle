@@ -104,6 +104,10 @@ A scope is a dedicated global storage that the program and its spaces share, lik
 
 - `scope A;` declares a scope, at the top level of a file. The scope belongs to that file: in `app.n` it is
   `app.A`. A file that imports `app` (`using app;`) reaches it as `scope.A` too, and `scope.app.A` names it in full.
+- The declaration creates the scope, where it is written, when the file's top-level code runs; the process keeps it
+  from then on. Every use (`scope.A.x`, in that file or any other) is access to that one storage, never a copy: a use
+  before the declaration has run, or in a process where the declaring file never ran (a plugin outside its host),
+  fails and says so. State of a plugin's own is a scope the plugin declares.
   Scopes of different files never mix, even with the same name.
 - `scope.A.registery("name", type("t"))` appends a slot to the storage. Anything fits a slot. Its type is the
   grammar's: the space's resolver says which Nemerle type the token `"t"` stands for, and a token that names a Nemerle

@@ -27,8 +27,10 @@ public sealed class Scope
       }
   }
 
-  /// The storage of scope `name`.
-  public static Of(name : string) : Scope
+  /// Creates scope `name` (`file.A`): what `scope A;` runs, where it is written, in the file that declares it. The
+  /// process keeps it from then on (the table above holds it, so it lives as long as the process); a declaration that
+  /// runs again (the same file loaded once more) finds it and keeps its values.
+  public static Declare(name : string) : Scope
   {
     lock (stores)
     {
@@ -37,6 +39,28 @@ public sealed class Scope
       Scope(slots)
     }
   }
+
+  /// The storage of scope `name`, for a use of it (`scope.A.x`, in any file): access to the one the declaring file
+  /// created, never a new one. Before that (the declaring file has not run in this process) the use fails, saying so.
+  public static Access(name : string) : Scope
+  {
+    lock (stores)
+    {
+      mutable slots;
+      if (stores.TryGetValue(name, out slots)) Scope(slots)
+      else
+      {
+        def dot = name.LastIndexOf('.');
+        def file = if (dot > 0) name.Substring(0, dot) else name;
+        def short = name.Substring(dot + 1);
+        throw InvalidOperationException($"scope $name is not set up in this process: `scope $short;' in $file creates it, and "
+          $"$file has not run here (a plugin reaches its host's scope only inside the host); for state of its own, declare a scope")
+      }
+    }
+  }
+
+  /// The storage of scope `name`, made if missing: what binaries compiled before Declare and Access use.
+  public static Of(name : string) : Scope { Declare(name) }
 
   /// The initial value of a slot of type `type`: its default.
   public static Default(type : Type) : object { if (type != null && type.IsValueType) Activator.CreateInstance(type) else null }
