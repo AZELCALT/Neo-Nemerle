@@ -58,7 +58,7 @@ public module Scripts
       def adapter = Path.Combine(AppContext.BaseDirectory, "Nemerle.Scripting.NuGet.dll");
       when (File.Exists(adapter))
       {
-        def cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nemerle", "scripting", "packages");
+        def cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create), "Nemerle", "scripting", "packages");
         def type = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true);
         def resolver = Activator.CreateInstance(type, array[cache : object, definition.Repositories.ToArray() : object]);
         settings.Resolver = resolver :> IScriptDependencyResolver;

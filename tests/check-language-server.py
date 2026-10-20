@@ -3,7 +3,7 @@
 
 Usage: check-language-server.py --server <out>/nemerle-lsp [--log FILE]
 Build the server first with build-language-server.py."""
-import argparse, json, pathlib, shutil, subprocess, tempfile, threading, queue, time, sys
+import argparse, json, os, pathlib, shutil, subprocess, tempfile, threading, queue, time, sys
 
 p = argparse.ArgumentParser()
 p.add_argument('--server', type=pathlib.Path, required=True)
@@ -18,10 +18,14 @@ def check(ok, message):
     if not ok: raise SystemExit('FAIL: ' + message)
     checks += 1
 
+# the servers keep their symbol index in a data folder of the test's own, not the user's
+testdata = tempfile.mkdtemp(prefix='nemerle-lsp-data-')
 class Client:
-    def __init__(self):
-        args = [str(a.server)] + (['--log', str(a.log)] if a.log else [])
-        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    def __init__(self, log=None, env=None):
+        log = log or a.log
+        args = [str(a.server)] + (['--log', str(log)] if log else [])
+        env = env or dict(os.environ, XDG_DATA_HOME=testdata, LOCALAPPDATA=testdata)
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         self.next_id = 0; self.inbox = queue.Queue(); self.diagnostics = {}
         threading.Thread(target=self.reader, daemon=True).start()
     def reader(self):
@@ -83,7 +87,9 @@ def covered(tokens, text, offset):
 c = Client()
 init = c.request('initialize', {'processId': None, 'rootUri': None, 'capabilities': {}})
 caps = init['capabilities']; legend = caps['semanticTokensProvider']['legend']['tokenTypes']
-check(caps['textDocumentSync'] == 1 and caps['foldingRangeProvider'] and caps['documentSymbolProvider'], 'capabilities')
+sync = caps['textDocumentSync']
+check(sync['change'] == 1 and sync['openClose'] and 'save' in sync and caps['foldingRangeProvider'] and caps['documentSymbolProvider'],
+      'capabilities (whole texts, and saves for the index): %s' % sync)
 check(caps['hoverProvider'] and caps['definitionProvider'], 'hover and definition capabilities')
 c.notify('initialized', {})
 
@@ -308,8 +314,62 @@ try:
     check('greeting' in items, 'a script\'s own names are completed: %s' % items[:20])
     print('PASS: a .ns script is checked by the scripting host (its errors at its lines, apart from the workspace; hover, '
           'definition and typed completion)')
+    # the symbol index: kept on disk, so a new server answers find-references without checking the workspace again;
+    # a saved change checks again only the file and the files that import it, and the uses follow it
+    c.request('shutdown', None); c.notify('exit', None); c.proc.wait(timeout=30)
+    (work / 'tool.ns').unlink()
+    (work / 'main.n').write_text(fixed)   # the repaired text, saved (the index follows the files on disk)
+    data = work / 'data'; indexenv = dict(os.environ, XDG_DATA_HOME=str(data), LOCALAPPDATA=str(data))
+    def session(logname):
+        log = work / logname
+        s = Client(log=log, env=indexenv)
+        s.request('initialize', {'processId': None, 'rootUri': work.as_uri(), 'capabilities': {}})
+        s.notify('initialized', {})
+        s.notify('textDocument/didOpen', {'textDocument': {'uri': uri, 'languageId': 'nemerle', 'version': 1, 'text': fixed}})
+        return s, log
+    def wait_log(log, text):
+        deadline = time.time() + a.timeout
+        while time.time() < deadline:
+            if log.exists() and text in log.read_text(): return True
+            time.sleep(0.3)
+        return False
+    def references_to_width(s, want):
+        l, ch = position(fixed, offset_of(fixed, 'p.Width') + 2)
+        deadline = time.time() + a.timeout; refs = []
+        while time.time() < deadline:
+            refs = s.request('textDocument/references', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'context': {'includeDeclaration': True}})
+            if want(refs): break
+            time.sleep(0.5)
+        return refs
+    pen_uri = (work / 'app/pen.n').as_uri()
+    both = lambda refs: {r['uri'] for r in refs} == {uri, pen_uri}
+    s, log = session('lsp1.log')
+    check(wait_log(log, 'index: '), 'the first server builds the index: %s' % (log.read_text() if log.exists() else ''))
+    stores = list((data / 'Nemerle/lsp-index').glob('*.json'))
+    check(len(stores) == 1 and ':Pen::Width' in stores[0].read_text(), 'the index is kept on disk with symbol ids: %s\n%s\n%s' % (stores, log.read_text(), sorted(str(x) for x in work.rglob('*.json'))))
+    refs = references_to_width(s, both)
+    check(both(refs), 'references from the index: %s' % refs)
+    s.request('shutdown', None); s.notify('exit', None); s.proc.wait(timeout=30)
+    s, log = session('lsp2.log')
+    refs = references_to_width(s, both)
+    check(both(refs), 'a new server answers from the index on disk: %s' % refs)
+    check('index: ' not in log.read_text(), 'nothing is checked again when nothing changed: %s' % log.read_text())
+    # a change on disk, then a save: pen.n moves down two lines; it and main.n (which imports it) are checked again
+    (work / 'app/pen.n').write_text('\n\n' + pen)
+    s.notify('textDocument/didSave', {'textDocument': {'uri': pen_uri}})
+    check(wait_log(log, 'index: 2 file(s) checked again'), 'a save checks again the file and its importer only: %s' % log.read_text())
+    moved = lambda refs: any(r['uri'] == pen_uri and r['range']['start']['line'] == 4 for r in refs)
+    refs = references_to_width(s, moved)
+    check(moved(refs), 'the uses follow the change: %s' % refs)
+    s.request('shutdown', None); s.notify('exit', None); s.proc.wait(timeout=30)
+    (work / 'app/pen.n').write_text(pen)
+    print('PASS: the symbol index (kept on disk, reused by a new server, checked again only where files changed)')
+    c = Client()
+    c.request('initialize', {'processId': None, 'rootUri': work.as_uri(), 'capabilities': {}})
+    c.notify('initialized', {})
     c.request('shutdown', None); c.notify('exit', None)
     check(c.proc.wait(timeout=30) == 0, 'clean exit')
 finally:
     shutil.rmtree(work, ignore_errors=True)
+    shutil.rmtree(testdata, ignore_errors=True)
 print('PASS: %d language server checks' % checks)

@@ -8,6 +8,7 @@ using SCG = System.Collections.Generic;
 using Nemerle.Imperative;
 using analysis;
 using checker;
+using index;
 using transport;
 
 public sealed class Document
@@ -53,6 +54,10 @@ public sealed class Server
   mutable checking : Diagnostics.Process;
   typedDiagnostics : SCG.Dictionary[string, SCG.List[JsonObject]] = SCG.Dictionary(); // worker thread only
   typedFacts : SCG.Dictionary[string, SCG.List[JsonObject]] = SCG.Dictionary();       // worker thread only
+  // the symbol index (index.n): find-references and rename read it; its own thread keeps it up to date with the
+  // files on disk (at the start, and after each save), checking again only what changed
+  mutable index : SymbolIndex;
+  indexWanted : AutoResetEvent = AutoResetEvent(false);
 
   public this(input : Stream, output : Stream, references : string, root : string, fileNameNamespaces : bool, log : TextWriter,
               typecheck : bool, libraries : SCG.List[string])
@@ -95,7 +100,14 @@ public sealed class Server
               when (root == null) root = RootOf(message["params"]);
               log.WriteLine("source root: " + (root ?? "<per file>"));
               transport.Respond(id, Capabilities())
-            | "initialized" => ()
+            | "initialized" =>
+              when (typecheck && root != null && index == null)
+              {
+                index = SymbolIndex(root);
+                def indexer = Thread(IndexLoop); indexer.IsBackground = true; indexer.Start();
+                _ = indexWanted.Set();
+              }
+            | "textDocument/didSave" => when (index != null) _ = indexWanted.Set()
             | "shutdown" => shutdownRequested = true; transport.Respond(id, null)
             | "exit" => exitCode = if (shutdownRequested) 0 else 1; running = false
             | "textDocument/didOpen" =>
@@ -141,7 +153,10 @@ public sealed class Server
     legend["tokenTypes"] = types; legend["tokenModifiers"] = JsonArray();
     def tokens = JsonObject(); tokens["legend"] = legend; tokens["full"] = JsonValue.Create(true);
     def caps = JsonObject();
-    caps["textDocumentSync"] = JsonValue.Create(1 : int);
+    // whole texts on change; saves are told too (the index follows the files on disk)
+    def sync = JsonObject(); sync["openClose"] = JsonValue.Create(true); sync["change"] = JsonValue.Create(1 : int);
+    def save = JsonObject(); save["includeText"] = JsonValue.Create(false); sync["save"] = save;
+    caps["textDocumentSync"] = sync;
     caps["semanticTokensProvider"] = tokens;
     caps["foldingRangeProvider"] = JsonValue.Create(true);
     caps["documentSymbolProvider"] = JsonValue.Create(true);
@@ -319,6 +334,65 @@ public sealed class Server
     when (track) lock (checkWanted) checking = null;
     if (process.ExitCode == 0 && output.Length > 0) JsonNode.Parse(output).AsObject()
     else { log.WriteLine("check failed (" + process.ExitCode.ToString() + "): " + errors.Result); null }
+  }
+
+  /// Keeps the symbol index up to date: each time it is wanted (the start, a save), the files that changed on disk
+  /// since it was last built, and those importing them, are checked again in a checker process; nothing else is.
+  IndexLoop() : void
+  {
+    log.WriteLine("symbol index kept in " + index.File);
+    index.Load();
+    while (true)
+    {
+      _ = indexWanted.WaitOne();
+      try
+      {
+        def current = index.Workspace();
+        def stale = index.Stale(current);
+        if (stale.Count == 0) index.Ready = true
+        else
+        {
+          def started = Diagnostics.Stopwatch.StartNew();
+          def request = JsonObject();
+          request["root"] = JsonValue.Create(root); request["references"] = JsonValue.Create(references);
+          request["fileNameNamespaces"] = JsonValue.Create(fileNameNamespaces);
+          request["libraries"] = JsonArray(libraries.Select(l => JsonValue.Create(l) : JsonNode).ToArray());
+          def files = JsonArray();
+          foreach (path in stale) { def f = JsonObject(); f["path"] = JsonValue.Create(path); f["text"] = JsonValue.Create(current[path]); files.Add(f) }
+          request["files"] = files;
+          when (stale.Count == current.Count) request["all"] = JsonValue.Create(true);
+          match (RunChecker(request, false))
+          {
+            | null => ()
+            | answer =>
+              def facts = SCG.Dictionary.[string, SCG.List[JsonObject]](StringComparer.Ordinal);
+              foreach (f in answer["facts"].AsArray())
+              {
+                def path = Str(f["path"]);
+                unless (facts.ContainsKey(path)) facts[path] = SCG.List();
+                facts[path].Add(f.AsObject());
+              }
+              // every file the check typed is up to date: the stale ones and the files they import
+              def typed = SCG.HashSet.[string](stale, StringComparer.Ordinal);
+              foreach (f in answer["files"].AsArray()) _ = typed.Add(Str(f));
+              // a check stopped by an error typed only part of the files: one without facts is not marked as done
+              def failed = answer["diagnostics"].AsArray().Any(d => Int(d["severity"]) == 1);
+              foreach (path in typed)
+                when (current.ContainsKey(path))
+                {
+                  def mine = if (facts.ContainsKey(path)) facts[path] else SCG.List();
+                  if (failed && mine.Count == 0) index.Update(path, "", mine) else index.Update(path, current[path], mine)
+                }
+              match (index.Save()) { | null => () | why => log.WriteLine("index: not kept (" + why + ")") }
+              index.Ready = true;
+              log.WriteLine("index: " + stale.Count.ToString() + " file(s) checked again in " + started.ElapsedMilliseconds.ToString() + " ms");
+              // the open files may use what changed on disk: their live facts are checked again too
+              RequestCheck()
+          }
+        }
+      }
+      catch { | e is Exception => log.WriteLine("index: " + e.Message) }
+    }
   }
 
   CheckLoop() : void
@@ -514,6 +588,26 @@ public sealed class Server
           log.WriteLine("completion: " + items.Count.ToString() + " item(s) in " + started.ElapsedMilliseconds.ToString() + " ms")
       }
     }
+    // a check that stopped before the cursor (a broken line elsewhere) offers no names: the file's last good check
+    // does (its facts name what the file declares and uses), except after a dot, where the type decides
+    when (items.Count == 0 && path != null && typedFacts.ContainsKey(path))
+      match (PrefixAt(doc, position))
+      {
+        | null => ()
+        | prefix =>
+          def offered = SCG.HashSet.[string]();
+          foreach (f in typedFacts[path])
+          {
+            def name = Str(f["name"]); def kind = Str(f["kind"]);
+            when (name != null && name.Length > 0 && name.StartsWith(prefix, StringComparison.Ordinal) && kind != "constructor" && offered.Add(name))
+            {
+              def item = JsonObject(); item["label"] = JsonValue.Create(name);
+              item["kind"] = JsonValue.Create(match (kind) { | "method" => 2 | "field" => 5 | "property" => 10 | "event" => 23 | _ => 6 } : int);
+              item["detail"] = JsonValue.Create(Str(f["hover"]));
+              items.Add(item);
+            }
+          }
+      }
     def labels = SCG.HashSet.[string](items.Select(i => Str(i["label"]) + "/" + Int(i["kind"]).ToString()));
     def typedWords = SCG.HashSet.[string](items.Where(i => Int(i["kind"]) == 14).Select(i => Str(i["label"])));
     foreach (b in basics)
@@ -521,6 +615,20 @@ public sealed class Server
         when (labels.Add(Str(b["label"]) + "/" + Int(b["kind"]).ToString())) items.Add(b.DeepClone());
     result["items"] = items;
     result
+  }
+
+  /// The identifier being written at a position (possibly empty), or null right after a dot (a member's place).
+  static PrefixAt(doc : Document, position : JsonNode) : string
+  {
+    def lines = doc.Text.Split('\n');
+    def line = Int(position["line"]);
+    if (line < 0 || line >= lines.Length) ""
+    else
+    {
+      def l = lines[line]; def at = Math.Min(Int(position["character"]), l.Length);
+      mutable start = at; while (start > 0 && (char.IsLetterOrDigit(l[start - 1]) || l[start - 1] == '_')) start--;
+      if (start > 0 && l[start - 1] == '.') null else l.Substring(start, at - start)
+    }
   }
 
   /// A span of the check's JSON (1-based lines and columns) as an LSP range.
@@ -598,9 +706,54 @@ public sealed class Server
     }
   }
 
+  /// The fact at a position in an open file, from its latest check (the live facts): a use of a symbol, or its
+  /// declaration's name; null when there is none (or the file has not been checked yet).
+  LiveFactAt(doc : Document, position : JsonNode) : JsonObject
+  {
+    def path = PathOf(doc.Uri);
+    if (path == null || !typedFacts.ContainsKey(path)) null
+    else
+    {
+      def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
+      mutable found = null;
+      foreach (f when found == null && f["target"] != null && f["id"] != null in typedFacts[path])
+      {
+        def onUse = if (f["nameLine"] != null) Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))
+                    else Inside(line, column, Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"]));
+        def t = f["target"];
+        def onDeclaration = Str(t["path"]) == path && t["nameLine"] != null && Inside(line, column, Int(t["nameLine"]), Int(t["nameColumn"]), Int(t["nameLine"]), Int(t["nameEndColumn"]));
+        when (onUse || onDeclaration) found = f;
+      }
+      found
+    }
+  }
+
+  /// Every use of symbol `id`: the live facts of the files the latest check typed, and the index for the others.
+  UsesOf(id : string) : SCG.List[JsonObject]
+  {
+    def uses = index.Uses(id, typedFacts.Keys);
+    foreach (pair in typedFacts) foreach (f when f["id"] != null && Str(f["id"]) == id in pair.Value) uses.Add(f);
+    uses
+  }
+
+  /// The symbol at a position, from the index when it is built and the open file has been checked (no compilation);
+  /// else from a whole-workspace check.
+  /// The symbol at a position and its uses: from the index when it is built and the open file has been checked (no
+  /// compilation; the uses are exactly the symbol's), else from a whole-workspace check (facts to match by target).
+  SymbolFast(doc : Document, position : JsonNode) : JsonObject * SCG.List[JsonNode] * bool
+  {
+    def live = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
+    if (live != null) (live["target"].AsObject(), UsesOf(Str(live["id"])).Select(f => f : JsonNode).ToList(), true)
+    else
+    {
+      def (target, _, _, facts) = Symbol(doc, position);
+      (target, if (facts == null) SCG.List() else facts.ToList(), false)
+    }
+  }
+
   References(doc : Document, position : JsonNode, declaration : bool) : JsonNode
   {
-    def (target, _, _, facts) = Symbol(doc, position);
+    def (target, facts, exact) = SymbolFast(doc, position);
     def result = JsonArray();
     when (target != null)
     {
@@ -612,7 +765,7 @@ public sealed class Server
         when (seen.Add(path + range.ToJsonString())) { def l = JsonObject(); l["uri"] = JsonValue.Create(UriOf(path)); l["range"] = range; result.Add(l) }
       }
       when (declaration) add(Str(target["path"]), NameRange(target) ?? RangeOf(Int(target["line"]), Int(target["column"]), Int(target["endLine"]), Int(target["endColumn"])));
-      foreach (f when f["target"] != null && Key(f["target"]) == key in facts)
+      foreach (f when exact || f["target"] != null && Key(f["target"]) == key in facts)
         add(Str(f["path"]), NameRange(f) ?? RangeOf(Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"])));
     }
     result
@@ -638,6 +791,17 @@ public sealed class Server
   }
 
   PrepareRename(doc : Document, position : JsonNode) : JsonNode
+  {
+    // a member or a local, from the index; a type (it has no facts of its own) from a whole-workspace check
+    def fast = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
+    if (fast != null && Renamable.Contains(Str(fast["kind"])) && fast["target"]["nameLine"] != null)
+    {
+      def x = JsonObject(); x["range"] = NameRange(fast) ?? NameRange(fast["target"]); x["placeholder"] = JsonValue.Create(Str(fast["name"])); x
+    }
+    else PrepareRenameChecked(doc, position)
+  }
+
+  PrepareRenameChecked(doc : Document, position : JsonNode) : JsonNode
   {
     def symbol = Symbol(doc, position);
     def (word, range) = WordAt(doc, position);
@@ -675,6 +839,12 @@ public sealed class Server
     if (newName == null || !Identifier.IsMatch(newName) || Keywords.Contains(newName)) (null, "`" + newName + "' is not a name")
     else
     {
+    // a member or a local: its uses from the index, with no compilation
+    def fast = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
+    if (fast != null && Renamable.Contains(Str(fast["kind"])) && fast["target"]["nameLine"] != null)
+      RenameUses(fast["target"].AsObject(), UsesOf(Str(fast["id"])), newName)
+    else
+    {
     def symbol = Symbol(doc, position);
     match (TypeAt(doc, position))
     {
@@ -698,28 +868,34 @@ public sealed class Server
       | (target, _, _, _) when target["nameLine"] == null => (null, "the declaration's name is not found in its source")
       | (target, _, _, facts) =>
         def key = Key(target);
-        def uses = facts.Where(f => f["target"] != null && Key(f["target"]) == key).ToList();
-        if (uses.Any(f => f["nameLine"] == null)) (null, "some uses of it are not plain names (generated code); rename them by hand")
-        else
+        RenameUses(target, facts.Where(f => f["target"] != null && Key(f["target"]) == key).Select(f => f.AsObject()).ToList(), newName)
+    }
+    }
+    }
+    }
+  }
+
+  /// The workspace edit renaming a symbol: its declaration's name and every use's.
+  RenameUses(target : JsonObject, uses : SCG.List[JsonObject], newName : string) : JsonNode * string
+  {
+    if (uses.Any(f => f["nameLine"] == null)) (null, "some uses of it are not plain names (generated code); rename them by hand")
+    else
+    {
+      def edits = SCG.Dictionary.[string, JsonArray]();
+      def seen = SCG.HashSet.[string]();
+      def edit(path : string, range : JsonObject) : void
+      {
+        when (seen.Add(path + range.ToJsonString()))
         {
-          def edits = SCG.Dictionary.[string, JsonArray]();
-          def seen = SCG.HashSet.[string]();
-          def edit(path : string, range : JsonObject) : void
-          {
-            when (seen.Add(path + range.ToJsonString()))
-            {
-              unless (edits.ContainsKey(path)) edits[path] = JsonArray();
-              def e = JsonObject(); e["range"] = range; e["newText"] = JsonValue.Create(newName); edits[path].Add(e);
-            }
-          }
-          edit(Str(target["path"]), NameRange(target));
-          foreach (f in uses) edit(Str(f["path"]), NameRange(f));
-          def changes = JsonObject();
-          foreach (pair in edits) changes[UriOf(pair.Key)] = pair.Value;
-          def x = JsonObject(); x["changes"] = changes; (x, null)
+          unless (edits.ContainsKey(path)) edits[path] = JsonArray();
+          def e = JsonObject(); e["range"] = range; e["newText"] = JsonValue.Create(newName); edits[path].Add(e);
         }
-    }
-    }
+      }
+      edit(Str(target["path"]), NameRange(target));
+      foreach (f in uses) edit(Str(f["path"]), NameRange(f));
+      def changes = JsonObject();
+      foreach (pair in edits) changes[UriOf(pair.Key)] = pair.Value;
+      def x = JsonObject(); x["changes"] = changes; (x, null)
     }
   }
 
@@ -801,7 +977,8 @@ internal module Program
         | _ => ()
       }
     when (references == null) references = DefaultReferences();
-    def log = if (logPath != null) StreamWriter(logPath, true) : TextWriter else Console.Error;
+    // written as it happens (each line flushed), from the server's threads at once
+    def log = if (logPath != null) { def w = StreamWriter(logPath, true); w.AutoFlush = true; TextWriter.Synchronized(w) } else TextWriter.Synchronized(Console.Error);
     log.WriteLine("nemerle-lsp: references " + (references ?? "<none>"));
     def server = Server(Console.OpenStandardInput(), Console.OpenStandardOutput(), references, root, shortNames, TextWriter.Synchronized(log),
                         typecheck, libraries);

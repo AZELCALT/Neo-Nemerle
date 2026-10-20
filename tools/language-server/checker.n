@@ -25,6 +25,7 @@ using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.fixed_type;
 using Nemerle.Compiler.Lexer;
 using scripts;
+using Nemerle.Compiler.local_value;
 
 /// `nemerle-lsp --check`: one typed compilation of the workspace files an editor needs, in a process of its own (the
 /// server starts it, and kills it when a newer edit arrives). It reads a request on stdin and writes the diagnostics,
@@ -223,6 +224,12 @@ public module Checker
     result
   }
 
+  static LocalId(decl : LocalValue) : string
+  {
+    def at = decl.Location;
+    "local:" + Location.GetFileName(at.FileIndex) + ":" + at.Line.ToString() + ":" + at.Column.ToString() + ":" + decl.Name
+  }
+
   /// Hooks a compilation for the editor: its diagnostics (with `reportDiagnostics`), the facts of its typed code (for
   /// hover and go-to-definition), and the types `files` declare (into `types`). The workspace check and the check of
   /// a script (scripts.n, whose compilation the scripting host runs) both use it.
@@ -294,12 +301,14 @@ public module Checker
       | (_, _, Some((l, c, e))) => node[prefix + "Line"] = JsonValue.Create(l); node[prefix + "Column"] = JsonValue.Create(c); node[prefix + "EndColumn"] = JsonValue.Create(e)
       | _ => ()
     }
-    def fact(at : Location, hover : string, target : Location, name : string, kind : string) : void
+    // `id': what the fact refers to, the same in every file and across edits (a member by its owner, name and
+    // signature; a local by where it is declared, as it is only seen in its file), the key of the server's index
+    def fact(at : Location, hover : string, target : Location, name : string, kind : string, id : string) : void
     {
       when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at))
       {
         def f = JsonObject(); place(f, at); f["hover"] = JsonValue.Create(hover);
-        f["name"] = JsonValue.Create(name); f["kind"] = JsonValue.Create(kind);
+        f["name"] = JsonValue.Create(name); f["kind"] = JsonValue.Create(kind); f["id"] = JsonValue.Create(id);
         span(f, "name", nameSpan(at, name, false));
         when (target.FileIndex > 0 && target.Line > 0 && target.IsSourceAvailable)
         {
@@ -319,7 +328,8 @@ public module Checker
         // a constructor without source of its own (the default one) leads to its type
         def target = if (m.Location.Line > 0 && !m.Location.IsGenerated || m.DeclaringType == null) m.Location else m.DeclaringType.Location;
         def parameters = if (shown.Contains(" -> ")) shown.Substring(0, shown.LastIndexOf(" -> ")) else "";
-        fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target, if (m.DeclaringType != null) m.DeclaringType.Name else "", "constructor")
+        fact(at, owner + "(" + (if (parameters == "void") "" else parameters) + ")", target, if (m.DeclaringType != null) m.DeclaringType.Name else "", "constructor",
+             "ctor:" + owner + "(" + m.GetMemType().ToString() + ")")
       }
       else
       {
@@ -328,7 +338,8 @@ public module Checker
         def nameLocation(b : MemberBuilder) { try { b.NameLocation } catch { | _ => Location.Default } }
         def declared = match (m) { | b is MemberBuilder when nameLocation(b).Line > 0 => nameLocation(b) | _ => m.Location };
         def kind = match (m.MemberKind) { | MemberKinds.Field => "field" | MemberKinds.Property => "property" | MemberKinds.Event => "event" | _ => "method" };
-        fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, declared, m.Name, kind)
+        fact(at, (if (owner != "") owner + "." else "") + m.Name + " : " + shown, declared, m.Name, kind,
+             kind + ":" + owner + "::" + m.Name + (if (kind == "method") ":" + m.GetMemType().ToString() else ""))
       }
     }
     def walk(body : TExpr) : void
@@ -336,8 +347,8 @@ public module Checker
       ExprWalker().Walk(body, info =>
         match (info.Node)
         {
-          | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
-          | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local")
+          | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
+          | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
           | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
           | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
           | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)

@@ -1,0 +1,171 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using SCG = System.Collections.Generic;
+
+/// The workspace's symbol index: for each file, the hash of its text, the files it imports, and the facts of its
+/// typed code (each use of a symbol, with the symbol's id: see Checker.Instrument). Find-references and rename look
+/// a symbol's uses up here instead of compiling the workspace; only a file whose text changed is checked again, with
+/// the files that import it. The index is kept on disk, per workspace, and survives a restart of the server.
+public sealed class SymbolIndex
+{
+  public sealed class Entry
+  {
+    public mutable Hash : string;
+    public Imports : SCG.List[string] = SCG.List();
+    public Facts : SCG.List[JsonObject] = SCG.List();
+  }
+
+  static UsingLine : Regex = Regex(@"^\s*using\s+(?:[A-Za-z_]\w*\s*=\s*)?([A-Za-z_][\w.]*)\s*;", RegexOptions.Multiline);
+  static Skipped : array[string] = array["out", "bin", "obj", "node_modules", ".git"];
+  // a server of another build may write facts differently: its index is not read
+  static Version : string = typeof(SymbolIndex).Assembly.ManifestModule.ModuleVersionId.ToString();
+
+  root : string;
+  store : string;
+  entries : SCG.Dictionary[string, Entry] = SCG.Dictionary(StringComparer.Ordinal);
+  /// Whether every workspace file has been indexed since the server started.
+  public mutable Ready : bool;
+
+  public this(root : string)
+  {
+    this.root = root;
+    // (made if missing: without that, a data folder that does not exist yet reads as "", a relative path)
+    def data = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
+    store = Path.Combine(data, "Nemerle", "lsp-index", HashOf(root).Substring(0, 24) + ".json");
+  }
+
+  /// Where the index is kept.
+  public File : string { get { store } }
+
+  public static HashOf(text : string) : string
+  {
+    using (sha = Security.Cryptography.SHA256.Create())
+      Convert.ToHexString(sha.ComputeHash(Text.Encoding.UTF8.GetBytes(text)))
+  }
+
+  /// The workspace's source files and their text on disk: modules (.n) and scripts (.ns).
+  public Workspace() : SCG.Dictionary[string, string]
+  {
+    def found = SCG.Dictionary(StringComparer.Ordinal);
+    try
+      foreach (path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                         .Where(p => (p.EndsWith(".n", StringComparison.Ordinal) || p.EndsWith(".ns", StringComparison.Ordinal))
+                                     && !Skipped.Any(s => p.Substring(root.Length).Split(Path.DirectorySeparatorChar).Contains(s)))
+                         .Take(5000))
+        try { found[Path.GetFullPath(path)] = IO.File.ReadAllText(path) } catch { | _ => () }
+    catch { | _ => () }
+    found
+  }
+
+  /// The files a file imports (`using a.b;' is a/b.n of the workspace).
+  Imports(text : string) : SCG.List[string]
+  {
+    def list = SCG.List();
+    foreach (m is Match in UsingLine.Matches(text))
+    {
+      def file = Path.Combine(root, m.Groups[1].Value.Replace('.', Path.DirectorySeparatorChar) + ".n");
+      unless (list.Contains(file)) list.Add(file);
+    }
+    list
+  }
+
+  /// The files to check again for the workspace as it is now: the new and changed ones, and the files that import
+  /// them (their uses may resolve differently), transitively. A file that is gone leaves the index.
+  public Stale(current : SCG.Dictionary[string, string]) : SCG.List[string]
+  {
+    lock (entries)
+    {
+      foreach (gone in entries.Keys.Where(p => !current.ContainsKey(p)).ToList()) _ = entries.Remove(gone);
+      def changed = SCG.HashSet(current.Keys.Where(p => !entries.ContainsKey(p) || entries[p].Hash != HashOf(current[p])), StringComparer.Ordinal);
+      // who imports whom, as the files are now
+      def importers = SCG.Dictionary.[string, SCG.List[string]](StringComparer.Ordinal);
+      foreach (pair in current)
+        foreach (imported in Imports(pair.Value))
+        {
+          unless (importers.ContainsKey(imported)) importers[imported] = SCG.List();
+          importers[imported].Add(pair.Key);
+        }
+      def queue = SCG.Queue(changed);
+      while (queue.Count > 0)
+      {
+        def path = queue.Dequeue();
+        when (importers.ContainsKey(path))
+          foreach (user in importers[path]) when (changed.Add(user)) queue.Enqueue(user);
+      }
+      changed.ToList()
+    }
+  }
+
+  /// Records a checked file: its text (for its hash and imports) and the facts the check gave it.
+  public Update(path : string, text : string, facts : SCG.IEnumerable[JsonObject]) : void
+  {
+    def entry = Entry();
+    entry.Hash = HashOf(text);
+    entry.Imports.AddRange(Imports(text));
+    foreach (f in facts) entry.Facts.Add(f.DeepClone().AsObject());
+    lock (entries) entries[path] = entry;
+  }
+
+  /// The uses of symbol `id` in the indexed files, but for the files in `except` (open ones, whose live facts the
+  /// server has).
+  public Uses(id : string, except : SCG.ICollection[string]) : SCG.List[JsonObject]
+  {
+    def found = SCG.List();
+    lock (entries)
+      foreach (pair in entries)
+        unless (except.Contains(pair.Key))
+          foreach (f in pair.Value.Facts)
+            when (f["id"] != null && f["id"].GetValue.[string]() == id) found.Add(f);
+    found
+  }
+
+  public Load() : void
+  {
+    try
+      when (IO.File.Exists(store))
+      {
+        def saved = JsonNode.Parse(IO.File.ReadAllText(store)).AsObject();
+        when (saved["version"] != null && saved["version"].GetValue.[string]() == Version && saved["root"].GetValue.[string]() == root)
+          lock (entries)
+            foreach (pair in saved["files"].AsObject())
+            {
+              def e = Entry(); def node = pair.Value.AsObject();
+              e.Hash = node["hash"].GetValue.[string]();
+              foreach (i in node["imports"].AsArray()) e.Imports.Add(i.GetValue.[string]());
+              foreach (f in node["facts"].AsArray()) e.Facts.Add(f.DeepClone().AsObject());
+              entries[pair.Key] = e;
+            }
+      }
+    catch { | _ => lock (entries) entries.Clear() }   // an unreadable index is built again
+  }
+
+  /// Writes the index to its file; the reason when it cannot (it is then built again next time).
+  public Save() : string
+  {
+    try
+    {
+      def saved = JsonObject();
+      saved["version"] = JsonValue.Create(Version); saved["root"] = JsonValue.Create(root);
+      def files = JsonObject();
+      lock (entries)
+        foreach (pair in entries)
+        {
+          def node = JsonObject();
+          node["hash"] = JsonValue.Create(pair.Value.Hash);
+          node["imports"] = JsonArray(pair.Value.Imports.Select(i => JsonValue.Create(i) : JsonNode).ToArray());
+          node["facts"] = JsonArray(pair.Value.Facts.Select(f => f.DeepClone()).ToArray());
+          files[pair.Key] = node;
+        }
+      saved["files"] = files;
+      _ = Directory.CreateDirectory(Path.GetDirectoryName(store));
+      def pending = store + "." + Guid.NewGuid().ToString("N");
+      IO.File.WriteAllText(pending, saved.ToJsonString());
+      IO.File.Move(pending, store, true);
+      null
+    }
+    catch { | e => e.Message }
+  }
+}
