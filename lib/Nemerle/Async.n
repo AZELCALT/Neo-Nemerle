@@ -1,0 +1,67 @@
+// The runtime of `async' functions (see doc/book/src/12-dotnet.md). BSD-3-Clause, as all of lib/.
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+
+/// Runs the body of an `async' function. The compiler makes the body an iterator: each `await' whose awaiter has not
+/// completed yields that awaiter, and the driver resumes the body when it completes (on the awaiter's context, as
+/// the awaiter decides: a Task's resumes on the SynchronizationContext it was awaited on). The body ends by setting
+/// Result; the driver's Task then completes with it, or with the exception the body threw (a cancellation cancels it).
+public sealed class AsyncDriver[T]
+{
+  source : TaskCompletionSource[T] = TaskCompletionSource.[T]();
+  mutable steps : IEnumerator[object];
+  mutable resume : Action;
+
+  /// The value the body ends with.
+  public mutable Result : T;
+
+  /// Starts the body (synchronously, up to its first `await' that has to wait) and returns its Task.
+  public Run(body : IEnumerable[object]) : Task[T]
+  {
+    steps = body.GetEnumerator();
+    resume = Action(Step);
+    Step();
+    source.Task
+  }
+
+  /// Starts the body of an `async' function that returns no Task (an event handler's): an exception it ends with
+  /// is thrown on the thread pool, where it ends the process unless handled, as in C#.
+  public RunAndForget(body : IEnumerable[object]) : void
+  {
+    def task = Run(body);
+    _ = task.ContinueWith(fun (t : Task[T]) : void
+      {
+        when (t.IsFaulted)
+        {
+          def error = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(t.Exception.InnerException);
+          System.Threading.ThreadPool.QueueUserWorkItem(_ => error.Throw())
+        }
+      }, TaskContinuationOptions.ExecuteSynchronously)
+  }
+
+  Step() : void
+  {
+    try
+    {
+      if (steps.MoveNext())
+        match (steps.Current)
+        {
+          | awaiter is INotifyCompletion => awaiter.OnCompleted(resume)
+          | null => Step()   // the body's first step, which only makes it an iterator
+          | other => throw InvalidOperationException($"await: $(other.GetType()) is not an awaiter (it has no OnCompleted)")
+        }
+      else
+      {
+        steps.Dispose();
+        _ = source.TrySetResult(Result)
+      }
+    }
+    catch
+    {
+      | e is OperationCanceledException => steps.Dispose(); _ = source.TrySetCanceled(e.CancellationToken)
+      | e => steps.Dispose(); _ = source.TrySetException(e)
+    }
+  }
+}

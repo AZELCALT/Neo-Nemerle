@@ -592,8 +592,13 @@ public class FieldBuilder : MemberBuilder, IField
           }
         });
         manager.ModuleTypedBindings[key] = typed;
-        Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
-        when (ty.Equals(manager.InternalType.Void)) Message.Error(Ast.Location, "A top-level binding cannot have void type");
+        // (an async file's top-level code is typed after its fields are made: they have their types already, from
+        // the synchronous copy of the code typed first, see FileModuleRegistry.MakeAsyncFiles)
+        when (Ast != null)
+        {
+          Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
+          when (ty.Equals(manager.InternalType.Void)) Message.Error(Ast.Location, "A top-level binding cannot have void type");
+        }
       }
       finally { scriptInferring = false; }
     }

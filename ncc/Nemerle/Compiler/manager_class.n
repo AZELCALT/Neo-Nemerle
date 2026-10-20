@@ -928,6 +928,7 @@ using Nemerle.Compiler.XmlDump;
               foreach (topDecl in result.TopDeclarations)
                 ScanningPipeline(topDecl);
           finally Hierarchy.Scanning = false;
+          when (Options.FileModules) FileModuleRegistry.MakeAsyncFiles();
 
           when (Options.DoNotLoadStdlib) InternalType.InitNemerleTypes ();
 

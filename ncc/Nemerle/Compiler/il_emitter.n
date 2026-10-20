@@ -426,6 +426,7 @@ using Nemerle.Compiler.Utility;
       | TExpr.Label (_, Literal (Void))
       | TExpr.DebugInfo (Literal (Void), null)
       | TExpr.DebugInfo (null, _) => ()
+      | _ when expr.Location.IsGenerated => ()   // code a macro made, after a value that ends in a throw
       | _ =>
         Message.Warning (expr.Location,
                          "this expression has been skipped in code "
@@ -1035,7 +1036,22 @@ using Nemerle.Compiler.Utility;
 
         /* assignment to a field */
         | Assign (FieldMember (base_object, field) as target, val) =>
-          if (val.NeedsEmptyStack) {
+          // `this' (or the closure of a loop an iterator keeps, which the value does not change) is the same before
+          // and after the value, so only the value waits in a local: a jump into the value (a resumed iterator's, at
+          // the label after its `yield') then finds no object it skipped storing
+          def stable = match (base_object)
+            {
+              | TExpr.This => true
+              | TExpr.FieldMember(TExpr.This, f) => f.Name.StartsWith("_N_closureOf_")
+              | _ => false
+            };
+          if (val.NeedsEmptyStack && stable) {
+            def val_local = declare_expr_local_slot(val);
+            emit (val);
+            _ilg.Emit (OpCodes.Stloc, val_local);
+            emit (base_object);
+            _ilg.Emit (OpCodes.Ldloc, val_local);
+          } else if (val.NeedsEmptyStack) {
             def base_local = declare_expr_local_slot(base_object);
             def val_local = declare_expr_local_slot(val);
 

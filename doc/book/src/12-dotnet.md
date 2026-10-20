@@ -118,6 +118,72 @@ When a method has both a span overload and another (`WriteLine(string)` and `Wri
 uses the other one, and an extension method on spans applies to a span itself, not to an array or string that would
 convert to one: `array.Contains(x)` is LINQ's.
 
+## Async functions
+
+A function written `async` returns a `Task[T]` (or `Task`, `ValueTask[T]`, `ValueTask`, or `void`), and `await e` in
+it waits for `e`, anything with a `GetAwaiter()` as a `Task` has, without blocking the thread: the rest of the function
+runs when `e` completes, and `await` is its value. `async` and `await` are names otherwise; they are words of the
+language only where they mean this.
+
+```nemerle
+using System;
+using System.Threading.Tasks;
+
+Fetch(name : string) : Task[string] { Task.Run(() => name.ToUpper()) }
+
+async Greet(names : list[string]) : Task[int]
+{
+  mutable count = 0;
+  foreach (name in names)
+  {
+    Console.WriteLine("hello " + await Fetch(name));
+    count++
+  }
+  count
+}
+
+def greeted = await Greet(["ada", "alan"]);
+Console.WriteLine($"$greeted greeted")
+```
+
+```text
+hello ADA
+hello ALAN
+2 greeted
+```
+
+An `await` can be anywhere in the function's code: in a loop, in a condition, inside an expression (what is written
+before it there is evaluated first, as without it, and `&&` and `||` still evaluate their right side only when
+needed), in a `try` and in its `catch` and `finally` handlers. What the function throws completes its task with that
+exception, which `await` on the task throws again, with its original stack trace; an `OperationCanceledException`
+cancels it. A `void` async function is for an event handler: nothing waits for it, and what it throws ends the
+process, as in C#.
+
+An `async` function cannot have `ref` or `out` parameters, and the compiler refuses an `await` where it cannot work:
+
+- in a `lock`: the rest of the body may run on another thread, which cannot release the lock (wait with
+  `SemaphoreSlim.WaitAsync()` instead);
+- in a lambda or local function: only the async function itself waits (an async lambda is not supported yet);
+- with a span in the function: its locals are kept between its waits, where a ref struct cannot be.
+
+A program's top-level code can `await` as well, and so can any file's: a file whose top-level code waits is an *async
+file*, and so is a file that imports one. Its top-level code runs once, as any file's does, where a file imports it,
+in `using` order, and the importing file waits for it there; its state is ready when the code after the `using` runs.
+
+```nemerle
+// file: lib/settings.n
+using System.Threading.Tasks;
+public def name = await Task.Run(() => "loaded");
+
+// file: main.n
+using lib.settings;
+System.Console.WriteLine(lib.settings.name)
+```
+
+```text
+loaded
+```
+
 ## Older .NET, .NET Framework and Mono
 
 The compiler runs on .NET 10, and builds for it by default. `-target-framework:NAME` with that target's reference

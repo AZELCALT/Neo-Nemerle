@@ -553,7 +553,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           // a file module's top-level code: each binding's type comes from its initializer, typed where the top-level
           // code assigns it (so the values and functions above it are in scope); a new typing attempt starts afresh
           when (Manager.ModuleBindings.Count > 0 && CurrentFunction.decl == null && CurrentMethodBuilder.IsStatic
-                && (CurrentMethodBuilder.Name == ".cctor" || CurrentMethodBuilder.Name == "Main"))
+                && Nemerle.Compiler.file_module_registry.FileModuleRegistry.IsTopLevelCode(CurrentMethodBuilder))
           {
             def prefix = CurrentType.FullName + ".";
             foreach (key when key.StartsWith(prefix, System.StringComparison.Ordinal) in Manager.ModuleTypedBindings.Keys.NToList())
@@ -1049,8 +1049,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     /// not a function or lambda in it.
     InFileTopLevel() : bool
     {
-      current_type != null && current_method_builder != null && current_fun : object == current_method_builder.Header : object
-      && (current_method_builder.Name == ".cctor" || current_method_builder.Name == "Main")
+      current_type != null && current_method_builder != null
+      && (current_fun : object == current_method_builder.Header : object
+          || current_fun.Name == "_N_yielding_function" && current_fun.decl != null && current_fun.decl.DefinedIn : object == current_method_builder.Header : object)
+      && Nemerle.Compiler.file_module_registry.FileModuleRegistry.IsTopLevelCode(current_method_builder)
       && Manager.TopLevelCallModules.Contains(current_type.FullName)
     }
 

@@ -115,6 +115,10 @@ public sealed class FileModuleRegistry
   public Usings : Hashtable[string, list[string]] = Hashtable();
   /// The modules of this compilation with top-level code, and those of continued binaries (from their sections).
   public TopLevel : Hashtable[string, TopLevelRecord] = Hashtable();
+  /// Each file's top-level code (by module name), as parsed.
+  public Code : Hashtable[string, TopLevelCode] = Hashtable();
+  /// The modules whose top-level code is async (it waits, or runs an async module's first).
+  public Async : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
   public External : Hashtable[string, TopLevelRecord] = Hashtable();
 
   /// The top-level state of the modules (`module.name`), and the files a script imports.
@@ -223,7 +227,7 @@ public sealed class FileModuleRegistry
       when (seen.Add(name) && name != self)
       {
         def record = if (TopLevel.Contains(name)) TopLevel[name] else if (External.Contains(name)) External[name] else null;
-        if (record != null && record.Kind == "initializer") result.Add(name)
+        if (record != null && (record.Kind == "initializer" || record.Kind == "async-initializer")) result.Add(name)
         else
         {
           def usings = if (record != null) record.Usings else if (Usings.Contains(name)) Usings[name] else [];
@@ -233,6 +237,91 @@ public sealed class FileModuleRegistry
     }
     foreach (name in modules) visit(name);
     result.NToList()
+  }
+
+  /// Whether `method' runs a file's top-level code: the static constructor, the start file's Main, or an async file's
+  /// top-level function (the iterator its body is in, see MakeAsyncFiles).
+  public static IsTopLevelCode(method : MethodBuilder) : bool
+  {
+    method != null && (method.Name == ".cctor" || method.Name == "Main" || method.Name == "_N_state_flow"
+                       || method.Name.StartsWith("_N_async_") && method.Name.Contains("_N_top_level"))
+  }
+
+  /// Whether `e' has an `await' (as the parser writes it), outside a lambda.
+  public static HasAwait(e : PExpr) : bool
+  {
+    mutable found = false;
+    _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+      {
+        match (node)
+        {
+          | PExpr.Call(PExpr.Member(_, name), [_]) when !after && name.ToString() == "__await" => found = true
+          | _ => ()
+        }
+        node
+      });
+    found
+  }
+
+  /// Async files: a file whose top-level code waits (has an `await'), or runs an async file's top-level code first
+  /// (imports it), has its top-level code in an async function. The start file's Main waits for it; another file's
+  /// runs once, the first time a file importing it asks (`__module_init', which awaits it), and the file's state is
+  /// ready when it ends. Run after the files are scanned, when what each file imports is known.
+  public MakeAsyncFiles() : void
+  {
+    // a module imported from a library is async when its record says so
+    def isAsync(name : string) : bool
+    {
+      Async.Contains(name) || External.Contains(name) && External[name].Kind == "async-initializer"
+    }
+    foreach (pair in Code) when (pair.Value.Awaits) _ = Async.Add(pair.Key);
+    mutable changed = true;
+    while (changed)
+    {
+      changed = false;
+      foreach (pair in Code)
+        when (!Async.Contains(pair.Key) && Initializers(if (Usings.Contains(pair.Key)) Usings[pair.Key] else [], pair.Key).Exists(isAsync))
+        {
+          _ = Async.Add(pair.Key);
+          changed = true;
+        }
+    }
+    foreach (name in Async)
+    {
+      def code = Code[name];
+      def type = manager.NameTree.LookupInternalType(NList.FromArray(name.Split('.'))) :> TypeBuilder;
+      def body = code.Body;
+      def task = <[ System.Threading.Tasks.Task ]>;
+      def define(decl : ClassMember) : void { type.Define(Nemerle.Compiler.UtilMacros.locate(code.Location, decl)) }
+      // the code as it would be without waiting, never run: typed first, as a file's Main and static constructor are
+      // (in import order), it gives the file's state its types before the fields are made (the async function's
+      // code is typed later, in its state machine)
+      if (code.WithArgs) define(<[ decl: private static _N_state_flow(args : array[string]) : void { _ = args; ..$body } ]>)
+      else define(<[ decl: private static _N_state_flow() : void { ..$body } ]>);
+      if (code.Start)
+      {
+        // Main waits for the program's top-level code (what it throws comes out as it is, not wrapped)
+        if (code.WithArgs)
+        {
+          define(<[ decl: [Nemerle.AsyncMacros.AsyncFunction] private static _N_top_level(args : array[string]) : $task { _ = args; ..$body } ]>);
+          code.Runner.body = FunBody.Parsed(Nemerle.Compiler.UtilMacros.locate(code.Location, <[ _N_top_level(args).GetAwaiter().GetResult() ]>));
+        }
+        else
+        {
+          define(<[ decl: [Nemerle.AsyncMacros.AsyncFunction] private static _N_top_level() : $task { ..$body } ]>);
+          code.Runner.body = FunBody.Parsed(Nemerle.Compiler.UtilMacros.locate(code.Location, <[ _N_top_level().GetAwaiter().GetResult() ]>));
+        }
+      }
+      else
+      {
+        define(<[ decl: [Nemerle.AsyncMacros.AsyncFunction] private static _N_top_level() : $task { ..$body } ]>);
+        define(<[ decl: private static mutable _N_top_level_run : System.Lazy[$task]; ]>);
+        define(<[ decl: public static _N_top_level_ready() : $task { _N_top_level_run.Value } ]>);
+        code.Runner.body = FunBody.Parsed(Nemerle.Compiler.UtilMacros.locate(code.Location,
+          <[ _N_top_level_run = System.Lazy(() => _N_top_level()) ]>));
+        when (TopLevel.Contains(name)) TopLevel[name].Kind = "async-initializer";
+      }
+    }
   }
 
   public ModulePrefix(name : list[string]) : string
@@ -341,6 +430,19 @@ public sealed class FileModuleRegistry
 
 /// A module's top-level code, as the continuation section records it: a fingerprint by which Nemerle binaries know
 /// each other's modules. Kind is "initializer" (run by `using`), "start" (the program's Main) or "none".
+/// A file's top-level code as the parser made it: the member that runs it (Main or the static constructor) and its
+/// body, which MakeAsyncFiles moves into an async function when the file is async.
+public sealed class TopLevelCode
+{
+  public mutable Runner : ClassMember.Function;
+  public mutable Body : list[PExpr];
+  public mutable Location : Location;
+  public mutable Start : bool;
+  public mutable WithArgs : bool;
+  /// Whether the code itself has an `await'.
+  public mutable Awaits : bool;
+}
+
 public sealed class TopLevelRecord
 {
   public mutable Module : string = "";
@@ -379,7 +481,12 @@ internal sealed class ModuleInitMacro : IMacro
         def calls = ctx.Manager.FileModuleRegistry.Initializers(imports, self).Map(name =>
         {
           def type = Nemerle.Compiler.main_parser.MainParser.ParseExpr(ctx.Env, name);
-          <[ System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof($type).TypeHandle) ]>
+          def registry = ctx.Manager.FileModuleRegistry;
+          if (registry.Async.Contains(name) || registry.External.Contains(name) && registry.External[name].Kind == "async-initializer")
+            // an async file's top-level code: this file's is async too (MakeAsyncFiles), and waits for it
+            <[ Nemerle.AsyncMacros.__await($type._N_top_level_ready()) ]>
+          else
+            <[ System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof($type).TypeHandle) ]>
         });
         if (calls.IsEmpty) <[ () ]> else <[ { ..$calls } ]>
       | [] => <[ () ]>
@@ -426,7 +533,8 @@ internal sealed class ModuleBindingMacro : IMacro
       | [SyntaxElement.Expression(PExpr.Literal(Literal.String(key)))] =>
         def name = key.Substring(key.LastIndexOf('.') + 1);
         foreach (field is FieldBuilder in ctx.CurrentType.LookupMember(name)) field.InferScriptType(ctx);
-        <[ _N_skip_write_check($(name : dyn)) = $(ctx.Manager.ModuleTypedBindings[key] : typed) ]>
+        // (through a local: the value of an async file's binding may wait, which a field's assignment cannot hold)
+        <[ def value = $(ctx.Manager.ModuleTypedBindings[key] : typed); _N_skip_write_check($(name : dyn)) = value ]>
       | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal top-level binding"); null
     }
   }
@@ -468,11 +576,13 @@ internal sealed class StateMacro : IMacro
     {
       def short = key.Substring(key.LastIndexOf('.') + 1);
       def method = ctx.CurrentMethodBuilder;
-      def topLevelCode = method != null && (method.Name == "Main" || method.Name == ".cctor");
+      def topLevelCode = FileModuleRegistry.IsTopLevelCode(method);
       def header = if (method != null) method.GetHeader() else null;
+      // (an async file's top-level code is typed in its state machine's function)
+      def inTopLevel(v : Nemerle.Compiler.local_value.LocalValue) { v.DefinedIn : object == header || v.DefinedIn != null && v.DefinedIn.Name == "_N_yielding_function" }
       mutable found = null;
       foreach ((n, v) in ctx.CurrentLocalContext.GetLocals())
-        when (found == null && n.Id == short && !(topLevelCode && v.DefinedIn : object == header)) found = v;
+        when (found == null && n.Id == short && !(topLevelCode && inTopLevel(v))) found = v;
       if (found == null) null else <[ $(TExpr.LocalRef(found.Type, found) : typed) ]>
     }
     match (name, exprs)
@@ -493,7 +603,7 @@ internal sealed class StateMacro : IMacro
           | _ when k == 1UL && manager.ModuleBindings.ContainsKey(key) =>
             // the inference pass could not settle the type: the first initializer gives it
             match (fieldOf(key)) { | null => () | f => f.InferScriptType(ctx) }
-            <[ _N_skip_write_check($field) = $(manager.ModuleTypedBindings[key] : typed) ]>
+            <[ def value = $(manager.ModuleTypedBindings[key] : typed); _N_skip_write_check($field) = value ]>
           | _ => <[ _N_skip_write_check($field) = $value ]>
         }
       | ("__state_read", [PExpr.Literal(Literal.String(key)), field, PExpr.Literal(Literal.Bool(true))]) =>

@@ -867,7 +867,7 @@ using Nemerle.Compiler.Utility;
     // different than zero means that we should use [leave] and not [br].
     // This is set in T4, if you create nodes of this type earlier, set
     // it to 1.
-    | Goto                  { target : int; mutable try_block : int; }
+    | Goto                  { mutable target : int; mutable try_block : int; }
     | DefaultValue
     | If                    { cond : TExpr; e_then : TExpr; e_else : TExpr;
                               mutable then_debug_loc : Location; mutable else_debug_loc : Location; }

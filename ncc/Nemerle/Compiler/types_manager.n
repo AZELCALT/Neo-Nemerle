@@ -1011,6 +1011,8 @@ using Nemerle.Compiler.Utility;
             foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
               constructor.RunBodyTyper();
             foreach (main is MethodBuilder in ti.LookupMember("Main")) main.RunBodyTyper();
+            // an async file's top-level code, as typed without waiting (FileModuleRegistry.MakeAsyncFiles); not emitted
+            foreach (flow is MethodBuilder in ti.LookupMember("_N_state_flow")) { flow.RunBodyTyper(); flow.SkipEmiting = true }
           });
 
       // a ref struct (Span[T]) lives on the stack only: no field holds one, and top-level values are fields

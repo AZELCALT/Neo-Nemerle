@@ -191,8 +191,14 @@ public class LocalValue : TypedBase,
       // a ref struct (Span[T]) lives on the stack only: a lambda or local function that uses it would keep it in its
       // closure, a field, which the runtime refuses
       when (ty != null && match (ty.Hint) { | Some(t) => Nemerle.Compiler.typer.Typer.IsSpanType(t) | _ => false })
-        Nemerle.Compiler.Utility.Message.Error(Location, $"`$(Name)' is a $(ty) (a ref struct, which lives on the stack only): a lambda or local "
-                                "function cannot use it; pass it to a function as a parameter instead");
+        if (defined_in != null && defined_in.Name == "_N_yielding_function")
+          // an iterator's or async function's locals live in its state machine, between its steps
+          Nemerle.Compiler.Utility.Message.Error(Location, $"`$(Name)' is a $(ty) (a ref struct, which lives on the stack only): an async "
+                                  "function or iterator keeps its locals between its steps (an `await' or `yield'), where it cannot be; "
+                                  "use it in a function this one calls");
+        else
+          Nemerle.Compiler.Utility.Message.Error(Location, $"`$(Name)' is a $(ty) (a ref struct, which lives on the stack only): a lambda or local "
+                                  "function cannot use it; pass it to a function as a parameter instead");
       closure_field = value;
     }
   }

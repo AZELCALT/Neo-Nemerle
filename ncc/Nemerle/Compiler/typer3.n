@@ -485,6 +485,16 @@ using Nemerle.Compiler.Utility;
         parent.GetClosure(funcId)
     }
 
+    /// A closure object's reference: a local, or a field of the enumerator when the closure is a loop's in an
+    /// iterator's MoveNext (a local of MoveNext is gone when it resumes after a `yield' in the loop).
+    ClosureValueRef (closure : LocalValue) : TExpr
+    {
+      if (closure.ClosureField != null && !closure.InClosure)
+        TExpr.FieldMember (closure.Type, TExpr.This (local_function_type.GetMemType ()), closure.ClosureField)
+      else
+        PlainRef (closure)
+    }
+
     #region Local reference through closures
     /** Return code referencing closure of [hd].  */
     ClosureRef (hd : TFunHeader) : TExpr
@@ -492,13 +502,17 @@ using Nemerle.Compiler.Utility;
       //Message.Debug ($"clo ref: $(hd.name)");
       if (hd.usage == FunctionUsage.UsedJustOnce && !hd.ConvertToLoopWithClosure)
         ClosureRef(hd.decl.DefinedIn)
+      // a loop with its own closure, in a method that is a closure itself (an iterator's MoveNext): the loop's
+      // locals are in the loop's object, not in this
+      else if (current_method.is_in_closure_of != 0 && hd.ConvertToLoopWithClosure && GetClosure(hd.id) != null)
+        ClosureValueRef(GetClosure(hd.id))
       else if (current_method.is_in_closure_of != 0)
       {
         //Message.Debug ($ "lookup $(hd.name) from $(current_method.name)");
         TExpr.This (local_function_type.GetMemType ())
       }
       else if (hd.id == current_local_fun.id && hd.ConvertToLoopWithClosure)
-        PlainRef(current_closure)
+        ClosureValueRef(current_closure)
       else if (hd.id == current_method.id)
         PlainRef(GetMethodClosure(hd.id))
       else if (closure_fields == null)
@@ -509,7 +523,7 @@ using Nemerle.Compiler.Utility;
 
         if (closure != null)
         {
-          PlainRef(closure)
+          ClosureValueRef(closure)
         }
         else
         {
@@ -754,10 +768,26 @@ using Nemerle.Compiler.Utility;
     }
 
 
-    static PrepareEnumeratorObject (yield_type : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
+    /// The name of the state machine class of an iterator or async function: its function's (`Boom' is
+    /// _N_Boom_async_12, `Items' _N_Items_Enumerable_13), which stack traces show.
+    StateMachineName (kind : string) : Nemerle.Compiler.Parsetree.Name
+    {
+      def function = current_local_fun.Name;
+      def readable =
+        if (function.StartsWith ("_N_async_"))
+        {
+          def rest = function.Substring (9);
+          def cut = rest.LastIndexOf ('_');
+          (if (cut > 0) rest.Substring (0, cut) else rest) + "_async"
+        }
+        else function + "_" + kind;
+      Macros.NewSymbol (readable)
+    }
+
+    PrepareEnumeratorObject (yield_type : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
     {
       <[ decl:
-        class $(Macros.NewSymbol ("Enumerator") : name) :
+        class $(StateMachineName ("Enumerator") : name) :
           System.Collections.IEnumerator,
           System.Collections.Generic.IEnumerator [$(yield_type : typed)],
           System.IDisposable
@@ -787,7 +817,7 @@ using Nemerle.Compiler.Utility;
 
     PrepareEnumerableObject (yield_type : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
     {
-      def name = Macros.NewSymbol ("Enumerable");
+      def name = StateMachineName ("Enumerable");
 
       def has_mutable_parm = current_local_fun.Parameters.Exists (fun (fp) { fp.decl.IsMutable });
 
@@ -860,6 +890,122 @@ using Nemerle.Compiler.Utility;
       ]>
     }
 
+    /// A `yield' within a `try' (that has handlers) resumes through the entry of the outermost `try' around it: the
+    /// CLR enters a protected block at its start only. The state machine's dispatch (Typer.AddYieldStateMachine) goes
+    /// to a label just before that `try', and a dispatch at the start of its body goes on, to the next `try' in or
+    /// to the `yield''s own label.
+    EnterTries(body : TExpr) : TExpr
+    {
+      // the state machine's dispatch: `match (_N_state) { | k => goto label_k ... }'
+      mutable top = null : TExpr.Match;
+      def state_of = Hashtable ();
+      // a case's goto, as Typer2 leaves it (converted to the match's type, with debug information)
+      def goto_in(e : TExpr) : TExpr.Goto
+      {
+        | TExpr.Goto as g => g
+        | TExpr.TypeConversion(e, _, _, _) | TExpr.DebugInfo(e, _) => goto_in(e)
+        | _ => null
+      }
+      _ = body.Walk(fun (x) {
+        | TExpr.Match(_, cases) as m when top == null =>
+          foreach (case in cases)
+            match (case.patterns, case.body)
+            {
+              | ([(Pattern.Literal(Literal.Integer as k), _, _)], body) when goto_in(body) != null =>
+                state_of[goto_in(body).target] = Option.UnSome(k.AsInt)
+              | _ => ()
+            }
+          when (state_of.Count > 0) top = m;
+          null
+        | _ => null
+      });
+      if (top == null) body
+      else
+      {
+        def state = match (top.expr) { | LocalRef(d) | DebugInfo(LocalRef(d), _) => d | _ => Nemerle.Compiler.UtilMacros.ice($"state = $(top.expr)") };
+        def yes() { TExpr.Literal(InternalType.Boolean, Literal.Bool(true)) }
+        def on_state(id, go) { Match_case([(Pattern.Literal(InternalType.Int32, Literal.FromInt(state_of[id])), yes(), [])], go, false) }
+        // the tries around each label, outermost first, as the code will be once the functions used once (loops) are
+        // inlined: a loop defined outside a `try' and called in it is in the `try'
+        def same = System.Collections.Generic.ReferenceEqualityComparer.Instance;
+        def chains = Hashtable();
+        mutable stack = [];
+        def following = System.Collections.Generic.HashSet(same);
+        def find(x : TExpr) : TExpr
+        {
+          | TExpr.Try(inner, cases) as t =>
+            stack ::= t;
+            _ = inner.Walk(find);
+            stack = stack.Tail;
+            foreach (case in cases)
+              match (case)
+              {
+                | Try_case.Catch(_, h) | Try_case.Fault(h) => _ = h.Walk(find)
+                | Try_case.Filter(_, f, h) => _ = f.Walk(find); _ = h.Walk(find)
+              }
+            t
+          | TExpr.LocalFunRef(LocalValue where (ValKind = LocalValue.Kind.Function(hd, _)), _)
+            when hd.usage == FunctionUsage.UsedJustOnce && hd.body is FunBody.Typed && following.Add(hd) =>
+            // (followed wherever it is called, but not into itself: a loop calls itself)
+            match (hd.body) { | FunBody.Typed(b) => _ = b.Walk(find) | _ => () }
+            _ = following.Remove(hd);
+            null
+          | TExpr.Label(id, _) when state_of.Contains(id) =>
+            def chain = stack.Rev();
+            when (!chains.Contains(id) || (chains[id] : list[TExpr]).Length < chain.Length) chains[id] = chain;
+            null
+          | _ => null
+        }
+        _ = body.Walk(find);
+        def entries = System.Collections.Generic.Dictionary.[object, int](same);
+        foreach (chain in chains.Values)
+          foreach (t in (chain : list[TExpr]))
+            unless (entries.ContainsKey(t)) entries[t] = Manager.GetNewId("TryEntry");
+        // where a dispatch goes for label `id', from within `try' `t' (null: the state machine's own dispatch)
+        def next(id : int, t : TExpr) : TExpr.Goto
+        {
+          def chain = chains[id] : list[TExpr];
+          def past(c : list[TExpr]) : list[TExpr] { | c :: rest => if (same.Equals(c, t)) rest else past(rest) | [] => [] }
+          def after = if (t == null) chain else past(chain);
+          match (after)
+          {
+            | first :: _ => TExpr.Goto(InternalType.Void, entries[first], 1)
+            | [] => TExpr.Goto(InternalType.Void, id, 1)
+          }
+        }
+        def enter(x : TExpr) : TExpr
+        {
+          | TExpr.Try(inner, cases) as t when entries.ContainsKey(t) =>
+            def inner = inner.Walk(enter);
+            def inside = chains.Keys.Filter(id => (chains[id] : list[TExpr]).Exists(c => same.Equals(c, t)));
+            def dispatch_cases = inside.Map(fun (id) {
+              def go = next(id, t);
+              if (go.target == id)
+                // the label itself: the state is spent, so entering this `try' again (in a loop) without
+                // resuming does not jump to the label
+                on_state(id, TExpr.Sequence(InternalType.Void,
+                  TExpr.Assign(InternalType.Void, TExpr.LocalRef(state.Type, state), TExpr.Literal(InternalType.Int32, Literal.FromInt(-1))),
+                  go))
+              else
+                on_state(id, go)
+            });
+            def no_resume = Match_case([(Pattern.Wildcard(InternalType.Int32), yes(), [])], VoidLiteral(), false);
+            def dispatch = TExpr.Match(InternalType.Void, TExpr.LocalRef(state.Type, state), dispatch_cases + [no_resume]);
+            TExpr.Sequence(t.Type, TExpr.Label(InternalType.Void, entries[t], VoidLiteral()),
+                           TExpr.Try(t.Type, TExpr.Sequence(inner.Type, dispatch, inner), cases))
+          | _ => null
+        }
+        def body = body.Walk(enter);
+        foreach (case in top.cases)
+          match (goto_in(case.body))
+          {
+            | null => ()
+            | g => when (chains.Contains(g.target)) g.target = next(g.target, null).target
+          }
+        body
+      }
+    }
+
     RewriteTryFinally(clo_type : TypeBuilder, fh : TFunHeader) : void
     {
       mutable dispose_expr = VoidLiteral();
@@ -908,17 +1054,53 @@ using Nemerle.Compiler.Utility;
               TExpr.If(InternalType.Void, fldref, handler, VoidLiteral (), Location.Default, Location.Default);
             dispose_expr = TExpr.Sequence (dispose_expr.Type, for_dispose, dispose_expr);
 
-            BuildRevSequence (
-               [handler.Walk(look_for_invalid_yield),
+            // the body runs in a `try' that catches what it throws (a `yield' in it resumes through the `try' entry,
+            // see EnterTries), so the handler runs once: when the body ends, or before what it threw goes on (with
+            // its stack trace); an iterator dropped while suspended in the body runs it from Dispose
+            def local (name, ty, kind) {
+              def v = LocalValue (fh, name, ty, kind, is_mutable = true);
+              v.Register ();
+              v.UseFrom (fh);
+              v
+            }
+            def exn_type = FixedType.Class (InternalType.Exception_tc, []);
+            def caught = local ("_N_caught", exn_type, LocalValue.Kind.Plain ());
+            def failed = local ("_N_failed", InternalType.Boolean, LocalValue.Kind.Plain ());
+            def exn = local ("_N_exn", exn_type, LocalValue.Kind.ExceptionValue ());
+            def body = body.Walk(rewrite);
+            def valued = !(body.Type.Fix () is FixedType.Void);
+            def result = if (valued) local ("_N_try_value", body.Type, LocalValue.Kind.Plain ()) else null;
+            def protect =
+              TExpr.Try (InternalType.Void,
+                if (valued) TExpr.Assign (InternalType.Void, PlainRef (result), body) else body,
+                [Try_case.Catch (exn, TExpr.Sequence (InternalType.Void,
+                   TExpr.Assign (InternalType.Void, PlainRef (caught), PlainRef (exn)),
+                   TExpr.Assign (InternalType.Void, PlainRef (failed), TExpr.TrueLiteral (Manager))))]);
+            def dispatch_info = Manager.LookupTypeInfo ("System.Runtime.ExceptionServices.ExceptionDispatchInfo", 0);
+            def dispatch_type = FixedType.Class (dispatch_info, []);
+            def capture = SingleMemberLookup (dispatch_info, "Capture") :> IMethod;
+            def throw_again = Option.UnSome (dispatch_info.LookupMember ("Throw").Find (m => !m.IsStatic && m is IMethod)) :> IMethod;
+            def captured = TExpr.Call (dispatch_type, TExpr.StaticRef (capture.GetMemType (), dispatch_type, capture, []), [Parm (PlainRef (caught))], false);
+            def rethrow = TExpr.Call (InternalType.Void, TExpr.MethodRef (throw_again.GetMemType (), captured, throw_again, [], false), [], false);
+            def steps =
+               [TExpr.If (InternalType.Void, PlainRef (failed), rethrow, VoidLiteral (), Location.Default, Location.Default),
+                handler.Walk(look_for_invalid_yield),
                 TExpr.Assign (InternalType.Void, fldref, TExpr.FalseLiteral (Manager)),
-                body.Walk(rewrite),
-                TExpr.Assign (InternalType.Void, fldref, TExpr.TrueLiteral (Manager))])
+                protect,
+                TExpr.Assign (InternalType.Void, fldref, TExpr.TrueLiteral (Manager)),
+                TExpr.Assign (InternalType.Void, PlainRef (failed), TExpr.FalseLiteral (Manager))];
+            def done = BuildRevSequence (if (valued) PlainRef (result) :: steps else steps);
+            def done = TExpr.DefValIn (done.Type, failed, TExpr.FalseLiteral (Manager), done);
+            def done = TExpr.DefValIn (done.Type, caught, TExpr.Literal (exn_type, Literal.Null ()), done);
+            if (valued) TExpr.DefValIn (done.Type, result, TExpr.DefaultValue (body.Type), done) else done
           }
           else
             null
 
         | Try (body, cases) as expr =>
-          _ = body.Walk(look_for_invalid_yield);
+          // a `yield' in the body resumes through the `try' entry (Typer.AddYieldStateMachine); its handlers cannot
+          // be resumed into
+          def body = body.Walk(rewrite);
           def walk_case(case)
           {
             | Try_case.Fault (handler)
@@ -930,13 +1112,13 @@ using Nemerle.Compiler.Utility;
           }
           foreach (case in cases)
             walk_case (case);
-          expr
+          TExpr.Try (expr.Type, body, cases)
         | _ => null
       }
 
       match (fh.body) {
         | FunBody.Typed (expr) =>
-          def expr = expr.Walk(rewrite);
+          def expr = EnterTries(expr.Walk(rewrite));
 
           def dispose_meth =
             SingleMemberLookup (clo_type, "Dispose") :> IMethod;
@@ -1066,6 +1248,15 @@ using Nemerle.Compiler.Utility;
         closure_val.Register();
         closure_val.UseFrom(closure_val_fun);
         current_closure = closure_val;
+        // a loop's closure in an iterator's MoveNext is kept by the enumerator (see ClosureValueRef)
+        def kept_by_enumerator = current_local_fun.ConvertToLoopWithClosure && current_method.is_in_closure_of != 0
+                                 && !local_function_type.LookupMember ("_N_state").IsEmpty;
+        when (kept_by_enumerator)
+        {
+          def field = local_function_type.DefineAndReturn (<[ decl: internal mutable $(Macros.NewSymbol (closureName) : name) : $(clo_mtype : typed); ]>) :> IField;
+          Manager.MarkAsAssigned (field);
+          closure_val.ClosureField = field;
+        }
 
         // FIXME: this should be moved up, so empty closures are not generated
         // but this causes ICE
@@ -1114,7 +1305,10 @@ using Nemerle.Compiler.Utility;
 
         clo_type.Compile ();
 
-        [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
+        if (kept_by_enumerator)
+          [TExpr.Assign (InternalType.Void, ClosureValueRef (closure_val), ctor_call)]
+        else
+          [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
       }
     }
 

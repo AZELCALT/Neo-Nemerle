@@ -89,6 +89,8 @@ using Nemerle.Compiler.Utility;
       public static ProductInfo : OperatorInfo = OperatorInfo      ("*", 261, 260);
       public static UnMinus     : OperatorInfo = UnaryOperatorInfo ("-", 281, 280);
       public static UnPlus      : OperatorInfo = UnaryOperatorInfo ("+", 281, 280);
+      // `await e' in an async function: a call of `__await', which the function's lowering takes apart
+      public static Await       : OperatorInfo = UnaryOperatorInfo ("__await", 281, 280);
 
       public override ToString() : string
       {
@@ -131,6 +133,10 @@ using Nemerle.Compiler.Utility;
 
     mutable env           : GlobalEnv;
     mutable in_variant    : bool;
+    // the last get_modifiers() read the contextual modifier `async'
+    mutable async_modifier : bool;
+    // parsing the body of an async function: `await' is an operator there
+    mutable in_async      : bool;
     mutable stream        : Token;
     mutable last_tok      : Token;
     mutable streams_stack : Stack [Token] = Stack (20);
@@ -649,7 +655,11 @@ using Nemerle.Compiler.Utility;
               {
                 when (statements.Count == 0) statementsLocation = topstream.Location;
                 statementsEnd = last.Location;
-                foreach (expression in fileParser.parse_expr_sequence(topstream)) collected.Add((expression, publicState));
+                // `await' waits in top-level code: a file whose top-level code waits is an async file (FileModuleRegistry.MakeAsyncFiles)
+                def wasAsync = fileParser.in_async;
+                fileParser.in_async = true;
+                def parsed = try { fileParser.parse_expr_sequence(topstream) } finally { fileParser.in_async = wasAsync };
+                foreach (expression in parsed) collected.Add((expression, publicState));
               }
               finally { last.Next = after; }
               topstream = last;
@@ -902,13 +912,21 @@ using Nemerle.Compiler.Utility;
           // a program's top-level code has its command-line arguments, `args' (as a script has, and C#'s top-level
           // statements), unless the file binds a value of that name itself
           def withArgs = !bindings.ContainsKey("args") && !members.Exists(m => m.Name == "args");
-          members.Add(Nemerle.Compiler.UtilMacros.locate(statementsLocation,
+          def runner = Nemerle.Compiler.UtilMacros.locate(statementsLocation,
             if (start && withArgs) <[ decl: public Main(args : array[string]) : void { _ = args; ..$body } ]>
             else if (start) <[ decl: public Main() : void { ..$body } ]>
-            else <[ decl: static this() { ..$body } ]>));
+            else <[ decl: static this() { ..$body } ]>);
+          members.Add(runner);
+          def code = TopLevelCode();
+          code.Runner = runner :> ClassMember.Function; code.Body = body; code.Location = statementsLocation;
+          code.Start = start; code.WithArgs = start && withArgs;
+          code.Awaits = statements.Exists(Nemerle.Compiler.file_module_registry.FileModuleRegistry.HasAwait);
+          registry.Code[moduleName] = code;
           when (bindings.Count > 0)
             members.Add(Nemerle.Compiler.UtilMacros.locate(statementsLocation,
-              <[ decl: private static _N_state_types() : void { ..$(inference()) } ]>));
+              // (with the program's `args', as its top-level code has them)
+              if (start && withArgs) <[ decl: private static _N_state_types(args : array[string]) : void { _ = args; ..$(inference()) } ]>
+              else <[ decl: private static _N_state_types() : void { ..$(inference()) } ]>));
         }
         foreach (member when !(member is ClassMember.TypeDeclaration) in members)
           when (member.modifiers != null) member.modifiers.mods |= NemerleModifiers.Static;
@@ -989,6 +1007,7 @@ using Nemerle.Compiler.Utility;
            "class", "variant", "interface", "struct", "enum", "delegate", "mask", "macro", "module", "abstract", "sealed"].Contains(key);
         | Token.SquareGroup => true;
         | Token.Identifier("type") => true;
+        | Token.Identifier("async") when token.Next is Token.Identifier || token.Next is Token.Keyword => IsMemberStart(token.Next, script);
         | Token.Identifier =>
           match (token.Next)
           {
@@ -2017,6 +2036,9 @@ using Nemerle.Compiler.Utility;
 
           mutable customs = get_customs ();
           def mods = AttributesAndModifiers(get_modifiers (), []);
+          def isAsync = async_modifier;
+          when (isAsync)
+            mods.AddCustomAttribute(PExpr.FromQualifiedIdentifier(Manager, "Nemerle.AsyncMacros.AsyncFunction"));
 
           mutable parsed_some_top_extension = false;
           def collect_type_macro_inv = AttributesAndModifiers();
@@ -2096,7 +2118,9 @@ using Nemerle.Compiler.Utility;
                 def return_value_mods = AttributesAndModifiers();
                 take_attributes_out (ref customs, System.AttributeTargets.ReturnValue, true, return_value_mods);
 
-                def met = parse_method (header, mods, return_value_mods);
+                def wasAsync = in_async;
+                in_async = isAsync;
+                def met = try { parse_method (header, mods, return_value_mods) } finally { in_async = wasAsync };
                 when (met != null)
                   members.Add(met);
               }
@@ -2991,11 +3015,18 @@ using Nemerle.Compiler.Utility;
 
     get_modifiers () : NemerleModifiers
     {
+      async_modifier = false;
       def loop (acc)
       {
         def tok = peek_token ();
         match (tok)
         {
+          // `async' is a modifier only before a name or another modifier (a member may still be named `async')
+          | Token.Identifier ("async") when tok.Next is Token.Identifier || tok.Next is Token.Keyword =>
+            shift ();
+            when (async_modifier) Error (tok, "attribute 'async' specified more than once");
+            async_modifier = true;
+            loop (acc)
           | Token.Keyword (key) =>
             def add_and_loop (attr : NemerleModifiers)
             {
@@ -3393,7 +3424,10 @@ using Nemerle.Compiler.Utility;
 
     make_operator_call (name : string, e : PExpr) : PExpr
     {
-      PExpr.Call (e.Location, PExpr.Ref (e.Location, MkName(name, e.Location)), [e])
+      if (name == "__await")
+        PExpr.Call (e.Location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.AsyncMacros.__await"), [e])
+      else
+        PExpr.Call (e.Location, PExpr.Ref (e.Location, MkName(name, e.Location)), [e])
     }
 
     make_operator_call (name : string, parms : list [PExpr], location : Location) : PExpr
@@ -3476,6 +3510,69 @@ using Nemerle.Compiler.Utility;
         This is the top expression parsing method, it uses infix to RPN method
         to parse operators and [parse_embedded_expr] to parse expression in between.
         */
+    /// The splices `$(...)' of an interpolated string in an async function, one of which has an `await': each is parsed
+    /// here (where `await' waits) and made a value before the string, in order, which the string then reads.
+    AwaitedSplices (text : string, location : Location) : string * string * list [PExpr]
+    {
+      def result = System.Text.StringBuilder ();
+      mutable before = [];
+      mutable i = 0;
+      while (i < text.Length)
+      {
+        if (text [i] == '$' && i + 1 < text.Length && text [i + 1] == '(' && !(i >= 2 && text [i - 1] == '.' && text [i - 2] == '.'))
+        {
+          // the splice's end: its closing parenthesis
+          mutable depth = 0;
+          mutable j = i + 1;
+          mutable closed = -1;
+          while (closed < 0 && j < text.Length)
+          {
+            when (text [j] == '(') depth++;
+            when (text [j] == ')') { depth--; when (depth == 0) closed = j; }
+            j++;
+          }
+          def inner = if (closed > 0) text.Substring (i + 2, closed - i - 2) else null;
+          if (inner == null || inner.Contains (";"))
+          {
+            _ = result.Append (text [i]);
+            i++;
+          }
+          else
+          {
+            def lexer = LexerString (Manager, inner + " ", location);
+            def tokens = PreParser (lexer, env).PreParse ();
+            def parser = MainParser (env);
+            parser.in_async = true;
+            if (tokens.Child.Next == null) parser.push_stream ((tokens.Child :> Token.LooseGroup).Child) else parser.push_stream (tokens);
+            def value = parser.parse_expr (TokenStoppers.None);
+            def name = "_N_splice_" + Manager.GetNewId ().ToString ();
+            before ::= PExpr.Define (location, PExpr.Ref (location, MkName (name, location)), value);
+            _ = result.Append ("$(").Append (name).Append (")");
+            i = closed + 1;
+          }
+        }
+        else
+        {
+          _ = result.Append (text [i]);
+          i++;
+        }
+      }
+      def text = result.ToString ();
+      (text, null, before.Rev ())   // (no raw text: the string is not the one written)
+    }
+
+    /// Whether `token' can begin the operand of a prefix operator (as after `await').
+    static starts_operand (token : Token) : bool
+    {
+      match (token)
+      {
+        | null | Token.EndOfGroup | Token.Semicolon | Token.Comma | Token.EndOfFile => false
+        | Token.Operator (op) => op == "$" || op == "-" || op == "!" || op == ".."
+        | Token.Keyword (k) => !["else", "with", "when", "as", "is", "in", "where", "matches", "and", "finally", "catch"].Contains (k)
+        | _ => true
+      }
+    }
+
     parse_expr (stop : TokenStoppers) : PExpr
     {
       mutable _expr_stack = [];
@@ -3493,6 +3590,11 @@ using Nemerle.Compiler.Utility;
               _expr_stack = PExpr.Ellipsis (expr.Location, expr) :: _expr_stack;
               expect_empty ("ellipsis expression");
               _op_context = OpContext.Postfix;
+              loop ()
+
+            | Token.Identifier ("await") when in_async && starts_operand (tok.Next) =>
+              shift ();
+              rpn_op_stack = (OperatorInfo.Await, loc) :: rpn_op_stack;
               loop ()
 
             | Token.Keyword (str)
@@ -3985,13 +4087,15 @@ using Nemerle.Compiler.Utility;
               {
                 | Token.StringLiteral(str, rawStr) as stok => // change $"..." to sprint("...")
                   shift ();
+                  // an `await' in a splice waits where the string is: the splices are values made before it
+                  def (str, rawStr, before) = if (in_async && str.Contains("await")) AwaitedSplices(str, stok.Location) else (str, rawStr, []);
                   // the sprint macro must get current location and global context...
                   def lit = Literal.String(str);
                   lit.RawString = rawStr;
                   def expr = PExpr.Literal (stok.Location, lit);
                   def sprintMacro = <[ $(MkNameGenerated("Nemerle") : name).IOMacros.sprint ($expr) ]>;
                   sprintMacro.Location = loc + stok.Location; // Make lacation as parsed (not generated)!
-                  sprintMacro
+                  if (before.IsEmpty) sprintMacro else PExpr.Sequence (sprintMacro.Location, before + [sprintMacro])
 
                 | Token.SquareGroup (group, _, _) as grp =>
                   shift ();

@@ -417,6 +417,116 @@ if runtime != 'mono':   # (Span[T] is .NET's; the Mono run checks .NET Framework
     print('PASS: Span[T]: indexer read and write, AsSpan, Slice, IndexOf, Memory.Span, foreach; and its rules (top level, '
           'capture, boxing, interpolation, inside a tuple) as errors', flush=True)
 
+# async functions and `await': values, Task, ValueTask and void functions, waits in loops (a loop's closure kept
+# across them), in expressions (evaluated in order, && and || still short), in try/catch and try/finally and in their
+# handlers, exceptions and cancellation; top-level await, and async files (a file whose top-level code waits, or
+# runs one that does first) awaited where they are imported, in `using' order; and the rules as errors
+if runtime != 'mono':   # (ValueTask is .NET's; the Mono run checks .NET Framework references)
+    source('async/lib/remote.n', '''using System.Threading.Tasks;
+System.Console.WriteLine("remote starts");
+public def greeting = await Task.Run(() => "hello from an async file");
+System.Console.WriteLine("remote is ready");''')
+    source('async/lib/middle.n', '''using lib.remote;
+public def shout = lib.remote.greeting.ToUpper();''')
+    source('async/lib/plain.n', '''public def seven = 7;
+System.Console.WriteLine("plain is set up");''')
+    source('async/main.n', '''using System;
+using System.Threading;
+using System.Threading.Tasks;
+using lib.plain;
+using lib.middle;
+
+Later[T](v : T) : Task[T] { Task.Run(() => v) }
+async Boom(message : string) : Task[int] { await Task.Delay(1); throw InvalidOperationException(message) }
+mutable order : list[string] = [];
+Note(s : string, v : int) : int { order ::= s; v }
+
+async Sum(n : int) : Task[int]
+{
+  mutable total = 0;
+  for (mutable i = 1; i <= n; i++) { def v = await Task.Run(() => i); total += v }
+  total
+}
+async Exprs() : Task[string]
+{
+  def sum = 1 + await Later(2) + await Later(3);
+  def len = (await Later("four")).Length;
+  def ok = await Later(true) && await Later(false) || await Later(true);
+  def text = if (await Later(false)) "then" else "else";
+  def counted = Note("b", 1) + await Later(Note("c", 2));
+  $"$sum $len $ok $text $counted $(order.Rev())"
+}
+async Caught() : Task[string]
+{
+  try { def b = await Boom("inner"); $"not $b" }
+  catch { | e is InvalidOperationException => def note = await Later("logged"); $"$note $(e.Message)" }
+}
+mutable log : list[string] = [];
+async Nested() : Task[int]
+{
+  for (mutable i = 0; i < 3; i++)
+    try
+    {
+      await Task.Delay(1);
+      try { when (i == 1) _ = await Boom("one"); log ::= $"ok $i" }
+      finally { await Task.Yield(); log ::= $"finally $i" }
+    }
+    catch { | e => log ::= "caught " + e.Message }
+  log.Length
+}
+async Small() : ValueTask[int] { await Task.Delay(1); 7 }
+mutable fired = false;
+async Fire() : void { await Task.Delay(1); fired = true }
+async Wait(token : CancellationToken) : Task { await Task.Delay(10000, token) }
+class Counter
+{
+  mutable count : int;
+  public async Bump(by : int) : Task[int] { await Task.Delay(1); count += by; count }
+}
+
+Console.WriteLine("main starts");
+Console.WriteLine(lib.middle.shout);
+Console.WriteLine(await Sum(10));
+Console.WriteLine(await Exprs());
+Console.WriteLine(await Caught());
+Console.WriteLine($"$(await Nested()) $(log.Rev())");
+Console.WriteLine(await Small() + await Counter().Bump(lib.plain.seven));
+Fire();
+Thread.Sleep(200);
+def source = CancellationTokenSource();
+def pending = Wait(source.Token);
+source.Cancel();
+try { await pending } catch { | _ is OperationCanceledException => Console.WriteLine($"fired $fired, canceled $(pending.IsCanceled)") }
+Console.WriteLine(args.Length)''')
+    run([runtime, compiler, work / 'async/main.n', work / 'async/lib/remote.n', work / 'async/lib/middle.n', work / 'async/lib/plain.n',
+         '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async.runtimeconfig.json')
+    expected = '''plain is set up
+remote starts
+remote is ready
+main starts
+HELLO FROM AN ASYNC FILE
+55
+6 4 True else 3 [b, c]
+logged inner
+6 [ok 0, finally 0, finally 1, caught one, ok 2, finally 2]
+14
+fired True, canceled True
+2'''
+    got = run([runtime, work / 'async.exe', 'one', 'two']).stdout.strip()
+    if got != expected:
+        raise RuntimeError('async: got\n' + got)
+    for name, text, diagnostic in (
+            ('lock', 'using System.Threading.Tasks;\nasync F() : Task { def o = object(); lock (o) { await Task.Delay(1) } }', "`await' in a `lock'"),
+            ('lambda', 'using System.Threading.Tasks;\nasync F() : Task[int] { def f = () => await Task.FromResult(1); f() }', "`await' in a lambda"),
+            ('span', 'using System;\nusing System.Threading.Tasks;\nasync F() : Task[int] { def s = "abc".AsSpan(); await Task.Delay(1); s.Length }', 'keeps its locals between its steps'),
+            ('return type', 'using System.Threading.Tasks;\nasync F() : int { await Task.Delay(1); 1 }', 'an async function returns Task')):
+        source('async/rule.n', text)
+        run([runtime, compiler, work / 'async/rule.n', '-source-root:' + str(work / 'async'), '-target:library', '-out:' + str(work / ('async-' + name.replace(' ', '-') + '.dll')),
+             '-no-color', *modern_references], False, diagnostic)
+    print('PASS: async functions and await (in loops, expressions, try/catch/finally and handlers, ValueTask, void, '
+          'cancellation), top-level await and async files in import order; and their rules as errors', flush=True)
+
 # what a macro declares at the top level is the file's state, as if written there: the file's functions see it;
 # `top name' reaches the file's top level past a closer name, and `top' stays an ordinary name otherwise
 source('macros/gen.n', '''using Nemerle.Compiler;

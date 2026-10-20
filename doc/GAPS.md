@@ -10,6 +10,18 @@ unless it says so. These edges will be closed, which can change what happens the
   copy of `Nemerle.dll` a plugin was loaded with. A value of a type the plugin loaded itself (its own copy of a
   library) is another type to the host, as anywhere in .NET; numbers, strings, framework types and the slots' own
   boxes are shared as they are.
+## Async
+
+- **No async lambdas or local functions.** `await` waits in an `async` function (a member or a file's top-level
+  code); in a lambda or local function it is an error that says so. Write the code as an async function and call it.
+- **No async streams.** `IAsyncEnumerable[T]` is used through its methods, but there is no `await foreach`, no
+  `await using` (`IAsyncDisposable`), and no `yield` in an async function.
+- **An async file's functions do not wait for its top-level code.** Its state is ready once a file importing it has
+  awaited it (at the `using`); a function of the file called before that, from a file that does not import it (by
+  reflection, from C#), sees the state unset.
+- **A `return`-like exit from a `try` whose `finally` waits** (a block's `break` out of it) leaves without running the
+  `finally`; a normal end and an exception run it.
+
 ## Targets
 
 - **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time

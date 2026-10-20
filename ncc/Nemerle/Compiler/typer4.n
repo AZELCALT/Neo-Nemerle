@@ -324,7 +324,8 @@ internal class Typer4
           when (Throws (e1))
             Message.Error (expr.Location, "`throw' in assignment target");
 
-          if (e1 is TExpr.LocalRef)
+          // (a closurised local is a field of this: an iterator's, or an async body's, value that ends in a throw)
+          if (e1 is TExpr.LocalRef || e1 is TExpr.FieldMember(TExpr.This, _))
             if (Throws (e2, allow_try))
             {
               // Message.Warning (expr.loc, "bad style: each branch in this block "

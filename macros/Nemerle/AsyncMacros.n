@@ -1,0 +1,324 @@
+// `async' functions and `await' (see doc/book/src/12-dotnet.md). The parser marks a function written `async F() : Task[T]'
+// with AsyncFunction and reads `await e' in its body as `__await(e)'. AsyncFunction moves the body into an iterator
+// (the state machine `yield' already makes) and F runs it with Nemerle.Async.AsyncDriver; `__await' expands, as the
+// iterator is typed, to a wait that yields the awaiter when it has not completed.
+using Nemerle;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.macros;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.Utility;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.AST;
+
+/// Whether `e' is an `await' (as the parser writes it).
+IsAwait(e : PExpr) : bool
+{
+  | PExpr.Call(PExpr.Member(_, name), [_]) => name.ToString() == "__await"
+  | _ => false
+}
+
+/// Whether an `await' is in `e'.
+HasAwait(e : PExpr) : bool
+{
+  mutable found = false;
+  _ = Macros.TraverseExpr(None(), e, false, (_, after, node) => { when (!after && IsAwait(node)) found = true; node });
+  found
+}
+
+/// Whether evaluating `e' early or late is the same: it is not moved ahead of an `await'.
+IsPlain(e : PExpr) : bool
+{
+  | PExpr.Literal | PExpr.Ref | PExpr.Lambda | PExpr.Wildcard | PExpr.ParmByRef | PExpr.ParmOut | PExpr.This | PExpr.Base => true
+  | PExpr.Member(obj, _) => IsPlain(obj)
+  | PExpr.MacroCall(name, _, _) => name.Id == "=>"   // a lambda
+  | PExpr.TypeEnforcement(e, _) => IsPlain(e)
+  | _ => false
+}
+
+/// Moves each `await' within an expression, and what is evaluated before it there, into a `def' ahead of the
+/// expression, in the order they are evaluated: `f(a(), await b)' is `{ def x = a(); def y = await b; f(x, y) }'. An
+/// `await' then stands where its state machine can wait (a statement, a `def' value, a branch), and its value
+/// stays one value, evaluated once. A loop's condition is not moved out of its loop.
+Spill(body : PExpr) : PExpr
+{
+  def part(e : PExpr, defs : System.Collections.Generic.List[PExpr]) : PExpr
+  {
+    match (e)
+    {
+      | PExpr.Sequence(items) when items.Length > 1 =>   // a value made ahead already: its defs come first
+        foreach (d in items.FirstN(items.Length - 1)) defs.Add(d);
+        part(items.Last, defs)
+      | _ when IsPlain(e) => e
+      | _ =>
+        def name = Macros.NewSymbol("await_part");
+        defs.Add(<[ def $(name : name) = $e ]>);
+        <[ $(name : name) ]>
+    }
+  }
+  // the parts up to the last one with an `await' are evaluated ahead, in order
+  def parts(items : list[PExpr], defs : System.Collections.Generic.List[PExpr]) : list[PExpr]
+  {
+    mutable last = -1;
+    mutable i = 0;
+    foreach (item in items) { when (HasAwait(item)) last = i; i++ }
+    mutable result = [];
+    i = 0;
+    foreach (item in items) { result ::= if (i <= last) part(item, defs) else item; i++ }
+    result.Rev()
+  }
+  def ahead(defs : System.Collections.Generic.List[PExpr], e : PExpr) : PExpr
+  {
+    if (defs.Count == 0) e else PExpr.Sequence(e.Location, Nemerle.Collections.NList.FromArray(defs.ToArray()) + [e])
+  }
+  def visit(_ : bool, after : bool, e : PExpr) : PExpr
+  {
+    if (!after || IsAwait(e) || !HasAwait(e)) e
+    else
+      Nemerle.Compiler.UtilMacros.locate(e.Location,
+        match (e)
+        {
+          // the right side of && and || is evaluated only when the left says so
+          | PExpr.Call(PExpr.Ref(op), [left, right]) when op.Id == "&&" && HasAwait(right) => Spill(<[ if ($left) $right else false ]>)
+          | PExpr.Call(PExpr.Ref(op), [left, right]) when op.Id == "||" && HasAwait(right) => Spill(<[ if ($left) true else $right ]>)
+          | PExpr.Call(f, args) =>
+            def defs = System.Collections.Generic.List();
+            def f = match (f)
+              {
+                | PExpr.Member(obj, name) when HasAwait(obj) || args.Exists(HasAwait) && !IsPlain(obj) =>
+                  PExpr.Member(f.Location, part(obj, defs), name)
+                | _ when HasAwait(f) => part(f, defs)
+                | _ => f
+              };
+            def args = parts(args, defs);
+            ahead(defs, PExpr.Call(e.Location, f, args))
+          | PExpr.Indexer(obj, args) =>
+            def defs = System.Collections.Generic.List();
+            def obj = part(obj, defs);
+            def args = parts(args, defs);
+            ahead(defs, PExpr.Indexer(e.Location, obj, args))
+          | PExpr.Member(obj, name) when HasAwait(obj) =>
+            def defs = System.Collections.Generic.List();
+            def obj = part(obj, defs);
+            ahead(defs, PExpr.Member(e.Location, obj, name))
+          | PExpr.Tuple(args) =>
+            def defs = System.Collections.Generic.List();
+            def args = parts(args, defs);
+            ahead(defs, PExpr.Tuple.Create(e.Location, args))
+          | PExpr.ListLiteral(args) =>
+            def defs = System.Collections.Generic.List();
+            def args = parts(args, defs);
+            ahead(defs, PExpr.ListLiteral(e.Location, args))
+          // (a name may be a field, the file's state: its value is not where the state machine can wait)
+          | PExpr.Assign(target, value) when HasAwait(value) =>
+            def defs = System.Collections.Generic.List();
+            def value = part(value, defs);
+            ahead(defs, PExpr.Assign(e.Location, target, value))
+          | PExpr.TypeEnforcement(value, ty) when HasAwait(value) =>
+            def defs = System.Collections.Generic.List(); def value = part(value, defs); ahead(defs, PExpr.TypeEnforcement(e.Location, value, ty))
+          | PExpr.TypeConversion(value, ty) when HasAwait(value) =>
+            def defs = System.Collections.Generic.List(); def value = part(value, defs); ahead(defs, PExpr.TypeConversion(e.Location, value, ty))
+          | PExpr.Is(value, ty) when HasAwait(value) =>
+            def defs = System.Collections.Generic.List(); def value = part(value, defs); ahead(defs, PExpr.Is(e.Location, value, ty))
+          | PExpr.Throw(value) when value != null && HasAwait(value) =>
+            def defs = System.Collections.Generic.List(); def value = part(value, defs); ahead(defs, PExpr.Throw(e.Location, value))
+          | PExpr.Match(value, cases, _) when HasAwait(value) =>
+            def defs = System.Collections.Generic.List(); def value = part(value, defs); ahead(defs, PExpr.Match(e.Location, value, cases))
+          // the condition of `if', `when' and `unless' is evaluated once, first
+          | PExpr.MacroCall(name, ns, SyntaxElement.Expression(condition) :: rest)
+            when (name.Id == "if" || name.Id == "when" || name.Id == "unless") && HasAwait(condition) =>
+            def defs = System.Collections.Generic.List();
+            def condition = part(condition, defs);
+            ahead(defs, PExpr.MacroCall(e.Location, name, ns, SyntaxElement.Expression(condition) :: rest))
+          // a handler that waits runs after its `try': the `try' only records which case caught the exception
+          | PExpr.Try(guarded, cases) when cases.Exists(HandlerAwaits)
+                                            && !cases.Exists(_ is TryCase.Ellipsis) =>
+            def caught = Macros.NewSymbol("caught");
+            def which = Macros.NewSymbol("which");
+            def result = Macros.NewSymbol("try_value");
+            mutable i = 0;
+            mutable later = [];
+            // (a case without a variable gets one, for a `throw;' in its handler)
+            def named(exn : Splicable) { | Splicable.Name(n) when n.Id == "_" => Splicable.Name(Macros.NewSymbol("exn")) | _ => exn }
+            def recorded = cases.Map(fun (c)
+              {
+                i++;
+                def record(exn : Splicable) { <[ $(caught : name) = $(Rethrown(exn, caught)); $(which : name) = $(i : int); Nemerle.AsyncMacros.__default_value() ]> }
+                def bind(exn : Splicable, ty : PExpr, handler : PExpr)
+                {
+                  def value = if (ty is PExpr.Wildcard) <[ $(caught : name) ]> else <[ ($(caught : name) : object) :> $ty ]>;
+                  def handler = AfterCatch(handler, caught);
+                  later ::= <[ case: | $(i : int) => $(match (exn) { | Splicable.Name(n) => <[ def $(n : name) = $value; $handler ]> | _ => handler }) ]>
+                }
+                match (c)
+                {
+                  | TryCase.Catch(exn, ty, handler) => def exn = named(exn); bind(exn, ty, handler); TryCase.Catch(c.Location, exn, ty, record(exn))
+                  | TryCase.Filter(exn, ty, filter, handler) => def exn = named(exn); bind(exn, ty, handler); TryCase.Filter(c.Location, exn, ty, filter, record(exn))
+                  | other => other
+                }
+              });
+            def dispatch = later.Rev() + [<[ case: | _ => $(result : name) ]>];
+            <[
+              mutable $(caught : name) : System.Exception = null;
+              mutable $(which : name) = 0;
+              def $(result : name) = $(PExpr.Try(e.Location, guarded, recorded));
+              match ($(which : name)) { ..$dispatch }
+            ]>
+          // a `finally' that waits runs after its `try', then what the `try' threw goes on
+          | PExpr.TryFinally(guarded, handler) when HasAwait(handler) =>
+            def caught = Macros.NewSymbol("caught");
+            def result = Macros.NewSymbol("try_value");
+            <[
+              mutable $(caught : name) : System.Exception = null;
+              def $(result : name) = try { $guarded } catch { | exn => $(caught : name) = exn; Nemerle.AsyncMacros.__default_value() };
+              $handler;
+              when ($(caught : name) != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture($(caught : name)).Throw();
+              $(result : name)
+            ]>
+          // a lock is its thread's: the code after an `await' may run on another thread, which cannot release it
+          | PExpr.MacroCall(name, _, _) when name.Id == "lock" =>
+            Message.Error(e.Location, "`await' in a `lock': the rest of the body may run on another thread, which cannot release the lock; "
+                                      "use System.Threading.SemaphoreSlim and `await semaphore.WaitAsync()' instead");
+            e
+          | _ => e
+        })
+  }
+  // an `await' in a lambda or local function does not make it wait (it is not async)
+  mutable depth = 0;
+  def body = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+    {
+      match (node)
+      {
+        | PExpr.Lambda | PExpr.DefFunctions => depth += if (after) -1 else 1; node
+        | PExpr.Call(PExpr.Ref(arrow), [_, _]) when arrow.Id == "=>" => depth += if (after) -1 else 1; node
+        | PExpr.Call(_, [awaited]) when after && depth > 0 && IsAwait(node) =>
+          Message.Error(node.Location, "`await' in a lambda or local function: only an async function waits, and a lambda cannot be one yet; "
+                                       "move the code into an async function and call it");
+          <[ ($awaited).GetAwaiter().GetResult() ]>
+        | _ => node
+      }
+    });
+  Macros.TraverseExpr(None(), body, false, visit)
+}
+
+/// Whether a catch case's handler has an `await'.
+HandlerAwaits(c : TryCase) : bool
+{
+  | TryCase.Catch(_, _, handler) | TryCase.Filter(_, _, _, handler) => HasAwait(handler)
+  | _ => false
+}
+
+/// The exception a catch case records: its variable.
+Rethrown(exn : Splicable, _caught : Name) : PExpr
+{
+  match (exn) { | Splicable.Name(n) => <[ $(n : name) ]> | _ => <[ null ]> }
+}
+
+/// A catch handler moved after its `try': `throw;' (rethrow) there throws the caught exception again, as it was.
+AfterCatch(handler : PExpr, caught : Name) : PExpr
+{
+  Macros.TraverseExpr(None(), handler, false, (_, after, node) =>
+    {
+      match (node)
+      {
+        // (it gives any type, as `throw' does)
+        | PExpr.Throw(null) when after =>
+          <[ System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture($(caught : name)).Throw();
+             $(Nemerle.Compiler.UtilMacros.locate(node.Location.AsGenerated(), <[ Nemerle.AsyncMacros.__default_value() ]>)) ]>
+        | _ => node
+      }
+    })
+}
+
+/// A value of any type (its default): what a `try' gives when a catch case that waits took over.
+macro __default_value()
+{
+  <[ $(Nemerle.Compiler.Typedtree.TExpr.DefaultValue(Macros.ImplicitCTX().FreshTypeVar()) : typed) ]>
+}
+
+[MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Method)]
+macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
+{
+  def loc = m.Location;
+  // what F returns, and what its body ends with (the driver's T)
+  def taskName(ty : PExpr) : string
+  {
+    match (ty)
+    {
+      | PExpr.Ref(n) => n.Id
+      | PExpr.Member(_, n) => n.ToString()
+      | _ => null
+    }
+  }
+  def returned = m.header.ReturnType;
+  def (result, finish) : PExpr * (PExpr -> PExpr) =
+    match (returned)
+    {
+      | PExpr.Indexer(task, [t]) when taskName(task) == "Task" => (t, run => run)
+      | PExpr.Indexer(task, [t]) when taskName(task) == "ValueTask" => (t, run => <[ System.Threading.Tasks.ValueTask.[$t]($run) ]>)
+      | _ when taskName(returned) == "Task" => (null, run => run)
+      | _ when taskName(returned) == "ValueTask" => (null, run => <[ System.Threading.Tasks.ValueTask($run) ]>)
+      | PExpr.Void => (null, null)
+      | _ =>
+        Message.Error(returned.Location, "an async function returns Task, Task[T], ValueTask, ValueTask[T] or void: its caller waits for that");
+        (null, run => run)
+    };
+  def t = if (result == null) <[ object ]> else result;
+  foreach (p in m.header.Parameters)
+    when (p.Type is PExpr.ParmByRef || p.Type is PExpr.ParmOut)
+      Message.Error(p.Location, "an async function takes no ref or out parameter: it returns before its body ends");
+  def iterator = Macros.NewSymbol("async_" + m.Name);
+  m.Body = Spill(m.Body);
+  // an async file's top-level code: its bindings' values are typed apart, where it assigns them
+  when (m.Name == "_N_top_level")
+  {
+    def bindings = Macros.Manager().ModuleBindings;
+    def prefix = tb.FullName + ".";
+    foreach (key when key.StartsWith(prefix, System.StringComparison.Ordinal) in Nemerle.Collections.NList.FromArray(System.Linq.Enumerable.ToArray(bindings.Keys)))
+      bindings[key] = Spill(bindings[key]);
+  }   // _N_async_F_<n>
+  def driver = Macros.NewSymbol("driver");
+  def parameters = <[ parameter: $(driver : name) : Nemerle.Async.AsyncDriver[$t] ]>
+                   :: m.header.Parameters.Map(p => <[ parameter: $(p.PName : name) : $(p.Type) ]>);
+  def arguments = <[ $(driver : name) ]> :: m.header.Parameters.Map(p => <[ $(p.PName : name) ]>);
+  // the body, as an iterator: it is one even when it never waits (the driver then completes it at once)
+  def body = if (result == null)
+               <[ when ($(driver : name) == null) yield null; $(m.Body); () ]>
+             else
+               <[ when ($(driver : name) == null) yield null;
+                  def value = $(m.Body);
+                  $(Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ $(driver : name).Result = value ]>)) ]>;
+  def ienumerable = <[ System.Collections.Generic.IEnumerable[object] ]>;
+  def method = if (m.Attributes %&& NemerleModifiers.Static)
+                 <[ decl: private static $(iterator : name) (..$parameters) : $ienumerable { $body } ]>
+               else
+                 <[ decl: private $(iterator : name) (..$parameters) : $ienumerable { $body } ]>;
+  (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
+  tb.Define(method);
+  def start = <[ $(iterator : name) (..$arguments) ]>;
+  m.Body = Nemerle.Compiler.UtilMacros.locate(loc,
+    if (finish == null)
+      <[ def $(driver : name) = Nemerle.Async.AsyncDriver.[object](); $(driver : name).RunAndForget($start) ]>
+    else
+      <[ def $(driver : name) = Nemerle.Async.AsyncDriver.[$t](); $(finish(<[ $(driver : name).Run($start) ]>)) ]>);
+}
+
+/// `await e': waits for e (anything with GetAwaiter(), as a Task) and is what it ends with.
+macro __await(e)
+{
+  def typer = Macros.ImplicitCTX();
+  // the iterator's body, or a function inlined in it, as a loop's (`yield' reports a lambda that is not)
+  if (typer.CurrentMethodBuilder.Name == "_N_state_types" || typer.CurrentMethodBuilder.Name == "_N_state_flow")
+    // a copy of top-level code that only gives the file's state its types (never run)
+    <[ ($e).GetAwaiter().GetResult() ]>
+  else if (!typer.CurrentMethodBuilder.Name.StartsWith("_N_async_"))
+  {
+    Message.Error(e.Location, "`await' waits in an async function only");
+    <[ ($e).GetAwaiter().GetResult() ]>
+  }
+  else
+    <[
+      def awaiter = ($e).GetAwaiter();
+      unless (awaiter.IsCompleted) yield (awaiter : object);
+      awaiter.GetResult()
+    ]>
+}
