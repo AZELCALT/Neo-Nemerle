@@ -211,6 +211,10 @@ Console.WriteLine(sum)
 30
 ```
 
+An async function runs on the runtime's own task builders, as C#'s does (one that completes without waiting makes no
+task of its own beyond the result), and debugs as C#'s does: a breakpoint stops after an `await`, a step goes over
+an `await` to the line after it, the debugger shows its locals, and a stack trace names the function.
+
 A program's top-level code can `await` as well, and so can any file's: a file whose top-level code waits is an *async
 file*, and so is a file that imports one. Its top-level code runs once, as any file's does, where a file imports it,
 in `using` order, and the importing file waits for it there; its state is ready when the code after the `using` runs.

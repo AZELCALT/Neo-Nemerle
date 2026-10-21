@@ -71,6 +71,8 @@ using Nemerle.Compiler.Utility;
 
     private _method_name : string;
     private _method_builder : Nemerle.Compiler.ClassMembers.MethodBuilder;
+    /// The offset of the last jump emitted (a `yield''s, before its resume label).
+    private mutable _last_jump : int;
     private mutable _method_start_label : Label;
     private mutable _debug_doc : ISymbolDocumentWriter;
     private mutable _is_ctor   : bool;
@@ -798,11 +800,22 @@ using Nemerle.Compiler.Utility;
           else
             _labels[id] = _ilg.DefineLabel();
 
+          // an async state machine's resume point, after the jump that suspended it: the debugger's step over an
+          // `await' waits for it (the PDB's async stepping information)
+          when (IsDebugEnabled && Manager.YieldLabels.Contains(id) && _method_builder.Name == "MoveNext"
+                && Manager.AsyncStateMachineTypes.Contains(_method_builder.DeclaringType))
+          {
+            unless (Manager.AsyncStepping.ContainsKey(_method_builder))
+              Manager.AsyncStepping[_method_builder] = System.Collections.Generic.List();
+            Manager.AsyncStepping[_method_builder].Add(_last_jump);
+            Manager.AsyncStepping[_method_builder].Add(_ilg.ILOffset);
+          }
           _ilg.MarkLabel(_labels[id], reset_throw);
           emit(nextExpr);
 
 
         | Goto (id, try_block) =>
+          _last_jump = _ilg.ILOffset;
           if (_labels.Contains (id))
             _label_usage[id] = null;
           else
@@ -1035,6 +1048,11 @@ using Nemerle.Compiler.Utility;
 
 
         /* assignment to a field */
+        // a statement that stores in a field (a state machine's local, a closure's): its sequence point comes before the
+        // object is loaded, where the stack is empty (the runtime stops at no other point)
+        | Assign (FieldMember as target, DebugInfo (value, parsed) as info) when value != null =>
+          emit (TExpr.DebugInfo (info.Location, expr.Type, TExpr.Assign (expr.Type, target, value), parsed))
+
         | Assign (FieldMember (base_object, field) as target, val) =>
           // `this' (or the closure of a loop an iterator keeps, which the value does not change) is the same before
           // and after the value, so only the value waits in a local: a jump into the value (a resumed iterator's, at
@@ -1045,7 +1063,15 @@ using Nemerle.Compiler.Utility;
               | TExpr.FieldMember(TExpr.This, f) => f.Name.StartsWith("_N_closureOf_")
               | _ => false
             };
-          if (val.NeedsEmptyStack && stable) {
+          // (in a debug build, a value with a sequence point in it too: the runtime stops at a sequence point only where
+          // the stack is empty, which it is not once the object is loaded)
+          def has_sequence_point(e : TExpr) : bool
+          {
+            mutable found = false;
+            _ = e.Walk(fun (x) { | TExpr.DebugInfo(_, _) => found = true; x | _ => null });
+            found
+          }
+          if ((val.NeedsEmptyStack || IsDebugEnabled && has_sequence_point(val)) && stable) {
             def val_local = declare_expr_local_slot(val);
             emit (val);
             _ilg.Emit (OpCodes.Stloc, val_local);
@@ -2577,6 +2603,9 @@ using Nemerle.Compiler.Utility;
       {
         _document = document;
       }
+
+      /// The offset of the next instruction.
+      public ILOffset : int { get { _ilg.ILOffset } }
 
       public BeginCatchBlock (tp : Type) : void  { _throw = false; _ilg.BeginCatchBlock(tp)      }
       public BeginExceptFilterBlock ()   : void  { _throw = false; _ilg.BeginExceptFilterBlock() }

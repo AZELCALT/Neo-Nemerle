@@ -10,6 +10,17 @@ using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.AST;
 
+/// A body whose value `finish' takes: its statements stay statements (each with its own sequence point, where a
+/// breakpoint stops), and only its last expression is finished.
+Ending(body : PExpr, finish : PExpr -> PExpr) : PExpr
+{
+  match (body)
+  {
+    | PExpr.Sequence(items) when !items.IsEmpty => PExpr.Sequence(body.Location, items.FirstN(items.Length - 1) + [Ending(items.Last, finish)])
+    | _ => finish(body)
+  }
+}
+
 /// Whether `e' is an `await' (as the parser writes it).
 IsAwait(e : PExpr) : bool
 {
@@ -81,14 +92,17 @@ Spill(body : PExpr, stream : PExpr = null) : PExpr
     });
   def restore(e : PExpr) : PExpr
   {
-    Macros.TraverseExpr(None(), e, false, (_, after, node) =>
-      {
-        match (node)
+    if (nested.Count == 0) e   // (nothing set aside: the tree as it is, with the places the last pass gave it)
+    else
+      Macros.TraverseExpr(None(), e, false, (_, after, node) =>
         {
-          | PExpr.Ref(name) when after && nested.ContainsKey(name.Id) => restore(nested[name.Id])
-          | _ => node
-        }
-      })
+          match (node)
+          {
+            | PExpr.Ref(name) when after && nested.ContainsKey(name.Id) => restore(nested[name.Id])
+            | PExpr.Call(_, [awaited]) when after && IsAwait(node) && awaited.Location.IsSourceAvailable => node.Location = awaited.Location; node
+            | _ => node
+          }
+        })
   }
   def part(e : PExpr, defs : System.Collections.Generic.List[PExpr]) : PExpr
   {
@@ -119,8 +133,18 @@ Spill(body : PExpr, stream : PExpr = null) : PExpr
   {
     if (defs.Count == 0) e else PExpr.Sequence(e.Location, Nemerle.Collections.NList.FromArray(defs.ToArray()) + [e])
   }
+  // the places of the nodes being visited (the traversal rebuilds the tree, and a rebuilt `await' keeps its own: its
+  // statement is a step of its own in the debugger, which a generated place would not be)
+  def places = System.Collections.Generic.Stack();
   def visit(_ : bool, after : bool, e : PExpr) : PExpr
   {
+    if (!after) places.Push(e.Location)
+    else
+    {
+      def place = places.Pop();
+      // (it is generated, as the async macros made it: marked as having its source, it is a step all the same)
+      when (IsAwait(e) && place.FileIndex > 0 && place.Line > 0) e.Location = place.AsFakeSorceAvailable();
+    }
     if (!after || IsAwait(e) || !HasAwait(e)) e
     else
       Nemerle.Compiler.UtilMacros.locate(e.Location,
@@ -319,15 +343,19 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
     when (p.Type is PExpr.ParmByRef || p.Type is PExpr.ParmOut)
       Message.Error(p.Location, "an async function takes no ref or out parameter: it returns before its body ends");
   def iterator = Macros.NewSymbol("async_" + m.Name);
+  // (F starts the state machine: the debug information and stack traces name F for it)
+  Macros.Manager().UserData["Nemerle.AsyncMacros.kickoff:" + iterator.Id] = m;
+  Macros.Manager().UserData["Nemerle.AsyncMacros.kickoff-name:" + iterator.Id] = (m.Name, m.header.Parameters.Length);
   if (item != null)
   {
     // an async stream: F returns an AsyncStream, each enumeration of which runs the iterator
     def stream = Macros.NewSymbol("stream");
+    Macros.Manager().UserData["Nemerle.AsyncMacros.driver:" + iterator.Id] = stream;   // (what its `await's wait with)
     def body = Spill(m.Body, <[ $(stream : name) ]>);
     def parameters = <[ parameter: $(stream : name) : Nemerle.Async.AsyncStream[$item] ]>
                      :: m.header.Parameters.Map(p => <[ parameter: $(p.PName : name) : $(p.Type) ]>);
     def arguments = <[ $(stream : name) ]> :: m.header.Parameters.Map(p => <[ $(p.PName : name) ]>);
-    def body = <[ when ($(stream : name) == null) yield null; $body; () ]>;
+    def body = <[ $(Nemerle.Compiler.UtilMacros.locate(body.Location.AsGenerated(), <[ when ($(stream : name) == null) yield null ]>)); $body; () ]>;
     def ienumerable = <[ System.Collections.Generic.IEnumerable[object] ]>;
     def method = if (m.Attributes %&& NemerleModifiers.Static)
                    <[ decl: private static $(iterator : name) (..$parameters) : $ienumerable { $body } ]>
@@ -349,16 +377,27 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
       bindings[key] = Spill(bindings[key]);
   }   // _N_async_F_<n>
   def driver = Macros.NewSymbol("driver");
-  def parameters = <[ parameter: $(driver : name) : Nemerle.Async.AsyncDriver[$t] ]>
+  Macros.Manager().UserData["Nemerle.AsyncMacros.driver:" + iterator.Id] = driver;   // (what its `await's wait with)
+  // the runtime's builder that runs it: a ValueTask's does not allocate a task when the body does not wait
+  def (driverType, newDriver, finish) : PExpr * PExpr * (PExpr -> PExpr) = match (returned)
+    {
+      | PExpr.Indexer(task, [_]) when taskName(task) == "ValueTask" =>
+        (<[ Nemerle.Async.AsyncValueDriver[$t] ]>, <[ Nemerle.Async.AsyncValueDriver.[$t]() ]>, run => run)
+      | _ when taskName(returned) == "ValueTask" =>
+        (<[ Nemerle.Async.AsyncValueVoidDriver ]>, <[ Nemerle.Async.AsyncValueVoidDriver() ]>, run => run)
+      | _ => (<[ Nemerle.Async.AsyncDriver[$t] ]>, <[ Nemerle.Async.AsyncDriver.[$t]() ]>, finish)
+    };
+  def parameters = <[ parameter: $(driver : name) : $driverType ]>
                    :: m.header.Parameters.Map(p => <[ parameter: $(p.PName : name) : $(p.Type) ]>);
   def arguments = <[ $(driver : name) ]> :: m.header.Parameters.Map(p => <[ $(p.PName : name) ]>);
   // the body, as an iterator: it is one even when it never waits (the driver then completes it at once)
+  def first = Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ when ($(driver : name) == null) yield null ]>);
   def body = if (result == null)
-               <[ when ($(driver : name) == null) yield null; $(m.Body); () ]>
+               <[ $first; $(m.Body); () ]>
              else
-               <[ when ($(driver : name) == null) yield null;
-                  def value = $(m.Body);
-                  $(Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ $(driver : name).Result = value ]>)) ]>;
+               <[ $first;
+                  $(Ending(m.Body, last => Nemerle.Compiler.UtilMacros.locate(last.Location,
+                      <[ def value = $last; $(Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ $(driver : name).Result = value ]>)) ]>))) ]>;
   def ienumerable = <[ System.Collections.Generic.IEnumerable[object] ]>;
   def method = if (m.Attributes %&& NemerleModifiers.Static)
                  <[ decl: private static $(iterator : name) (..$parameters) : $ienumerable { $body } ]>
@@ -371,7 +410,7 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
     if (finish == null)
       <[ def $(driver : name) = Nemerle.Async.AsyncDriver.[object](); $(driver : name).RunAndForget($start) ]>
     else
-      <[ def $(driver : name) = Nemerle.Async.AsyncDriver.[$t](); $(finish(<[ $(driver : name).Run($start) ]>)) ]>);
+      <[ def $(driver : name) = $newDriver; $(finish(<[ $(driver : name).Run($start) ]>)) ]>);
   }
 }
 
@@ -379,22 +418,41 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
 macro __await(e)
 {
   def typer = Macros.ImplicitCTX();
-  // the iterator's body, or a function inlined in it, as a loop's (`yield' reports a lambda that is not)
-  if (typer.CurrentMethodBuilder.Name == "_N_state_types" || typer.CurrentMethodBuilder.Name == "_N_state_flow")
+  def manager = typer.Manager;
+  def method = typer.CurrentMethodBuilder.Name;
+  // what the state machine around waits with: its driver (or stream), the nearest async lambda's or the function's
+  def driver = match ((typer.CurrentFunction :: typer.CurrentFunction.GetParents()).Find(h => h.Name.StartsWith("_N_async_local_")))
+    {
+      | Some(h) when manager.UserData.Contains("Nemerle.AsyncMacros.driver:" + h.Name) => manager.UserData["Nemerle.AsyncMacros.driver:" + h.Name] :> Name
+      | _ when manager.UserData.Contains("Nemerle.AsyncMacros.driver:" + method) => manager.UserData["Nemerle.AsyncMacros.driver:" + method] :> Name
+      | _ => null
+    };
+  if (method == "_N_state_types" || method == "_N_state_flow")
     // a copy of top-level code that only gives the file's state its types (never run)
     <[ ($e).GetAwaiter().GetResult() ]>
-  else if (!typer.CurrentMethodBuilder.Name.StartsWith("_N_async_")
-           && !(typer.CurrentFunction :: typer.CurrentFunction.GetParents()).Exists(h => h.Name.StartsWith("_N_async_local_")))
+  else if (driver == null)
   {
     Message.Error(e.Location, "`await' waits in an async function only");
     <[ ($e).GetAwaiter().GetResult() ]>
   }
   else
-    <[
-      def awaiter = ($e).GetAwaiter();
-      unless (awaiter.IsCompleted) yield (awaiter : object);
+  {
+    // the awaiter goes to the driver by reference, with its own type (not boxed), as C#'s builders take it; one that
+    // is only an INotifyCompletion is waited for with the ExecutionContext flowed by itself
+    def awaiter = typer.TypeExpr(<[ ($e).GetAwaiter() ]>);
+    def critical = match (manager.LookupTypeInfo("System.Runtime.CompilerServices.ICriticalNotifyCompletion", 0))
+      {
+        | null => false
+        | info => awaiter.Type.TryRequire(Nemerle.Compiler.fixed_type.FixedType.Class(info, []))
+      };
+    def wait = if (critical) <[ $(driver : name).AwaitUnsafe(ref awaiter) ]> else <[ $(driver : name).AwaitSafe(ref awaiter) ]>;
+    // (at the `await's place: its line is a step of its own, where the debugger stops)
+    Nemerle.Compiler.UtilMacros.locate(e.Location.AsGenerated(), <[
+      mutable awaiter = $(awaiter : typed);
+      unless (awaiter.IsCompleted) { $wait; yield null }
       awaiter.GetResult()
-    ]>
+    ]>)
+  }
 }
 
 /// The kind of task an async local function's declared return type asks for: what its driver's Task becomes.
@@ -418,6 +476,7 @@ macro __async_lambda(e)
   {
     def driver = Macros.NewSymbol("driver");
     def iterator = Macros.NewSymbol("async_local");   // _N_async_local_<n>: typed as an iterator
+    Macros.Manager().UserData["Nemerle.AsyncMacros.driver:" + iterator.Id] = driver;
     def body = Spill(body);
     def start = if (forgotten) <[ $(driver : name).RunAndForget($(iterator : name)()) ]>
                 else <[ Nemerle.AsyncMacros.__async_task($(driver : name), $(iterator : name)()) ]>;
@@ -425,8 +484,8 @@ macro __async_lambda(e)
       def $(driver : name) = Nemerle.Async.AsyncDriver();
       def $(iterator : name)() : System.Collections.Generic.IEnumerable[object]
       {
-        when ($(driver : name) == null) yield null;
-        Nemerle.AsyncMacros.__async_result($(driver : name), $body)
+        $(Nemerle.Compiler.UtilMacros.locate(body.Location.AsGenerated(), <[ when ($(driver : name) == null) yield null ]>));
+        $(Ending(body, last => Nemerle.Compiler.UtilMacros.locate(last.Location, <[ Nemerle.AsyncMacros.__async_result($(driver : name), $last) ]>)))
       }
       $(finish(start))
     ]>)

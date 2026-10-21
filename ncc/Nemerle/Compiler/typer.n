@@ -5172,6 +5172,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       Nemerle.Compiler.UtilMacros.cassert (solver.IsTopLevel);
       def label_no = Manager.GetNewId("YieldLabel");
+      _ = Manager.YieldLabels.Add(label_no);
       def state_no = AddYieldLabel(label_no);
       def label = TExpr.Label(InternalType.Void, label_no, VoidLiteral());
 

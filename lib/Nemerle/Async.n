@@ -4,15 +4,15 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
-/// Runs the body of an `async' function. The compiler makes the body an iterator: each `await' whose awaiter has not
-/// completed yields that awaiter, and the driver resumes the body when it completes (on the awaiter's context, as
-/// the awaiter decides: a Task's resumes on the SynchronizationContext it was awaited on). The body ends by setting
-/// Result; the driver's Task then completes with it, or with the exception the body threw (a cancellation cancels it).
-public sealed class AsyncDriver[T]
+/// Runs the body of an `async' function, as the C# compiler's code does: the body is an iterator (the state machine
+/// `yield' makes), driven by the runtime's AsyncTaskMethodBuilder. An `await' whose awaiter has not completed hands
+/// the awaiter to AwaitUnsafe (or AwaitSafe), by reference and with its own type, and yields; the builder resumes the
+/// body when it completes (on the awaiter's context, as the awaiter decides). The body ends by setting Result. A body
+/// that never waits completes its task at once, and allocates no other task.
+public sealed class AsyncDriver[T] : IAsyncStateMachine
 {
-  source : TaskCompletionSource[T] = TaskCompletionSource.[T]();
+  mutable builder : AsyncTaskMethodBuilder[T];
   mutable steps : IEnumerator[object];
-  mutable resume : Action;
 
   /// The value the body ends with.
   public mutable Result : T;
@@ -20,50 +20,52 @@ public sealed class AsyncDriver[T]
   /// Starts the body (synchronously, up to its first `await' that has to wait) and returns its Task.
   public Run(body : IEnumerable[object]) : Task[T]
   {
+    builder = AsyncTaskMethodBuilder.[T].Create();
     steps = body.GetEnumerator();
-    resume = Action(Step);
-    Step();
-    source.Task
+    mutable machine = this;
+    builder.Start(ref machine);
+    builder.Task
   }
 
-  /// Starts the body of an `async' function that returns no Task (an event handler's): an exception it ends with
+  /// Starts the body of an async function that returns no Task (an event handler's): an exception it ends with
   /// is thrown on the thread pool, where it ends the process unless handled, as in C#.
   public RunAndForget(body : IEnumerable[object]) : void
   {
-    def task = Run(body);
-    _ = task.ContinueWith(fun (t : Task[T]) : void
-      {
-        when (t.IsFaulted)
-        {
-          def error = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(t.Exception.InnerException);
-          System.Threading.ThreadPool.QueueUserWorkItem(_ => error.Throw())
-        }
-      }, TaskContinuationOptions.ExecuteSynchronously)
+    AsyncVoid.Forget(Run(body))
   }
 
-  Step() : void
+  /// Runs the body to its next wait, or to its end.
+#if !NETSTANDARD2_0
+  [System.Diagnostics.StackTraceHidden]   // (the runtime's plumbing, as C#'s builders: a stack trace shows the async functions)
+#endif
+  public MoveNext() : void
   {
     try
     {
-      if (steps.MoveNext())
-        match (steps.Current)
-        {
-          | awaiter is INotifyCompletion => awaiter.OnCompleted(resume)
-          | null => Step()   // the body's first step, which only makes it an iterator
-          | other => throw InvalidOperationException($"await: $(other.GetType()) is not an awaiter (it has no OnCompleted)")
-        }
-      else
+      unless (steps.MoveNext())
       {
         steps.Dispose();
-        _ = source.TrySetResult(Result)
+        builder.SetResult(Result)
       }
     }
-    catch
-    {
-      | e is OperationCanceledException => steps.Dispose(); _ = source.TrySetCanceled(e.CancellationToken)
-      | e => steps.Dispose(); _ = source.TrySetException(e)
-    }
+    catch { | e => steps.Dispose(); builder.SetException(e) }   // (an OperationCanceledException cancels the task)
   }
+
+  /// The body waits for `awaiter': the builder resumes it when it completes.
+  public AwaitUnsafe[A](awaiter : ref A) : void where A : ICriticalNotifyCompletion
+  {
+    mutable machine = this;
+    builder.AwaitUnsafeOnCompleted(ref awaiter, ref machine)
+  }
+
+  /// As AwaitUnsafe, for an awaiter that is only an INotifyCompletion.
+  public AwaitSafe[A](awaiter : ref A) : void where A : INotifyCompletion
+  {
+    mutable machine = this;
+    builder.AwaitOnCompleted(ref awaiter, ref machine)
+  }
+
+  public SetStateMachine(machine : IAsyncStateMachine) : void { builder.SetStateMachine(machine) }
 }
 
 /// An async lambda run where a `void' delegate is wanted (an event handler, as C#'s `async void'): nothing waits for its
@@ -84,6 +86,102 @@ public module AsyncVoid
 }
 
 #if !NETSTANDARD2_0   // (async streams are .NET Core 3.0's and later: .NET Standard 2.0 has no IAsyncEnumerable)
+/// As AsyncDriver, for an async function that returns ValueTask[T]: one that never waits completes with its value and
+/// allocates nothing (AsyncValueTaskMethodBuilder).
+public sealed class AsyncValueDriver[T] : IAsyncStateMachine
+{
+  mutable builder : AsyncValueTaskMethodBuilder[T];
+  mutable steps : IEnumerator[object];
+  public mutable Result : T;
+
+  public Run(body : IEnumerable[object]) : ValueTask[T]
+  {
+    builder = AsyncValueTaskMethodBuilder.[T].Create();
+    steps = body.GetEnumerator();
+    mutable machine = this;
+    builder.Start(ref machine);
+    builder.Task
+  }
+
+#if !NETSTANDARD2_0
+  [System.Diagnostics.StackTraceHidden]   // (the runtime's plumbing, as C#'s builders: a stack trace shows the async functions)
+#endif
+  public MoveNext() : void
+  {
+    try
+    {
+      unless (steps.MoveNext())
+      {
+        steps.Dispose();
+        builder.SetResult(Result)
+      }
+    }
+    catch { | e => steps.Dispose(); builder.SetException(e) }
+  }
+
+  public AwaitUnsafe[A](awaiter : ref A) : void where A : ICriticalNotifyCompletion
+  {
+    mutable machine = this;
+    builder.AwaitUnsafeOnCompleted(ref awaiter, ref machine)
+  }
+
+  public AwaitSafe[A](awaiter : ref A) : void where A : INotifyCompletion
+  {
+    mutable machine = this;
+    builder.AwaitOnCompleted(ref awaiter, ref machine)
+  }
+
+  public SetStateMachine(machine : IAsyncStateMachine) : void { builder.SetStateMachine(machine) }
+}
+
+/// As AsyncValueDriver, for an async function that returns ValueTask.
+public sealed class AsyncValueVoidDriver : IAsyncStateMachine
+{
+  mutable builder : AsyncValueTaskMethodBuilder;
+  mutable steps : IEnumerator[object];
+  /// (unused: the body has no value)
+  public mutable Result : object;
+
+  public Run(body : IEnumerable[object]) : ValueTask
+  {
+    builder = AsyncValueTaskMethodBuilder.Create();
+    steps = body.GetEnumerator();
+    mutable machine = this;
+    builder.Start(ref machine);
+    builder.Task
+  }
+
+#if !NETSTANDARD2_0
+  [System.Diagnostics.StackTraceHidden]   // (the runtime's plumbing, as C#'s builders: a stack trace shows the async functions)
+#endif
+  public MoveNext() : void
+  {
+    try
+    {
+      unless (steps.MoveNext())
+      {
+        steps.Dispose();
+        builder.SetResult()
+      }
+    }
+    catch { | e => steps.Dispose(); builder.SetException(e) }
+  }
+
+  public AwaitUnsafe[A](awaiter : ref A) : void where A : ICriticalNotifyCompletion
+  {
+    mutable machine = this;
+    builder.AwaitUnsafeOnCompleted(ref awaiter, ref machine)
+  }
+
+  public AwaitSafe[A](awaiter : ref A) : void where A : INotifyCompletion
+  {
+    mutable machine = this;
+    builder.AwaitOnCompleted(ref awaiter, ref machine)
+  }
+
+  public SetStateMachine(machine : IAsyncStateMachine) : void { builder.SetStateMachine(machine) }
+}
+
 /// Runs the body of an async function that returns an IAsyncEnumerable[T] (an async stream): the body is an iterator,
 /// as an async function's is, that yields the awaiters it waits for and, for each item it produces (`yield x'),
 /// Produce(x). Each enumeration runs the body afresh; MoveNextAsync completes when the next item is there (true) or
@@ -104,6 +202,12 @@ public sealed class AsyncStream[T] : IAsyncEnumerable[T], IAsyncEnumerator[T]
 
   public Current : T { get { current } }
 
+  /// The body waits for `awaiter': it resumes when the awaiter completes (OnCompleted carries the ExecutionContext over,
+  /// so AsyncLocal values flow into the rest of the body).
+  public AwaitUnsafe[A](awaiter : ref A) : void where A : ICriticalNotifyCompletion { awaiter.OnCompleted(resume) }
+
+  public AwaitSafe[A](awaiter : ref A) : void where A : INotifyCompletion { awaiter.OnCompleted(resume) }
+
   /// What the body yields for an item: the item is then the enumerator's Current.
   public Produce(item : T) : object { current = item; produced }
 
@@ -123,6 +227,7 @@ public sealed class AsyncStream[T] : IAsyncEnumerable[T], IAsyncEnumerator[T]
     ValueTask.[bool](pending.Task)
   }
 
+  [System.Diagnostics.StackTraceHidden]
   Step() : void
   {
     try
@@ -130,11 +235,8 @@ public sealed class AsyncStream[T] : IAsyncEnumerable[T], IAsyncEnumerator[T]
       if (steps.MoveNext())
         match (steps.Current)
         {
-          | null => Step()   // the body's first step, which only makes it an iterator
           | item when object.ReferenceEquals(item, produced) => _ = pending.TrySetResult(true)
-          // (OnCompleted carries the ExecutionContext over, so AsyncLocal values flow into the rest of the body)
-          | awaiter is INotifyCompletion => awaiter.OnCompleted(resume)
-          | other => throw InvalidOperationException($"await: $(other.GetType()) is not an awaiter (it has no OnCompleted)")
+          | _ => ()   // waiting: the awaiter resumes the body (AwaitUnsafe)
         }
       else
         _ = pending.TrySetResult(false)

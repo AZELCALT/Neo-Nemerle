@@ -241,6 +241,17 @@ using Nemerle.Compiler.XmlDump;
     /// While above zero, messages are not reported, only errors counted (a pass that only learns types).
     public mutable QuietMessages : int;
     public mutable QuietErrors : int;
+    /// The labels a `yield' resumes at (Typer.HandleYield): an async state machine's are its resume points, which the
+    /// debug information lists (ILEmitter, AsyncStepping).
+    public YieldLabels : System.Collections.Generic.HashSet[int] = System.Collections.Generic.HashSet();
+    /// The state machines made (an iterator's or async function's MoveNext, and the function that starts it, or null
+    /// for a lambda's), for the debug information (the PDB's StateMachineMethod table).
+    public StateMachines : System.Collections.Generic.List[Nemerle.Compiler.ClassMembers.MethodBuilder * Nemerle.Compiler.ClassMembers.MethodBuilder] = System.Collections.Generic.List();
+    /// The classes of async state machines (an async function's, lambda's or stream's).
+    public AsyncStateMachineTypes : System.Collections.Generic.HashSet[Nemerle.Compiler.type_builder.TypeBuilder] = System.Collections.Generic.HashSet();
+    /// For each async MoveNext, where it suspends and where it resumes (IL offsets, in pairs): the debugger steps over
+    /// an `await' with them.
+    public AsyncStepping : System.Collections.Generic.Dictionary[Nemerle.Compiler.ClassMembers.MethodBuilder, System.Collections.Generic.List[int]] = System.Collections.Generic.Dictionary();
     /// How many async lambdas were taken as `void' delegates (Typer.NonLiteralCast), for overload resolution.
     public mutable AsyncVoidAdaptations : int;
     /// Per top-level value (`module.name`): the type of each of its bindings, learned by the inference pass.

@@ -3,6 +3,8 @@ using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Diagnostics.SymbolStore;
+using System.Collections.Generic;
+using System.Linq;
 #if MODERN_CLR
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -144,6 +146,43 @@ namespace Nemerle.Platform
 #endif
         }
 
+        private readonly List<(MethodInfo MoveNext, MethodInfo Kickoff, int[] Stepping)> stateMachines = new List<(MethodInfo, MethodInfo, int[])>();
+
+        /// <summary>A state machine for the debug information: its MoveNext, the method that starts it (or null), and
+        /// for an async one the IL offsets where it suspends and resumes, in pairs.</summary>
+        public void AddStateMachine(MethodInfo moveNext, MethodInfo kickoff, int[] stepping)
+        {
+            stateMachines.Add((moveNext, kickoff, stepping));
+        }
+
+        // the kind of the async stepping information C# writes (the debugger steps over an await with it)
+        private static readonly Guid AsyncMethodSteppingInformation = new Guid("54FD2AC5-E925-401A-9C2A-F94F171072F8");
+
+#if MODERN_CLR
+        private void AddStateMachines(MetadataBuilder symbols)
+        {
+            // (the StateMachineMethod table is sorted by MoveNext)
+            foreach (var sm in stateMachines.OrderBy(s => s.MoveNext.MetadataToken))
+            {
+                var moveNext = (MethodDefinitionHandle)MetadataTokens.EntityHandle(sm.MoveNext.MetadataToken);
+                if (sm.Kickoff != null)
+                    symbols.AddStateMachineMethod(moveNext, (MethodDefinitionHandle)MetadataTokens.EntityHandle(sm.Kickoff.MetadataToken));
+                if (sm.Stepping != null && sm.Stepping.Length >= 2)
+                {
+                    var blob = new BlobBuilder();
+                    blob.WriteUInt32(0);   // no catch handler of its own (the body's exceptions end its task)
+                    for (int i = 0; i + 1 < sm.Stepping.Length; i += 2)
+                    {
+                        blob.WriteUInt32((uint)sm.Stepping[i]);       // where it suspends
+                        blob.WriteUInt32((uint)sm.Stepping[i + 1]);   // where it resumes
+                        blob.WriteCompressedInteger(MetadataTokens.GetRowNumber(moveNext));
+                    }
+                    symbols.AddCustomDebugInformation(moveNext, symbols.GetOrAddGuid(AsyncMethodSteppingInformation), symbols.GetOrAddBlob(blob));
+                }
+            }
+        }
+#endif
+
         public void Save(PortableExecutableKinds kind, ImageFileMachine machine)
         {
             if (inMemory) throw new InvalidOperationException("Cannot save a runnable assembly session.");
@@ -166,6 +205,7 @@ namespace Nemerle.Platform
             DebugDirectoryBuilder debugDirectory = null;
             if (emitDebug)
             {
+                AddStateMachines(symbols);
                 var pdb = new PortablePdbBuilder(symbols, metadata.GetRowCounts(), entry);
                 var pdbBlob = new BlobBuilder();
                 var id = pdb.Serialize(pdbBlob);

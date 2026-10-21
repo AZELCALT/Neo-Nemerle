@@ -73,8 +73,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     # the debug adapter session
     proc = subprocess.Popen([str(debugger), '--interpreter=vscode'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     inbox = queue.Queue(); seq = [0]
-    def reader():
-        out = proc.stdout
+    def reader(out, inbox):
         while True:
             length = None
             while True:
@@ -84,7 +83,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
                 if not line: break
                 if line.lower().startswith(b'content-length:'): length = int(line.split(b':')[1])
             inbox.put(json.loads(out.read(length)))
-    threading.Thread(target=reader, daemon=True).start()
+    threading.Thread(target=reader, args=(proc.stdout, inbox), daemon=True).start()
     def send(command, arguments=None):
         seq[0] += 1
         body = json.dumps({'seq': seq[0], 'type': 'request', 'command': command, 'arguments': arguments or {}}).encode()
@@ -142,6 +141,44 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     print('PASS: a breakpoint in top-level code: its line and the top-level state')
     request('continue', {'threadId': stopped['body']['threadId']})
     wait(lambda m: m.get('event') in ('exited', 'terminated'), 'the end')
+    try: request('disconnect', {})
+    except SystemExit: pass
+    proc.kill()
+
+    # an async function: a breakpoint after an `await' (the code resumed on another thread), its locals (the state
+    # machine's fields, named as C#'s), and a step over the next `await' to the line after it
+    aprog = work / 'asyncprog'; aprog.mkdir()
+    (aprog / 'asyncprog.nproj').write_text('name = "asyncprog"\n[compiler]\noptions = ["-debug+"]\n')
+    (aprog / 'main.n').write_text('using System.Threading.Tasks;\n\nasync Compute(n : int) : Task[int]\n{\n  def start = n * 2;\n'
+                                  '  await Task.Delay(10);\n  def middle = start + 1;\n  await Task.Delay(10);\n  middle * 10\n}\n\n'
+                                  'System.Console.WriteLine(await Compute(4))\n')
+    r = subprocess.run([str(tc / 'ncc'), 'build', str(aprog)], capture_output=True, text=True)
+    check(r.returncode == 0, 'the async program\'s build: ' + r.stdout + r.stderr)
+    proc = subprocess.Popen([str(debugger), '--interpreter=vscode'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    inbox = queue.Queue()
+    threading.Thread(target=reader, args=(proc.stdout, inbox), daemon=True).start()
+    request('initialize', {'adapterID': 'nemerle', 'linesStartAt1': True, 'columnsStartAt1': True, 'pathFormat': 'path'})
+    n = send('launch', {'program': 'dotnet', 'args': [str(aprog / 'out/asyncprog.dll')], 'cwd': str(aprog), 'justMyCode': True})
+    wait(lambda m: m.get('event') == 'initialized' or (m.get('type') == 'response' and m.get('request_seq') == n), 'initialized')
+    request('setBreakpoints', {'source': {'path': str(aprog / 'main.n')}, 'breakpoints': [{'line': 7}]})
+    request('configurationDone')
+    stopped = wait(lambda m: m.get('event') == 'stopped', 'the breakpoint after an await')
+    thread = stopped['body']['threadId']
+    frames = request('stackTrace', {'threadId': thread})['stackFrames']
+    check(frames[0]['line'] == 7 and 'Compute' in frames[0]['name'], 'stopped in Compute after its await (main.n:7): %s' % frames[0])
+    local = values(frames[0])
+    check(local.get('start') == '8' and local.get('n') == '4' and not any(k.startswith('_N_') or k.startswith('<') for k in local),
+          'the async function\'s parameter and local, and none of its state machine\'s own fields: %s' % local)
+    request('next', {'threadId': thread})
+    stepped = wait(lambda m: m.get('event') == 'stopped', 'the step to the await')
+    request('next', {'threadId': stepped['body']['threadId']})
+    stepped = wait(lambda m: m.get('event') == 'stopped', 'the step over the await')
+    frame = request('stackTrace', {'threadId': stepped['body']['threadId']})['stackFrames'][0]
+    check(frame['line'] == 9 and 'Compute' in frame['name'], 'a step over an await lands on the line after it (main.n:9): %s' % frame)
+    check(values(frame).get('middle') == '9', 'the local set before the await')
+    print('PASS: an async function: a breakpoint after an await, its locals, and a step over an await')
+    request('continue', {'threadId': stepped['body']['threadId']})
+    wait(lambda m: m.get('event') in ('exited', 'terminated'), 'the end of the async program')
     try: request('disconnect', {})
     except SystemExit: pass
     proc.kill()

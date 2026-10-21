@@ -780,20 +780,22 @@ using Nemerle.Compiler.Utility;
     }
 
 
-    /// The name of the state machine class of an iterator or async function: its function's (`Boom' is
-    /// _N_Boom_async_12, `Items' _N_Items_Enumerable_13), which stack traces show.
+    /// The name of the state machine class of an iterator or async function: its function's (`Boom''s is
+    /// <Boom>d__12), which stack traces and debuggers show.
     StateMachineName (kind : string) : Nemerle.Compiler.Parsetree.Name
     {
+      _ = kind;
       def function = current_local_fun.Name;
       def readable =
         if (function.StartsWith ("_N_async_"))
         {
           def rest = function.Substring (9);
           def cut = rest.LastIndexOf ('_');
-          (if (cut > 0) rest.Substring (0, cut) else rest) + "_async"
+          if (cut > 0) rest.Substring (0, cut) else rest
         }
-        else function + "_" + kind;
-      Macros.NewSymbol (readable)
+        else function;
+      // (named as C# names its state machines, <F>d__n: debuggers and tools know them by it)
+      Macros.NewSymbol (readable).NewName ($"<$readable>d__$(Manager.GetNewId ())")
     }
 
     PrepareEnumeratorObject (yield_type : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
@@ -806,7 +808,7 @@ using Nemerle.Compiler.Utility;
         {
           public Current : $(yield_type : typed)
           {
-            get { this._N_current }
+            get { this.$("<>2__current" : dyn) }
           }
 
           public Dispose () : void
@@ -845,7 +847,7 @@ using Nemerle.Compiler.Utility;
           body
         else
           <[
-            if(System.Threading.Interlocked.CompareExchange(ref _N_this_used, 1, 0) != 0)
+            if(System.Threading.Interlocked.CompareExchange(ref this.$("<>this_used" : dyn), 1, 0) != 0)
               $body
             else
               this
@@ -862,7 +864,7 @@ using Nemerle.Compiler.Utility;
         {
           public Current : $(yield_type : typed)
           {
-            get { this._N_current }
+            get { this.$("<>2__current" : dyn) }
           }
 
           public Dispose () : void
@@ -880,7 +882,7 @@ using Nemerle.Compiler.Utility;
             foobar
           }
 
-          mutable _N_this_used : int;
+          mutable $("<>this_used" : dyn) : int;
 
           public GetEnumerator () : System.Collections.Generic.IEnumerator [$(yield_type : typed)]
           {
@@ -896,7 +898,7 @@ using Nemerle.Compiler.Utility;
           CopyFrom (other : this) : void
           {
             _ = other; // avoid warning about unused other
-            _N_this_used = 1;
+            this.$("<>this_used" : dyn) = 1;
           }
         }
       ]>
@@ -1144,7 +1146,7 @@ using Nemerle.Compiler.Utility;
 
           def this_N_state =
             TExpr.FieldMember (InternalType.Int32, thisref,
-                               SingleMemberLookup (clo_type, "_N_state") :> IField);
+                               SingleMemberLookup (clo_type, "<>1__state") :> IField);
           dispose_expr =
             TExpr.Sequence (InternalType.Void,
               TExpr.Assign (InternalType.Void,
@@ -1158,6 +1160,69 @@ using Nemerle.Compiler.Utility;
       }
     }
 
+
+    /// An iterator's or async function's state machine, as C# marks it: the function that starts it carries
+    /// [IteratorStateMachine] or [AsyncStateMachine] (and an async one [DebuggerStepThrough]), so stack traces name the
+    /// function, and the PDB links the state machine's MoveNext to it (see TypesManager.SaveAssembly).
+    RegisterStateMachine (clo_type : TypeBuilder) : void
+    {
+      def move_next = SingleMemberLookup (clo_type, "MoveNext") :> MethodBuilder;
+      def method = if (current_local_fun.decl == null) the_method else null;
+      def is_async = method != null && method.Name.StartsWith ("_N_async_");
+      // an async function's state machine is started by the function the async macros made it from
+      def kickoff =
+        if (is_async)
+        {
+          def key = "Nemerle.AsyncMacros.kickoff:" + method.Name;
+          mutable found = null;
+          def methods = method.DeclaringType.GetMethods (System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                                                         | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance
+                                                         | System.Reflection.BindingFlags.DeclaredOnly);
+          when (Manager.UserData.Contains (key))
+            foreach (m is MethodBuilder in methods)
+              when (m.Ast : object == Manager.UserData [key]) found = m;
+          // (or by its name and parameters, as it was written)
+          when (found == null && Manager.UserData.Contains ("Nemerle.AsyncMacros.kickoff-name:" + method.Name))
+          {
+            def (name, count) = Manager.UserData ["Nemerle.AsyncMacros.kickoff-name:" + method.Name] :> string * int;
+            foreach (m is MethodBuilder in methods)
+              when (found == null && m.Name == name && m.GetParameters ().Length == count) found = m;
+          }
+          found
+        }
+        else method;
+      Manager.StateMachines.Add ((move_next, kickoff));
+      // (compiler-made, as C#'s: .NET's stack traces then name the function for its MoveNext)
+      match (Manager.NameTree.LookupSystemType ("System.Runtime.CompilerServices.CompilerGeneratedAttribute"))
+      {
+        | Some (generated) =>
+          def emitter = clo_type.TyManager.ClrEmitter;
+          clo_type.DoBeforeFinalization (fun () { emitter.SetAttribute (clo_type.GetTypeBuilder (), Manager.AttributeCompiler.MakeEmittedAttribute (generated)) })
+        | None => ()
+      }
+      when (is_async || current_local_fun.Name.StartsWith ("_N_async_local_"))
+        _ = Manager.AsyncStateMachineTypes.Add (clo_type);
+      when (kickoff != null)
+      {
+        def cache = Manager.SystemTypeCache;
+        def attribute = match (Manager.NameTree.LookupSystemType (if (is_async) "System.Runtime.CompilerServices.AsyncStateMachineAttribute"
+                                                                  else "System.Runtime.CompilerServices.IteratorStateMachineAttribute"))
+          {
+            | Some (t) => t
+            | None => null   // (a target framework without it)
+          };
+        def emitter = kickoff.DeclaringType.TyManager.ClrEmitter;
+        kickoff.DeclaringType.DoBeforeFinalization (fun ()
+          {
+            when (attribute != null && kickoff.GetMethodInfo () != null)
+            {
+              emitter.SetAttribute (kickoff.GetMethodInfo (), Manager.AttributeCompiler.MakeEmittedAttribute (attribute, array [cache.Type], clo_type.GetTypeBuilder ()));
+              when (is_async)
+                emitter.SetAttribute (kickoff.GetMethodInfo (), Manager.AttributeCompiler.MakeEmittedAttribute (cache.Reflect ("System.Diagnostics.DebuggerStepThroughAttribute")));
+            }
+          })
+      }
+    }
 
     SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string], parent_fields : Hashtable [int, IField]) : void
     {
@@ -1264,7 +1329,7 @@ using Nemerle.Compiler.Utility;
         current_closure = closure_val;
         // a loop's closure in an iterator's MoveNext is kept by the enumerator (see ClosureValueRef)
         def kept_by_enumerator = current_local_fun.ConvertToLoopWithClosure && current_method.is_in_closure_of != 0
-                                 && !local_function_type.LookupMember ("_N_state").IsEmpty;
+                                 && !local_function_type.LookupMember ("<>1__state").IsEmpty;
         when (kept_by_enumerator)
         {
           def field = local_function_type.DefineAndReturn (<[ decl: internal mutable $(Macros.NewSymbol (closureName) : name) : $(clo_mtype : typed); ]>) :> IField;
@@ -1289,12 +1354,34 @@ using Nemerle.Compiler.Utility;
             });
 
         mutable parm_field_names = [];
+        mutable hoisted = 0;
 
         foreach (decl in vars)
         {
           def name =
-            if (decl.Name == "_N_current" || decl.Name == "_N_state")
+            // (the state machine's current item and state, as C# names them)
+            if (decl.Name == "_N_current")
+              Macros.NewSymbol ("current").NewName ("<>2__current")
+            else if (decl.Name == "_N_state")
+              Macros.NewSymbol ("state").NewName ("<>1__state")
+            // a state machine's fields are named as the debuggers know C#'s: a parameter by its name, `this' as
+            // <>4__this, and a local of the code as <name>5__n (shown as `name' where the debugger stops in it)
+            else if (uses_yield && decl.ValKind is LocalValue.Kind.ClosurisedThisPointer)
+              Nemerle.Compiler.Parsetree.Name ("<>4__this")
+            else if (uses_yield && decl.ValKind is LocalValue.Kind.FunParm && !decl.Name.StartsWith ("_N_"))
               Nemerle.Compiler.Parsetree.Name (decl.Name)
+            else if (uses_yield && !decl.Name.StartsWith ("_N_") && decl.Location.IsSourceAvailable && !decl.Location.IsGenerated
+                     && (decl.ValKind is LocalValue.Kind.Plain || decl.ValKind is LocalValue.Kind.ExceptionValue || decl.ValKind is LocalValue.Kind.PatternVariable))
+            {
+              hoisted++;
+              Nemerle.Compiler.Parsetree.Name ($"<$(decl.Name)>5__$hoisted")
+            }
+            // (the state machine's own fields, not the code's: <>-named, as C#'s, which debuggers do not show)
+            else if (uses_yield)
+            {
+              def symbol = Macros.NewSymbol (decl.Name);
+              symbol.NewName ("<>" + symbol.Id)
+            }
             else
               Macros.NewSymbol (decl.Name);
           //Message.Debug ($"clo field: $name $(fix_type (decl.Type)) tv=$new_tp");
@@ -1333,7 +1420,10 @@ using Nemerle.Compiler.Utility;
         }
 
         when (uses_yield)
+        {
           SetEnumeratorBody (clo_type, subst, parm_field_names, parent_fields);
+          RegisterStateMachine (clo_type);
+        }
 
 
         clo_type.Compile ();

@@ -815,6 +815,12 @@ using Nemerle.Compiler.Utility;
       try
       {
         def (portableExecutableKind, imageFileMachine) = make_platform_flags (Manager.Options.Platform);
+        // the state machines, for the debug information: MoveNext and the function that starts it, and an async
+        // one's suspend and resume points
+        foreach ((move_next, kickoff) in Manager.StateMachines)
+          when (move_next.GetMethodInfo() != null)
+            _assembly_session.AddStateMachine(move_next.GetMethodInfo(), if (kickoff == null) null else kickoff.GetMethodInfo(),
+              if (Manager.AsyncStepping.ContainsKey(move_next)) Manager.AsyncStepping[move_next].ToArray() else null);
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
         // shared scopes go next to the grammars, as their storage layout (slot names and types; the values live in
