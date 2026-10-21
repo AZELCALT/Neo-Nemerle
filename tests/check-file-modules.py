@@ -792,6 +792,121 @@ done
 values.Boom() values.Rethrow() values.Rethrow()
 values.Boom() values.Plain()''':
         raise RuntimeError('async values and traces: got\n' + got)
+    # the locals that lambdas use, in a struct state machine, are a class's (as C#'s display class): shared with them,
+    # `this' too, a loop's per iteration, in a generic function, through nested lambdas and async lambdas
+    source('async/display.n', '''using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+async Shared() : Task[string]
+{
+  mutable count = 0;
+  def inc = () => { count++; count };
+  await Task.Yield();
+  _ = inc();
+  count += 10;
+  await Task.Delay(1);
+  def seen = inc();
+  $"$count $seen"
+}
+
+class Counter
+{
+  mutable total : int;
+  public async Add(xs : list[int]) : Task[int]
+  {
+    def add = x => total += x;   // captures `this'
+    foreach (x in xs) { await Task.Yield(); add(x) }
+    total
+  }
+}
+
+async Loops() : Task[int]
+{
+  def fs = List();
+  for (mutable i = 0; i < 3; i++) { def j = i; await Task.Yield(); fs.Add(() => j * 10) }
+  mutable sum = 0;
+  foreach (f in fs) sum += f();
+  sum
+}
+
+async Generic[T](x : T, n : int) : Task[list[T]]
+{
+  def make = k => $[x | _ in [1 .. k]];
+  await Task.Yield();
+  make(n)
+}
+
+async Nested(a : int) : Task[int]
+{
+  def outer = b => { def inner = c => a + b + c; inner(1) };
+  await Task.Delay(1);
+  outer(2) + a
+}
+
+async AsyncInAsync(a : int) : Task[int]
+{
+  mutable acc = a;
+  def step = async (k : int) => { await Task.Yield(); acc += k; def twice = () => acc * 2; twice() };
+  def r1 = await step(1);
+  def r2 = await step(2);
+  r1 + r2 + acc
+}
+
+Console.WriteLine(await Shared());
+Console.WriteLine(await Counter().Add([1, 2, 3]));
+Console.WriteLine(await Loops());
+Console.WriteLine(await Generic("ab", 3));
+Console.WriteLine(await Nested(5));
+Console.WriteLine(await AsyncInAsync(10))
+''')
+    run([runtime, compiler, work / 'async/display.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-display.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-display.runtimeconfig.json')
+    got = run([runtime, work / 'async-display.exe']).stdout.strip()
+    if got != '''12 12
+6
+30
+[ab, ab, ab]
+13
+61''':
+        raise RuntimeError('async display classes: got\n' + got)
+    # an async file's function called before its top-level code has ended (from a file that does not import it)
+    # waits for it; the code's own calls do not; what it threw comes out of each call
+    source('early/config.n', '''using System;
+using System.Threading.Tasks;
+
+mutable settings : string = null;
+async Load() : Task[string] { await Task.Delay(50); "loaded" }
+settings = await Load();
+Console.WriteLine("config sees " + Get());
+
+public Get() : string { settings }
+public async GetAsync() : Task[string] { await Task.Yield(); settings + "!" }
+''')
+    source('early/broken.n', '''using System.Threading.Tasks;
+await Task.Delay(10);
+throw System.InvalidOperationException("broken failed");
+public Get() : int { 1 }
+''')
+    source('early/main.n', '''using System;
+Console.WriteLine(config.Get());
+Console.WriteLine(config.GetAsync().Result);
+def fails() { try { _ = broken.Get(); "no" } catch { | e => e.Message } }
+Console.WriteLine(fails() + " " + fails());
+// a ValueTask lambda by a delegate's constructor, as a ValueTask's state machine
+def made = Func.[System.Threading.Tasks.ValueTask[int]](async () => { await System.Threading.Tasks.Task.Yield(); 7 });
+Console.WriteLine(made().Result)
+''')
+    run([runtime, compiler, work / 'early/main.n', work / 'early/config.n', work / 'early/broken.n', '-source-root:' + str(work / 'early'),
+         '-out:' + str(work / 'early.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'early.runtimeconfig.json')
+    got = run([runtime, work / 'early.exe']).stdout.strip()
+    if got != '''config sees loaded
+loaded
+loaded!
+broken failed broken failed
+7''':
+        raise RuntimeError('async files called early: got\n' + got)
     source('async/iterators.n', '''using System;
 using System.Collections.Generic;
 using System.Linq;

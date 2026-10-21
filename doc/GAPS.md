@@ -12,9 +12,8 @@ unless it says so. These edges will be closed, which can change what happens the
   boxes are shared as they are.
 ## Async
 
-- **An async file's functions do not wait for its top-level code.** Its state is ready once a file importing it has
-  awaited it (at the `using`); a function of the file called before that, from a file that does not import it (by
-  reflection, from C#), sees the state unset.
+- **An async file's state read directly (a public field, by reflection or from C#) is not waited for.** Its functions
+  are: one called before its top-level code has ended waits for it (an async one awaits it).
 
 ## Targets
 

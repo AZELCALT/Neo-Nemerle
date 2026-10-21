@@ -320,11 +320,33 @@ public sealed class FileModuleRegistry
       }
       else
       {
-        define(<[ decl: [Nemerle.AsyncMacros.AsyncFunction] private static _N_top_level() : $task { ..$body } ]>);
+        // (it says when it has ended, and the code it runs, which goes on in what it starts, knows it is its own: see below)
+        define(<[ decl: [Nemerle.AsyncMacros.AsyncFunction] private static _N_top_level() : $task
+                  {
+                    _N_initializing.Value = true;
+                    ..$body;
+                    _N_state_ready = true
+                  } ]>);
         define(<[ decl: private static mutable _N_top_level_run : System.Lazy[$task]; ]>);
+        define(<[ decl: private static mutable _N_initializing : System.Threading.AsyncLocal[bool]; ]>);
+        define(<[ decl: private static mutable _N_state_ready : bool; ]>);
         define(<[ decl: public static _N_top_level_ready() : $task { _N_top_level_run.Value } ]>);
         code.Runner.body = FunBody.Parsed(Nemerle.Compiler.UtilMacros.locate(code.Location,
-          <[ _N_top_level_run = System.Lazy(() => _N_top_level()) ]>));
+          <[ _N_initializing = System.Threading.AsyncLocal(); _N_top_level_run = System.Lazy(() => _N_top_level()) ]>));
+        // a function of the file called before its top-level code has ended (by reflection, from C#, from a file that
+        // does not import it) waits for it, as a type's members wait for its type initializer: an async one awaits
+        // it, another blocks until it has ended (and throws what it threw); the code's own calls do not wait
+        foreach (f is ClassMember.Function in type.GetParsedMembers(true))
+          when (!f.Name.StartsWith("_N_") && f : object != code.Runner && f.Name != ".ctor" && f.Name != ".cctor"
+                && (f.modifiers.mods & NemerleModifiers.Private) == NemerleModifiers.None && f.Body != null)
+          {
+            def async = f.modifiers.custom_attrs.Exists(a => a.ToString().Contains("AsyncFunction"));
+            def wait = if (async) <[ Nemerle.AsyncMacros.__await(_N_top_level_ready()) ]>
+                       else <[ _N_top_level_ready().GetAwaiter().GetResult() ]>;
+            def guard = Nemerle.Compiler.UtilMacros.locate(f.Body.Location.AsGenerated(),
+              <[ unless (_N_state_ready || _N_initializing.Value) $wait ]>);
+            f.Body = PExpr.Sequence(f.Body.Location, [guard, f.Body])
+          }
         when (TopLevel.Contains(name)) TopLevel[name].Kind = "async-initializer";
       }
     }
