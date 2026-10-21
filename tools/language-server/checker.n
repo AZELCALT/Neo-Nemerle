@@ -348,6 +348,9 @@ public module Checker
         match (info.Node)
         {
           | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
+          // where a local is declared: its name there is the local too (hover, rename)
+          | TExpr.DefValIn(decl, _, _) when decl.NameLocation.Line > 0 && decl.Type != null =>
+            fact(decl.NameLocation, decl.Name + " : " + decl.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
           | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
           | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
           | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
@@ -487,6 +490,7 @@ public sealed class CompletionManager : ManagerClass
   protected override IsExtensionMethod(_ : IMethod, _ : TypeVar) : bool { false }
 
   Keywords : array[string] = array["def", "mutable", "if", "else", "when", "unless", "match", "foreach", "for", "while", "do",
+    "async", "await", "yield",
     "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
     "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "mask",
     "export", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void"];

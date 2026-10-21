@@ -244,6 +244,28 @@ try:
     l, ch = position(typing, len(typing) - 1)
     result = c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']
     check(not any(i['kind'] in (14, 15) for i in result), 'no keywords after a dot: %s' % [i['label'] for i in result])
+    typing = edit(fixed + 'asy\n')
+    l, ch = position(typing, len(typing) - 1)
+    result = c.request('textDocument/completion', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})['items']
+    check(any(i['label'] == 'async' and i.get('insertTextFormat') == 2 and 'Task[' in i['insertText'] for i in result),
+          'the async function form: %s' % [i['label'] for i in result])
+    # an async function: no errors, and hover where its locals are declared and used
+    typing = edit(fixed + 'async Twice(n : int) : System.Threading.Tasks.Task[int]\n{\n  def got = await System.Threading.Tasks.Task.FromResult(n);\n  got * 2\n}\n')
+    deadline = time.time() + a.timeout; hover = None
+    while time.time() < deadline:
+        l, ch = position(typing, offset_of(typing, 'got =') + 1)
+        hover = c.request('textDocument/hover', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
+        if hover and 'got : int' in hover['contents']['value']: break
+        time.sleep(0.5)
+    check(hover and 'got : int' in hover['contents']['value'], 'hover where a local of an async function is declared: %s' % hover)
+    l, ch = position(typing, offset_of(typing, 'got * 2') + 1)
+    hover = c.request('textDocument/hover', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}})
+    check(hover and 'got : int' in hover['contents']['value'], 'hover where it is used: %s' % hover)
+    check(not any(d['severity'] == 1 for d in c.diagnostics[uri]['diagnostics']), 'an async function has no errors: %s' % c.diagnostics[uri])
+    l, ch = position(typing, offset_of(typing, 'got * 2') + 1)
+    renamed = c.request('textDocument/rename', {'textDocument': {'uri': uri}, 'position': {'line': l, 'character': ch}, 'newName': 'value'})
+    lines = sorted(e['range']['start']['line'] for e in renamed['changes'][uri])
+    check(len(lines) == 2 and len(set(lines)) == 2, 'renaming a local edits its declaration and its use, once each: %s' % renamed)
     edit(fixed)
     print('PASS: completion (members after a dot, names in scope, despite another broken line; keywords and forms)')
     # find-references and rename, over the whole workspace

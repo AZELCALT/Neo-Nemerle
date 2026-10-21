@@ -19,6 +19,9 @@
       "include": "#numbers"
     },
     {
+      "include": "#contextual"
+    },
+    {
       "include": "#keywords"
     },
     {
@@ -122,6 +125,19 @@
     "operators": {
       "name": "keyword.operator.nemerle",
       "match": "[=<>@^&\\-+|*/$%!?~.:#\\\\`]+"
+    },
+    "contextual": {
+      "comment": "async and await are words only where they mean it (async before a function or lambda, await before what it waits for)",
+      "patterns": [
+        {
+          "name": "keyword.control.async.nemerle",
+          "match": "\\basync\\b(?=\\s+(?:[A-Za-z_]|\\()|\\s*\\()"
+        },
+        {
+          "name": "keyword.control.await.nemerle",
+          "match": "\\bawait\\b(?=\\s+(?:[A-Za-z_@$(\\[\\\"0-9]|-))"
+        }
+      ]
     }
   }
 }

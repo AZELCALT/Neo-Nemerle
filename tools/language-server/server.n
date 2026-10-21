@@ -528,6 +528,7 @@ public sealed class Server
     ("try", "try\n{\n  $0\n}\ncatch\n{\n  | e is ${1:System.Exception} => ${2:()}\n}", "try / catch"),
     ("fun", "fun (${1:x}) { $0 }", "a function value"),
     ("function", "${1:Name}(${2:x} : ${3:int}) : ${4:int}\n{\n  $0\n}", "a function of the file"),
+    ("async", "async ${1:Name}(${2:x} : ${3:int}) : System.Threading.Tasks.Task[${4:int}]\n{\n  $0\n}", "an async function (await waits in it)"),
     ("class", "class ${1:Name}\n{\n  public this() { }\n  $0\n}", "a class"),
     ("export", "export class ${1:Name}\n{\n  $0\n}", "a type for the whole program"),
     ("variant", "variant ${1:Name}\n{\n  | ${2:First}\n  | ${3:Second} { ${4:value} : ${5:int} }\n}", "a variant (closed set of cases)"),
@@ -535,6 +536,7 @@ public sealed class Server
     ("macro", "macro ${1:Name}(${2:expr})\n{\n  <[ \\$${2:expr} ]>\n}", "a macro"),
   ];
   static Words : array[string] = array["def", "mutable", "if", "else", "when", "unless", "match", "foreach", "for", "while", "do",
+    "async", "await", "yield",
     "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
     "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "mask",
     "export", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void",
