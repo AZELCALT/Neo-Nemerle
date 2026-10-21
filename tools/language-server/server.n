@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using System.Collections.Concurrent;
 using SCG = System.Collections.Generic;
@@ -131,7 +132,8 @@ public sealed class Server
               jobs.Add(Job.Close(uri))
             | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol"
             | "textDocument/hover" | "textDocument/definition" | "textDocument/completion" | "textDocument/references"
-            | "textDocument/prepareRename" | "textDocument/rename" =>
+            | "textDocument/prepareRename" | "textDocument/rename" | "textDocument/documentHighlight" | "textDocument/inlayHint"
+            | "textDocument/signatureHelp" | "workspace/symbol" =>
               jobs.Add(Job.Request(id.DeepClone(), method, message["params"].DeepClone()))
             | _ => when (id != null) transport.RespondError(id, -32601, "method not supported: " + method)
           }
@@ -150,7 +152,8 @@ public sealed class Server
   {
     def legend = JsonObject();
     def types = JsonArray(); foreach (t in Legend.Types) types.Add(JsonValue.Create(t));
-    legend["tokenTypes"] = types; legend["tokenModifiers"] = JsonArray();
+    def modifiers = JsonArray(); foreach (m in Legend.Modifiers) modifiers.Add(JsonValue.Create(m));
+    legend["tokenTypes"] = types; legend["tokenModifiers"] = modifiers;
     def tokens = JsonObject(); tokens["legend"] = legend; tokens["full"] = JsonValue.Create(true);
     def caps = JsonObject();
     // whole texts on change; saves are told too (the index follows the files on disk)
@@ -162,6 +165,9 @@ public sealed class Server
     caps["documentSymbolProvider"] = JsonValue.Create(true);
     caps["hoverProvider"] = JsonValue.Create(true);
     caps["definitionProvider"] = JsonValue.Create(true);
+    caps["documentHighlightProvider"] = JsonValue.Create(true);
+    caps["workspaceSymbolProvider"] = JsonValue.Create(true);
+    caps["inlayHintProvider"] = JsonValue.Create(true);
     when (typecheck)
     {
       def completion = JsonObject(); completion["triggerCharacters"] = JsonArray(array[JsonValue.Create(".") : JsonNode]);
@@ -169,6 +175,9 @@ public sealed class Server
       caps["referencesProvider"] = JsonValue.Create(true);
       def rename = JsonObject(); rename["prepareProvider"] = JsonValue.Create(true);
       caps["renameProvider"] = rename;
+      def signature = JsonObject();
+      signature["triggerCharacters"] = JsonArray(array[JsonValue.Create("(") : JsonNode, JsonValue.Create(",")]);
+      caps["signatureHelpProvider"] = signature;
     }
     def info = JsonObject(); info["name"] = JsonValue.Create("nemerle-lsp"); info["version"] = JsonValue.Create("0.2");
     def r = JsonObject(); r["capabilities"] = caps; r["serverInfo"] = info; r
@@ -192,6 +201,7 @@ public sealed class Server
             _ = results.Remove(uri);
             def p = JsonObject(); p["uri"] = JsonValue.Create(uri); p["diagnostics"] = JsonArray();
             transport.Notify("textDocument/publishDiagnostics", p)
+          | Job.Request(id, "workspace/symbol", parameters) => transport.Respond(id, WorkspaceSymbols(Str(parameters["query"]) ?? ""))
           | Job.Request(id, method, parameters) =>
             def doc = Current(Str(parameters["textDocument"]["uri"]));
             if (doc == null) transport.Respond(id, null)
@@ -200,11 +210,14 @@ public sealed class Server
               def r = Ensure(doc);
               match (method)
               {
-                | "textDocument/semanticTokens/full" => transport.Respond(id, SemanticTokens(r))
+                | "textDocument/semanticTokens/full" => transport.Respond(id, SemanticTokens(r, PathOf(doc.Uri)))
                 | "textDocument/foldingRange" => transport.Respond(id, Folding(r))
                 | "textDocument/hover" => transport.Respond(id, Hover(doc, r, parameters["position"]))
                 | "textDocument/definition" => transport.Respond(id, Definition(doc, parameters["position"]))
                 | "textDocument/completion" => transport.Respond(id, Completions(doc, parameters["position"]))
+                | "textDocument/documentHighlight" => transport.Respond(id, Highlights(doc, r, parameters["position"]))
+                | "textDocument/inlayHint" => transport.Respond(id, InlayHints(doc, r, parameters["range"]))
+                | "textDocument/signatureHelp" => transport.Respond(id, SignatureHelp(doc, r, parameters["position"]))
                 | "textDocument/references" =>
                   def context = parameters["context"];
                   transport.Respond(id, References(doc, parameters["position"], context != null && context["includeDeclaration"] != null && context["includeDeclaration"].GetValue.[bool]()))
@@ -512,6 +525,188 @@ public sealed class Server
     }
   }
 
+  // ---- document highlight, inlay hints, workspace symbols, signature help ----
+
+  /// The other places in the file of what is at the position: the uses (and declaration) of the symbol the latest
+  /// check typed there, or in a grammar block, of the rule (or module) name there.
+  Highlights(doc : Document, r : AnalysisResult, position : JsonNode) : JsonNode
+  {
+    def items = JsonArray(); def seen = SCG.HashSet.[string]();
+    def add(range : JsonObject) : void
+    {
+      when (range != null && seen.Add(range.ToJsonString())) { def x = JsonObject(); x["range"] = range; x["kind"] = JsonValue.Create(1 : int); items.Add(x) }
+    }
+    def path = PathOf(doc.Uri);
+    def offset = r.Lines.Offset(Int(position["line"]) + 1, Int(position["character"]) + 1);
+    match (FactAt(doc, position))
+    {
+      | f when f != null && f["id"] != null && path != null =>
+        def id = Str(f["id"]);
+        foreach (g in typedFacts[path])
+          when (Str(g["id"]) == id)
+          {
+            add(NameRange(g));
+            def t = g["target"];
+            when (t != null && Str(t["path"]) == path) add(NameRange(t))
+          }
+      | _ =>
+        foreach (block in r.Grammars)
+          when (offset >= block.Start && offset <= block.End)
+          {
+            mutable name = null;
+            foreach ((n, s, e, _) in block.Names) when (name == null && offset >= s && offset <= e) name = n;
+            when (name != null) foreach ((other, s, e, _) in block.Names) when (other == name) add(Range(r, s, e).AsObject())
+          }
+    }
+    items
+  }
+
+  /// The types the latest check inferred, after the names declared without one (`def x = ...', `mutable y = ...').
+  InlayHints(doc : Document, r : AnalysisResult, range : JsonNode) : JsonNode
+  {
+    def items = JsonArray();
+    def path = PathOf(doc.Uri);
+    def first = if (range != null) Int(range["start"]["line"]) + 1 else 1;
+    def last = if (range != null) Int(range["end"]["line"]) + 1 else int.MaxValue;
+    def lines = doc.Text.Split('\n');
+    def seen = SCG.HashSet.[string]();
+    when (path != null && typedFacts.ContainsKey(path))
+      foreach (f in typedFacts[path])
+        when (f["nameLine"] != null && (Str(f["kind"]) == "local" || Str(f["kind"]) == "field"))
+        {
+          def line = Int(f["nameLine"]);
+          def (column, end) = (Int(f["nameColumn"]), Int(f["nameEndColumn"]));
+          when (line >= first && line <= last && line <= lines.Length)
+          {
+            def text = lines[line - 1];
+            when (end - 1 <= text.Length && column >= 1)
+            {
+              def before = text.Substring(0, column - 1);
+              def after = text.Substring(end - 1).TrimStart();
+              def hover = Str(f["hover"]);
+              def at = hover.IndexOf(" : ", StringComparison.Ordinal);
+              when (Regex.IsMatch(before, @"(?:^|[\s;{(])(?:def|mutable)\s+$") && !after.StartsWith(":") && at > 0 && seen.Add(line.ToString() + ":" + end.ToString()))
+              {
+                def p = JsonObject(); p["line"] = JsonValue.Create(line - 1); p["character"] = JsonValue.Create(end - 1);
+                def x = JsonObject(); x["position"] = p; x["label"] = JsonValue.Create(": " + hover.Substring(at + 3));
+                x["kind"] = JsonValue.Create(1 : int); x["paddingLeft"] = JsonValue.Create(false);
+                items.Add(x)
+              }
+            }
+          }
+        }
+    items
+  }
+
+  /// The workspace's files, each with its outline (its Nemerle declarations, and its grammar blocks' modules and
+  /// rules), kept while its text is the same.
+  outlines : SCG.Dictionary[string, string * AnalysisResult] = SCG.Dictionary(StringComparer.Ordinal);
+
+  WorkspaceSymbols(query : string) : JsonNode
+  {
+    def items = JsonArray();
+    def texts = SCG.Dictionary.[string, string](StringComparer.Ordinal);
+    when (root != null)
+      try
+        foreach (file in Directory.EnumerateFiles(root, "*.n", SearchOption.AllDirectories))
+        {
+          def relative = Path.GetRelativePath(root, file).Split(Path.DirectorySeparatorChar);
+          unless (relative.Take(relative.Length - 1).Any(d => d.StartsWith(".") || d == "out" || d == "bin" || d == "obj" || d == "node_modules"))
+            texts[Path.GetFullPath(file)] = try { File.ReadAllText(file) } catch { | _ => null }
+        }
+      catch { | _ => () }
+    lock (documents) foreach (d in documents.Values) match (PathOf(d.Uri)) { | null => () | path => texts[path] = d.Text }
+    // (each letter of the query, in order, ignoring case)
+    def wanted(name : string) : bool
+    {
+      mutable i = 0;
+      foreach (c in name) when (i < query.Length && char.ToLowerInvariant(c) == char.ToLowerInvariant(query[i])) i++;
+      i == query.Length
+    }
+    foreach (pair in texts)
+      when (pair.Value != null)
+      {
+        mutable known;
+        def r = if (outlines.TryGetValue(pair.Key, out known) && known[0] == pair.Value) known[1]
+                else
+                {
+                  when (analyzer == null) analyzer = Analyzer(references, root, fileNameNamespaces);
+                  def analyzed = analyzer.Analyze(pair.Key, 0, pair.Value);
+                  outlines[pair.Key] = (pair.Value, analyzed); analyzed
+                };
+        def uri = UriOf(pair.Key);
+        def visit(s : SymbolInfo, container : string) : void
+        {
+          when (wanted(s.Name))
+          {
+            def location = JsonObject(); location["uri"] = JsonValue.Create(uri); location["range"] = Range(r, s.NameStart, s.NameEnd);
+            def x = JsonObject(); x["name"] = JsonValue.Create(s.Name); x["kind"] = JsonValue.Create(s.Kind); x["location"] = location;
+            when (container != null) x["containerName"] = JsonValue.Create(container);
+            items.Add(x)
+          }
+          foreach (c in s.Children) visit(c, s.Name)
+        }
+        foreach (s in r.Symbols) visit(s, Path.GetFileNameWithoutExtension(pair.Key))
+      }
+    items
+  }
+
+  /// The call the position is in the arguments of: what its name can call (each overload's parameters), and which
+  /// argument the position is at.
+  SignatureHelp(doc : Document, r : AnalysisResult, position : JsonNode) : JsonNode
+  {
+    def path = PathOf(doc.Uri);
+    def text = doc.Text;
+    def offset = Math.Min(text.Length, r.Lines.Offset(Int(position["line"]) + 1, Int(position["character"]) + 1));
+    // back to the call's `(': its arguments before the position are counted by their commas
+    mutable depth = 0; mutable commas = 0; mutable open = -1; mutable i = offset - 1;
+    while (open < 0 && i >= 0)
+    {
+      match (text[i])
+      {
+        | ')' | ']' => depth++
+        | '(' when depth == 0 => open = i
+        | '(' | '[' => depth--
+        | ',' when depth == 0 => commas++
+        | ';' | '{' | '}' when depth == 0 => i = -1
+        | '"' => i--; while (i >= 0 && text[i] != '"') i--
+        | _ => ()
+      }
+      i--;
+    }
+    mutable stop = open; while (stop > 0 && char.IsWhiteSpace(text[stop - 1])) stop--;
+    mutable start = stop; while (start > 0 && (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] == '_')) start--;
+    if (!typecheck || root == null || path == null || open < 0 || start == stop) null
+    else
+    {
+      // (the call's arguments made `()', where an unfinished one would stop the parse)
+      mutable close = -1; mutable d = 0; mutable j = open + 1;
+      while (close < 0 && j < text.Length)
+      {
+        match (text[j]) { | '(' => d++ | ')' when d == 0 => close = j | ')' => d-- | ';' | '{' | '}' when d == 0 => j = text.Length | _ => () }
+        j++
+      }
+      def called = text.Substring(0, open) + "()" + (if (close >= 0) text.Substring(close + 1) else text.Substring(offset));
+      def request = CheckRequest();
+      foreach (f in request["files"].AsArray()) when (Str(f["path"]) == path) f["text"] = JsonValue.Create(called);
+      def at = JsonObject(); at["path"] = JsonValue.Create(path);
+      at["line"] = JsonValue.Create(r.Lines.Line(stop) + 1); at["column"] = JsonValue.Create(r.Lines.Column(stop) + 1);
+      request["complete"] = at; request["signature"] = JsonValue.Create(true);
+      match (RunChecker(request, false))
+      {
+        | null => null
+        | answer when answer["signatures"] == null || answer["signatures"].AsArray().Count == 0 => null
+        | answer =>
+          def signatures = answer["signatures"].AsArray().DeepClone().AsArray();
+          mutable active = 0;
+          for (mutable k = signatures.Count - 1; k >= 0; k--)
+            when (signatures[k]["parameters"].AsArray().Count > commas) active = k;
+          def x = JsonObject(); x["signatures"] = signatures;
+          x["activeSignature"] = JsonValue.Create(active); x["activeParameter"] = JsonValue.Create(commas); x
+      }
+    }
+  }
+
   // ---- completion, references, rename ----
 
   /// Nemerle's basic forms, as snippets (LSP snippet syntax): offered for the word being typed, with no compile.
@@ -783,7 +978,7 @@ public sealed class Server
     result
   }
 
-  static Renamable : array[string] = array["local", "field", "property", "method", "event"];
+  static Renamable : array[string] = array["local", "parameter", "function", "field", "property", "method", "event"];
 
   /// A type of the workspace at the position: its rename places (or why not), from the latest workspace check.
   TypeAt(doc : Document, position : JsonNode) : JsonArray * string
@@ -911,13 +1106,65 @@ public sealed class Server
     }
   }
 
-  SemanticTokens(r : AnalysisResult) : JsonNode
+  /// The names the latest check typed, by what they are (a local, a parameter, a field, a method, a type), and a
+  /// grammar block's rule names: over the parse's tokens (a `$"..."' string's names cut its token).
+  Meanings(r : AnalysisResult, path : string) : SCG.List[int * int * int * int]
   {
+    def found = SCG.List();
+    foreach (block in r.Grammars)
+      foreach ((_, start, end, declaration) in block.Names)
+        found.Add((start, end - start, Legend.Type, if (declaration) Legend.Declaration else 0));
+    when (path != null && typedFacts.ContainsKey(path))
+      foreach (f in typedFacts[path])
+        when (f["nameLine"] != null)
+        {
+          def name = Str(f["name"]);
+          def start = r.Lines.Offset(Int(f["nameLine"]), Int(f["nameColumn"]));
+          def length = Int(f["nameEndColumn"]) - Int(f["nameColumn"]);
+          // (a fact of an earlier text: only where the name still is)
+          when (length > 0 && start + length <= r.Text.Length && name != null && string.CompareOrdinal(r.Text, start, name, 0, length) == 0)
+          {
+            def kind = match (Str(f["kind"]))
+            {
+              | "local" => Legend.Variable | "parameter" => Legend.Parameter | "function" => Legend.Function
+              | "method" => Legend.Method | "field" | "property" => Legend.Property | "event" => Legend.Event
+              | "constructor" => Legend.Type | _ => -1
+            };
+            def t = f["target"];
+            def declaration = t != null && t["nameLine"] != null && Str(t["path"]) == path
+                              && Int(t["nameLine"]) == Int(f["nameLine"]) && Int(t["nameColumn"]) == Int(f["nameColumn"]);
+            when (kind >= 0) found.Add((start, length, kind, if (declaration) Legend.Declaration else 0));
+          }
+        }
+    found
+  }
+
+  SemanticTokens(r : AnalysisResult, path : string) : JsonNode
+  {
+    // the parse's tokens, cut where a name's meaning goes over them, then the names
+    def meanings = Meanings(r, path);
+    def tokens = SCG.List.[int * int * int * int]();
+    foreach ((offset, length, kind) in r.Tokens)
+    {
+      mutable pieces = SCG.List.[int * int](); pieces.Add((offset, offset + length));
+      foreach ((m, ml, _, _) in meanings)
+        when (m < offset + length && m + ml > offset)
+        {
+          def cut = SCG.List.[int * int]();
+          foreach ((a, b) in pieces)
+            if (m >= b || m + ml <= a) cut.Add((a, b))
+            else { when (m > a) cut.Add((a, m)); when (b > m + ml) cut.Add((m + ml, b)) }
+          pieces = cut
+        }
+      foreach ((a, b) in pieces) tokens.Add((a, b - a, kind, 0));
+    }
+    def seen = SCG.HashSet.[int]();
+    foreach ((m, ml, kind, mods) in meanings) when (seen.Add(m)) tokens.Add((m, ml, kind, mods));
     // sorted, non-overlapping, split at line ends, delta encoded
-    def sorted = r.Tokens.OrderBy(t => t[0]).ThenByDescending(t => t[1]).ToList();
+    def sorted = tokens.OrderBy(t => t[0]).ThenByDescending(t => t[1]).ToList();
     def data = JsonArray();
     mutable lastLine = 0; mutable lastChar = 0; mutable covered = 0;
-    foreach ((offset, length, kind) in sorted)
+    foreach ((offset, length, kind, mods) in sorted)
       when (offset >= covered && length > 0 && offset < r.Text.Length)
       {
         def end = Math.Min(offset + length, r.Text.Length);
@@ -933,7 +1180,7 @@ public sealed class Server
             def ch = s - r.Lines.LineStart(line);
             def dl = line - lastLine; def dc = if (dl == 0) ch - lastChar else ch;
             data.Add(JsonValue.Create(dl)); data.Add(JsonValue.Create(dc)); data.Add(JsonValue.Create(piece));
-            data.Add(JsonValue.Create(kind)); data.Add(JsonValue.Create(0 : int));
+            data.Add(JsonValue.Create(kind)); data.Add(JsonValue.Create(mods));
             lastLine = line; lastChar = ch;
           }
           s = r.Lines.LineEnd(line) + 1;

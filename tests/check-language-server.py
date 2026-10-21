@@ -444,5 +444,72 @@ try:
     print('PASS: async code, declarations, $ strings that wait, completion after a broken line, and one of two types of a name renamed')
 finally:
     shutil.rmtree(lang, ignore_errors=True)
+# 9. signature help, document highlight, workspace symbols, inlay hints and meaning-based tokens: for Nemerle code
+# from the typed check, for a grammar block from its rules (Nitra's declarations)
+more = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-lsp-more-'))
+try:
+    (more / 'app').mkdir()
+    (more / 'app/pen.n').write_text('public class Pen\n{\n  public Width : int = 3;\n'
+                                    '  public Scale(by : int, extra : string) : int { Width * by + extra.Length }\n'
+                                    '  public Scale(by : int) : int { Width * by }\n}\n')
+    code = ('using System;\nusing System.Threading.Tasks;\nusing app.pen;\n\n'
+            'async Compute(n : int, label : string) : Task[int]\n{\n  def start = n * 2;\n  def scale = x => x * start;\n'
+            '  await Task.Delay(1);\n  scale(3) + label.Length\n}\n\n'
+            'def p : Pen = Pen();\nmutable total = 0;\ndef ratio = p.Scale(2) * 1.5;\ntotal += p.Width;\ndef name = "x";\n'
+            'Console.WriteLine($"$total $(await Compute(4, name)) $ratio")\n')
+    (more / 'main.n').write_text(code)
+    gram = ('grammar Calc\n{\n  syntax module Arith\n  {\n    using Nitra.Core;\n    [StartRule] syntax Start = Expr;\n'
+            '    syntax Expr = Term "+" Expr;\n    syntax Term = Number;\n    regex Number = [\'0\'..\'9\']+;\n  }\n}\n')
+    (more / 'calc.n').write_text(gram)
+    c = Client()
+    caps = c.request('initialize', {'processId': None, 'rootUri': more.as_uri(), 'capabilities': {}})['capabilities']
+    check(caps.get('documentHighlightProvider') and caps.get('workspaceSymbolProvider') and caps.get('inlayHintProvider')
+          and '(' in caps['signatureHelpProvider']['triggerCharacters'], 'the capabilities: %s' % caps)
+    legend = caps['semanticTokensProvider']['legend']['tokenTypes']
+    c.notify('initialized', {})
+    muri = (more / 'main.n').as_uri(); guri = (more / 'calc.n').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': muri, 'languageId': 'nemerle', 'version': 1, 'text': code}})
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': guri, 'languageId': 'nemerle', 'version': 1, 'text': gram}})
+    def spot(u, text, needle, nth=0, delta=0):
+        l, ch = position(text, offset_of(text, needle, nth) + delta)
+        return {'textDocument': {'uri': u}, 'position': {'line': l, 'character': ch}}
+    deadline = time.time() + a.timeout
+    while time.time() < deadline and not c.request('textDocument/hover', spot(muri, code, 'n * 2')): time.sleep(0.5)
+    # signature help: the overloads, the argument the position is at
+    sig = c.request('textDocument/signatureHelp', spot(muri, code, 'Compute(4, name', delta=len('Compute(4, ')))
+    check(sig and sig['signatures'][0]['label'] == 'Compute(n : int, label : string) : System.Threading.Tasks.Task[int]' and sig['activeParameter'] == 1,
+          'signature help in a call, at its second argument: %s' % sig)
+    sig = c.request('textDocument/signatureHelp', spot(muri, code, 'Scale(2', delta=len('Scale(')))
+    labels = [x['label'] for x in sig['signatures']] if sig else []
+    check('Scale(by : int) : int' in labels and 'Scale(by : int, extra : string) : int' in labels, 'a method\'s overloads: %s' % labels)
+    # document highlight: a local's uses; a rule's uses in its grammar block
+    lit = c.request('textDocument/documentHighlight', spot(muri, code, 'total', 1))
+    check(sorted((x['range']['start']['line'], x['range']['start']['character']) for x in lit) == [(13, 8), (15, 0), (17, 21)],
+          'the uses of a top-level value highlighted: %s' % lit)
+    lit = c.request('textDocument/documentHighlight', spot(guri, gram, 'Expr', 1))
+    check(sorted((x['range']['start']['line'], x['range']['start']['character']) for x in lit) == [(5, 31), (6, 11), (6, 27)],
+          'a rule\'s declaration and uses highlighted in its grammar: %s' % lit)
+    # workspace symbols: a function, a method's overloads, a rule, a syntax module
+    found = lambda q: [(x['name'], x['location']['uri'].rsplit('/', 1)[-1]) for x in c.request('workspace/symbol', {'query': q})]
+    check(('Compute', 'main.n') in found('Comp') and found('Scale').count(('Scale', 'pen.n')) == 2
+          and ('Expr', 'calc.n') in found('Expr') and ('Arith', 'calc.n') in found('Arith'),
+          'workspace symbols: %s %s %s %s' % (found('Comp'), found('Scale'), found('Expr'), found('Arith')))
+    # inlay hints: the types inferred where none is written
+    hints = {(x['position']['line'], x['label']) for x in c.request('textDocument/inlayHint', {'textDocument': {'uri': muri},
+             'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 40, 'character': 0}}})}
+    check({(6, ': int'), (13, ': int'), (14, ': double'), (16, ': string')} <= hints and not any(l == 12 for l, _ in hints),
+          'inlay hints of inferred types (none where a type is written): %s' % hints)
+    # tokens by meaning
+    def kinds(u, text, needle, nth=0):
+        return [t[3] for t in covered(decode(c.request('textDocument/semanticTokens/full', {'textDocument': {'uri': u}}), legend), text, offset_of(text, needle, nth))]
+    check(kinds(muri, code, 'start') == ['variable'] and kinds(muri, code, 'n * 2') == ['parameter'] and kinds(muri, code, 'Compute(4') == ['method']
+          and kinds(muri, code, 'Width;') == ['property'] and kinds(muri, code, 'Pen()') == ['type'],
+          'tokens by what the names are: %s %s %s %s %s' % (kinds(muri, code, 'start'), kinds(muri, code, 'n * 2'), kinds(muri, code, 'Compute(4'),
+                                                            kinds(muri, code, 'Width;'), kinds(muri, code, 'Pen()')))
+    check(kinds(guri, gram, 'Expr;') == ['type'] and kinds(guri, gram, 'Arith') == ['type'], 'a grammar\'s rule and module names: %s %s' % (kinds(guri, gram, 'Expr;'), kinds(guri, gram, 'Arith')))
+    c.request('shutdown', None); c.notify('exit', None)
+    print('PASS: signature help, document highlight, workspace symbols, inlay hints and tokens by meaning (Nemerle and Nitra)')
+finally:
+    shutil.rmtree(more, ignore_errors=True)
 shutil.rmtree(testdata, ignore_errors=True)
 print('PASS: %d language server checks' % checks)

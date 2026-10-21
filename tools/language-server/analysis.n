@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Text.RegularExpressions;
 using SCG = System.Collections.Generic;
 using Nemerle.Imperative;
 using Nemerle.Compiler.AST;
@@ -35,6 +36,16 @@ public sealed class SymbolInfo
 }
 
 /// Offsets <-> LSP positions (0-based line, UTF-16 column) for one text.
+/// A grammar block's names (its syntax modules, rules and alternatives): where each is declared, and every use of
+/// one in the block (document highlight, the outline, workspace symbols, semantic tokens).
+public sealed class GrammarBlock
+{
+  public Start : int; public End : int;
+  /// (name, start, end, declaration): each occurrence of a declared name in the block.
+  public Names : SCG.List[string * int * int * bool] = SCG.List();
+  public this(start : int, end : int) { Start = start; End = end; }
+}
+
 public sealed class LineMap
 {
   starts : SCG.List[int] = SCG.List();
@@ -74,6 +85,7 @@ public sealed class AnalysisResult
   /// (start line, end line), 0-based
   public Folds : SCG.List[int * int] = SCG.List();
   public Symbols : SCG.List[SymbolInfo] = SCG.List();
+  public Grammars : SCG.List[GrammarBlock] = SCG.List();
   public this(version : int, text : string) { Version = version; Text = text; Lines = LineMap(text); }
   public AddFold(start : int, end : int) : void
   {
@@ -85,9 +97,14 @@ public sealed class AnalysisResult
 /// Semantic token legend shared by both parsers.
 public module Legend
 {
-  public Types : array[string] = array["keyword", "comment", "string", "number", "operator", "type", "macro", "variable", "namespace", "regexp", "function"];
+  public Types : array[string] = array["keyword", "comment", "string", "number", "operator", "type", "macro", "variable", "namespace", "regexp", "function",
+                                       "property", "parameter", "event", "method"];
   public Keyword = 0; public Comment = 1; public String = 2; public Number = 3; public Operator = 4; public Type = 5; public Macro = 6;
   public Variable = 7; public Namespace = 8; public Regexp = 9; public Function = 10;
+  public Property = 11; public Parameter = 12; public Event = 13; public Method = 14;
+  /// The token modifiers: a name where it is declared.
+  public Modifiers : array[string] = array["declaration"];
+  public Declaration = 1;
   /// Nitra span classes are matched by name (Keyword, Operator, String, Char, Number, Comment, Type, ...).
   public OfSpanClass(name : string) : int
   {
@@ -323,9 +340,12 @@ public sealed class Analyzer
         when (open >= 0 && open < g.End)
         {
           result.AddFold(g.Start, g.End);
-          result.Symbols.Add(SymbolInfo("grammar " + g.Name, 2, g.Start, g.End, g.Start, open));
+          def grammar = SymbolInfo("grammar " + g.Name, 2, g.Start, g.End, g.Start, open);
+          result.Symbols.Add(grammar);
           when (nitraSyntaxStart == null) nitraSyntaxStart = StartRule(typeof(NitraSyntaxParseTree.Start).Assembly, "NitraSyntax.Start");
           Parse(result, text, open + 1, Math.Max(open + 1, g.End - 1), nitraSyntaxStart, "nitra");
+          // (after Nitra's spans: they say where its strings and comments are)
+          when (g.Document != null) try { GrammarNames(result, text, g, grammar) } catch { | _ => () }
         }
       }
     def assembly = match (index.NativeHost) { | host is Nitra.Compiler.NativeSourceHost => host.GrammarAssembly | _ => null };
@@ -338,6 +358,80 @@ public sealed class Analyzer
         def start = if (assembly != null && z.Rule != null) StartRule(assembly, z.Rule) else null;
         when (start != null) Parse(result, text, z.Body, z.End, start, "space");
       }
+  }
+
+  /// The grammar block's syntax modules, rules and alternatives: children of its symbol, with where each is declared,
+  /// and the names' uses in the block (an identifier that is one of them, outside strings and comments).
+  GrammarNames(result : AnalysisResult, text : string, g : NitraEditorGrammar, grammar : SymbolInfo) : void
+  {
+    // (the index keeps the block as the compiler reads it, wrapped, with its declarations not read yet: they are read
+    // here, and their offsets moved from the wrapped text to the file's, by where the block's body is in it)
+    def source = g.Document.Source;
+    def open = text.IndexOf('{', g.Start);
+    def body = if (open >= 0 && open < g.End) text.Substring(open + 1, Math.Max(0, g.End - 1 - (open + 1))) else "";
+    def sample = body.Substring(0, Math.Min(body.Length, 60));
+    def inSource = if (String.IsNullOrEmpty(source) || sample.Trim().Length == 0) -1 else source.IndexOf(sample, StringComparison.Ordinal);
+    // (the file's offset of the wrapped text's start: negative when the wrapping is longer than what is before)
+    def at = open + 1 - inSource;
+    def document = if (inSource < 0) null else Nemerle.Compiler.nitra_syntax.NitraSyntax.ReadDefinitions(source, null);
+    when (document != null)
+    {
+      def block = GrammarBlock(g.Start, g.End);
+      def word(name : string) { Regex(@"(?<![\w@])" + Regex.Escape(name) + @"(?![\w])") }
+      // where a declaration's name is: its first whole occurrence after the declaration's start
+      def named(d : NitraDeclaration, name : string) : int * int
+      {
+        if (d == null || String.IsNullOrEmpty(name) || d.Text == null) (-1, -1)
+        else
+        {
+          def m = word(name).Match(d.Text);
+          if (m.Success) (at + d.Start + m.Index, at + d.Start + m.Index + name.Length) else (-1, -1)
+        }
+      }
+      def declared = SCG.HashSet.[int]();
+      // (a module's name is qualified, `Calc.Arith': written there by its last part)
+      def short(name : string) { if (name == null) null else name.Substring(name.LastIndexOf('.') + 1) }
+      def symbol(full : string, kind : int, d : NitraDeclaration, into : SCG.List[SymbolInfo]) : SymbolInfo
+      {
+        def name = short(full);
+        if (d == null || String.IsNullOrEmpty(name)) null
+        else
+        {
+          def (ns, ne) = named(d, name);
+          def x = SymbolInfo(name, kind, at + d.Start, at + d.End, if (ns >= 0) ns else at + d.Start, if (ne >= 0) ne else at + d.Start);
+          when (ns >= 0 && declared.Add(ns)) block.Names.Add((name, ns, ne, true));
+          into.Add(x); x
+        }
+      }
+      def names = SCG.HashSet.[string]();
+      foreach (m in document.Modules)
+      {
+        def syntaxModule = symbol(m.Name, 2, m.Declaration, grammar.Children);
+        _ = names.Add(short(m.Name));
+        def into = if (syntaxModule != null) syntaxModule.Children else grammar.Children;
+        foreach (r in m.Rules)
+        {
+          _ = names.Add(r.Name);
+          // a syntax rule is a class of trees; a token's or regex's (a lexical rule's) a constant; an alias a variable
+          def kind = match (r.Kind) { | "regex" | "token" | "literal" | "keyword" => 14 | "alias" => 13 | _ => 5 };
+          def rule = symbol(r.Name, kind, r.Declaration, into);
+          when (rule != null)
+            foreach (a in r.Alternatives)
+              when (a.Name != r.Name && a.Declaration : object != r.Declaration) { _ = names.Add(a.Name); _ = symbol(a.Name, 22, a.Declaration, rule.Children) }
+        }
+      }
+      // the uses: identifiers of those names in the block, outside its strings and comments (Nitra's spans say where)
+      def quoted = result.Tokens.Where(t => (t[2] == Legend.String || t[2] == Legend.Comment) && t[0] >= g.Start && t[0] < g.End).ToList();
+      def inQuoted(pos : int) { quoted.Exists(t => pos >= t[0] && pos < t[0] + t[1]) }
+      def body = text.Substring(g.Start, g.End - g.Start);
+      foreach (name in names)
+        foreach (m is Match in word(name).Matches(body))
+        {
+          def pos = g.Start + m.Index;
+          unless (declared.Contains(pos) || inQuoted(pos)) block.Names.Add((name, pos, pos + name.Length, false));
+        }
+      result.Grammars.Add(block);
+    }
   }
 
   StartRule(assembly : Assembly, rule : string) : Nitra.Runtime.StartRuleDescriptor

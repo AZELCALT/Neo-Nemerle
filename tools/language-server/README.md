@@ -42,9 +42,20 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   that type: each identifier is looked up as its file sees it (its `using`s, the type it is written in), so of two
   types with one name, only the one under the cursor is renamed.
 
+- **Signature help** in a call's arguments: what the name called can call (each overload, with its parameters' names
+  and types, from the checker's typer at the name), and the argument the cursor is at.
+- **Document highlight**: the uses in the file of the symbol under the cursor (from the check's facts); in a grammar
+  block, of the rule or syntax module name under it.
+- **Workspace symbols**: every workspace file's declarations, its grammar blocks' syntax modules, rules and
+  alternatives included (each file parsed for its outline, kept while its text is the same).
+- **Inlay hints**: the type the check inferred, after each `def` or `mutable` name written without one.
+- **Semantic tokens by meaning**: a local, a parameter, a local function, a method, a field or property, an event and
+  a type are told apart (from the check's facts, the `declaration` modifier where one is declared), over the parse's
+  tokens; a grammar block's rule and module names are types, over Nitra's spans.
+
 Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
-`semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`, `references`,
-`prepareRename` and `rename`.
+`semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`, `signatureHelp`,
+`documentHighlight`, `inlayHint`, `references`, `prepareRename`, `rename` and `workspace/symbol`.
 
 Options: `--references DIR`, `--source-root DIR`, `--file-name-namespaces`, `--library DLL` (repeatable, for the
 typed check), `--no-typecheck`, `--log FILE`.

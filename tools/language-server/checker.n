@@ -41,6 +41,8 @@ public module Checker
   Skipped : array[string] = array["out", "bin", "obj", "node_modules", ".git"];
 
   /// The place of the name of the type to rename (path, line, column; 1-based), when the editor gives it.
+  /// A signature help request: the completion marker is on the name called.
+  public mutable Signature : bool;
   public mutable RenameAtPath : string = null;
   public mutable RenameAtLine : int;
   public mutable RenameAtColumn : int;
@@ -65,6 +67,8 @@ public module Checker
     mutable completion = null;
     mutable completing = null;
     mutable cursorLine = 0;
+    // signature help: the marker goes at the end of the name called, and the typer lists what that name can call
+    when (request["signature"] != null) Signature = true;
     when (request["complete"] != null)
     {
       def at = request["complete"];
@@ -222,7 +226,7 @@ public module Checker
       options.TargetReferenceDirectory = references;
       options.ReferencedLibraries = libraries;
       options.Sources = files.Select(f => StringSource(Location.GetFileIndex(f), Text(f, overlay)) : ISource).NToList();
-      def completer = if (completion != null) CompletionManager(options, completion) else null;
+      def completer = if (completion != null) CompletionManager(options, completion, Signature) else null;
       def manager = if (completer != null) completer : ManagerClass else ManagerClass(options);
       def types = SCG.List.[string * string * Location]();
       Instrument(manager, files, overlay, diagnostics, facts, types, true);
@@ -230,7 +234,7 @@ public module Checker
       try { manager.Run() }
       catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("run: " + e.ToString()) } // the errors were reported; the facts gathered so far still help (and completion stops here)
       finally { ManagerClass.Instance = previous; }
-      when (completer != null) result["completion"] = completer.Items;
+      when (completer != null) { result["completion"] = completer.Items; result["signatures"] = completer.Signatures }
       when (renameType != null) RenameType(manager, files, overlay, facts, types, renameType, result);
     }
     result
@@ -361,11 +365,14 @@ public module Checker
       ExprWalker().Walk(body, info =>
         match (info.Node)
         {
-          | TExpr.LocalRef(decl) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
+          // (a parameter's kind is its own: the editor colours it as one)
+          | TExpr.LocalRef(decl) as e =>
+            fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name,
+                 if (decl.ValKind is LocalValue.Kind.FunParm) "parameter" else "local", LocalId(decl))
           // where a local is declared: its name there is the local too (hover, rename)
           | TExpr.DefValIn(decl, _, _) when decl.NameLocation.Line > 0 && decl.Type != null =>
             fact(decl.NameLocation, decl.Name + " : " + decl.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
-          | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
+          | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "function", LocalId(decl))
           | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
           | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)
           | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)
@@ -629,11 +636,15 @@ public sealed class CompletionManager : ManagerClass
   public Items : JsonArray = JsonArray();
   prefix : string;
   mutable done : bool;
+  /// Signature help: what the name at the marker (the whole of it, `prefix') can call, each with its parameters.
+  signature : bool;
+  public Signatures : JsonArray = JsonArray();
 
-  public this(options : CompilationOptions, prefix : string)
+  public this(options : CompilationOptions, prefix : string, signature : bool = false)
   {
     base(options);
     this.prefix = prefix;
+    this.signature = signature;
     _isIntelliSenseMode = true;
     _isCompletionInProgress = true;
   }
@@ -654,9 +665,107 @@ public sealed class CompletionManager : ManagerClass
     def marked(n : Name) { !done && n.Id.EndsWith(Marker, StringComparison.Ordinal) }
     match (expression)
     {
+      | PExpr.Member(obj, Splicable.Name(n)) when marked(n) && signature => done = true; CalledMember(obj, typer, env); throw Found()
+      | PExpr.Ref(n) when marked(n) && signature => done = true; CalledName(typer, env); throw Found()
       | PExpr.Member(obj, Splicable.Name(n)) when marked(n) => done = true; AfterDot(obj, n, typer, env); throw Found()
       | PExpr.Ref(n) when marked(n) => done = true; Names(n, typer, env); throw Found()
       | _ => null
+    }
+  }
+
+  // ---- signature help ----
+
+  /// One callable: its label (`Name(a : int, b : string) : bool'), with its parameters'.
+  AddSignature(name : string, parameters : list[string * string], returned : string) : void
+  {
+    def shown = parameters.Map(p => if (p[0] == null || p[0] == "") p[1] else p[0] + " : " + p[1]);
+    def label = name + "(" + string.Join(", ", shown) + ")" + (if (returned == null) "" else " : " + returned);
+    unless (Signatures.Any(s => s["label"].GetValue.[string]() == label))
+    {
+      def item = JsonObject(); item["label"] = JsonValue.Create(label);
+      def ps = JsonArray(); foreach (p in shown) { def x = JsonObject(); x["label"] = JsonValue.Create(p); ps.Add(x) }
+      item["parameters"] = ps;
+      Signatures.Add(item);
+    }
+  }
+
+  /// A method's (or constructor's) parameters and result.
+  Method(name : string, m : IMethod) : void
+  {
+    def header = try { m.GetHeader() } catch { | _ => null };
+    def parameters = if (header != null) header.Parameters.Map(p => (p.Name, p.Type.ToString())) else [];
+    def returned = if (m.MemberKind == MemberKinds.Constructor) null else try { m.ReturnType.ToString() } catch { | _ => null };
+    AddSignature(name, parameters, returned)
+  }
+
+  /// What a type's members of the name can call (its constructors for a nested type of the name).
+  Callable(ti : TypeInfo, instance : bool) : void
+  {
+    foreach (m in (try { ti.LookupMember(prefix) } catch { | _ => [] }))
+      match (m)
+      {
+        | method is IMethod when instance != method.IsStatic || !instance => Method(prefix, method)
+        | nested is TypeInfo => Constructors(nested)
+        | _ => ()
+      }
+  }
+
+  Constructors(ti : TypeInfo) : void
+  {
+    foreach (c is IMethod in (try { ti.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) } catch { | _ => [] }))
+      Method(ti.Name, c)
+  }
+
+  CalledMember(obj : PExpr, typer : Typer, env : GlobalEnv) : void
+  {
+    // a type's (or a namespace's) path: its static members of the name, or a type of the name in it
+    match (match (Path(obj)) { | null => None() | path => try { env.LookupType(path) } catch { | _ => None() } })
+    {
+      | Some(ti) => Callable(ti, false)
+      | None =>
+        match (match (Path(obj)) { | null => None() | path => try { env.LookupType(path + [prefix]) } catch { | _ => None() } })
+        {
+          | Some(ti) => Constructors(ti)
+          | None =>
+            try
+            {
+              match (typer.TypeExpr(obj).Type.Hint)
+              {
+                | Some(FixedType.Class(ti, _)) => Callable(ti, true)
+                | _ => ()
+              }
+            }
+            catch { | _ is Found => throw Found() | _ => () }
+        }
+    }
+  }
+
+  CalledName(typer : Typer, env : GlobalEnv) : void
+  {
+    // a local function (its parameters' names), or a local holding a function value (its type's)
+    try
+      foreach ((_, v) in typer.CurrentLocalContext.GetLocals())
+        when (v.Name == prefix)
+          match (v.ValKind)
+          {
+            | LocalValue.Kind.Function(header, _) => AddSignature(prefix, header.Parameters.Map(p => (p.Name, p.Type.ToString())), header.ReturnType.ToString())
+            | _ =>
+              match (v.Type.Hint)
+              {
+                | Some(FixedType.Fun(from, to)) =>
+                  def parameters = match (from.Hint) { | Some(FixedType.Tuple(args)) => args.Map(a => (null, a.ToString())) | Some(FixedType.Void) => [] | _ => [(null, from.ToString())] };
+                  AddSignature(prefix, parameters, to.ToString())
+                | _ => ()
+              }
+          }
+    catch { | _ => () }
+    // the current type's functions of the name (a file's), then a type of the name (its constructors)
+    def current = typer.CurrentTypeBuilder;
+    when (current != null) { Callable(current, true); Callable(current, false) }
+    match (try { env.LookupType([prefix]) } catch { | _ => None() })
+    {
+      | Some(ti) => Constructors(ti)
+      | None => ()
     }
   }
 
