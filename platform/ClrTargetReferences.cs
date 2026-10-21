@@ -11,6 +11,21 @@ namespace Nemerle.Platform
     {
         public string TargetReferenceDirectory { get; set; }
 
+        /// The other assemblies the output is compiled with (packages, by path): a framework type the target's reference
+        /// assemblies do not define may be one of theirs (a polyfill, as ValueTask in System.Threading.Tasks.Extensions).
+        public IEnumerable<string> TargetLibraries { get; set; }
+
+        internal static IEnumerable<string> ExistingLibraries(IEnumerable<string> libraries)
+        {
+            if (libraries == null) yield break;
+            foreach (var library in libraries)
+            {
+                string path;
+                try { path = Path.GetFullPath(library); } catch (Exception) { continue; }
+                if (File.Exists(path)) yield return path;
+            }
+        }
+
         /// The target framework; null: the one the target references are for (or the host's without them).
         public ClrTarget Target { get; set; }
 
@@ -53,6 +68,23 @@ namespace Nemerle.Platform
                         PublicKeyToken = name.PublicKeyToken, Culture = name.Culture
                     };
                     foreach (var type in definition.MainModule.Types) IndexContract(type, reference, contracts, definitions);
+                }
+                // (then the packages': a type the target lacks may be theirs)
+                foreach (var path in ExistingLibraries(TargetLibraries))
+                {
+                    AssemblyDefinition definition;
+                    try { definition = AssemblyDefinition.ReadAssembly(path); }
+                    catch (Exception) { continue; }
+                    opened.Add(definition);
+                    var name = definition.Name;
+                    var reference = new AssemblyNameReference(name.Name, name.Version) {
+                        PublicKeyToken = name.PublicKeyToken, Culture = name.Culture
+                    };
+                    var found = new Dictionary<string, AssemblyNameReference>(StringComparer.Ordinal);
+                    var types = new Dictionary<string, TypeDefinition>(StringComparer.Ordinal);
+                    foreach (var type in definition.MainModule.Types) IndexContract(type, reference, found, types);
+                    foreach (var pair in found)
+                        if (!contracts.ContainsKey(pair.Key)) { contracts[pair.Key] = pair.Value; definitions[pair.Key] = types[pair.Key]; }
                 }
                 // the host framework's assemblies: the ones runtime reflection names
                 var host = new HashSet<string>(Directory.GetFiles(Path.GetDirectoryName(typeof(object).Assembly.Location), "*.dll")

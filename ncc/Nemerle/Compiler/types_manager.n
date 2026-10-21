@@ -548,6 +548,7 @@ using Nemerle.Compiler.Utility;
       Manager = man;
       ClrEmitter.PersistedOutput = !man.Options.CompileToMemory;
       ClrEmitter.TargetReferenceDirectory = man.Options.TargetReferenceDirectory;
+      ClrEmitter.TargetLibraries = man.Options.ReferencedLibraries.ToArray ();
       // the target framework: the one named, else the one the target references are for, else the host's
       try
       {
@@ -555,7 +556,7 @@ using Nemerle.Compiler.Utility;
         def target = ClrEmitter.EffectiveTarget;
         ClrEmitter.Target = target;
         when (!target.SameAs(Nemerle.Platform.ClrTarget.Host) && man.Options.TargetReferenceDirectory != null)
-          man.TargetContracts = Nemerle.Platform.ClrTargetContracts(man.Options.TargetReferenceDirectory, target);
+          man.TargetContracts = Nemerle.Platform.ClrTargetContracts(man.Options.TargetReferenceDirectory, target, man.Options.ReferencedLibraries.ToArray ());
         when (!man.Options.TargetIsLibrary && !target.Executables)
           Message.Error($"$target has libraries only: build a library (-target:library), or target a runtime such as net8.0 or net48");
       }

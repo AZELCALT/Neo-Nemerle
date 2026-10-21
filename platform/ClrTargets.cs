@@ -165,18 +165,25 @@ namespace Nemerle.Platform
         readonly Dictionary<string, Mono.Cecil.TypeDefinition> types = new Dictionary<string, Mono.Cecil.TypeDefinition>(StringComparer.Ordinal);
         readonly List<Mono.Cecil.AssemblyDefinition> opened = new List<Mono.Cecil.AssemblyDefinition>();
 
-        public ClrTargetContracts(string referenceDirectory, ClrTarget target)
+        /// `libraries': the other assemblies the code is compiled with (packages), whose public types the target has too
+        /// where its reference assemblies do not define them (System.Threading.Tasks.Extensions' ValueTask on net48).
+        public ClrTargetContracts(string referenceDirectory, ClrTarget target) : this(referenceDirectory, target, null) { }   // (the pinned compiler's)
+
+        public ClrTargetContracts(string referenceDirectory, ClrTarget target, IEnumerable<string> libraries)
         {
             this.target = target;
-            foreach (var path in Directory.GetFiles(Path.GetFullPath(referenceDirectory), "*.dll"))
-            {
-                Mono.Cecil.AssemblyDefinition definition;
-                try { definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(path); }
-                catch (Exception) { continue; }
-                opened.Add(definition);
-                foreach (var t in definition.MainModule.GetTypes())
-                    if (t.IsPublic || t.IsNestedPublic) types[t.FullName] = t;
-            }
+            foreach (var path in Directory.GetFiles(Path.GetFullPath(referenceDirectory), "*.dll")) Read(path, true);
+            foreach (var path in ClrEmission.ExistingLibraries(libraries)) Read(path, false);
+        }
+
+        void Read(string path, bool target)
+        {
+            Mono.Cecil.AssemblyDefinition definition;
+            try { definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(path); }
+            catch (Exception) { return; }
+            opened.Add(definition);
+            foreach (var t in definition.MainModule.GetTypes())
+                if ((t.IsPublic || t.IsNestedPublic) && (target || !types.ContainsKey(t.FullName))) types[t.FullName] = t;
         }
 
         public string TargetName { get { return target.Name; } }

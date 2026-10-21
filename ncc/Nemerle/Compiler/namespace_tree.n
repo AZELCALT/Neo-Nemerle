@@ -356,7 +356,11 @@ public class NamespaceTree
         if (by_parms_amount.Contains (count)) {
           def used = by_parms_amount [count] : System.Type;
           def isModule(t : System.Type) { t.IsClass && t.IsAbstract && t.IsSealed }
+          // (a referenced polyfill of a framework type, as System.Threading.Tasks.Extensions' ValueTask: for a target
+          // that lacks it, the referenced one is the type, and the compiler's own framework's is not)
+          def framework(t : System.Type) { System.IO.Path.GetDirectoryName(t.Assembly.Location) == System.IO.Path.GetDirectoryName(typeof(object).Assembly.Location) }
           if (used.Assembly.GetName().Name == e.system_type.Assembly.GetName().Name) ()
+          else if (framework(e.system_type) && !framework(used)) ()
           // A path names exactly one file: two libraries exporting the same module path is an ambiguity.
           else if (isModule(used) && isModule(e.system_type))
             Message.Error ($"ambiguous path `$(ClrNames.TypeFullName (used))': it is defined by both "

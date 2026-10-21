@@ -220,10 +220,12 @@ internal module Projects
       // Nemerle.dll and the standard macros are always there
       when (File.Exists(path) && name != "Nemerle" && name != "Nemerle.Macros") { compileReferences.Add(path); runtimeFiles.Add(path) }
     }
-    unless (project.Packages.Count == 0) ResolvePackages(project, offline, compileReferences, runtimeFiles);
+    def target = TargetOf(project);
+    // (the packages' assemblies for the target: a polyfill package, as System.Threading.Tasks.Extensions, has them for
+    // net48 and none for the compiler's .NET)
+    unless (project.Packages.Count == 0) ResolvePackages(project, offline, compileReferences, runtimeFiles, target);
     // a target other than the compiler's own .NET: its reference assemblies (fetched once), and the runtime library
     // built for .NET Standard 2.0, which every target can load
-    def target = TargetOf(project);
     def targetOptions = SCG.List.[string]();
     mutable runtimeLibrary = Path.Combine(toolchainDir, "Nemerle.dll");
     when (target != null)
@@ -251,7 +253,7 @@ internal module Projects
       unless (File.Exists(runtimeLibrary))
         throw project.Error("target", null, "this toolchain has no Nemerle.dll for .NET Standard 2.0 (netstandard2.0/Nemerle.dll), which " + target.Name + " programs need; rebuild it with ./bootstrap while online");
     }
-    def references = compileReferences.Distinct().ToList();
+    def references = Latest(compileReferences);
 
     def sources = project.Sources();
     when (sources.Count == 0) throw ProjectException(project.File, 1, 1, "the project has no .n files");
@@ -298,7 +300,8 @@ internal module Projects
                         + (started.ElapsedMilliseconds / 100 / 10.0).ToString(Globalization.CultureInfo.InvariantCulture) + " s)");
     }
     // the runtime: Nemerle.dll and what the references need, next to the binary
-    def runtime = runtimeLibrary :: runtimeFiles.Distinct().NToList();
+    def runtimeFiles = Latest(runtimeFiles);
+    def runtime = runtimeLibrary :: runtimeFiles.NToList();
     foreach (f in runtime)
     {
       def target = Path.Combine(output, Path.GetFileName(f));
@@ -308,7 +311,7 @@ internal module Projects
     // a program's launcher, next to its .dll
     when (project.Launcher != null) MakeLauncher(project, binary, offline);
     File.WriteAllLines(project.ReferencesFile, references);
-    File.WriteAllLines(Path.Combine(output, project.Name + ".runtime"), runtimeFiles.Distinct());
+    File.WriteAllLines(Path.Combine(output, project.Name + ".runtime"), runtimeFiles);
     binary
   }
 
@@ -734,7 +737,17 @@ internal module Projects
   }
 
   /// The project's NuGet packages, through the toolchain's NuGet adapter (the one nscript uses; its cache is shared).
-  ResolvePackages(project : Project, offline : bool, compile : SCG.List[string], runtime : SCG.List[string]) : void
+  /// The assemblies, one of each name: the last (the project's own packages, resolved for its target, after what the
+  /// projects it uses bring: a library's netstandard2.0 build of a package, where a net48 program has its net462 one).
+  Latest(paths : SCG.IEnumerable[string]) : SCG.List[string]
+  {
+    def last = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
+    foreach (path in paths) last[Path.GetFileName(path)] = path;
+    def kept = SCG.HashSet(last.Values, StringComparer.Ordinal);
+    paths.Distinct().Where(kept.Contains).ToList()
+  }
+
+  ResolvePackages(project : Project, offline : bool, compile : SCG.List[string], runtime : SCG.List[string], target : Nemerle.Platform.ClrTarget) : void
   {
     def toolchain = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
     def adapter = Path.Combine(toolchain, "Nemerle.Scripting.NuGet.dll");
@@ -762,6 +775,7 @@ internal module Projects
       _ = requests.Add(Activator.CreateInstance(type("PackageRequest"), array[p.Id : object, p.Version, at]));
     }
     def definition = Activator.CreateInstance(type("ScriptDefinition"));
+    when (target != null) type("ScriptDefinition").GetField("TargetFramework").SetValue(definition, target.Name);
     def result = try
       {
         resolverType.GetMethod("Resolve").Invoke(resolver, array[data, definition, Threading.CancellationToken.None : object])

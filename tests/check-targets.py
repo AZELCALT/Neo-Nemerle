@@ -88,6 +88,25 @@ try:
     else:
         print('SKIP: no mono to run the net48 program')
 
+    # async streams where the framework has no IAsyncEnumerable: as in C#, with the Microsoft.Bcl.AsyncInterfaces package
+    # (its types, and System.Threading.Tasks.Extensions' ValueTask, are the target's)
+    streams = 'packages = { "Microsoft.Bcl.AsyncInterfaces" = "8.0.0" }\n'
+    count = 'using System.Collections.Generic;\nusing System.Threading.Tasks;\n' \
+            'public async Count(n : int) : IAsyncEnumerable[int] { for (mutable i = 1; i <= n; i++) { await Task.Yield(); yield i } }\n'
+    run('build', project('countlib', 'kind = "library"\ntarget = "netstandard2.0"\n[references]\n' + streams, {'countlib.n': count}))
+    fxstreams = project('fxstreams', 'target = "net48"\n[references]\nprojects = ["../countlib"]\n' + streams,
+                        {'main.n': 'using countlib;\nusing System.Threading.Tasks;\n'
+                                   'async Sum() : Task[int]\n{\n  mutable total = 0;\n'
+                                   '  try { await foreach (x in Count(4)) total += x } finally { await Task.Delay(1); total *= 10 }\n  total\n}\n'
+                                   'System.Console.WriteLine(Sum().Result);\n'})
+    run('build', fxstreams)
+    if shutil.which('mono'):
+        out = subprocess.run(['mono', str(fxstreams / 'out/fxstreams.exe')], capture_output=True, text=True)
+        check(out.stdout.strip() == '100', 'an async stream on net48 (Mono): ' + out.stdout + out.stderr)
+        print('PASS: async streams in a netstandard2.0 library and a net48 program, with Microsoft.Bcl.AsyncInterfaces (Mono)')
+    else:
+        print('PASS: async streams build for netstandard2.0 and net48 (no mono to run them)')
+
     # 4. an older .NET
     n8 = project('n8', 'target = "net8.0"\n', {'main.n': 'System.Console.WriteLine("on .NET 8");\n'})
     run('build', n8)

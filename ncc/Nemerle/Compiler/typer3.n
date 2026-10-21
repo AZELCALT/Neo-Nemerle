@@ -792,9 +792,9 @@ using Nemerle.Compiler.Utility;
       _ = kind;
       def function = current_local_fun.Name;
       def readable =
-        if (function.StartsWith ("_N_async_") || function.StartsWith ("_N_asyncs_"))
+        if (function.StartsWith ("_N_async_") || function.StartsWith ("_N_asyncs_") || function.StartsWith ("_N_asyncc_") || function.StartsWith ("_N_asyncm_"))
         {
-          def rest = function.Substring (if (function.StartsWith ("_N_asyncs_")) 10 else 9);
+          def rest = function.Substring (if (function.StartsWith ("_N_async_")) 9 else 10);
           def cut = rest.LastIndexOf ('_');
           if (cut > 0) rest.Substring (0, cut) else rest
         }
@@ -838,8 +838,12 @@ using Nemerle.Compiler.Utility;
     /// for the task the function returns. Start runs it (the builder boxes it only when it first has to wait); MoveNext
     /// (bool) is the body, as an iterator's, which the interface's MoveNext (Advance) runs, completing the task when the
     /// body ends; AwaitUnsafe, AwaitSafe and Return are what the body's Nemerle.Async.Machine calls become.
-    PrepareAsyncStructMachine (task : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
+    /// As a class (`as_class'), for a function with lambdas in it: they share its locals, the machine's fields.
+    PrepareAsyncStructMachine (task : TypeVar, as_class : bool) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
     {
+      // (the builder takes the machine by reference: a class's is a local)
+      def self = if (as_class) <[ machine ]> else <[ this ]>;
+      def own = if (as_class) <[ mutable machine = this ]> else <[ () ]>;
       def (builder_type, builder, result) =
         match (task.Fix ())
         {
@@ -876,19 +880,22 @@ using Nemerle.Compiler.Utility;
           public Start () : $(task : typed)
           {
             this.$("<>t__builder" : dyn) = $builder.Create ();
-            this.$("<>t__builder" : dyn).Start (ref this);
+            $own;
+            this.$("<>t__builder" : dyn).Start (ref $self);
             this.$("<>t__builder" : dyn).Task
           } ]>,
         <[ decl:
           public AwaitUnsafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.ICriticalNotifyCompletion
           {
-            this.$("<>t__builder" : dyn).AwaitUnsafeOnCompleted (ref awaiter, ref this);
+            $own;
+            this.$("<>t__builder" : dyn).AwaitUnsafeOnCompleted (ref awaiter, ref $self);
             null
           } ]>,
         <[ decl:
           public AwaitSafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.INotifyCompletion
           {
-            this.$("<>t__builder" : dyn).AwaitOnCompleted (ref awaiter, ref this);
+            $own;
+            this.$("<>t__builder" : dyn).AwaitOnCompleted (ref awaiter, ref $self);
             null
           } ]>
       ];
@@ -896,8 +903,226 @@ using Nemerle.Compiler.Utility;
         if (result == null) members
         else <[ decl: public mutable $("<>result" : dyn) : $(result : typed); ]>
              :: <[ decl: public Return (value : $(result : typed)) : void { this.$("<>result" : dyn) = value } ]> :: members;
+      if (as_class)
+        <[ decl:
+          class $(StateMachineName ("") : name) : System.Runtime.CompilerServices.IAsyncStateMachine
+          {
+            ..$members
+          }
+        ]>
+      else
+        <[ decl:
+          struct $(StateMachineName ("") : name) : System.Runtime.CompilerServices.IAsyncStateMachine
+          {
+            ..$members
+          }
+        ]>
+    }
+
+    /// An async stream's state machine as C#'s: a class that is the stream (IAsyncEnumerable[T], each enumeration of
+    /// which is the class itself the first time, a copy after), its enumerator, and the source of the ValueTask its
+    /// MoveNextAsync and DisposeAsync return (IValueTaskSource, with the runtime's ManualResetValueTaskSourceCore): an
+    /// item allocates nothing. The runtime's AsyncIteratorMethodBuilder runs the body (MoveNext, as an iterator's) in
+    /// the ExecutionContext of the code that waits for the next item. DisposeAsync resumes a stream that has not
+    /// ended in dispose mode, where its `yield' leaves through its `finally' blocks (Nemerle.Async.StreamDisposed).
+    /// A parameter marked [EnumeratorCancellation] is the token of the enumeration combined with its own (Token).
+    PrepareAsyncStreamMachine (stream : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
+    {
+      def item = match (stream.Fix ()) { | Class (_, [t]) => t | _ => InternalType.Object };
+      def name = StateMachineName ("");
+      def cancels = Manager.UserData.Contains ("Nemerle.AsyncMacros.cancel:" + the_method.Name);
+      def has_mutable_parm = current_local_fun.Parameters.Exists (fun (fp) { fp.decl.IsMutable });
+      def enumeration =
+      {
+        def copy = <[ def res = $(name : name) () : this; res.CopyFrom (this); res ]>;
+        if (has_mutable_parm) copy
+        else <[ if (System.Threading.Interlocked.CompareExchange (ref this.$("<>this_used" : dyn), 1, 0) != 0) $copy else this ]>
+      };
+      def tokens =
+        if (cancels)
+          <[
+            def origin = machine.$("<>3__token" : dyn);
+            if (!origin.CanBeCanceled)
+              machine.$("<>x__token" : dyn) = token
+            else if (token.Equals (origin) || !token.CanBeCanceled)
+              machine.$("<>x__token" : dyn) = origin
+            else
+            {
+              def combined = System.Threading.CancellationTokenSource.CreateLinkedTokenSource (origin, token);
+              machine.$("<>x__combined" : dyn) = combined;
+              machine.$("<>x__token" : dyn) = combined.Token
+            }
+          ]>
+        else <[ _ = token ]>;
+      def release =
+        if (cancels)
+          <[ when (this.$("<>x__combined" : dyn) != null) { this.$("<>x__combined" : dyn).Dispose (); this.$("<>x__combined" : dyn) = null } ]>
+        else <[ () ]>;
+      def sources = <[ System.Threading.Tasks.Sources ]>;
+      def members = [
+        <[ decl: public mutable $("<>t__builder" : dyn) : System.Runtime.CompilerServices.AsyncIteratorMethodBuilder; ]>,
+        <[ decl: public mutable $("<>v__promise" : dyn) : $sources.ManualResetValueTaskSourceCore[bool]; ]>,
+        <[ decl: mutable $("<>2__item" : dyn) : $(item : typed); ]>,
+        <[ decl: mutable $("<>this_used" : dyn) : int; ]>,
+        <[ decl: mutable $("<>w__disposeMode" : dyn) : bool; ]>,
+        <[ decl: mutable $("<>w__started" : dyn) : bool; ]>,
+        <[ decl: mutable $("<>w__done" : dyn) : bool; ]>,
+        <[ decl: public MoveNext () : bool { foobar } ]>,
+        <[ decl: public Current : $(item : typed) { get { this.$("<>2__item" : dyn) } } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          Advance () : void implements System.Runtime.CompilerServices.IAsyncStateMachine.MoveNext
+          {
+            try
+            {
+              if (this.MoveNext ())
+                // (an item: the body waits otherwise, and the awaiter resumes it)
+                when (this.$("<>2__current" : dyn) != null) this.$("<>v__promise" : dyn).SetResult (true)
+              else
+                this.Finish (null)
+            }
+            catch
+            {
+              | _ is Nemerle.Async.StreamDisposed => this.Finish (null)
+              | e is System.Exception => this.Finish (e)
+            }
+          } ]>,
+        <[ decl:
+          Finish (error : System.Exception) : void
+          {
+            this.$("<>w__done" : dyn) = true;
+            this.$("<>2__item" : dyn) = $(TExpr.DefaultValue (item) : typed);
+            $release;
+            this.$("<>t__builder" : dyn).Complete ();
+            if (error == null) this.$("<>v__promise" : dyn).SetResult (false) else this.$("<>v__promise" : dyn).SetException (error)
+          } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          SetMachine (machine : System.Runtime.CompilerServices.IAsyncStateMachine) : void
+            implements System.Runtime.CompilerServices.IAsyncStateMachine.SetStateMachine
+          {
+            _ = machine
+          } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          public GetAsyncEnumerator (token : System.Threading.CancellationToken) : System.Collections.Generic.IAsyncEnumerator[$(item : typed)]
+          {
+            def machine = $enumeration;
+            machine.$("<>t__builder" : dyn) = System.Runtime.CompilerServices.AsyncIteratorMethodBuilder.Create ();
+            $tokens;
+            machine
+          } ]>,
+        <[ decl:
+          CopyFrom (other : this) : void
+          {
+            _ = other;
+            this.$("<>this_used" : dyn) = 1;
+          } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          public MoveNextAsync () : System.Threading.Tasks.ValueTask[bool]
+          {
+            if (this.$("<>w__done" : dyn))
+              System.Threading.Tasks.ValueTask.[bool] (false)
+            else
+            {
+              this.$("<>w__started" : dyn) = true;
+              this.$("<>v__promise" : dyn).Reset ();
+              mutable machine = this;
+              this.$("<>t__builder" : dyn).MoveNext (ref machine);
+              def version = this.$("<>v__promise" : dyn).Version;
+              if (this.$("<>v__promise" : dyn).GetStatus (version) == $sources.ValueTaskSourceStatus.Succeeded)
+                System.Threading.Tasks.ValueTask.[bool] (this.$("<>v__promise" : dyn).GetResult (version))
+              else
+                System.Threading.Tasks.ValueTask.[bool] (this : $sources.IValueTaskSource[bool], version)
+            }
+          } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          public DisposeAsync () : System.Threading.Tasks.ValueTask
+          {
+            if (this.$("<>w__done" : dyn))
+              System.Threading.Tasks.ValueTask ()
+            else if (!this.$("<>w__started" : dyn))
+            {
+              this.Finish (null);
+              System.Threading.Tasks.ValueTask ()
+            }
+            else if (this.$("<>v__promise" : dyn).GetStatus (this.$("<>v__promise" : dyn).Version) == $sources.ValueTaskSourceStatus.Pending)
+              throw System.NotSupportedException ("an async stream is disposed of while its next item is awaited")
+            else
+            {
+              this.$("<>w__disposeMode" : dyn) = true;
+              this.$("<>v__promise" : dyn).Reset ();
+              mutable machine = this;
+              this.$("<>t__builder" : dyn).MoveNext (ref machine);
+              System.Threading.Tasks.ValueTask (this : $sources.IValueTaskSource, this.$("<>v__promise" : dyn).Version)
+            }
+          } ]>,
+        <[ decl: public Produce (item : $(item : typed)) : object { this.$("<>2__item" : dyn) = item; this } ]>,
+        <[ decl: public Disposing () : bool { this.$("<>w__disposeMode" : dyn) } ]>,
+        <[ decl:
+          public AwaitUnsafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.ICriticalNotifyCompletion
+          {
+            mutable machine = this;
+            this.$("<>t__builder" : dyn).AwaitUnsafeOnCompleted (ref awaiter, ref machine);
+            null
+          } ]>,
+        <[ decl:
+          public AwaitSafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.INotifyCompletion
+          {
+            mutable machine = this;
+            this.$("<>t__builder" : dyn).AwaitOnCompleted (ref awaiter, ref machine);
+            null
+          } ]>,
+        <[ decl:
+          GetResultOfNext (token : short) : bool implements $sources.IValueTaskSource[bool].GetResult
+          {
+            this.$("<>v__promise" : dyn).GetResult (token)
+          } ]>,
+        <[ decl:
+          GetStatusOfNext (token : short) : $sources.ValueTaskSourceStatus implements $sources.IValueTaskSource[bool].GetStatus
+          {
+            this.$("<>v__promise" : dyn).GetStatus (token)
+          } ]>,
+        <[ decl:
+          OnCompletedOfNext (continuation : System.Action[object], state : object, token : short, flags : $sources.ValueTaskSourceOnCompletedFlags) : void
+            implements $sources.IValueTaskSource[bool].OnCompleted
+          {
+            this.$("<>v__promise" : dyn).OnCompleted (continuation, state, token, flags)
+          } ]>,
+        <[ decl:
+          GetResultOfDispose (token : short) : void implements $sources.IValueTaskSource.GetResult
+          {
+            _ = this.$("<>v__promise" : dyn).GetResult (token)
+          } ]>,
+        <[ decl:
+          GetStatusOfDispose (token : short) : $sources.ValueTaskSourceStatus implements $sources.IValueTaskSource.GetStatus
+          {
+            this.$("<>v__promise" : dyn).GetStatus (token)
+          } ]>,
+        <[ decl:
+          OnCompletedOfDispose (continuation : System.Action[object], state : object, token : short, flags : $sources.ValueTaskSourceOnCompletedFlags) : void
+            implements $sources.IValueTaskSource.OnCompleted
+          {
+            this.$("<>v__promise" : dyn).OnCompleted (continuation, state, token, flags)
+          } ]>
+      ];
+      def members =
+        if (cancels)
+          <[ decl: mutable $("<>x__token" : dyn) : System.Threading.CancellationToken; ]>
+          :: <[ decl: mutable $("<>x__combined" : dyn) : System.Threading.CancellationTokenSource; ]>
+          :: <[ decl: public Token (origin : System.Threading.CancellationToken) : System.Threading.CancellationToken { _ = origin; this.$("<>x__token" : dyn) } ]>
+          :: members
+        else members;
       <[ decl:
-        struct $(StateMachineName ("") : name) : System.Runtime.CompilerServices.IAsyncStateMachine
+        class $(name : name) :
+          System.Collections.Generic.IAsyncEnumerable[$(item : typed)],
+          System.Collections.Generic.IAsyncEnumerator[$(item : typed)],
+          System.IAsyncDisposable,
+          System.Runtime.CompilerServices.IAsyncStateMachine,
+          $sources.IValueTaskSource[bool],
+          $sources.IValueTaskSource
         {
           ..$members
         }
@@ -1099,6 +1324,15 @@ using Nemerle.Compiler.Utility;
     {
       mutable dispose_expr = VoidLiteral();
       def thisref = TExpr.This(clo_type.GetMemType());
+      // where the state machine's MoveNext returns: a `yield' (or the body's end) jumps there, which is no exit of a
+      // `try' around it
+      mutable suspend = -1;
+      match (fh.body)
+      {
+        | FunBody.Typed (body) =>
+          _ = body.Walk (fun (e) { | TExpr.Label (id, TExpr.LocalRef (v)) when v.Name == "_N_MoveNext_exit" => suspend = id; null | _ => null })
+        | _ => ()
+      }
 
       def look_for_invalid_yield(expr : TExpr)
       {
@@ -1157,11 +1391,33 @@ using Nemerle.Compiler.Utility;
             def failed = local ("_N_failed", InternalType.Boolean, LocalValue.Kind.Plain ());
             def exn = local ("_N_exn", exn_type, LocalValue.Kind.ExceptionValue ());
             def body = body.Walk(rewrite);
+            // a jump out of the body (`break', `continue', `return', a block's exit: a goto to a label outside it) leaves
+            // it through its end, and is made after the handler has run, as the CLR's `leave' would
+            def inside = Hashtable ();
+            _ = body.Walk (fun (e) { | TExpr.Label (id, _) => inside [id] = true; null | _ => null });
+            mutable exits = [];
+            def leave = Manager.GetNewId ("Block");
+            def exit = local ("_N_exit", InternalType.Int32, LocalValue.Kind.Plain ());
+            def body = body.Walk (fun (e)
+              {
+                | TExpr.Goto (id, _) when !inside.Contains (id) && id != suspend =>
+                  def k = match (exits.Find (x => x [1] == id))
+                    {
+                      | Some ((k, _)) => k
+                      | None => def k = exits.Length + 1; exits ::= (k, id); k
+                    };
+                  TExpr.Sequence (e.Type,
+                    TExpr.Assign (InternalType.Void, PlainRef (exit), TExpr.Literal (InternalType.Int32, Literal.FromInt (k))),
+                    TExpr.Goto (e.Type, leave, 1))
+                | _ => null
+              });
             def valued = !(body.Type.Fix () is FixedType.Void);
             def result = if (valued) local ("_N_try_value", body.Type, LocalValue.Kind.Plain ()) else null;
+            def stored = if (valued) TExpr.Assign (InternalType.Void, PlainRef (result), body) else body;
             def protect =
               TExpr.Try (InternalType.Void,
-                if (valued) TExpr.Assign (InternalType.Void, PlainRef (result), body) else body,
+                if (exits.IsEmpty) stored
+                else TExpr.Sequence (InternalType.Void, stored, TExpr.Label (InternalType.Void, leave, VoidLiteral ())),
                 [Try_case.Catch (exn, TExpr.Sequence (InternalType.Void,
                    TExpr.Assign (InternalType.Void, PlainRef (caught), PlainRef (exn)),
                    TExpr.Assign (InternalType.Void, PlainRef (failed), TExpr.TrueLiteral (Manager))))]);
@@ -1171,7 +1427,11 @@ using Nemerle.Compiler.Utility;
             def throw_again = Option.UnSome (dispatch_info.LookupMember ("Throw").Find (m => !m.IsStatic && m is IMethod)) :> IMethod;
             def captured = TExpr.Call (dispatch_type, TExpr.StaticRef (capture.GetMemType (), dispatch_type, capture, []), [Parm (PlainRef (caught))], false);
             def rethrow = TExpr.Call (InternalType.Void, TExpr.MethodRef (throw_again.GetMemType (), captured, throw_again, [], false), [], false);
-            def steps =
+            def jumps =
+              if (exits.IsEmpty) []
+              else [TExpr.Switch (InternalType.Void, PlainRef (exit), Some (VoidLiteral ()),   // (0: the body's end)
+                                  (0, VoidLiteral ()) :: exits.Map (x => (x [0], TExpr.Goto (InternalType.Void, x [1], 1))))];
+            def steps = jumps +
                [TExpr.If (InternalType.Void, PlainRef (failed), rethrow, VoidLiteral (), Location.Default, Location.Default),
                 handler.Walk(look_for_invalid_yield),
                 TExpr.Assign (InternalType.Void, fldref, TExpr.FalseLiteral (Manager)),
@@ -1180,6 +1440,7 @@ using Nemerle.Compiler.Utility;
                 TExpr.Assign (InternalType.Void, PlainRef (failed), TExpr.FalseLiteral (Manager))];
             def done = BuildRevSequence (if (valued) PlainRef (result) :: steps else steps);
             def done = TExpr.DefValIn (done.Type, failed, TExpr.FalseLiteral (Manager), done);
+            def done = TExpr.DefValIn (done.Type, exit, TExpr.Literal (InternalType.Int32, Literal.FromInt (0)), done);
             def done = TExpr.DefValIn (done.Type, caught, TExpr.Literal (exn_type, Literal.Null ()), done);
             if (valued) TExpr.DefValIn (done.Type, result, TExpr.DefaultValue (body.Type), done) else done
           }
@@ -1242,6 +1503,17 @@ using Nemerle.Compiler.Utility;
     }
 
 
+    /// A framework attribute the state machines are marked with, when the target framework has it too (net48 has no
+    /// StackTraceHidden).
+    TargetAttribute (name : string) : option [System.Type]
+    {
+      match (Manager.NameTree.LookupSystemType (name))
+      {
+        | Some (t) when Manager.TargetContracts != null && Manager.TargetContracts.MissingType (t) != null => None ()
+        | found => found
+      }
+    }
+
     /// An iterator's or async function's state machine, as C# marks it: the function that starts it carries
     /// [IteratorStateMachine] or [AsyncStateMachine] (and an async one [DebuggerStepThrough]), so stack traces name the
     /// function, and the PDB links the state machine's MoveNext to it (see TypesManager.SaveAssembly).
@@ -1249,7 +1521,8 @@ using Nemerle.Compiler.Utility;
     {
       def move_next = SingleMemberLookup (clo_type, "MoveNext") :> MethodBuilder;
       def method = if (current_local_fun.decl == null) the_method else null;
-      def is_async = method != null && (method.Name.StartsWith ("_N_async_") || method.Name.StartsWith ("_N_asyncs_"));
+      def is_stream = method != null && method.Name.StartsWith ("_N_asyncm_");
+      def is_async = method != null && (method.Name.StartsWith ("_N_async_") || method.Name.StartsWith ("_N_asyncs_") || method.Name.StartsWith ("_N_asyncc_") || is_stream);
       // an async function's state machine is started by the function the async macros made it from
       def kickoff =
         if (is_async)
@@ -1274,7 +1547,7 @@ using Nemerle.Compiler.Utility;
         else method;
       Manager.StateMachines.Add ((move_next, kickoff));
       // (a struct machine's IAsyncStateMachine.MoveNext only runs the body's: not a frame of its own in stack traces)
-      match ((clo_type.LookupMember ("Advance"), Manager.NameTree.LookupSystemType ("System.Diagnostics.StackTraceHiddenAttribute")))
+      match ((clo_type.LookupMember ("Advance"), TargetAttribute ("System.Diagnostics.StackTraceHiddenAttribute")))
       {
         | ([advance is MethodBuilder], Some (hidden)) =>
           def emitter = clo_type.TyManager.ClrEmitter;
@@ -1282,7 +1555,7 @@ using Nemerle.Compiler.Utility;
         | _ => ()
       }
       // (compiler-made, as C#'s: .NET's stack traces then name the function for its MoveNext)
-      match (Manager.NameTree.LookupSystemType ("System.Runtime.CompilerServices.CompilerGeneratedAttribute"))
+      match (TargetAttribute ("System.Runtime.CompilerServices.CompilerGeneratedAttribute"))
       {
         | Some (generated) =>
           def emitter = clo_type.TyManager.ClrEmitter;
@@ -1294,7 +1567,8 @@ using Nemerle.Compiler.Utility;
       when (kickoff != null)
       {
         def cache = Manager.SystemTypeCache;
-        def attribute = match (Manager.NameTree.LookupSystemType (if (is_async) "System.Runtime.CompilerServices.AsyncStateMachineAttribute"
+        def attribute = match (TargetAttribute (if (is_stream) "System.Runtime.CompilerServices.AsyncIteratorStateMachineAttribute"
+                                                                  else if (is_async) "System.Runtime.CompilerServices.AsyncStateMachineAttribute"
                                                                   else "System.Runtime.CompilerServices.IteratorStateMachineAttribute"))
           {
             | Some (t) => t
@@ -1306,7 +1580,7 @@ using Nemerle.Compiler.Utility;
             when (attribute != null && kickoff.GetMethodInfo () != null)
             {
               emitter.SetAttribute (kickoff.GetMethodInfo (), Manager.AttributeCompiler.MakeEmittedAttribute (attribute, array [cache.Type], clo_type.GetTypeBuilder ()));
-              when (is_async)
+              when (is_async && !is_stream)
                 emitter.SetAttribute (kickoff.GetMethodInfo (), Manager.AttributeCompiler.MakeEmittedAttribute (cache.Reflect ("System.Diagnostics.DebuggerStepThroughAttribute")));
             }
           })
@@ -1314,7 +1588,7 @@ using Nemerle.Compiler.Utility;
     }
 
     SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string], parent_fields : Hashtable [int, IField],
-                       struct_machine : bool, clo_mtype : FixedType) : void
+                       struct_machine : bool, stream_machine : bool, clo_mtype : FixedType) : void
     {
       match (current_local_fun.body) {
         | FunBody.Typed (DefValIn (_, _, DefValIn (_, _, DefFunctionsIn ([fh], _)))) =>
@@ -1326,7 +1600,7 @@ using Nemerle.Compiler.Utility;
           def child = Typer3 (this, meth);
           child.current_subst = subst;
           child.enumerator_parents = parent_fields;
-          when (struct_machine) child.struct_machine = clo_type;
+          when (struct_machine || stream_machine) child.struct_machine = clo_type;
           child.Run ();
 
           if (struct_machine)
@@ -1338,13 +1612,17 @@ using Nemerle.Compiler.Utility;
                           TExpr.MethodRef (clo_mtype.TypeOfMember (start), PlainRef (current_closure), start, [], true), [], false))
           }
           else {
-          def meth = SingleMemberLookup (clo_type, "Dispose") :> MethodBuilder;
-          meth.GetHeader ().used_closures = fh.GetParents ();
-          meth.GetHeader ().is_in_closure_of = fh.id;
-          def child = Typer3 (this, meth);
-          child.current_subst = subst;
-          child.enumerator_parents = parent_fields;
-          child.Run ();
+          // (an async stream has no Dispose: DisposeAsync resumes its body)
+          unless (stream_machine)
+          {
+            def meth = SingleMemberLookup (clo_type, "Dispose") :> MethodBuilder;
+            meth.GetHeader ().used_closures = fh.GetParents ();
+            meth.GetHeader ().is_in_closure_of = fh.id;
+            def child = Typer3 (this, meth);
+            child.current_subst = subst;
+            child.enumerator_parents = parent_fields;
+            child.Run ();
+          }
 
           unless (parm_field_names.IsEmpty) {
             def meth = SingleMemberLookup (clo_type, "CopyFrom") :> MethodBuilder;
@@ -1384,9 +1662,23 @@ using Nemerle.Compiler.Utility;
 
         def uses_yield = current_local_fun.yield_type != null;
         // an async function's state machine as C#'s: a struct (the async macros make the method, _N_asyncs_F)
-        def struct_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncs_");
+        def local_machine = uses_yield && current_local_fun.decl != null && current_local_fun.Name.StartsWith ("_N_async_local_")
+                            && Manager.UserData.Contains ("Nemerle.AsyncMacros.struct:" + current_local_fun.Name);
+        def local_class = local_machine && Manager.UserData.Contains ("Nemerle.AsyncMacros.class:" + current_local_fun.Name);
+        def struct_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncs_")
+                             || local_machine && !local_class;
+        // (as a class, for a function with lambdas in it: _N_asyncc_F)
+        def class_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncc_")
+          // (and an async lambda's or local function's, with lambdas in it)
+          || local_class;
+        // an async stream's, as C#'s: a class that is the stream (_N_asyncm_F)
+        def stream_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncm_");
+        // (what the stream is enumerated with is kept in a field of its own: its copies combine it with their tokens)
+        def cancel_origin = if (stream_machine && Manager.UserData.Contains ("Nemerle.AsyncMacros.cancel:" + the_method.Name))
+                              Manager.UserData ["Nemerle.AsyncMacros.cancel:" + the_method.Name] :> string
+                            else null;
         def is_enumerable =
-          if (uses_yield && !struct_machine)
+          if (uses_yield && !struct_machine && !class_machine && !stream_machine)
             match (current_local_fun.ReturnType.Fix ()) {
               | Class (tc, _) =>
                 tc.Equals (InternalType.Generic_IEnumerable_tc) ||
@@ -1404,8 +1696,10 @@ using Nemerle.Compiler.Utility;
                 internal this () {}
               }
             ]>
-          else if (struct_machine)
-            PrepareAsyncStructMachine (fix_type (current_local_fun.ReturnType))
+          else if (struct_machine || class_machine)
+            PrepareAsyncStructMachine (fix_type (current_local_fun.ReturnType), class_machine)
+          else if (stream_machine)
+            PrepareAsyncStreamMachine (fix_type (current_local_fun.ReturnType))
           else
             if (is_enumerable)
               PrepareEnumerableObject (fix_type (current_local_fun.yield_type));
@@ -1455,7 +1749,7 @@ using Nemerle.Compiler.Utility;
               {
                 // (a struct machine's method body becomes the call of Start: the iterator's function value, and the
                 // `_' it is given to there, are not kept)
-                | _ when struct_machine && decl.DefinedIn : object == current_local_fun
+                | _ when (struct_machine || class_machine || stream_machine) && decl.DefinedIn : object == current_local_fun
                          && (decl.Name == "_N_yielding_function" || decl.Name.StartsWith ("_N_wildcard")) => false
                 | Function(TFunHeader where(usage = UsedAsFirstClass), _) => true
                 | Function => false
@@ -1470,7 +1764,9 @@ using Nemerle.Compiler.Utility;
         {
           def name =
             // (the state machine's current item and state, as C# names them)
-            if (decl.Name == "_N_current")
+            if (decl.Name == cancel_origin && decl.ValKind is LocalValue.Kind.FunParm)
+              Nemerle.Compiler.Parsetree.Name ("<>3__token")
+            else if (decl.Name == "_N_current")
               Macros.NewSymbol ("current").NewName ("<>2__current")
             else if (decl.Name == "_N_state")
               Macros.NewSymbol ("state").NewName ("<>1__state")
@@ -1499,7 +1795,7 @@ using Nemerle.Compiler.Utility;
           def fld = clo_type.DefineAndReturn (ptdecl);
           decl.ClosureField = fld :> IField;
           Manager.MarkAsAssigned (decl.ClosureField);
-          when(is_enumerable && (decl.ValKind is LocalValue.Kind.FunParm || decl.ValKind is LocalValue.Kind.ClosurisedThisPointer))
+          when((is_enumerable || stream_machine) && (decl.ValKind is LocalValue.Kind.FunParm || decl.ValKind is LocalValue.Kind.ClosurisedThisPointer))
             parm_field_names ::= name.Id;
         }
 
@@ -1528,7 +1824,7 @@ using Nemerle.Compiler.Utility;
             def field = clo_type.DefineAndReturn (<[ decl: internal mutable $(name : name) : $(fix_type (parm.decl.Type) : typed); ]>) :> IField;
             Manager.MarkAsAssigned (field);
             table [header.id] = field;
-            when (is_enumerable) parm_field_names ::= name.Id;
+            when (is_enumerable || stream_machine) parm_field_names ::= name.Id;
             parent_stores ::= TExpr.Assign (InternalType.Void, TExpr.FieldMember (field.GetMemType (), PlainRef (closure_val), field), PlainRef (parm.decl))
           });
           parent_fields = table;
@@ -1536,7 +1832,7 @@ using Nemerle.Compiler.Utility;
 
         when (uses_yield)
         {
-          SetEnumeratorBody (clo_type, subst, parm_field_names, parent_fields, struct_machine, clo_mtype);
+          SetEnumeratorBody (clo_type, subst, parm_field_names, parent_fields, struct_machine || class_machine, stream_machine, clo_mtype);
           RegisterStateMachine (clo_type);
         }
 
@@ -2790,7 +3086,7 @@ using Nemerle.Compiler.Utility;
               when struct_machine != null && m.DeclaringType.FullName == "Nemerle.Async.Machine" =>
             def target = SingleMemberLookup (struct_machine, m.Name) :> IMethod;
             def self = TExpr.This (local_function_type.GetMemType ());
-            EmitCall (expr.Location, expr.Type, TExpr.MethodRef (func.Type, self, target, if (m.Name == "Return") [] else typarms, true), parms, false)
+            EmitCall (expr.Location, expr.Type, TExpr.MethodRef (func.Type, self, target, if (m.Name == "Return" || m.Name == "Produce") [] else typarms, true), parms, false)
 
           | TExpr.Call (func, parms, is_tail) =>
             EmitCall (expr.Location, expr.Type, func, parms, is_tail)

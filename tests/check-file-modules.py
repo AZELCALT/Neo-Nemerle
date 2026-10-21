@@ -689,6 +689,78 @@ Console.WriteLine(log.Rev());
 [1, -1]
 [numbers done, stream broke]''':
         raise RuntimeError('async streams: got\n' + got)
+    # as C#'s: leaving a stream early resumes it to run its finally blocks (waiting in them), no catch sees that, a
+    # [EnumeratorCancellation] parameter gets WithCancellation's token, each enumeration after the first is a copy;
+    # and break, continue and return leave a try through its finally, waiting or not
+    source('async/exits.n', '''using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using Nemerle.Imperative;
+
+mutable log : list[string] = [];
+
+async Guarded(name : string) : IAsyncEnumerable[string]
+{
+  try
+  {
+    try { yield name + "1"; yield name + "2"; yield name + "3" }
+    catch { | e => log ::= "caught " + e.GetType().Name }
+  }
+  finally { await Task.Delay(1); log ::= "finally " + name }
+}
+
+async Ticks([EnumeratorCancellation] token : CancellationToken = default(CancellationToken)) : IAsyncEnumerable[int]
+{
+  mutable i = 0;
+  while (true) { await Task.Delay(1, token); i++; yield i }
+}
+
+async Squares(count : int) : IAsyncEnumerable[int]
+{
+  for (mutable i = 1; i <= count; i++) { await Task.Yield(); yield i * i }
+}
+
+async Loops() : Task
+{
+  mutable i = 0;
+  while (i < 3)
+  {
+    i++;
+    try { await Task.Yield(); when (i == 1) continue; break } finally { log ::= $"plain $i" }
+  }
+  while (true) { try { await Task.Yield(); break } finally { await Task.Delay(1); log ::= "waiting" } }
+  foreach (x in [1, 2]) using (closing = Closing(x)) { await Task.Yield(); when (x == 1) break; _ = closing }
+}
+
+async Early(n : int) : Task[int]
+{
+  try { await Task.Yield(); when (n > 0) return n * 10 } finally { await Task.Delay(1); log ::= $"early $n" }
+  -1
+}
+
+class Closing : IDisposable { n : int; public this(n : int) { this.n = n } public Dispose() : void { log ::= $"closed $n" } }
+
+await foreach (x in Guarded("a")) { log ::= x; when (x == "a2") break }
+def s = Squares(3);
+mutable total = 0;
+await foreach (x in s) total += x;
+await foreach (x in s) total += x;
+def cts = CancellationTokenSource();
+mutable seen = 0;
+try { await foreach (x in Ticks().WithCancellation(cts.Token)) { seen = x; when (x == 3) cts.Cancel() } }
+catch { | _ is OperationCanceledException => log ::= $"cancelled at $seen" }
+await Loops();
+Console.WriteLine($"$total $(await Early(4)) $(await Early(0))");
+Console.WriteLine(log.Rev());
+''')
+    run([runtime, compiler, work / 'async/exits.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-exits.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-exits.runtimeconfig.json')
+    got = run([runtime, work / 'async-exits.exe']).stdout.strip()
+    if got != '''28 40 -1
+[a1, a2, finally a, cancelled at 3, plain 1, plain 2, waiting, closed 1, early 4, early 0]''':
+        raise RuntimeError('async exits: got\n' + got)
     source('async/iterators.n', '''using System;
 using System.Collections.Generic;
 using System.Linq;

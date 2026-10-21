@@ -12,17 +12,16 @@ unless it says so. These edges will be closed, which can change what happens the
   boxes are shared as they are.
 ## Async
 
-- **Async streams are not on .NET Standard 2.0** (nor .NET Framework): it has no `IAsyncEnumerable[T]`, so the
-  .NET Standard `Nemerle.dll` has no `AsyncStream`. An async lambda returns a `Task` or `Task[T]` (or is given as a
-  `void` delegate), not a `ValueTask`, and is not an async stream.
-- **Async lambdas, local functions, async streams and functions with a lambda inside keep a class state machine**
-  (one allocation per call); only plain async functions get C#'s struct. A function that waits allocates 113 bytes
-  per call where C# allocates 97 (a `current` field and a temporary for the result).
+- **An async lambda returns a `Task` or `Task[T]`** (or is given as a `void` delegate), not a `ValueTask`, and is not
+  an async stream.
+- **A function with a lambda in it has a class state machine**, which its lambdas share: one allocation per call
+  (128 bytes for a small one that does not wait, where C# allocates 88: a struct, and a class for the locals the
+  lambdas use only). Async functions and lambdas without lambdas in them get C#'s struct, and async streams C#'s
+  class. A function that waits allocates 112 bytes per call where C# allocates 96, and a stream 88 where C#
+  allocates 80 (a `current` field).
 - **An async file's functions do not wait for its top-level code.** Its state is ready once a file importing it has
   awaited it (at the `using`); a function of the file called before that, from a file that does not import it (by
   reflection, from C#), sees the state unset.
-- **A `return`-like exit from a `try` whose `finally` waits** (a block's `break` out of it) leaves without running the
-  `finally`; a normal end and an exception run it.
 
 ## Targets
 

@@ -84,6 +84,24 @@ public module Machine
 
   /// The value the body ends with: its task's result.
   public Return[T](_value : T) : void { throw InvalidOperationException("Machine.Return runs in a state machine only") }
+
+  /// An async stream's `yield x': the item is the stream's Current, and MoveNextAsync completes with true.
+  public Produce[T](_item : T) : object { throw InvalidOperationException("Machine.Produce runs in a state machine only") }
+
+  /// Whether an async stream is being disposed of before its end (DisposeAsync resumed it after a `yield'): it then
+  /// leaves through its `finally' blocks, as C#'s does.
+  public Disposing() : bool { throw InvalidOperationException("Machine.Disposing runs in a state machine only") }
+
+  /// An async stream's [EnumeratorCancellation] parameter: `origin' (what the stream was made with) combined with the
+  /// token it is enumerated with.
+  public Token(_origin : System.Threading.CancellationToken) : System.Threading.CancellationToken { throw InvalidOperationException("Machine.Token runs in a state machine only") }
+}
+
+/// What an async stream disposed of before its end throws where it resumes: it runs the stream's `finally' blocks (no
+/// `catch' sees it), and its state machine ends the enumeration when it gets it.
+public sealed class StreamDisposed : Exception
+{
+  public this() { base("the async stream is disposed of") }
 }
 
 /// An async lambda run where a `void' delegate is wanted (an event handler, as C#'s `async void'): nothing waits for its
@@ -103,7 +121,7 @@ public module AsyncVoid
   }
 }
 
-#if !NETSTANDARD2_0   // (async streams are .NET Core 3.0's and later: .NET Standard 2.0 has no IAsyncEnumerable)
+#if !NETSTANDARD2_0   // (.NET Standard 2.0 has no ValueTask builders)
 /// As AsyncDriver, for an async function that returns ValueTask[T]: one that never waits completes with its value and
 /// allocates nothing (AsyncValueTaskMethodBuilder).
 public sealed class AsyncValueDriver[T] : IAsyncStateMachine
@@ -200,77 +218,4 @@ public sealed class AsyncValueVoidDriver : IAsyncStateMachine
   public SetStateMachine(machine : IAsyncStateMachine) : void { builder.SetStateMachine(machine) }
 }
 
-/// Runs the body of an async function that returns an IAsyncEnumerable[T] (an async stream): the body is an iterator,
-/// as an async function's is, that yields the awaiters it waits for and, for each item it produces (`yield x'),
-/// Produce(x). Each enumeration runs the body afresh; MoveNextAsync completes when the next item is there (true) or
-/// the body ends (false), with what the body throws.
-public sealed class AsyncStream[T] : IAsyncEnumerable[T], IAsyncEnumerator[T]
-{
-  static produced : object = object();
-  start : AsyncStream[T] -> IEnumerable[object];
-  mutable steps : IEnumerator[object];
-  mutable pending : TaskCompletionSource[bool];
-  mutable resume : Action;
-  mutable current : T;
-
-  public this(start : AsyncStream[T] -> IEnumerable[object]) { this.start = start }
-
-  /// The token the enumeration was started with (GetAsyncEnumerator's, as WithCancellation passes it).
-  public Token : System.Threading.CancellationToken { get; private set; }
-
-  public Current : T { get { current } }
-
-  /// The body waits for `awaiter': it resumes when the awaiter completes (OnCompleted carries the ExecutionContext over,
-  /// so AsyncLocal values flow into the rest of the body).
-  public AwaitUnsafe[A](awaiter : ref A) : void where A : ICriticalNotifyCompletion { awaiter.OnCompleted(resume) }
-
-  public AwaitSafe[A](awaiter : ref A) : void where A : INotifyCompletion { awaiter.OnCompleted(resume) }
-
-  /// What the body yields for an item: the item is then the enumerator's Current.
-  public Produce(item : T) : object { current = item; produced }
-
-  public GetAsyncEnumerator(token : System.Threading.CancellationToken = default(System.Threading.CancellationToken)) : IAsyncEnumerator[T]
-  {
-    def run = AsyncStream(start);
-    run.Token = token;
-    run.resume = Action(run.Step);
-    run.steps = start(run).GetEnumerator();
-    run
-  }
-
-  public MoveNextAsync() : ValueTask[bool]
-  {
-    pending = TaskCompletionSource.[bool](TaskCreationOptions.RunContinuationsAsynchronously);
-    Step();
-    ValueTask.[bool](pending.Task)
-  }
-
-  [System.Diagnostics.StackTraceHidden]
-  Step() : void
-  {
-    try
-    {
-      if (steps.MoveNext())
-        match (steps.Current)
-        {
-          | item when object.ReferenceEquals(item, produced) => _ = pending.TrySetResult(true)
-          | _ => ()   // waiting: the awaiter resumes the body (AwaitUnsafe)
-        }
-      else
-        _ = pending.TrySetResult(false)
-    }
-    catch
-    {
-      | e is OperationCanceledException => _ = pending.TrySetCanceled(e.CancellationToken)
-      | e => _ = pending.TrySetException(e)
-    }
-  }
-
-  /// Ends the enumeration: the body's `finally' blocks run (as an iterator's do when it is disposed).
-  public DisposeAsync() : ValueTask
-  {
-    when (steps != null) steps.Dispose();
-    ValueTask()
-  }
-}
 #endif

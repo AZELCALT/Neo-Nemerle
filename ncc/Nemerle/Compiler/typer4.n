@@ -179,7 +179,12 @@ internal class Typer4
         | DebugInfo(null, _)  => false
         | DebugInfo(tExtr, _) => HasJumpTarget(tExtr)
         | TExpr.MacroEnvelope(expanded=expanded) => HasJumpTarget(expanded)
-        | _ => false
+        // a label deeper in, that a goto goes to: an iterator's resume point in a branch, after a `break' (the state
+        // machine's dispatch jumps to it)
+        | _ =>
+          mutable found = false;
+          _ = expr.Walk(fun (e) { | TExpr.Label(id, _) when goto_targets.Contains(id) => found = true; null | _ => null });
+          found
       };
     expr.JumpTarget = res;
     res

@@ -156,11 +156,13 @@ An `await` can be anywhere in the function's code: in a loop, in a condition, in
 before it there is evaluated first, as without it, and `&&` and `||` still evaluate their right side only when
 needed), in a `try` and in its `catch` and `finally` handlers. What the function throws completes its task with that
 exception, which `await` on the task throws again, with its original stack trace; an `OperationCanceledException`
-cancels it. A `void` async function is for an event handler: nothing waits for it, and what it throws ends the
-process, as in C#.
+cancels it. A `return` (from `Nemerle.Imperative`) ends the function with its value; a `break`, `continue` or
+`return` out of a `try` runs its `finally` first, also one that waits. A `void` async function is for an event
+handler: nothing waits for it, and what it throws ends the process, as in C#.
 
 As in C#, an async function is compiled to a *state machine*: a struct that keeps its locals between its waits.
 A function that finishes without waiting allocates nothing, and one that waits moves the struct to the heap once.
+An async lambda's is a struct too; a function with lambdas in it, which share its locals, has a class.
 
 An `async` function cannot have `ref` or `out` parameters, and the compiler refuses an `await` where it cannot work:
 
@@ -189,7 +191,11 @@ Console.WriteLine(total[0] + total[1])
 
 An async function that returns `IAsyncEnumerable[T]` is an *async stream*: it waits with `await` and produces its
 items with `yield`, and `await foreach (x in stream)` goes over one, waiting for each item. `await using (x = value)`
-disposes an `IAsyncDisposable` at the end, waiting for it. (Async streams need .NET Core 3.0 or later.)
+disposes an `IAsyncDisposable` at the end, waiting for it. A loop that stops early (a `break`) disposes of the
+stream, which runs its `finally` blocks, as C#'s does; a parameter marked `[EnumeratorCancellation]` is the token
+the stream is enumerated with (`stream.WithCancellation(token)`). Each item allocates nothing. On .NET Standard 2.0
+and .NET Framework, which have no `IAsyncEnumerable[T]`, a project uses the `Microsoft.Bcl.AsyncInterfaces` package
+for them, as a C# project does.
 
 ```nemerle
 using System;

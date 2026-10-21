@@ -3183,7 +3183,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           header.yield_type = yield_type;
           header.cannot_inline = true;
           // (in the global colour, as `yield' refers to the state machine's names: this may run inside a macro's expansion)
-          def wrapped = Manager.MacroColors.InGlobalColor (fun () { WrapYieldingFunction (fn.body, yield_type) });
+          // (an async lambda's: a state machine that returns its task, as an async function's)
+          def machine = if (Manager.UserData.Contains ("Nemerle.AsyncMacros.struct:" + name_obj.Id)) header.ReturnType else null;
+          def wrapped = Manager.MacroColors.InGlobalColor (fun () { WrapYieldingFunction (fn.body, yield_type, machine) });
           header.body = FunBody.Parsed (Nemerle.Compiler.UtilMacros.locate (fn.body.Location, wrapped));
         }
         else
@@ -5106,7 +5108,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     #endregion
 
     #region yield handling
-    WrapYieldingFunction (body : PExpr, yield_type : TypeVar = null) : PExpr
+    /// `machine': the task an async local function's state machine returns (Typer3 makes its machine, as for an async
+    /// function whose machine is a struct)
+    WrapYieldingFunction (body : PExpr, yield_type : TypeVar = null, machine : TypeVar = null) : PExpr
     {
       def yield_type = if (yield_type == null) GetYieldType () else yield_type;
 
@@ -5133,18 +5137,22 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           }
 
           _ = _N_yielding_function;
-          $(if (IsStructMachine ()) <[ $(TExpr.DefaultValue (GetTopTyper ().current_fun.ReturnType) : typed) ]> else <[ null ]>)
+          $(if (machine != null) <[ $(TExpr.DefaultValue (machine) : typed) ]>
+            else if (IsStructMachine ()) <[ $(TExpr.DefaultValue (GetTopTyper ().current_fun.ReturnType) : typed) ]> else <[ null ]>)
         ]>;
 
       new_body
     }
 
-    /// Whether the method being typed is an async function whose state machine is a struct (the async macros make it:
-    /// it returns its task, and its yields are where it waits, see Typer3).
+    /// Whether the method being typed is an async function whose state machine Typer3 makes as C#'s (the async macros
+    /// make it): a struct for one that returns a task, a class for an async stream. It returns its task (or stream),
+    /// and its yields are where it waits (or produces an item).
     IsStructMachine () : bool
     {
       def top = GetTopTyper ();
-      top.current_fun.decl == null && top.current_method_builder != null && top.current_method_builder.Name.StartsWith ("_N_asyncs_")
+      top.current_fun.decl == null && top.current_method_builder != null
+        && (top.current_method_builder.Name.StartsWith ("_N_asyncs_") || top.current_method_builder.Name.StartsWith ("_N_asyncc_")
+            || top.current_method_builder.Name.StartsWith ("_N_asyncm_"))
     }
 
     CanYield () : bool {
@@ -5182,7 +5190,15 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       Nemerle.Compiler.UtilMacros.cassert (solver.IsTopLevel);
       def label_no = Manager.GetNewId("YieldLabel");
-      _ = Manager.YieldLabels.Add(label_no);
+      // (where an async state machine resumes after a wait: an async stream's item is not one, as in C#)
+      def produces = match (expr)
+        {
+          | PExpr.Call (PExpr.Member (PExpr.Member (PExpr.Member (_, async), machine), produce), _) =>
+            async.ToString () == "Async" && machine.ToString () == "Machine" && produce.ToString () == "Produce"
+          | _ => false
+        };
+      unless (produces)
+        _ = Manager.YieldLabels.Add(label_no);
       def state_no = AddYieldLabel(label_no);
       def label = TExpr.Label(InternalType.Void, label_no, VoidLiteral());
 
