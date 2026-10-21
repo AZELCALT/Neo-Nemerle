@@ -153,7 +153,10 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
                                   '  await Task.Delay(10);\n  def middle = start + 1;\n  await Task.Delay(10);\n  middle * 10\n}\n\n'
                                   'System.Console.WriteLine(await Compute(4));\n'
                                   'def scaled = async (k : int) =>\n{\n  def shifted = k + 1;\n  await Task.Delay(10);\n  shifted * 3\n};\n'
-                                  'System.Console.WriteLine(await scaled(4))\n')
+                                  'System.Console.WriteLine(await scaled(4));\n'
+                                  'async Scaled(n : int) : Task[int]\n{\n  def factor = n + 1;\n  def scale = x => x * factor;\n'
+                                  '  await Task.Delay(10);\n  def doubled = scale(2);\n  doubled\n}\n'
+                                  'System.Console.WriteLine(await Scaled(4))\n')
     r = subprocess.run([str(tc / 'ncc'), 'build', str(aprog)], capture_output=True, text=True)
     check(r.returncode == 0, 'the async program\'s build: ' + r.stdout + r.stderr)
     proc = subprocess.Popen([str(debugger), '--interpreter=vscode'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -162,7 +165,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     request('initialize', {'adapterID': 'nemerle', 'linesStartAt1': True, 'columnsStartAt1': True, 'pathFormat': 'path'})
     n = send('launch', {'program': 'dotnet', 'args': [str(aprog / 'out/asyncprog.dll')], 'cwd': str(aprog), 'justMyCode': True})
     wait(lambda m: m.get('event') == 'initialized' or (m.get('type') == 'response' and m.get('request_seq') == n), 'initialized')
-    request('setBreakpoints', {'source': {'path': str(aprog / 'main.n')}, 'breakpoints': [{'line': 7}, {'line': 17}]})
+    request('setBreakpoints', {'source': {'path': str(aprog / 'main.n')}, 'breakpoints': [{'line': 7}, {'line': 17}, {'line': 22}]})
     request('configurationDone')
     stopped = wait(lambda m: m.get('event') == 'stopped', 'the breakpoint after an await')
     thread = stopped['body']['threadId']
@@ -187,6 +190,23 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     local = values(frame)
     check(local.get('shifted') == '5' and local.get('k') == '4', 'the async lambda\'s parameter and local: %s' % local)
     print('PASS: an async lambda: a breakpoint after an await, and its locals')
+    # a function with a lambda in it: the local the lambda uses is its display class's (as C#'s); each statement is
+    # a step, the lambda's making and its call too
+    request('continue', {'threadId': stopped['body']['threadId']})
+    stopped = wait(lambda m: m.get('event') == 'stopped', 'the breakpoint in the function with a lambda')
+    frame = request('stackTrace', {'threadId': stopped['body']['threadId']})['stackFrames'][0]
+    check(frame['line'] == 22, 'stopped in Scaled (main.n:22): %s' % frame)
+    lines = []
+    for _ in range(4):
+        request('next', {'threadId': stopped['body']['threadId']})
+        stopped = wait(lambda m: m.get('event') == 'stopped', 'a step in Scaled')
+        frame = request('stackTrace', {'threadId': stopped['body']['threadId']})['stackFrames'][0]
+        lines.append(frame['line'])
+    check(lines == [23, 24, 25, 26], 'the steps through Scaled, its lambda\'s making and call included: %s' % lines)
+    local = values(frame)
+    check(local.get('factor') == '5' and local.get('doubled') == '10' and local.get('n') == '4',
+          'Scaled\'s locals, the one in its display class too: %s' % local)
+    print('PASS: a function with a lambda in it: its steps, and its locals (one in its display class)')
     request('continue', {'threadId': stopped['body']['threadId']})
     wait(lambda m: m.get('event') in ('exited', 'terminated'), 'the end of the async program')
     try: request('disconnect', {})

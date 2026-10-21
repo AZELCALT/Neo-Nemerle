@@ -3172,8 +3172,24 @@ using Nemerle.Compiler.Utility;
             if (val is TExpr.DefaultValue)
               Walk(body)
             else {
+              def walked = Walk(val);
               def assign =
-                TExpr.Assign (InternalType.Void, LocalRef (decl), Walk(val));
+                TExpr.Assign (InternalType.Void, LocalRef (decl), walked);
+              // (a state machine's local, written in its code, whose value has no sequence point of its own, as a
+              // function value's call or a lambda's making: the definition is a step, as a local's is elsewhere)
+              def has_sequence_point (e : TExpr) : bool
+              {
+                mutable found = false;
+                _ = e.Walk (fun (x) { | TExpr.DebugInfo => found = true; x | _ => null });
+                found
+              }
+              def assign =
+                if (Manager.Options.EmitDebug && struct_machine != null && decl.Location.IsSourceAvailable && !decl.Location.IsGenerated
+                    && !has_sequence_point (walked))
+                  TExpr.DebugInfo (if (val.Location.IsSourceAvailable && !val.Location.IsGenerated && val.Location.FileIndex == decl.Location.FileIndex)
+                                     decl.Location + val.Location else decl.Location,
+                                   InternalType.Void, assign, null)
+                else assign;
               TExpr.Sequence (assign, Walk(body))
             }
 

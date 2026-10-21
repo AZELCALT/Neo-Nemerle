@@ -1060,7 +1060,8 @@ using Nemerle.Compiler.Utility;
           def stable = match (base_object)
             {
               | TExpr.This => true
-              | TExpr.FieldMember(TExpr.This, f) => f.Name.StartsWith("_N_closureOf_")
+              // (or a state machine's display class, made with it)
+              | TExpr.FieldMember(TExpr.This, f) => f.Name.StartsWith("_N_closureOf_") || f.Name == "<>8__locals"
               | _ => false
             };
           // (in a debug build, a value with a sequence point in it too: the runtime stops at a sequence point only where
