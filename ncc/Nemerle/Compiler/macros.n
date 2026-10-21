@@ -1235,7 +1235,8 @@ public module Macros
 
             | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => expr
 
-            | PExpr.Lambda => Nemerle.Compiler.UtilMacros.ice ("Bad construction of PExpr.Lambda")
+            // (a lambda with a stated return type: its body)
+            | PExpr.Lambda (decl) => PExpr.Lambda (expr.Location, Function_decl (decl.Location, decl.header, traverse (decl.body)))
           };
         call (in_pattern, true, recursed)
       })
@@ -1514,7 +1515,7 @@ public module Macros
                                                     PExpr.Quoted (inner)
 
                                                 | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => expr
-                                                | PExpr.Lambda => Nemerle.Compiler.UtilMacros.ice ("Bad construction of PExpr.Lambda")
+                                                | PExpr.Lambda (decl) => PExpr.Lambda (expr.Location, Function_decl (decl.Location, decl.header, traverse (decl.body)))
                                                 | PExpr.Base(ty) => PExpr.Base(ty.Map(traverse))
                                               }
                                if (context.IsBreaked) recursed else call(context, true, recursed);

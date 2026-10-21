@@ -164,6 +164,7 @@ using Nemerle.Compiler.Utility;
       this (parent, meth.GetHeader ());
       local_function_type = meth.DeclaringType;
       current_method = meth.GetHeader ();
+      enumerator_parents = null;   // (another method: the parent's enumerator is not its this)
     }
 
     this (parent : Typer3, fn : TFunHeader)
@@ -174,6 +175,7 @@ using Nemerle.Compiler.Utility;
       if (parent != null) {
         local_function_type = parent.local_function_type;
         current_method = parent.current_method;
+        enumerator_parents = parent.enumerator_parents;   // (a function inlined in the same method: a loop in MoveNext)
 
         if (fn.TypeParameters.IsEmpty)
           accumulated_typarms = parent.accumulated_typarms;

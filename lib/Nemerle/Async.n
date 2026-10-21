@@ -66,6 +66,23 @@ public sealed class AsyncDriver[T]
   }
 }
 
+/// An async lambda run where a `void' delegate is wanted (an event handler, as C#'s `async void'): nothing waits for its
+/// task, so what it ends with is thrown on the thread pool, where it ends the process unless handled.
+public module AsyncVoid
+{
+  public Forget(task : Task) : void
+  {
+    _ = task.ContinueWith(fun (t : Task) : void
+      {
+        when (t.IsFaulted)
+        {
+          def error = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(t.Exception.InnerException);
+          System.Threading.ThreadPool.QueueUserWorkItem(_ => error.Throw())
+        }
+      }, TaskContinuationOptions.ExecuteSynchronously)
+  }
+}
+
 #if !NETSTANDARD2_0   // (async streams are .NET Core 3.0's and later: .NET Standard 2.0 has no IAsyncEnumerable)
 /// Runs the body of an async function that returns an IAsyncEnumerable[T] (an async stream): the body is an iterator,
 /// as an async function's is, that yields the awaiters it waits for and, for each item it produces (`yield x'),

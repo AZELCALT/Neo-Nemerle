@@ -689,8 +689,65 @@ Console.WriteLine(log.Rev());
 [1, -1]
 [numbers done, stream broke]''':
         raise RuntimeError('async streams: got\n' + got)
+    source('async/iterators.n', '''using System;
+using System.Collections.Generic;
+using System.Linq;
+
+// an iterator local function and an iterator lambda, in an ordinary function
+Evens(limit : int) : list[int]
+{
+  def evens(from : int) : IEnumerable[int]
+  {
+    for (mutable i = from; i <= limit; i += 2) yield i   // `limit' is the enclosing function's
+  }
+  def squares = fun (xs : list[int]) : IEnumerable[int] { foreach (x in xs) yield x * x };
+  $[x | x in evens(0).Concat(squares([3, 4]))]
+}
+
+// lazily: nothing runs until it is enumerated, and each enumeration runs afresh
+mutable started = 0;
+def counter = fun () : IEnumerable[int] { started++; yield 1; yield 2 };
+def c = counter();
+Console.WriteLine($"$started $(c.Count()) $(c.Count()) $started");
+Console.WriteLine(Evens(6));
+// an iterator in an iterator method
+Pairs() : IEnumerable[string]
+{
+  def inner(n : int) : IEnumerable[string] { yield $"$n-a"; yield $"$n-b" }
+  foreach (n in [1, 2]) foreach (s in inner(n)) yield s
+}
+Console.WriteLine($[s | s in Pairs()])
+''')
+    run([runtime, compiler, work / 'async/iterators.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-iterators.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-iterators.runtimeconfig.json')
+    got = run([runtime, work / 'async-iterators.exe']).stdout.strip()
+    if got != '''0 2 2 2
+[0, 2, 4, 6, 9, 16]
+[1-a, 1-b, 2-a, 2-b]''':
+        raise RuntimeError('async iterators: got\n' + got)
+    source('async/handlers.n', '''using System;
+using System.Threading.Tasks;
+class Button { public event Click : EventHandler; public Press() : void { Click(this, EventArgs.Empty) } }
+def b = Button();
+mutable clicked = 0;
+b.Click += async (_, _) => { await Task.Delay(1); clicked++ };
+def act : Action = async () => { await Task.Delay(1); clicked++ };
+b.Press(); act();
+System.Threading.Thread.Sleep(300);
+Console.WriteLine(clicked);
+def viaRun = Task.Run(async () => { await Task.Delay(1); clicked += 10 });
+viaRun.Wait();
+Console.WriteLine(clicked)
+''')
+    run([runtime, compiler, work / 'async/handlers.n', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-handlers.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-handlers.runtimeconfig.json')
+    got = run([runtime, work / 'async-handlers.exe']).stdout.strip()
+    if got != '''2
+12''':
+        raise RuntimeError('async handlers: got\n' + got)
     print('PASS: async functions and await (in loops, expressions, try/catch/finally and handlers, ValueTask, void, '
-          'cancellation), async lambdas and local functions, await foreach and await using, async streams, top-level '
+          'cancellation), async lambdas and local functions (async void ones as event handlers), iterator lambdas, await '
+          'foreach and await using, async streams, top-level '
           'await and async files in import order; and their rules as errors', flush=True)
 
 # what a macro declares at the top level is the file's state, as if written there: the file's functions see it;

@@ -3366,13 +3366,19 @@ public class TypeBuilder : TypeInfo
      */
     internal CreateEmitDeclarations() : void
     {
-      // nested types are skipped here
+      // nested types are skipped here; a member is declared once: a type made while its declaring type's code is typed
+      // before the declarations are emitted (a closure or state machine of a file's top-level code, typed first) is
+      // declared by its Compile and again with the others
+      when (declared_members == null) declared_members = System.Collections.Generic.HashSet();
       foreach (m is MemberBuilder in member_list)
-      {
-        // Message.Debug ($ "emit $m from $type_builder");
-        m.CreateEmitBuilder (type_builder);
-      }
+        when (declared_members.Add (m))
+        {
+          // Message.Debug ($ "emit $m from $type_builder");
+          m.CreateEmitBuilder (type_builder);
+        }
     }
+
+    mutable declared_members : System.Collections.Generic.HashSet [MemberBuilder];
 
     /**
      * Reads the inheritance list of a class and retrieves the base

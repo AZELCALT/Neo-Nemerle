@@ -133,3 +133,28 @@ WriteLine(Greet("ada", punctuation = "?"))
 Hello, ada!
 Hello, ada?
 ```
+
+## Iterators
+
+A function that returns `IEnumerable[T]` (or `IEnumerator[T]`) and has `yield` in it is an *iterator*: each `yield x`
+gives the next item, and the code runs only as the items are asked for, from the start for each enumeration. A lambda
+or local function is one the same way, when it states that type.
+
+```nemerle
+using System.Collections.Generic;
+using System.Console;
+
+Squares(limit : int) : IEnumerable[int]
+{
+  for (mutable i = 1; i <= limit; i++) yield i * i
+}
+
+def evens = fun (limit : int) : IEnumerable[int] { for (mutable i = 0; i <= limit; i += 2) yield i };
+WriteLine($[x | x in Squares(4)]);
+WriteLine($[x | x in evens(6)])
+```
+
+```text
+[1, 4, 9, 16]
+[0, 2, 4, 6]
+```

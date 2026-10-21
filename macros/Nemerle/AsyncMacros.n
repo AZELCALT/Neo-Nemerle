@@ -405,7 +405,6 @@ Finished(returned : PExpr) : PExpr -> PExpr
   {
     | PExpr.Indexer(task, [t]) when last(task) == "ValueTask" => run => <[ System.Threading.Tasks.ValueTask.[$t]($run) ]>
     | _ when last(returned) == "ValueTask" => run => <[ System.Threading.Tasks.ValueTask($run) ]>
-    | PExpr.Void => Message.Error(returned.Location, "an async local function returns Task, Task[T], ValueTask or ValueTask[T]: its caller waits for that"); run => run
     | _ => run => run
   }
 }
@@ -414,11 +413,14 @@ Finished(returned : PExpr) : PExpr -> PExpr
 /// machine) run by an AsyncDriver; the lambda returns its Task (a Task[T] when the body has a value).
 macro __async_lambda(e)
 {
-  def lower(body : PExpr, finish : PExpr -> PExpr) : PExpr
+  def typer = Macros.ImplicitCTX();
+  def lower(body : PExpr, finish : PExpr -> PExpr, forgotten : bool) : PExpr
   {
     def driver = Macros.NewSymbol("driver");
     def iterator = Macros.NewSymbol("async_local");   // _N_async_local_<n>: typed as an iterator
     def body = Spill(body);
+    def start = if (forgotten) <[ $(driver : name).RunAndForget($(iterator : name)()) ]>
+                else <[ Nemerle.AsyncMacros.__async_task($(driver : name), $(iterator : name)()) ]>;
     Nemerle.Compiler.UtilMacros.locate(body.Location, <[
       def $(driver : name) = Nemerle.Async.AsyncDriver();
       def $(iterator : name)() : System.Collections.Generic.IEnumerable[object]
@@ -426,16 +428,24 @@ macro __async_lambda(e)
         when ($(driver : name) == null) yield null;
         Nemerle.AsyncMacros.__async_result($(driver : name), $body)
       }
-      $(finish(<[ Nemerle.AsyncMacros.__async_task($(driver : name), $(driver : name).Run($(iterator : name)())) ]>))
+      $(finish(start))
     ]>)
+  }
+  def lambda(forgotten : bool) : PExpr
+  {
+    match (e)
+    {
+      | PExpr.Lambda(decl) => PExpr.Lambda(e.Location, Function_decl(decl.Location, decl.header, lower(decl.body, run => run, forgotten)))
+      | PExpr.Call(PExpr.Ref(arrow) as f, [parameters, body]) when arrow.Id == "=>" => PExpr.Call(e.Location, f, [parameters, lower(body, run => run, forgotten)])
+      | _ => null
+    }
   }
   match (e)
   {
-    | PExpr.Lambda(decl) => decl.body = lower(decl.body, run => run); e
-    | PExpr.Call(PExpr.Ref(arrow) as f, [parameters, body]) when arrow.Id == "=>" => PExpr.Call(e.Location, f, [parameters, lower(body, run => run)])
     | PExpr.DefFunctions(functions) =>
-      foreach (f in functions) f.body = lower(f.body, Finished(f.header.ReturnType));
+      foreach (f in functions) f.body = lower(f.body, Finished(f.header.ReturnType), f.header.ReturnType is PExpr.Void);
       e
+    | _ when lambda(false) != null => lambda(false)
     | _ =>
       Message.Error(e.Location, "`async' makes a lambda (`async fun', `async (x) => ...') or a local function (`async def') async");
       e
@@ -466,14 +476,15 @@ macro __async_result(driver, body)
     <[ def value = $(typed : typed); $driver.Result = value ]>
 }
 
-/// An async lambda's task: a Task when its body has no value (__async_result, typed before this), else its Task[T].
-macro __async_task(driver, run)
+/// An async lambda's task: a Task[T] when its body has a value, else a Task (which a `void' delegate, an event
+/// handler, takes as C#'s `async void': see Typer.NonLiteralCast).
+macro __async_task(driver, start)
 {
   def manager = Macros.ImplicitCTX().Manager;
   match (driver)
   {
-    | PExpr.Ref(name) when manager.UserData.Contains("Nemerle.AsyncMacros.void:" + name.Id) => <[ ($run : System.Threading.Tasks.Task) ]>
-    | _ => run
+    | PExpr.Ref(name) when manager.UserData.Contains("Nemerle.AsyncMacros.void:" + name.Id) => <[ ($driver.Run($start) : System.Threading.Tasks.Task) ]>
+    | _ => <[ $driver.Run($start) ]>
   }
 }
 

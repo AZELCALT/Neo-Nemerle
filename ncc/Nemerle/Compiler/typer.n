@@ -1466,6 +1466,70 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     /// Returns null if has no cast
     NonLiteralCast(expr : TExpr, target : TypeVar, isAllNestedDelayedTypingResolved : out bool, speculative : bool) : TExpr
     {
+      // an async lambda (a function returning a Task) where a `void' delegate is wanted (an event handler): the delegate
+      // starts it and leaves its Task, as C#'s `async void' does (what it throws comes out on the thread pool)
+      def returnsTask(t : TypeVar) : bool
+      {
+        match (t.Hint)
+        {
+          | Some(FixedType.Fun(_, to)) =>
+            match (to.Hint) { | Some(FixedType.Class(tc, [])) => tc.FullName == "System.Threading.Tasks.Task" | _ => false }
+          | _ => false
+        }
+      }
+      // an async lambda: its body starts the state machine the async macros make (_N_async_local_<n>)
+      def startsStateMachine(e : TExpr) : bool
+      {
+        | TExpr.DebugInfo(e, _) | TExpr.MacroEnvelope(_, _, e, _) | TExpr.DefValIn(_, _, e) | TExpr.Block(_, e) => startsStateMachine(e)
+        | TExpr.Sequence(a, b) => startsStateMachine(a) || startsStateMachine(b)
+        | TExpr.DefFunctionsIn(functions, rest) => functions.Exists(f => f.Name.StartsWith("_N_async_local_")) || startsStateMachine(rest)
+        | _ => false
+      }
+      def isAsyncLambda(e : TExpr) : bool
+      {
+        | TExpr.DebugInfo(e, _) | TExpr.MacroEnvelope(_, _, e, _) => isAsyncLambda(e)
+        | TExpr.DefFunctionsIn([lambda], _) =>
+          match (lambda.body)
+          {
+            | FunBody.Typed(body) => startsStateMachine(body)
+            // (not typed yet: its code, as the async macros made it)
+            | FunBody.Parsed(body) =>
+              mutable found = false;
+              _ = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+                {
+                  match (node)
+                  {
+                    | PExpr.DefFunctions(functions) when !after && functions.Exists(f => f.header.PName.Id.StartsWith("_N_async_local_")) => found = true
+                    | PExpr.Call(PExpr.Member(_, name), [_]) when !after && name.ToString() == "__async_lambda" => found = true
+                    | _ => ()
+                  }
+                  node
+                });
+              found
+            | _ => false
+          }
+        | _ => false
+      }
+      def adapted =
+        if (IsFunctional(expr) && returnsTask(expr.Type) && isAsyncLambda(expr))
+          match (TryExtractFunType(target.Hint))
+          {
+            | (del, null, args, ret) when del != null && ret.Hint is Some(FixedType.Void)
+                                          && !expr.Type.TryRequire(FixedType.Fun(TypeVar.FromList(args), args.Length, ret)) =>
+              def names = args.Map(_ => Macros.NewSymbol("argument"));
+              def parameters = names.Map(n => <[ parameter: $(n : name) ]>);
+              def arguments = names.Map(n => <[ $(n : name) ]>);
+              Manager.AsyncVoidAdaptations++;
+              TypeExpr(<[ fun (..$parameters) : void { Nemerle.Async.AsyncVoid.Forget($(expr : typed)(..$arguments)) } ]>)
+            | _ => null
+          }
+        else null;
+      if (adapted != null) NonLiteralCastCore(adapted, target, out isAllNestedDelayedTypingResolved, speculative)
+      else NonLiteralCastCore(expr, target, out isAllNestedDelayedTypingResolved, speculative)
+    }
+
+    NonLiteralCastCore(expr : TExpr, target : TypeVar, isAllNestedDelayedTypingResolved : out bool, speculative : bool) : TExpr
+    {
       isAllNestedDelayedTypingResolved          = false;
       mutable isResolveNestedDelayedTypingTried = false;
       def oldIsSpeculativeTyping = Manager.IsSpeculativeTyping;
@@ -3007,12 +3071,51 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     }
 
 
+    /// Whether a function's stated return type is an iterator's: IEnumerable[T], IEnumerator[T] or their non-generic forms.
+    static StatesIterator (ty : PExpr) : bool
+    {
+      match (ty)
+      {
+        | PExpr.Indexer (t, [_]) => StatesIterator (t)
+        | PExpr.Ref (n) => n.Id == "IEnumerable" || n.Id == "IEnumerator"
+        | PExpr.Member (_, n) => n.ToString () == "IEnumerable" || n.ToString () == "IEnumerator"
+        | _ => false
+      }
+    }
+
+    /// Whether `body' yields itself (not in a lambda or local function in it).
+    static HasOwnYield (body : PExpr) : bool
+    {
+      mutable found = false;
+      mutable depth = 0;
+      _ = Macros.TraverseExpr (None (), body, false, (_, after, node) =>
+        {
+          match (node)
+          {
+            | PExpr.Lambda | PExpr.DefFunctions => depth += if (after) -1 else 1
+            | PExpr.MacroCall (name, _, _) when !after && depth == 0 && name.Id == "yield" => found = true
+            | _ => ()
+          }
+          node
+        });
+      found
+    }
+
     TypeLocalFunction (functions : list [PT.Function_decl]) : TExpr
     {
       mutable headers = [];
 
       foreach (fn in functions)
       {
+        // an iterator lambda or local function (it says it returns IEnumerable[T] or IEnumerator[T], and yields): its
+        // body is a local iterator's, which it returns
+        when (StatesIterator (fn.header.ReturnType) && HasOwnYield (fn.body)
+              && !fn.header.PName.Id.StartsWith ("_N_iterator_local_") && !fn.header.PName.Id.StartsWith ("_N_async_local_"))
+        {
+          def iterator = Macros.NewSymbol ("iterator_local");   // _N_iterator_local_<n>
+          fn.body = Nemerle.Compiler.UtilMacros.locate (fn.body.Location,
+            <[ def $(iterator : name) () : $(fn.header.ReturnType) { $(fn.body) } $(iterator : name) () ]>);
+        }
         def container = tenv.AddTyparms(current_type.GlobalEnv, fn.header.TypeParameters, current_type, check_parms = true);
         container.SetConstraints();
         def tenv = container.TypeVarEnv;
@@ -3068,11 +3171,20 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         header.decl = local;
         // a local function the async macros make (an async lambda's or local function's body) is an iterator, as an
         // iterator method is: its own state machine, never inlined
-        if (name_obj.Id.StartsWith ("_N_async_local_"))
+        if (name_obj.Id.StartsWith ("_N_async_local_") || name_obj.Id.StartsWith ("_N_iterator_local_"))
         {
-          header.yield_type = InternalType.Object;
+          def yield_type =
+            if (name_obj.Id.StartsWith ("_N_async_local_")) InternalType.Object
+            else match (header.ReturnType.Fix ())
+            {
+              | Class (tc, [t]) when tc.Equals (InternalType.Generic_IEnumerable_tc) || tc.Equals (InternalType.Generic_IEnumerator_tc) => t
+              | _ => InternalType.Object
+            };
+          header.yield_type = yield_type;
           header.cannot_inline = true;
-          header.body = FunBody.Parsed (Nemerle.Compiler.UtilMacros.locate (fn.body.Location, WrapYieldingFunction (fn.body, InternalType.Object)));
+          // (in the global colour, as `yield' refers to the state machine's names: this may run inside a macro's expansion)
+          def wrapped = Manager.MacroColors.InGlobalColor (fun () { WrapYieldingFunction (fn.body, yield_type) });
+          header.body = FunBody.Parsed (Nemerle.Compiler.UtilMacros.locate (fn.body.Location, wrapped));
         }
         else
           header.body = FunBody.Parsed (fn.body);
@@ -7110,6 +7222,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         else
           Parm(overload.ExtensionMethodObject) :: parms;
       def ct = CallTyper(this, overload.Compile(), parms2, expected);
+      def adaptations = Manager.AsyncVoidAdaptations;
 
       ct.overload_possibility = overload;
       ct.is_final = final;
@@ -7127,6 +7240,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           {
             overload.PermutationArray = ct.GetPermutationArray();
             overload.UsedDefaultParms = ct.used_default_parms;
+            overload.UsedAsyncVoid = Manager.AsyncVoidAdaptations != adaptations;
           }
 
           ct.result
@@ -7437,6 +7551,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           // (as in C#: a candidate that needs no default arguments filled in beats one that does, so IndexOf(span,
           // value) wins over IndexOf(span, value, comparer = null))
           def res6 = res5.FilterIfExists(o => !o.UsedDefaultParms);
+          // (as in C#: Task.Run(async () => ...) takes the lambda as a Func[Task], not as an Action)
+          def res6 = res6.FilterIfExists(o => !o.UsedAsyncVoid);
 
           // Message.Debug ($"gbo: $parms ---> $res6");
 

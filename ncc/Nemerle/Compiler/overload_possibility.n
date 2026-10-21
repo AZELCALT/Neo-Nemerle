@@ -63,6 +63,9 @@ public class OverloadPossibility : TypedBase, System.IEquatable[OverloadPossibil
   public mutable ExtensionMethodObject : TExpr;
   public mutable IsConstantObject : bool;
   public mutable UsedDefaultParms : bool;
+  /// Whether an async lambda among the arguments was taken as a `void' delegate (Typer.NonLiteralCast): a candidate
+  /// that takes it as returning its Task is better, as in C#.
+  public mutable UsedAsyncVoid : bool;
   public mutable UsedLastTime : bool;
 
   mutable permutation_array : array [int];
@@ -245,6 +248,7 @@ public class OverloadPossibility : TypedBase, System.IEquatable[OverloadPossibil
     permutation_array = null;
     formal_types = null;
     UsedDefaultParms = false;
+    UsedAsyncVoid = false;
     did_mambo_jumbo = false;
   }
 

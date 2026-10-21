@@ -241,6 +241,8 @@ using Nemerle.Compiler.XmlDump;
     /// While above zero, messages are not reported, only errors counted (a pass that only learns types).
     public mutable QuietMessages : int;
     public mutable QuietErrors : int;
+    /// How many async lambdas were taken as `void' delegates (Typer.NonLiteralCast), for overload resolution.
+    public mutable AsyncVoidAdaptations : int;
     /// Per top-level value (`module.name`): the type of each of its bindings, learned by the inference pass.
     public StateTypes : System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[int, Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
     /// The target's reference assemblies, when the target is not the compiler's own .NET: what the typed code uses
