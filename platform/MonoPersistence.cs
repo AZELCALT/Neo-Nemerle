@@ -26,7 +26,7 @@ namespace Nemerle.Platform
 #endif
         private void CompleteSavedMetadataCore(string path, object signingKey, byte[] signingKeyBlob)
         {
-            bool needed = TargetReferenceDirectory != null || signingKeyBlob != null || savedAttributes.Count != 0 || methodAliases.Count != 0 || overrideDefinitions.Exists(item => PersistedOutput || item.Declaration is MethodBuilder);
+            bool needed = TargetReferenceDirectory != null || signingKeyBlob != null || savedAttributes.Count != 0 || methodAliases.Count != 0 || guardedState.Count != 0 || overrideDefinitions.Exists(item => PersistedOutput || item.Declaration is MethodBuilder);
             if (!needed) return;
             using (var resolver = new DefaultAssemblyResolver())
             {
@@ -109,6 +109,7 @@ namespace Nemerle.Platform
                     }
                     method.Name = alias.OriginalName;
                 }
+                GuardState(assembly.MainModule);
                 BindTargetContracts(assembly.MainModule);
                 var temporary = path + ".metadata-fix.tmp";
                 try

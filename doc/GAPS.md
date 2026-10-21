@@ -12,8 +12,6 @@ unless it says so. These edges will be closed, which can change what happens the
   boxes are shared as they are.
 ## Async
 
-- **An async file's state read directly (a public field, by reflection or from C#) is not waited for.** Its functions
-  are: one called before its top-level code has ended waits for it (an async one awaits it).
 
 ## Targets
 

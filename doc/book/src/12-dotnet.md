@@ -231,7 +231,8 @@ A program's top-level code can `await` as well, and so can any file's: a file wh
 imports it, in `using` order, and the importing file waits for it there; its state is ready when the code after the
 `using` runs. A function of the file called before that (from a file that does not import it, or from C#) waits for
 its top-level code to end: an async one awaits it, another blocks until it has, as a type's members wait for its
-static constructor. The file's own code does not wait for itself.
+static constructor; so does its public state, which other code (C# too) reaches through a property, a field's read
+being one instruction that could wait for nothing. The file's own code does not wait for itself.
 
 ```nemerle
 // file: lib/settings.n

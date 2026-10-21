@@ -822,6 +822,18 @@ using Nemerle.Compiler.Utility;
           when (move_next.GetMethodInfo() != null)
             _assembly_session.AddStateMachine(move_next.GetMethodInfo(), if (kickoff == null) null else kickoff.GetMethodInfo(),
               if (Manager.AsyncStepping.ContainsKey(move_next)) Manager.AsyncStepping[move_next].ToArray() else null);
+        // an async file's public state: a property in the saved assembly, whose accessors wait for the file's
+        // top-level code (a field's read is one instruction, which can wait for nothing)
+        foreach (name in Manager.FileModuleRegistry.GuardedModules)
+          match (Manager.NameTree.LookupInternalType (NList.FromArray (name.Split ('.'))))
+          {
+            | type is TypeBuilder =>
+              foreach (field is FieldBuilder in type.GetFields (System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static
+                                                                | System.Reflection.BindingFlags.DeclaredOnly))
+                when (!field.Name.StartsWith ("_N_") && !field.IsLiteral)
+                  ClrEmitter.GuardStateField (type.FullName, field.Name, "_N_state_wait", field.IsMutable)
+            | _ => ()
+          }
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
         // shared scopes go next to the grammars, as their storage layout (slot names and types; the values live in

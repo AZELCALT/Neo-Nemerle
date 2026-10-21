@@ -119,6 +119,9 @@ public sealed class FileModuleRegistry
   public Code : Hashtable[string, TopLevelCode] = Hashtable();
   /// The modules whose top-level code is async (it waits, or runs an async module's first).
   public Async : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+  /// The async modules whose public state the saved assembly reaches through properties that wait for their
+  /// top-level code (TypesManager.SaveAssembly, ClrEmission.GuardStateField).
+  public GuardedModules : System.Collections.Generic.List[string] = System.Collections.Generic.List();
   public External : Hashtable[string, TopLevelRecord] = Hashtable();
 
   /// The top-level state of the modules (`module.name`), and the files a script imports.
@@ -331,6 +334,12 @@ public sealed class FileModuleRegistry
         define(<[ decl: private static mutable _N_initializing : System.Threading.AsyncLocal[bool]; ]>);
         define(<[ decl: private static mutable _N_state_ready : bool; ]>);
         define(<[ decl: public static _N_top_level_ready() : $task { _N_top_level_run.Value } ]>);
+        // (what the properties of its public state call first)
+        define(<[ decl: private static _N_state_wait() : void
+                  {
+                    unless (_N_state_ready || _N_initializing.Value) _N_top_level_ready().GetAwaiter().GetResult()
+                  } ]>);
+        GuardedModules.Add(name);
         code.Runner.body = FunBody.Parsed(Nemerle.Compiler.UtilMacros.locate(code.Location,
           <[ _N_initializing = System.Threading.AsyncLocal(); _N_top_level_run = System.Lazy(() => _N_top_level()) ]>));
         // a function of the file called before its top-level code has ended (by reflection, from C#, from a file that

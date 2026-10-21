@@ -889,6 +889,11 @@ throw System.InvalidOperationException("broken failed");
 public Get() : int { 1 }
 ''')
     source('early/main.n', '''using System;
+// its public state is a property that waits too (a field's read could not), as C# and reflection see it
+Console.WriteLine(config.settings);
+def property = typeof(config).GetProperty("settings");
+def noField = object.ReferenceEquals(typeof(config).GetField("settings"), null);
+Console.WriteLine($"$(property != null) $(property.GetValue(null)) $noField");
 Console.WriteLine(config.Get());
 Console.WriteLine(config.GetAsync().Result);
 def fails() { try { _ = broken.Get(); "no" } catch { | e => e.Message } }
@@ -902,6 +907,8 @@ Console.WriteLine(made().Result)
     shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'early.runtimeconfig.json')
     got = run([runtime, work / 'early.exe']).stdout.strip()
     if got != '''config sees loaded
+loaded
+True loaded True
 loaded
 loaded!
 broken failed broken failed
