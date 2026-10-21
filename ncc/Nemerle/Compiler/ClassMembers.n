@@ -582,6 +582,22 @@ public class FieldBuilder : MemberBuilder, IField
       try
       {
         def typed = typer.TypeExpr(manager.ModuleBindings[key]);
+        // (an operator with overloads, as `field == null', is a delayed typing until its operands' types settle: it
+        // is resolved before the types are fixed, else its open type is fixed as object, which the overload it
+        // resolves to later does not fit)
+        mutable progress = true;
+        while (progress)
+        {
+          progress = false;
+          ExprWalker().Walk(typed, info =>
+          {
+            match (info.Node)
+            {
+              | TExpr.Delayed(dt) when !dt.IsResolved => dt.Resolve(); when (dt.IsResolved) progress = true
+              | _ => ()
+            }
+          });
+        }
         ty = typed.Type.DeepFix();
         ExprWalker().Walk(typed, info =>
         {

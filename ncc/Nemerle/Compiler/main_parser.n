@@ -559,6 +559,26 @@ using Nemerle.Compiler.Utility;
                   // in force at this point
                   def k = if (depth > 0) bindings[n.Id] else if (current.ContainsKey(n.Id)) current[n.Id] else 1;
                   <[ $(stateName(n.Id, k) : dyn) ]>
+                // a `$"..."' string names the values in its text, which its macro reads later: they are this copy's
+                // locals there too (not the module's fields, whose types the copy is finding)
+                // (the parser writes it Nemerle.IOMacros.sprint("..."); print("...") reads names the same way)
+                | PExpr.Call(PExpr.Member(_, op), [PExpr.Literal(Literal.String(text))])
+                  when after && !inPattern && (op.ToString() == "sprint" || op.ToString() == "print") =>
+                  def mentions(name : string) : bool
+                  {
+                    System.Text.RegularExpressions.Regex.IsMatch(text, "(?<![A-Za-z0-9_'])" + System.Text.RegularExpressions.Regex.Escape(name) + "(?![A-Za-z0-9_'])")
+                  }
+                  def named = $[name | name in bindings.Keys, mentions(name)];
+                  if (named.IsEmpty) node
+                  else
+                  {
+                    def aliases = named.Map(name =>
+                      {
+                        def k = if (depth > 0) bindings[name] else if (current.ContainsKey(name)) current[name] else 1;
+                        <[ def $(name : dyn) = $(stateName(name, k) : dyn) ]>
+                      });
+                    PExpr.Sequence(node.Location, aliases + [node])
+                  }
                 | _ => node
               }
             })

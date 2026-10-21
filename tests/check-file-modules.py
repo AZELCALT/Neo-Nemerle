@@ -914,6 +914,28 @@ loaded!
 broken failed broken failed
 7''':
         raise RuntimeError('async files called early: got\n' + got)
+    # top-level state: the inference pass sees the values a `$"..."' string names (they are its locals there too),
+    # and an initializer typed on its own (the pass could not settle it) has its overloads resolved before its types
+    # are fixed (`x == null' with == overloaded)
+    source('dollar/main.n', '''using System;
+using System.Reflection;
+mutable m = null;
+def property = typeof(string).GetProperty("Length");
+def noField = typeof(string).GetField("x") == null;
+Console.WriteLine($"$m $(property.Name) $noField");
+m = "set";
+def field = typeof(main).GetField("m", BindingFlags.NonPublic | BindingFlags.Static);
+Console.WriteLine(field.FieldType.Name)
+''')
+    source('dollar/other.n', '''public One() : int { 1 }
+''')
+    run([runtime, compiler, work / 'dollar/main.n', work / 'dollar/other.n', '-source-root:' + str(work / 'dollar'),
+         '-out:' + str(work / 'dollar.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'dollar.runtimeconfig.json')
+    got = run([runtime, work / 'dollar.exe']).stdout.strip()
+    if got != '''Length True
+String''':
+        raise RuntimeError('top-level state named in a $ string: got\n' + got)
     source('async/iterators.n', '''using System;
 using System.Collections.Generic;
 using System.Linq;
