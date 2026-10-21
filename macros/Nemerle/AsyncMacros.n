@@ -619,7 +619,8 @@ macro __await(e)
     };
   def driver = if (manager.UserData.Contains("Nemerle.AsyncMacros.driver:" + nearest)) manager.UserData["Nemerle.AsyncMacros.driver:" + nearest] :> Name else null;
   def structMode = driver == null && manager.UserData.Contains("Nemerle.AsyncMacros.struct:" + nearest);
-  if (method == "_N_state_types" || method == "_N_state_flow")
+  // (a copy of top-level code that only gives the file's state its types, never run; a script binding typed for its type)
+  if (method == "_N_state_types" || method == "_N_state_flow" || manager.UserData.Contains("Nemerle.AsyncMacros.blocking"))
     // a copy of top-level code that only gives the file's state its types (never run)
     <[ ($e).GetAwaiter().GetResult() ]>
   else if (driver == null && !structMode)
@@ -689,6 +690,41 @@ macro __async_lambda(e)
                             else <[ def $(iterator : name)(..$parameters) : $declared { $body } ]>;
     Nemerle.Compiler.UtilMacros.locate(body.Location, <[ $iterator_function; $start ]>)
   }
+  // a local async stream (`async def f(...) : IAsyncEnumerable[T]'): its body is an async stream's state machine, as an
+  // async stream method's (a class that is the stream, see AsyncFunction), made by its function, _N_async_local_<n>
+  def lowerStream(f : Function_decl) : PExpr
+  {
+    def iterator = Macros.NewSymbol("async_local");
+    def manager = Macros.Manager();
+    manager.UserData["Nemerle.AsyncMacros.struct:" + iterator.Id] = true;   // (its awaits are the machine's)
+    manager.UserData["Nemerle.AsyncMacros.stream:" + iterator.Id] = true;
+    def generated = f.body.Location.AsGenerated();
+    // (its parameters are the machine function's, see lower: none when one is a pattern, the body then uses them from
+    // around it)
+    def named = !Named(f.header.Parameters).IsEmpty;
+    def origin = Macros.NewSymbol("cancel");
+    def cancels(p : PParameter) { named && p.modifiers.custom_attrs.Exists(a => a.ToString().Contains("EnumeratorCancellation")) }
+    mutable tokens = [];
+    foreach (p when cancels(p) in f.header.Parameters)
+    {
+      manager.UserData["Nemerle.AsyncMacros.cancel:" + iterator.Id] = origin.Id;
+      tokens ::= Nemerle.Compiler.UtilMacros.locate(generated, <[ def $(p.PName : name) = Nemerle.Async.Machine.Token($(origin : name)) ]>);
+    }
+    def parameters = if (!named) [] else f.header.Parameters.Map(p =>
+      if (cancels(p)) <[ parameter: $(origin : name) : System.Threading.CancellationToken ]> else <[ parameter: $(p.PName : name) ]>);
+    def arguments = if (!named) [] else f.header.Parameters.Map(p => <[ $(p.PName : name) ]>);
+    def first = Nemerle.Compiler.UtilMacros.locate(generated, <[ when (Nemerle.Async.Machine.Never) yield null ]>);
+    def body = PExpr.Sequence(f.body.Location, first :: tokens.Rev() + [Spill(f.body, true), <[ () ]>]);
+    def returned = f.header.ReturnType;
+    Nemerle.Compiler.UtilMacros.locate(f.body.Location,
+      <[ def $(iterator : name)(..$parameters) : $returned { $body }; $(iterator : name)(..$arguments) ]>)
+  }
+  def stream(returned : PExpr) : bool
+  {
+    | PExpr.Indexer(PExpr.Ref(n), [_]) => n.Id == "IAsyncEnumerable"
+    | PExpr.Indexer(PExpr.Member(_, n), [_]) => n.ToString() == "IAsyncEnumerable"
+    | _ => false
+  }
   def lambda(forgotten : bool) : PExpr
   {
     match (e)
@@ -706,9 +742,11 @@ macro __async_lambda(e)
   }
   match (e)
   {
+    // (new functions: the code may be expanded more than once, as a file's top-level code is, see _N_state_flow)
     | PExpr.DefFunctions(functions) =>
-      foreach (f in functions) f.body = lower(f.body, declared(f.header.ReturnType), f.header.ReturnType is PExpr.Void, Named(f.header.Parameters));
-      e
+      PExpr.DefFunctions(e.Location, functions.Map(f => Function_decl(f.Location, f.header,
+        if (stream(f.header.ReturnType)) lowerStream(f)
+        else lower(f.body, declared(f.header.ReturnType), f.header.ReturnType is PExpr.Void, Named(f.header.Parameters)))))
     | _ =>
       // (made once: making it records its machine, see lower)
       match (lambda(false))

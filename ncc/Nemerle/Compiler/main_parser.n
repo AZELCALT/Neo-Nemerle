@@ -1020,7 +1020,8 @@ using Nemerle.Compiler.Utility;
     {
       match (token)
       {
-        | Token.Keyword("mutable") when !script =>
+        // (`mutable x = ...' is a binding, as in a file's top-level code; `mutable x : T ...' a field of the script)
+        | Token.Keyword("mutable") =>
           match (token.Next) { | Token.Identifier as name => name.Next is Token.Operator(":") | _ => false }
         | Token.Keyword(key) =>
           ["public", "private", "internal", "protected", "static", "mutable", "virtual", "override",
@@ -1160,7 +1161,7 @@ using Nemerle.Compiler.Utility;
               {
                 | ClassMember.Field as field when field.Initializer != null && (field.modifiers.mods & NemerleModifiers.Static) == NemerleModifiers.None =>
                   def target = PExpr.Ref(field.Location, Name.NameInCurrentColor(emitted, field.Location, parser.env));
-                  expressions.Add(<[ $target = $(field.Initializer) ]>);
+                  expressions.Add(<[ _N_skip_write_check($target) = $(field.Initializer) ]>);
                   field.Initializer = null;
                   _ = data.RelocatedInitializers.Add(emitted);
                 | ClassMember.Property as property =>
@@ -1192,6 +1193,17 @@ using Nemerle.Compiler.Utility;
           | PExpr.Tuple(parts) => parts.ForAll(plainNames)
           | _ => false
         }
+        // (the local functions written so far, an `async def' too: a binding's value may call them)
+        def functions() : list[PExpr]
+        {
+          expressions.NToList().Filter(e =>
+            match (e)
+            {
+              | PExpr.DefFunctions => true
+              | PExpr.Call(PExpr.Member(_, name), [PExpr.DefFunctions]) => name.ToString() == "__async_lambda"
+              | _ => false
+            })
+        }
         def binding(pattern : PExpr, value : PExpr, mutableBinding : bool) : void
         {
           mutable ty = <[ _ ]>;
@@ -1207,7 +1219,7 @@ using Nemerle.Compiler.Utility;
               def mods = AttributesAndModifiers(NemerleModifiers.Public |
                 (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
               when (value != null)
-                match (ty) { | <[ _ ]> => data.InferredInitializers[name.Id] = value; | _ => (); }
+                match (ty) { | <[ _ ]> => data.InferredInitializers[name.Id] = value; data.InferenceFunctions[name.Id] = functions(); | _ => (); }
               def initializer = if (data.InferredInitializers.ContainsKey(name.Id))
                 <[ Nemerle.Compiler.__script_binding_value($(name.Id : string)) ]> else value;
               when (initializer != null) initializer.Location = value.Location;
@@ -1227,8 +1239,9 @@ using Nemerle.Compiler.Utility;
                       (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
                     def read = PExpr.Ref(part.Location, name);
                     data.InferredInitializers[name.Id] = <[ { def $pattern = $value; $read } ]>;
+                    data.InferenceFunctions[name.Id] = functions();
                     add([ClassMember.Field(part.Location, Splicable.Name(name), mods, <[ _ ]>, null)], "", true);
-                    assignments.Add(<[ this.$(name.Id : usesite) = $read ]>);
+                    assignments.Add(<[ _N_skip_write_check(this.$(name.Id : usesite)) = $read ]>);
                   | _ => ();
                 }
               }
@@ -1268,7 +1281,12 @@ using Nemerle.Compiler.Utility;
             | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
             | token when IsMemberStart(token, true) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
-            | _ => foreach (expression in parser.parse_expr_sequence(groups)) addExpression(expression);
+            // (`await' waits in a script's top-level code, as in a file's: the script's statements then wait, below)
+            | _ =>
+              def wasAsync = parser.in_async;
+              parser.in_async = true;
+              def parsed = try { parser.parse_expr_sequence(groups) } finally { parser.in_async = wasAsync };
+              foreach (expression in parsed) addExpression(expression);
           }
         }
         finally { groups.Next = next; }
@@ -1342,11 +1360,51 @@ using Nemerle.Compiler.Utility;
       def resultName = data.Prefix + "result";
       def resultField = <[ decl: private mutable $(resultName : usesite) : array[object]; ]>;
       finalMembers.Add(resultField);
+      // statements that wait run in an async method of the script, which its constructor waits for (as a program's
+      // Main waits for its top-level code): the host's Run returns when the script has ended
+      mutable waits = ScriptInitializerMacro.Waits(body);
+      // (a binding's value waits in its initializer, which the statements read through `__script_binding_value')
+      foreach (value in data.InferredInitializers.Values) when (ScriptInitializerMacro.Waits(value)) waits = true;
+      def run =
+        if (!waits) capture
+        else
+        {
+          def topLevel = data.Prefix + "top_level";
+          def location = if (body.Location.FileIndex != 0) body.Location else lex.Location;
+          // (the statements as they are, the last one's value captured: the waits move out of a statement only)
+          // (the bindings' values are written in place, typed there: the async function's waits are taken out of what
+          // its statements are, not of what a macro will expand to, and its code is typed as its own)
+          def inlined(e : PExpr) : PExpr
+          {
+            Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+              match (node)
+              {
+                | PExpr.Call(PExpr.Member(_, name), [PExpr.Literal(Literal.String(binding))])
+                  when after && name.ToString() == "__script_binding_value" && data.InferredInitializers.ContainsKey(binding) =>
+                  data.InferredInitializers[binding]
+                | _ => node
+              })
+          }
+          def statements = expressions.NToList().Map(inlined);
+          def captured = match (statements.Rev())
+            {
+              | last :: before => PExpr.Sequence(location, before.Rev() + [<[ Nemerle.Compiler.__capture_script_result($last) ]>])
+              | [] => capture
+            };
+          // (its `def' values are assigned there, not in the constructor: the compiler's assignments alone may)
+          foreach (field is ClassMember.Field in finalMembers)
+            when ((field.modifiers.mods & (NemerleModifiers.Mutable | NemerleModifiers.Static)) == NemerleModifiers.None)
+              field.modifiers.mods |= NemerleModifiers.CompilerMutable;
+          def method = Nemerle.Compiler.UtilMacros.locate(location,
+            <[ decl: [Nemerle.AsyncMacros.AsyncFunction] private $(topLevel : usesite)() : System.Threading.Tasks.Task { $captured } ]>);
+          finalMembers.Add(method);
+          <[ this.$(topLevel : usesite)().GetAwaiter().GetResult() ]>
+        };
       foreach (member in finalMembers)
         match (member)
         {
           | ClassMember.Function as constructor when constructor.name.GetName().Id == ".ctor" =>
-            constructor.Body = <[ $(constructor.Body); $capture ]>;
+            constructor.Body = <[ $(constructor.Body); $run ]>;
           | _ => ();
         }
       def evaluate = <[ decl: public $(data.Prefix + "evaluate" : usesite)() : array[object] { this.$(resultName : usesite) } ]>;

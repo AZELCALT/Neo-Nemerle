@@ -570,6 +570,26 @@ public class FieldBuilder : MemberBuilder, IField
     Ast.ty = PT.PExpr.TypedType(Ast.Location, t);
   }
 
+  /// An initializer typed on its own, before its types are fixed: an operator with overloads in it (`field == null')
+  /// is a delayed typing until its operands' types settle, resolved here; else its open type is fixed as object, which
+  /// the overload it resolves to later does not fit.
+  static ResolveDelayed(typed : TExpr) : void
+  {
+    mutable progress = true;
+    while (progress)
+    {
+      progress = false;
+      ExprWalker().Walk(typed, info =>
+      {
+        match (info.Node)
+        {
+          | TExpr.Delayed(dt) when !dt.IsResolved => dt.Resolve(); when (dt.IsResolved) progress = true
+          | _ => ()
+        }
+      });
+    }
+  }
+
   internal InferScriptType(typer : Typer) : void
   {
     // a file module's top-level binding: its type is its initializer's
@@ -582,22 +602,7 @@ public class FieldBuilder : MemberBuilder, IField
       try
       {
         def typed = typer.TypeExpr(manager.ModuleBindings[key]);
-        // (an operator with overloads, as `field == null', is a delayed typing until its operands' types settle: it
-        // is resolved before the types are fixed, else its open type is fixed as object, which the overload it
-        // resolves to later does not fit)
-        mutable progress = true;
-        while (progress)
-        {
-          progress = false;
-          ExprWalker().Walk(typed, info =>
-          {
-            match (info.Node)
-            {
-              | TExpr.Delayed(dt) when !dt.IsResolved => dt.Resolve(); when (dt.IsResolved) progress = true
-              | _ => ()
-            }
-          });
-        }
+        ResolveDelayed(typed);
         ty = typed.Type.DeepFix();
         ExprWalker().Walk(typed, info =>
         {
@@ -625,7 +630,46 @@ public class FieldBuilder : MemberBuilder, IField
       scriptInferring = true;
       try
       {
-        def typed = typer.TypeExpr(script.InferredInitializers[Name]);
+        // (an `await' in it waits by blocking here: this typing gives the value's type, and a script that waits types
+        // it again in its async code, see MainParser.ParseScript)
+        def value = script.InferredInitializers[Name];
+        // (the local functions above it that it calls, and those they call)
+        def names(e : PExpr) : SCG.HashSet[string]
+        {
+          def found = SCG.HashSet();
+          _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+            {
+              match (node) { | PExpr.Ref(n) when !after => _ = found.Add(n.Id) | _ => () }
+              node
+            });
+          found
+        }
+        def defined(f : PExpr) : list[string]
+        {
+          | PExpr.DefFunctions(functions) | PExpr.Call(_, [PExpr.DefFunctions(functions)]) => functions.Map(f => f.header.PName.Id)
+          | _ => []
+        }
+        def available = if (script.InferenceFunctions.ContainsKey(Name)) script.InferenceFunctions[Name] else [];
+        def used = names(value);
+        mutable needed = [];
+        mutable grew = true;
+        while (grew)
+        {
+          grew = false;
+          foreach (f when !needed.Contains(f) && defined(f).Exists(used.Contains) in available)
+          {
+            needed ::= f; grew = true;
+            used.UnionWith(names(f))
+          }
+        }
+        def value = match (available.Filter(needed.Contains))
+          {
+            | [] => value
+            | functions => PExpr.Sequence(value.Location, functions + [value])
+          };
+        Manager.UserData["Nemerle.AsyncMacros.blocking"] = true;
+        def typed = try { typer.TypeExpr(value) } finally { Manager.UserData.Remove("Nemerle.AsyncMacros.blocking") };
+        ResolveDelayed(typed);
         ty = typed.Type.DeepFix();
         // Cached initializer trees also enter speculative overload checks.
         // Resolve their expression types before those solver states expire.

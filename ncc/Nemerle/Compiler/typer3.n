@@ -999,18 +999,15 @@ using Nemerle.Compiler.Utility;
         <[ decl: mutable $("<>w__disposeMode" : dyn) : bool; ]>,
         <[ decl: mutable $("<>w__started" : dyn) : bool; ]>,
         <[ decl: mutable $("<>w__done" : dyn) : bool; ]>,
-        <[ decl: mutable $("<>w__produced" : dyn) : bool; ]>,
         <[ decl: public MoveNext () : bool { foobar } ]>,
         <[ decl: public Current : $(item : typed) { get { this.$("<>2__item" : dyn) } } ]>,
         <[ decl:
           [System.Diagnostics.DebuggerHidden]
           Advance () : void implements System.Runtime.CompilerServices.IAsyncStateMachine.MoveNext
           {
-            if (this.MoveNext ())
-              // (an item: the body waits otherwise, and the awaiter resumes it)
-              when (this.$("<>w__produced" : dyn)) { this.$("<>w__produced" : dyn) = false; this.$("<>v__promise" : dyn).SetResult (true) }
-            else
-              this.Finish (null)
+            // (suspended, it is left alone: at a wait the awaiter may already be resuming it on another thread, and an
+            // item was handed over by Produce, whose reader may be running it again)
+            unless (this.MoveNext ()) this.Finish (null)
           } ]>,
         // (what the body throws, which it hands over itself: being disposed of ends it as its end does)
         <[ decl:
@@ -1090,7 +1087,9 @@ using Nemerle.Compiler.Utility;
               System.Threading.Tasks.ValueTask (this : $sources.IValueTaskSource, this.$("<>v__promise" : dyn).Version)
             }
           } ]>,
-        <[ decl: public Produce (item : $(item : typed)) : object { this.$("<>2__item" : dyn) = item; this.$("<>w__produced" : dyn) = true; null } ]>,
+        // (the item is handed over where the body yields it, its state already set, as C#'s: nothing touches the machine
+        // after that, so the reader may run it again from the continuation SetResult calls)
+        <[ decl: public Produce (item : $(item : typed)) : object { this.$("<>2__item" : dyn) = item; this.$("<>v__promise" : dyn).SetResult (true); null } ]>,
         <[ decl: public Disposing () : bool { this.$("<>w__disposeMode" : dyn) } ]>,
         <[ decl:
           public AwaitUnsafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.ICriticalNotifyCompletion
@@ -1702,19 +1701,23 @@ using Nemerle.Compiler.Utility;
 
         def uses_yield = current_local_fun.yield_type != null;
         // an async function's state machine as C#'s: a struct (the async macros make the method, _N_asyncs_F)
-        def local_machine = uses_yield && current_local_fun.decl != null && current_local_fun.Name.StartsWith ("_N_async_local_")
-                            && Manager.UserData.Contains ("Nemerle.AsyncMacros.struct:" + current_local_fun.Name);
+        def local_async = uses_yield && current_local_fun.decl != null && current_local_fun.Name.StartsWith ("_N_async_local_")
+                          && Manager.UserData.Contains ("Nemerle.AsyncMacros.struct:" + current_local_fun.Name);
+        def local_stream = local_async && Manager.UserData.Contains ("Nemerle.AsyncMacros.stream:" + current_local_fun.Name);
+        def local_machine = local_async && !local_stream;
         // (with lambdas in it, _N_asyncc_F or an async lambda's: a struct too, as C#'s, and the locals the lambdas use are a
         // class's, its display class, see below)
         def struct_machine = uses_yield && current_local_fun.decl == null && the_method != null
                              && (the_method.Name.StartsWith ("_N_asyncs_") || the_method.Name.StartsWith ("_N_asyncc_"))
                              || local_machine;
         def class_machine = false;
-        // an async stream's, as C#'s: a class that is the stream (_N_asyncm_F)
-        def stream_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncm_");
+        // an async stream's, as C#'s: a class that is the stream (_N_asyncm_F, or a local async stream's _N_async_local_<n>)
+        def stream_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncm_")
+                             || local_stream;
+        def machine_name = if (local_stream) current_local_fun.Name else if (the_method != null) the_method.Name else "";
         // (what the stream is enumerated with is kept in a field of its own: its copies combine it with their tokens)
-        def cancel_origin = if (stream_machine && Manager.UserData.Contains ("Nemerle.AsyncMacros.cancel:" + the_method.Name))
-                              Manager.UserData ["Nemerle.AsyncMacros.cancel:" + the_method.Name] :> string
+        def cancel_origin = if (stream_machine && Manager.UserData.Contains ("Nemerle.AsyncMacros.cancel:" + machine_name))
+                              Manager.UserData ["Nemerle.AsyncMacros.cancel:" + machine_name] :> string
                             else null;
         def is_enumerable =
           if (uses_yield && !struct_machine && !class_machine && !stream_machine)

@@ -35,7 +35,20 @@ hello, grace
 Arguments after `--` reach the script as `args`.
 
 A script is a file like any other: it can declare functions, classes, `grammar`s and `space`s. Its top-level code,
-spaces included, is what runs.
+spaces included, is what runs. `nscript` compiles it with the compiler itself (it is the same compiler, in the
+process), so a script is Nemerle as a compiled file is, `await` in its top-level code included: the script's code
+then runs as an async function, and the script ends when it does.
+
+```nemerle,script
+using System.Threading.Tasks;
+
+def answer = await Task.Run(() => 41);
+System.Console.WriteLine(answer + 1)
+```
+
+```text
+42
+```
 
 ## Declaring dependencies
 

@@ -543,12 +543,19 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             CurrentMethodBuilder.StartTyping();
 
           def script = Manager.Options.Script;
-          when (script != null && CurrentType.FullName == script.TypeName && CurrentMethodBuilder.IsConstructor && CurrentFunction.decl == null)
+          when (script != null && CurrentType.FullName == script.TypeName && CurrentFunction.decl == null && !CurrentMethodBuilder.IsStatic)
           {
             // Keep inferred initializer trees in this typing attempt's root
             // solver state, never in an overload's speculative transaction.
-            script.TypedInitializers.Clear();
-            foreach (field is FieldBuilder in CurrentType.GetFields()) field.InferScriptType(this);
+            // (any method of the script that reads them, its async top-level code too: typed before its constructor)
+            when (CurrentMethodBuilder.IsConstructor) script.TypedInitializers.Clear();
+            // (in the order they are written: a binding read by a later one is typed first, here, and not where the
+            // later one's value reads it, which may be inside an overload's speculative typing)
+            def fields = SCG.List();
+            foreach (field is FieldBuilder in CurrentType.GetFields()) fields.Add(field);
+            fields.Sort((a, b) => if (a.Location.Line != b.Location.Line) a.Location.Line.CompareTo(b.Location.Line)
+                                  else a.Location.Column.CompareTo(b.Location.Column));
+            foreach (field in fields) field.InferScriptType(this);
           }
           // a file module's top-level code: each binding's type comes from its initializer, typed where the top-level
           // code assigns it (so the values and functions above it are in scope); a new typing attempt starts afresh

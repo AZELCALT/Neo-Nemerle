@@ -176,7 +176,8 @@ A lambda or local function is async when written so: `async (x) => ...`, `async 
 and `async def f(x) : Task[T] { ... }`. Its body waits as an async function's does, and it returns a `Task[T]`, or a
 `Task` when its body has no value (given where a `Func[ValueTask[T]]` is wanted, a `ValueTask[T]`). One given where
 a `void` delegate is wanted, an event handler, is started and not waited for, as C#'s `async void`: what it throws
-ends the process, unless handled.
+ends the process, unless handled. A local function that returns `IAsyncEnumerable[T]` is a local async stream
+(below), as in C#.
 
 ```nemerle
 using System;
@@ -220,6 +221,26 @@ Console.WriteLine(sum)
 
 ```text
 30
+```
+
+The same as a local function, in a function or in top-level code:
+
+```nemerle
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+async def Countdown(from : int) : IAsyncEnumerable[int]
+{
+  for (mutable i = from; i > 0; i--) { await Task.Yield(); yield i }
+}
+
+await foreach (n in Countdown(3)) Console.Write(n);
+Console.WriteLine()
+```
+
+```text
+321
 ```
 
 An async function runs on the runtime's own task builders, as C#'s does (one that completes without waiting makes no

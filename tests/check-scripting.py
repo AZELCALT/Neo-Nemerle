@@ -66,3 +66,53 @@ assert auto.returncode == 0 and auto.stdout.count('42') == 2 and 'error' not in 
 print('PASS: automatic multiline expressions and declarations')
 print('PASS: interactive submissions, multiline input and persistent history without automatic replay')
 print('PASS: source-run, compile, artifact-run and artifact evaluation without compiler/macros/SDK reference assemblies')
+# the embedded compiler is the compiler: the same program run as a script and compiled as a file prints the same
+# (top-level await, a binding whose value waits, await foreach, local async functions and streams, async lambdas, and
+# bindings as a file's top-level code has them)
+parity = work / 'parity'
+parity.mkdir()
+programs = {
+    'wait': ('using System.Threading.Tasks;\ndef x = await Task.FromResult(41);\nSystem.Console.WriteLine(x + 1)\n', '42'),
+    'each': ('using System;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n'
+             'async Numbers(n : int) : IAsyncEnumerable[int] { for (mutable i = 1; i <= n; i++) { await Task.Yield(); yield i } }\n'
+             'mutable t = 0;\nawait foreach (x in Numbers(3)) t += x;\nConsole.WriteLine(t)\n', '6'),
+    'local': ('using System;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n'
+              'async def S(k : int) : IAsyncEnumerable[int] { yield k; await Task.Yield(); yield k * 2 }\n'
+              'async def T() : Task[int] { await Task.Yield(); 5 }\n'
+              'def r = T().Result;\nmutable t = r;\nawait foreach (x in S(10)) t += x;\nConsole.WriteLine(t)\n', '35'),
+    'mixed': ('using System;\nusing System.Threading.Tasks;\n'
+              'def vt : Func[ValueTask[int]] = async () => { await Task.Yield(); 7 };\n'
+              'def p = typeof(string).GetProperty("Length");\n'
+              'def same = typeof(string).GetField("x") == null;\n'
+              'await Task.Yield();\nConsole.WriteLine($"$(await vt()) $(p.Name) $same")\n', '7 Length True'),
+    # (many streams at once, some left early: a stream's machine is touched by one thread at a time)
+    'streams': ('using System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Threading.Tasks;\nusing Nemerle.Imperative;\n'
+                'async Numbers(n : int) : IAsyncEnumerable[int] { for (mutable i = 1; i <= n; i++) { await Task.Yield(); yield i } }\n'
+                'async Sum(k : int) : Task[int]\n{\n'
+                '  async def Local(n : int) : IAsyncEnumerable[int] { for (mutable i = 1; i <= n; i++) { await Task.Yield(); yield i } }\n'
+                '  mutable t = 0;\n  await foreach (x in Numbers(10)) { t += x; when (k % 3 == 0 && x == 5) break }\n'
+                '  await foreach (x in Local(4)) t += x;\n  t\n}\n'
+                'def all = await Task.WhenAll(Enumerable.Range(0, 4000).Select(k => Sum(k)));\nConsole.WriteLine(all.Sum())\n', '206640'),
+    # (bindings that read earlier ones and the local functions above them, `mutable' as `def')
+    'bindings': ('def T() : int { 5 }\ndef a = T();\nmutable t = a;\nt += 1;\ndef b = t * 2;\n'
+                 'System.Console.WriteLine($"$a $t $b")\n', '5 6 12'),
+    'plain': ('async def T() : System.Threading.Tasks.Task[int] { await System.Threading.Tasks.Task.Yield(); 2 }\n'
+              'def n = T().Result;\nSystem.Console.WriteLine(n * 21)\n', '42'),
+}
+ncc = args.toolchain.resolve() / 'ncc.exe'
+for name, (text, expected) in programs.items():
+    script = parity / (name + '.ns')
+    script.write_text(text)
+    said = cli('run', script)
+    assert said == expected, '%s as a script printed %r, expected %r' % (name, said, expected)
+    program = parity / name
+    program.mkdir()
+    (program / (name + '.n')).write_text(text)
+    built = subprocess.run(['dotnet', str(ncc), str(program / (name + '.n')), '-source-root:' + str(program), '-out:' + str(program / (name + '.exe')),
+        '-launcher-', '-no-color'], cwd=program, capture_output=True, text=True, timeout=120)
+    assert built.returncode == 0, built.stdout + built.stderr
+    shutil.copy2(args.toolchain / 'Nemerle.dll', program / 'Nemerle.dll')
+    shutil.copy2(args.toolchain / 'ncc.runtimeconfig.json', program / (name + '.runtimeconfig.json'))
+    ran = subprocess.run(['dotnet', str(program / (name + '.exe'))], cwd=program, capture_output=True, text=True, timeout=60)
+    assert ran.returncode == 0 and ran.stdout.strip() == expected, '%s as a file printed %r %r' % (name, ran.stdout, ran.stderr)
+print('PASS: %d programs (async code, bindings) print the same as scripts (the embedded compiler) and as compiled files' % len(programs))
