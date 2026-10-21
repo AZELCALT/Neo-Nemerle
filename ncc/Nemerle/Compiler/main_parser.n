@@ -3532,8 +3532,25 @@ using Nemerle.Compiler.Utility;
         */
     /// The splices `$(...)' of an interpolated string in an async function, one of which has an `await': each is parsed
     /// here (where `await' waits) and made a value before the string, in order, which the string then reads.
-    AwaitedSplices (text : string, location : Location) : string * string * list [PExpr]
+    AwaitedSplices (text : string, raw : string, location : Location) : string * string * list [PExpr]
     {
+      // where the value's character `at' is in the source (its escapes take more characters there), for a string on
+      // one line: what a splice's code is lexed at, so its names are where they are written (hover, definitions)
+      def mapped = location.Line == location.EndLine && raw != null && raw.Length > 0 && raw [0] == '"';
+      def rawIndex (at : int) : int
+      {
+        mutable r = 1;
+        for (mutable v = 0; v < at && r < raw.Length; v++)
+          r += if (raw [r] == '\\' && r + 1 < raw.Length) (if (raw [r + 1] == 'u') 6 else if (raw [r + 1] == 'U') 10 else 2) else 1;
+        r
+      }
+      def place (at : int) : Location
+      {
+        if (!mapped) location
+        else Location (location.FileIndex, location.Line, location.Column + rawIndex (at), location.Line, location.EndColumn)
+      }
+      // (the source text too, with the same splices made names: the string macro places its splices by it)
+      mutable replaced = [];
       def result = System.Text.StringBuilder ();
       mutable before = [];
       mutable i = 0;
@@ -3559,15 +3576,22 @@ using Nemerle.Compiler.Utility;
           }
           else
           {
-            def lexer = LexerString (Manager, inner + " ", location);
+            def lexer = LexerString (Manager, inner + " ", place (i + 2));
             def tokens = PreParser (lexer, env).PreParse ();
             def parser = MainParser (env);
             parser.in_async = true;
             if (tokens.Child.Next == null) parser.push_stream ((tokens.Child :> Token.LooseGroup).Child) else parser.push_stream (tokens);
             def value = parser.parse_expr (TokenStoppers.None);
-            def name = "_N_splice_" + Manager.GetNewId ().ToString ();
+            // (as long as the splice: the string's other splices stay where they are written)
+            def id = Manager.GetNewId ();
+            def digits = System.Text.StringBuilder ();
+            mutable n = id;
+            do { _ = digits.Insert (0, "0123456789abcdefghijklmnopqrstuvwxyz" [n % 36]); n /= 36 } while (n > 0);
+            def short = "_N_" + digits.ToString ();
+            def name = if (short.Length <= inner.Length) short else "_N_splice_" + id.ToString ();
             before ::= PExpr.Define (location, PExpr.Ref (location, MkName (name, location)), value);
-            _ = result.Append ("$(").Append (name).Append (")");
+            _ = result.Append ("$(").Append (name).Append (string (' ', System.Math.Max (0, inner.Length - name.Length))).Append (")");
+            replaced ::= (i, closed + 1, name);
             i = closed + 1;
           }
         }
@@ -3578,7 +3602,20 @@ using Nemerle.Compiler.Utility;
         }
       }
       def text = result.ToString ();
-      (text, null, before.Rev ())   // (no raw text: the string is not the one written)
+      def rawText =
+        if (!mapped) null   // (no source text: the string is not the one written)
+        else
+        {
+          def edited = System.Text.StringBuilder (raw);
+          foreach ((from, upto, name) in replaced)   // (from the last: the earlier places stay)
+          {
+            def (start, stop) = (rawIndex (from), rawIndex (upto));
+            def replacement = "$(" + name + string (' ', System.Math.Max (0, stop - start - 3 - name.Length)) + ")";
+            _ = edited.Remove (start, stop - start).Insert (start, replacement);
+          }
+          edited.ToString ()
+        };
+      (text, rawText, before.Rev ())
     }
 
     /// Whether `token' can begin the operand of a prefix operator (as after `await').
@@ -4128,7 +4165,7 @@ using Nemerle.Compiler.Utility;
                 | Token.StringLiteral(str, rawStr) as stok => // change $"..." to sprint("...")
                   shift ();
                   // an `await' in a splice waits where the string is: the splices are values made before it
-                  def (str, rawStr, before) = if (in_async && str.Contains("await")) AwaitedSplices(str, stok.Location) else (str, rawStr, []);
+                  def (str, rawStr, before) = if (in_async && str.Contains("await")) AwaitedSplices(str, rawStr, stok.Location) else (str, rawStr, []);
                   // the sprint macro must get current location and global context...
                   def lit = Literal.String(str);
                   lit.RawString = rawStr;

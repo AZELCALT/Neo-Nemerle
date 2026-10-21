@@ -28,10 +28,8 @@ unless it says so. These edges will be closed, which can change what happens the
 
 ## Tooling
 
-- **Completion after a broken line elsewhere** offers the names of the file's last good check (and keywords and
-  syntax forms), not names written since. A type is renamed only when its short name is unique (in the workspace and
-  among the referenced libraries' types); renaming a type still checks the workspace (members and locals are renamed
-  from the symbol index).
+- **Renaming a type checks the workspace** (members and locals are renamed from the symbol index), and the names
+  it edits are those its files' identifiers mean: a name in a string or a comment is left as it is.
 - **Windows is checked by running it there, not in `./bootstrap`.** `install.ps1` runs whole under PowerShell 7 in
   `./bootstrap`'s installer check, and is written for Windows PowerShell 5.1 (its native calls, its zip and tar
   reading), but 5.1 itself and the launchers' Windows side (`hello.exe` starting `hello.dll`) are run on Windows by

@@ -393,5 +393,56 @@ try:
     check(c.proc.wait(timeout=30) == 0, 'clean exit')
 finally:
     shutil.rmtree(work, ignore_errors=True)
-    shutil.rmtree(testdata, ignore_errors=True)
+# 8. async code, declarations, $ strings and type renames: hover where a function is declared; completion after a dot
+# in an async function (top-level code with an async lambda, which completion types too); the names in a $ string
+# that waits at their own places; completion of a name written after a broken line; renaming one of two types of
+# the same name (each name means the type its file sees)
+lang = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-lsp-lang-'))
+try:
+    (lang / 'app').mkdir()
+    (lang / 'app/pen.n').write_text('public class Pen\n{\n  public Width : int = 3;\n}\n')
+    (lang / 'app/ink.n').write_text('// a Pen of its own\npublic class Pen { public Ink : int = 1; }\npublic Make() : int { def p = Pen(); p.Ink }\n')
+    code = ('using System;\nusing System.Threading.Tasks;\nusing app.pen;\n\n'
+            'async Compute(n : int) : Task[int]\n{\n  def start = n * 2;\n  def scale = x => x * start;\n  await Task.Delay(1);\n  scale(3)\n}\n\n'
+            'def lambda = async (k : int) => { await Task.Yield(); k + 1 };\nmutable total = 0;\ndef p : Pen = Pen();\n'
+            'Console.WriteLine($"$total $(await Compute(4)) $(await lambda(2)) $(p.Width)")\n')
+    (lang / 'main.n').write_text(code)
+    c = Client()
+    c.request('initialize', {'processId': None, 'rootUri': lang.as_uri(), 'capabilities': {}})
+    c.notify('initialized', {})
+    luri = (lang / 'main.n').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': luri, 'languageId': 'nemerle', 'version': 1, 'text': code}})
+    def at(text, needle, nth=0, delta=0):
+        l, ch = position(text, offset_of(text, needle, nth) + delta)
+        return {'textDocument': {'uri': luri}, 'position': {'line': l, 'character': ch}}
+    def hover_text(text, needle, nth=0):
+        r = c.request('textDocument/hover', at(text, needle, nth))
+        return r['contents']['value'] if r else ''
+    deadline = time.time() + a.timeout
+    while time.time() < deadline and 'n : int' not in hover_text(code, 'n * 2'): time.sleep(0.5)
+    check('main.Compute : int -> System.Threading.Tasks.Task[int]' in hover_text(code, 'Compute'), 'hover where a function is declared: %s' % hover_text(code, 'Compute'))
+    check('main.Compute' in hover_text(code, 'Compute(4)') and 'main.lambda' in hover_text(code, 'lambda(2)')
+          and 'main.total' in hover_text(code, 'total ', 1) and 'Pen.Width' in hover_text(code, 'Width)'),
+          'the names in a $ string that waits, at their places: %s / %s / %s' % (hover_text(code, 'Compute(4)'), hover_text(code, 'lambda(2)'), hover_text(code, 'total ', 1)))
+    def complete_at(text, version, marker):
+        c.notify('textDocument/didChange', {'textDocument': {'uri': luri, 'version': version}, 'contentChanges': [{'text': text}]})
+        l, ch = position(text, text.index(marker) + len(marker))
+        r = c.request('textDocument/completion', {'textDocument': {'uri': luri}, 'position': {'line': l, 'character': ch}})
+        return [i['label'] for i in r['items']]
+    dotted = code.replace('  scale(3)\n', '  start.\n')
+    items = complete_at(dotted, 2, '  start.')
+    check('CompareTo' in items and 'ToString' in items, 'completion after a dot in an async function: %s' % items)
+    broken = code.replace('mutable total = 0;', 'mutable total = 0;\ndef oops = (;').replace('  scale(3)\n', '  def freshly = 2;\n  fre\n')
+    items = complete_at(broken, 3, '  fre')
+    check('freshly' in items, 'completion of a name written since, with a broken line elsewhere: %s' % items)
+    c.notify('textDocument/didChange', {'textDocument': {'uri': luri, 'version': 4}, 'contentChanges': [{'text': code}]})
+    renamed = c.request('textDocument/rename', dict(at(code, 'Pen()'), newName='Marker'))['changes']
+    places = {u.rsplit('/', 1)[-1]: sorted((e['range']['start']['line'], e['range']['start']['character']) for e in v) for u, v in renamed.items()}
+    check(places.get('main.n') == [(14, 8), (14, 14)] and places.get('pen.n') == [(0, 13)] and 'ink.n' not in places,
+          'renaming app.pen.Pen (app.ink.Pen has its name too): its uses and declaration only: %s' % places)
+    c.request('shutdown', None); c.notify('exit', None)
+    print('PASS: async code, declarations, $ strings that wait, completion after a broken line, and one of two types of a name renamed')
+finally:
+    shutil.rmtree(lang, ignore_errors=True)
+shutil.rmtree(testdata, ignore_errors=True)
 print('PASS: %d language server checks' % checks)

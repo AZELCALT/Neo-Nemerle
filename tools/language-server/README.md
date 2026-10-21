@@ -25,8 +25,9 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   other projects included). Otherwise the workspace is a program when `<root>/main.n` is among them, a library
   otherwise. Its errors and warnings
   (type errors, `NotYet`, type changes, threads, export conflicts) are published for every file they are in, open
-  or not, merged with the parse diagnostics. Each typed reference (a local, a member, a constructor) becomes a fact
-  with its type and its declaration: hover and go-to-definition answer from the latest check. A compilation with
+  or not, merged with the parse diagnostics. Each typed reference (a local, a member, a constructor), and each
+  declaration where its name is, becomes a fact with its type and its declaration: hover and go-to-definition answer
+  from the latest check. A compilation with
   errors stops before typing everything, so a file it typed nothing of keeps its earlier facts.
 
 - **Keywords and syntax forms** (snippets of `def`, `match`, `foreach`, `try`/`catch`, a function, a class, a
@@ -37,7 +38,9 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   state, what the `using`s open, and keywords).
 - **Find-references and rename** run a check of the whole workspace and use its facts: every use of the declaration
   under the cursor (or of the one a use names). Rename edits the names alone, for locals, fields, properties,
-  methods, events and types (with their annotations and constructor calls).
+  methods, events and types (with their annotations and constructor calls). A type's name is renamed where it means
+  that type: each identifier is looked up as its file sees it (its `using`s, the type it is written in), so of two
+  types with one name, only the one under the cursor is renamed.
 
 Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
 `semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`, `references`,

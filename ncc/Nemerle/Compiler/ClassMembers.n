@@ -1801,7 +1801,7 @@ public class MethodBuilder : MemberBuilder, IMethod
 
     internal CompileAfterTyping () : void
     {
-      when (SkipEmiting || IsTypedOnly)
+      when (SkipEmiting || IsTypedOnly || Manager.IsCompletionInProgress)
         return;
 
       def setup_method (emitter) {

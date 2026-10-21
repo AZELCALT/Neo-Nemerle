@@ -683,7 +683,17 @@ public sealed class Server
     {
       def request = CheckRequest(); request["all"] = JsonValue.Create(true);
       // the word at the cursor, in case it names a type of the workspace (a type has no facts of its own)
-      match (WordAt(doc, position)) { | (null, _) => () | (word, _) => request["renameType"] = JsonValue.Create(word) }
+      match (WordAt(doc, position))
+      {
+        | (null, _) => ()
+        | (word, _) =>
+          request["renameType"] = JsonValue.Create(word);
+          // (and where it is: which type of that name the word means there)
+          def at = JsonObject();
+          at["path"] = JsonValue.Create(path);
+          at["line"] = JsonValue.Create(Int(position["line"]) + 1); at["column"] = JsonValue.Create(Int(position["character"]) + 1);
+          request["renameAt"] = at
+      }
       def answer = RunChecker(request, false);
       lastWorkspaceCheck = answer;
       match (answer)

@@ -644,6 +644,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       // emitted: no closures or state machines of its own, whose debug information would be a second copy of the code's)
       when (meth.IsTypedOnly)
         return;
+      // (code completion needs the typing that reaches the cursor only: each method is typed with a solver of its
+      // own then, so lowering it compiles its lambdas' classes at once, before their bodies are ready)
+      when (Manager.IsCompletionInProgress)
+        return;
       
       def t2 = Typer2 (current_type, meth, this);
       t2.Run ();

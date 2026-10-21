@@ -40,6 +40,11 @@ public module Checker
   ExportLine : Regex = Regex(@"^\s*export\s", RegexOptions.Multiline);
   Skipped : array[string] = array["out", "bin", "obj", "node_modules", ".git"];
 
+  /// The place of the name of the type to rename (path, line, column; 1-based), when the editor gives it.
+  public mutable RenameAtPath : string = null;
+  public mutable RenameAtLine : int;
+  public mutable RenameAtColumn : int;
+
   public Run(input : TextReader, output : TextWriter) : int
   {
     def request = JsonNode.Parse(input.ReadToEnd());
@@ -49,6 +54,13 @@ public module Checker
     foreach (f in request["files"].AsArray()) overlay[Path.GetFullPath(str(f["path"]))] = str(f["text"]);
     def libraries = if (request["libraries"] is JsonArray) request["libraries"].AsArray().Select(l => str(l)).ToList() else SCG.List();
     def flag(name : string) { request[name] != null && request[name].GetValue.[bool]() }
+    // (a type's rename: where its name is, to tell which type of that name it is)
+    when (request["renameAt"] != null)
+    {
+      RenameAtPath = Path.GetFullPath(str(request["renameAt"]["path"]));
+      RenameAtLine = request["renameAt"]["line"].GetValue.[int]();
+      RenameAtColumn = request["renameAt"]["column"].GetValue.[int]()
+    }
     // completion: the marker goes where the cursor is, and the typer says what fits there
     mutable completion = null;
     mutable completing = null;
@@ -305,7 +317,9 @@ public module Checker
     // signature; a local by where it is declared, as it is only seen in its file), the key of the server's index
     def fact(at : Location, hover : string, target : Location, name : string, kind : string, id : string) : void
     {
-      when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at))
+      // (not of what the compiler made: a `$"..."' string's parts, an async function's state machine)
+      when (at.FileIndex > 0 && at.Line > 0 && !at.IsGenerated && files.Contains(Location.GetFileName(at.FileIndex)) && !onUsing(at)
+            && !name.StartsWith("_N_", StringComparison.Ordinal))
       {
         def f = JsonObject(); place(f, at); f["hover"] = JsonValue.Create(hover);
         f["name"] = JsonValue.Create(name); f["kind"] = JsonValue.Create(kind); f["id"] = JsonValue.Create(id);
@@ -370,8 +384,38 @@ public module Checker
             types.Add((tb.Name, tb.FullName, tb.Location)))
       catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + e.ToString()) }
       when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + string.Join(", ", types.Select(x => { def (n, f, _) = x; n + "=" + f }).ToArray()));
+      // a member's declaration is a fact too, where its name is (hover and go-to-definition there, and its place among
+      // the references): a method's when it is typed, the type's fields and properties with its first one
+      def declarations = SCG.HashSet.[string]();
+      def declaration(m : IMember) : void
+      {
+        match (m)
+        {
+          | b is MemberBuilder when !b.Name.StartsWith("_N_", StringComparison.Ordinal) =>
+            // (where its name is: its NameLocation, or the name's first place in its declaration, as a file's function
+            // has no NameLocation)
+            def named = try { b.NameLocation } catch { | _ => Location.Default };
+            def at = if (named.Line > 0) named
+                     else match (if (b.Location.FileIndex > 0 && b.Location.Line > 0) nameSpan(b.Location, b.Name, true) else None())
+                     {
+                       | Some((line, column, end)) => Location(b.Location.FileIndex, line, column, line, end)
+                       | None => Location.Default
+                     };
+            when (at.Line > 0 && !at.IsGenerated && declarations.Add(b.DeclaringType.FullName + "::" + b.Name + "@" + at.ToString()))
+              try { member(at, b, null) } catch { | _ => () }
+          | _ => ()
+        }
+      }
       manager.Hierarchy.Iter(tb => tb.MethodBeforeStage2 += fun(_, args)
         {
+          def method = args.Typer.CurrentMethodBuilder;
+          when (method != null && args.Typer.CurrentFunction.decl == null)
+          {
+            declaration(method);
+            when (declarations.Add("type:" + tb.FullName))
+              foreach (m in tb.GetDirectMembers())
+                when (m.MemberKind == MemberKinds.Field || m.MemberKind == MemberKinds.Property || m.MemberKind == MemberKinds.Event) declaration(m)
+          }
           match (args.Typer.CurrentFunction.Body)
           {
             | FunBody.Typed(body) => try { walk(body) } catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("walk: " + e.ToString()) }
@@ -393,7 +437,117 @@ public module Checker
     foreach ((n, full, _) in types) when (n == name) declared.Add(full);
     _ = files;
     def refuse(why : string) : void { result["typeRenameError"] = JsonValue.Create(why) }
-    if (declared.Count == 0) ()   // not a type of the workspace: nothing to say
+    // what an identifier of that name means where it is: the type its file sees by that name (or path, `a.b.Name'), from
+    // the type it is written in; the rename edits the names that mean the type at the editor's place
+    // (a file's, after its `using's, as its members are typed in)
+    def env(fileIndex : int) : GlobalEnv
+    {
+      mutable after;
+      if (manager.FileModuleRegistry.MemberEnvironments.TryGetValue(fileIndex, out after)) after
+      else if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex)
+      else manager.CoreEnv
+    }
+    def enclosing(at : Location) : TypeBuilder
+    {
+      mutable best = null; mutable size = int.MaxValue;
+      foreach ((_, full, loc) in types)
+        when (loc.FileIndex == at.FileIndex && loc.Contains(at) && loc.EndLine - loc.Line < size)
+          match (manager.CoreEnv.LookupType(NList.FromArray(full.Split('.'))))
+          {
+            | Some(tb is TypeBuilder) => best = tb; size = loc.EndLine - loc.Line
+            | _ => ()
+          }
+      when (best == null && manager.FileModuleRegistry.IsModule(at.FileIndex))
+        match (manager.CoreEnv.LookupType(NList.FromArray(manager.FileModuleRegistry.Name(at.FileIndex).Split('.'))))
+        {
+          | Some(tb is TypeBuilder) => best = tb
+          | _ => ()
+        }
+      best
+    }
+    def meaning(path : list[string], at : Location) : string
+    {
+      def previous = ManagerClass.Instance;
+      ManagerClass.Instance = manager;
+      try
+      {
+        def from = enclosing(at);
+        // (in a type of the file: that type's environment)
+        def scope = if (from != null && from.DeclaringType != null) from.GlobalEnv else env(at.FileIndex);
+        def r = match (scope.LookupType(path, from, -1))
+        {
+          | Some(ti) => ti.FullName
+          | None => null
+        };
+        r
+      }
+      catch { | _ => null }
+      finally { ManagerClass.Instance = previous }
+    }
+    // the identifiers of that name in a file, each with the path it ends (`a.b.Name')
+    def named(path : string) : list[list[string] * Location]
+    {
+      mutable found = [];
+      def text = Text(path, overlay);
+      when (text != null && text.Contains(name))
+      {
+        def previous = ManagerClass.Instance;
+        ManagerClass.Instance = manager;
+        try
+        {
+          def fileIndex = Location.GetFileIndex(path);
+          def lexer = LexerString(manager, text, Location(fileIndex, 1, 1));
+          lexer.Keywords = env(fileIndex).Keywords;
+          mutable chain = [];
+          mutable dotted = false;
+          mutable token = lexer.GetToken();
+          while (!(token is Token.EndOfFile))
+          {
+            match (token)
+            {
+              | Token.Identifier(id) =>
+                chain = if (dotted) chain + [id] else [id];
+                dotted = false;
+                when (id == name) found ::= (chain, token.Location)
+              | Token.Operator(".") when !chain.IsEmpty => dotted = true
+              | _ => chain = []; dotted = false
+            }
+            token = lexer.GetToken();
+          }
+        }
+        catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("lex " + path + ": " + e.ToString()) }
+        finally { ManagerClass.Instance = previous }
+      }
+      found.Rev()
+    }
+    // the type meant at the editor's place, when it gives one
+    def target =
+      if (RenameAtPath == null) null
+      else match (named(RenameAtPath).Find(x => x[1].Line == RenameAtLine && x[1].Column <= RenameAtColumn && RenameAtColumn <= x[1].Column + name.Length))
+      {
+        | Some((chain, loc)) => meaning(chain, loc)
+        | None => null
+      };
+    if (target != null && declared.Contains(target))
+    {
+      // what facts show is something else of that name (a local, a member)
+      def others = SCG.HashSet.[string]();
+      foreach (f in facts)
+        when (f["name"] != null && f["name"].GetValue.[string]() == name && f["kind"].GetValue.[string]() != "constructor" && f["nameLine"] != null)
+          _ = others.Add(f["path"].GetValue.[string]() + ":" + f["nameLine"].GetValue.[int]().ToString() + ":" + f["nameColumn"].GetValue.[int]().ToString());
+      def spans = JsonArray();
+      foreach (path in files)
+        foreach ((chain, at) in named(path))
+          when (!others.Contains(path + ":" + at.Line.ToString() + ":" + at.Column.ToString()) && meaning(chain, at) == target)
+          {
+            def s = JsonObject();
+            s["path"] = JsonValue.Create(path); s["line"] = JsonValue.Create(at.Line);
+            s["column"] = JsonValue.Create(at.Column); s["endColumn"] = JsonValue.Create(at.Column + name.Length);
+            spans.Add(s);
+          }
+      result["typeRename"] = spans;
+    }
+    else if (declared.Count == 0) ()   // not a type of the workspace: nothing to say
     else if (declared.Count > 1)
       refuse("`" + name + "' names " + declared.Count.ToString() + " types in the workspace (" + string.Join(", ", declared.ToArray()) + "); rename them by hand")
     else
