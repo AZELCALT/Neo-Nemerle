@@ -13,8 +13,11 @@ unless it says so. These edges will be closed, which can change what happens the
 ## Async
 
 - **Async streams are not on .NET Standard 2.0** (nor .NET Framework): it has no `IAsyncEnumerable[T]`, so the
-  .NET Standard `Nemerle.dll` has no `AsyncStream`. An async lambda returns a `Task` or `Task[T]` (not a
-  `ValueTask`, not `void` for an event handler: wrap it, `(s, e) => { _ = handler(s, e) }`), and is not an async stream.
+  .NET Standard `Nemerle.dll` has no `AsyncStream`. An async lambda returns a `Task` or `Task[T]` (or is given as a
+  `void` delegate), not a `ValueTask`, and is not an async stream.
+- **Async lambdas, local functions, async streams and functions with a lambda inside keep a class state machine**
+  (one allocation per call); only plain async functions get C#'s struct. A function that waits allocates 113 bytes
+  per call where C# allocates 97 (a `current` field and a temporary for the result).
 - **An async file's functions do not wait for its top-level code.** Its state is ready once a file importing it has
   awaited it (at the `using`); a function of the file called before that, from a file that does not import it (by
   reflection, from C#), sees the state unset.

@@ -368,6 +368,55 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
   }
   else {
   m.Body = Spill(m.Body);
+  // as C#'s: the state machine is a struct, which the builder boxes only when the body first has to wait (Typer3 makes
+  // it). Not for code with lambdas or local functions in it, which would share its locals with them (nor async void).
+  def lambdas(e : PExpr) : bool
+  {
+    mutable found = false;
+    _ = Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+      {
+        match (node)
+        {
+          | PExpr.Lambda | PExpr.DefFunctions when !after => found = true
+          | PExpr.Call(PExpr.Ref(arrow), [_, _]) when !after && arrow.Id == "=>" => found = true
+          | PExpr.Call(PExpr.Member(_, name), [_]) when !after && name.ToString() == "__async_lambda" => found = true
+          | _ => ()
+        }
+        node
+      });
+    found
+  }
+  def returnsTask = match (returned)
+    {
+      | PExpr.Indexer(task, [_]) => taskName(task) == "Task" || taskName(task) == "ValueTask"
+      | _ => taskName(returned) == "Task" || taskName(returned) == "ValueTask"
+    };
+  def structMode = finish != null && returnsTask && !lambdas(m.Body) && m.Name != "_N_top_level";
+  if (structMode)
+  {
+    def iterator = Macros.NewSymbol("asyncs_" + m.Name);   // _N_asyncs_F_<n>: its state machine is a struct
+    def manager = Macros.Manager();
+    manager.UserData["Nemerle.AsyncMacros.struct:" + iterator.Id] = true;
+    manager.UserData["Nemerle.AsyncMacros.kickoff:" + iterator.Id] = m;
+    manager.UserData["Nemerle.AsyncMacros.kickoff-name:" + iterator.Id] = (m.Name, m.header.Parameters.Length);
+    def parameters = m.header.Parameters.Map(p => <[ parameter: $(p.PName : name) : $(p.Type) ]>);
+    def arguments = m.header.Parameters.Map(p => <[ $(p.PName : name) ]>);
+    def first = Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ when (Nemerle.Async.Machine.Never) yield null ]>);
+    def body = if (result == null)
+                 <[ $first; $(m.Body); () ]>
+               else
+                 <[ $first;
+                    $(Ending(m.Body, last => Nemerle.Compiler.UtilMacros.locate(last.Location,
+                        <[ def value = $last; $(Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ Nemerle.Async.Machine.Return(value) ]>)) ]>))) ]>;
+    def method = if (m.Attributes %&& NemerleModifiers.Static)
+                   <[ decl: private static $(iterator : name) (..$parameters) : $returned { $body } ]>
+                 else
+                   <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>;
+    (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
+    tb.Define(method);
+    m.Body = Nemerle.Compiler.UtilMacros.locate(loc, <[ $(iterator : name) (..$arguments) ]>);
+  }
+  else {
   // an async file's top-level code: its bindings' values are typed apart, where it assigns them
   when (m.Name == "_N_top_level")
   {
@@ -412,6 +461,7 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
     else
       <[ def $(driver : name) = $newDriver; $(finish(<[ $(driver : name).Run($start) ]>)) ]>);
   }
+  }
 }
 
 /// `await e': waits for e (anything with GetAwaiter(), as a Task) and is what it ends with.
@@ -427,10 +477,12 @@ macro __await(e)
       | _ when manager.UserData.Contains("Nemerle.AsyncMacros.driver:" + method) => manager.UserData["Nemerle.AsyncMacros.driver:" + method] :> Name
       | _ => null
     };
+  // (an async function whose state machine is a struct: its awaits are the Machine calls Typer3 makes the struct's)
+  def structMode = driver == null && manager.UserData.Contains("Nemerle.AsyncMacros.struct:" + method);
   if (method == "_N_state_types" || method == "_N_state_flow")
     // a copy of top-level code that only gives the file's state its types (never run)
     <[ ($e).GetAwaiter().GetResult() ]>
-  else if (driver == null)
+  else if (driver == null && !structMode)
   {
     Message.Error(e.Location, "`await' waits in an async function only");
     <[ ($e).GetAwaiter().GetResult() ]>
@@ -445,11 +497,15 @@ macro __await(e)
         | null => false
         | info => awaiter.Type.TryRequire(Nemerle.Compiler.fixed_type.FixedType.Class(info, []))
       };
-    def wait = if (critical) <[ $(driver : name).AwaitUnsafe(ref awaiter) ]> else <[ $(driver : name).AwaitSafe(ref awaiter) ]>;
+    // (a struct machine's builder copies it: the wait is what `yield' yields, after the state is set)
+    def wait = if (structMode && critical) <[ yield Nemerle.Async.Machine.AwaitUnsafe(ref awaiter) ]>
+               else if (structMode) <[ yield Nemerle.Async.Machine.AwaitSafe(ref awaiter) ]>
+               else if (critical) <[ $(driver : name).AwaitUnsafe(ref awaiter); yield null ]>
+               else <[ $(driver : name).AwaitSafe(ref awaiter); yield null ]>;
     // (at the `await's place: its line is a step of its own, where the debugger stops)
     Nemerle.Compiler.UtilMacros.locate(e.Location.AsGenerated(), <[
       mutable awaiter = $(awaiter : typed);
-      unless (awaiter.IsCompleted) { $wait; yield null }
+      unless (awaiter.IsCompleted) { $wait }
       awaiter.GetResult()
     ]>)
   }

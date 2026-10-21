@@ -136,6 +136,9 @@ using Nemerle.Compiler.Utility;
     /// In the MoveNext of a local function that is an iterator (an async lambda's): the fields of the enumerator that
     /// keep the closures of the functions around it (its own closure is the enumerator, `this').
     mutable enumerator_parents : Hashtable [int, IField];
+    /// In the MoveNext of a struct state machine (an async function's, as C#'s): the struct, whose methods the body's
+    /// Nemerle.Async.Machine calls become.
+    mutable struct_machine : TypeBuilder;
 
     /* Given:
          static foo[A,B] () {
@@ -165,6 +168,7 @@ using Nemerle.Compiler.Utility;
       local_function_type = meth.DeclaringType;
       current_method = meth.GetHeader ();
       enumerator_parents = null;   // (another method: the parent's enumerator is not its this)
+      struct_machine = null;
     }
 
     this (parent : Typer3, fn : TFunHeader)
@@ -176,6 +180,7 @@ using Nemerle.Compiler.Utility;
         local_function_type = parent.local_function_type;
         current_method = parent.current_method;
         enumerator_parents = parent.enumerator_parents;   // (a function inlined in the same method: a loop in MoveNext)
+        struct_machine = parent.struct_machine;
 
         if (fn.TypeParameters.IsEmpty)
           accumulated_typarms = parent.accumulated_typarms;
@@ -787,9 +792,9 @@ using Nemerle.Compiler.Utility;
       _ = kind;
       def function = current_local_fun.Name;
       def readable =
-        if (function.StartsWith ("_N_async_"))
+        if (function.StartsWith ("_N_async_") || function.StartsWith ("_N_asyncs_"))
         {
-          def rest = function.Substring (9);
+          def rest = function.Substring (if (function.StartsWith ("_N_asyncs_")) 10 else 9);
           def cut = rest.LastIndexOf ('_');
           if (cut > 0) rest.Substring (0, cut) else rest
         }
@@ -825,6 +830,76 @@ using Nemerle.Compiler.Utility;
           {
             foobar
           }
+        }
+      ]>
+    }
+
+    /// An async function's state machine as C#'s: a struct implementing IAsyncStateMachine, with the runtime's builder
+    /// for the task the function returns. Start runs it (the builder boxes it only when it first has to wait); MoveNext
+    /// (bool) is the body, as an iterator's, which the interface's MoveNext (Advance) runs, completing the task when the
+    /// body ends; AwaitUnsafe, AwaitSafe and Return are what the body's Nemerle.Async.Machine calls become.
+    PrepareAsyncStructMachine (task : TypeVar) : Nemerle.Compiler.Parsetree.ClassMember.TypeDeclaration
+    {
+      def (builder_type, builder, result) =
+        match (task.Fix ())
+        {
+          | Class (tc, [t]) when tc.FullName == "System.Threading.Tasks.Task" =>
+            (<[ System.Runtime.CompilerServices.AsyncTaskMethodBuilder[$(t : typed)] ]>, <[ System.Runtime.CompilerServices.AsyncTaskMethodBuilder.[$(t : typed)] ]>, t)
+          | Class (tc, [t]) when tc.FullName == "System.Threading.Tasks.ValueTask" =>
+            (<[ System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder[$(t : typed)] ]>, <[ System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder.[$(t : typed)] ]>, t)
+          | Class (tc, []) when tc.FullName == "System.Threading.Tasks.ValueTask" =>
+            (<[ System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder ]>, <[ System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder ]>, null)
+          | _ =>
+            (<[ System.Runtime.CompilerServices.AsyncTaskMethodBuilder ]>, <[ System.Runtime.CompilerServices.AsyncTaskMethodBuilder ]>, null)
+        };
+      def finish = if (result == null) <[ this.$("<>t__builder" : dyn).SetResult () ]>
+                   else <[ this.$("<>t__builder" : dyn).SetResult (this.$("<>result" : dyn)) ]>;
+      def members = [
+        <[ decl: public mutable $("<>t__builder" : dyn) : $builder_type; ]>,
+        <[ decl: public MoveNext () : bool { foobar } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          Advance () : void implements System.Runtime.CompilerServices.IAsyncStateMachine.MoveNext
+          {
+            try { unless (this.MoveNext ()) $finish }
+            catch { | e is System.Exception => this.$("<>t__builder" : dyn).SetException (e) }
+          } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          SetMachine (machine : System.Runtime.CompilerServices.IAsyncStateMachine) : void
+            implements System.Runtime.CompilerServices.IAsyncStateMachine.SetStateMachine
+          {
+            this.$("<>t__builder" : dyn).SetStateMachine (machine)
+          } ]>,
+        <[ decl:
+          [System.Diagnostics.DebuggerHidden]
+          public Start () : $(task : typed)
+          {
+            this.$("<>t__builder" : dyn) = $builder.Create ();
+            this.$("<>t__builder" : dyn).Start (ref this);
+            this.$("<>t__builder" : dyn).Task
+          } ]>,
+        <[ decl:
+          public AwaitUnsafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.ICriticalNotifyCompletion
+          {
+            this.$("<>t__builder" : dyn).AwaitUnsafeOnCompleted (ref awaiter, ref this);
+            null
+          } ]>,
+        <[ decl:
+          public AwaitSafe[A] (awaiter : ref A) : object where A : System.Runtime.CompilerServices.INotifyCompletion
+          {
+            this.$("<>t__builder" : dyn).AwaitOnCompleted (ref awaiter, ref this);
+            null
+          } ]>
+      ];
+      def members =
+        if (result == null) members
+        else <[ decl: public mutable $("<>result" : dyn) : $(result : typed); ]>
+             :: <[ decl: public Return (value : $(result : typed)) : void { this.$("<>result" : dyn) = value } ]> :: members;
+      <[ decl:
+        struct $(StateMachineName ("") : name) : System.Runtime.CompilerServices.IAsyncStateMachine
+        {
+          ..$members
         }
       ]>
     }
@@ -1134,6 +1209,11 @@ using Nemerle.Compiler.Utility;
         | FunBody.Typed (expr) =>
           def expr = EnterTries(expr.Walk(rewrite));
 
+          if (clo_type.LookupMember ("Dispose").IsEmpty)
+            // a struct state machine: what its body throws ends its task (the builder takes it), and nothing disposes
+            // of it before it ends
+            fh.body = FunBody.Typed (expr)
+          else {
           def dispose_meth =
             SingleMemberLookup (clo_type, "Dispose") :> IMethod;
           def dispose_call =
@@ -1155,6 +1235,7 @@ using Nemerle.Compiler.Utility;
                                            Literal.FromInt (-1))),
               dispose_expr);
           dispose_meth.GetHeader ().body = FunBody.Typed (dispose_expr);
+          }
 
         | _ => Nemerle.Compiler.UtilMacros.ice ()
       }
@@ -1168,7 +1249,7 @@ using Nemerle.Compiler.Utility;
     {
       def move_next = SingleMemberLookup (clo_type, "MoveNext") :> MethodBuilder;
       def method = if (current_local_fun.decl == null) the_method else null;
-      def is_async = method != null && method.Name.StartsWith ("_N_async_");
+      def is_async = method != null && (method.Name.StartsWith ("_N_async_") || method.Name.StartsWith ("_N_asyncs_"));
       // an async function's state machine is started by the function the async macros made it from
       def kickoff =
         if (is_async)
@@ -1192,6 +1273,14 @@ using Nemerle.Compiler.Utility;
         }
         else method;
       Manager.StateMachines.Add ((move_next, kickoff));
+      // (a struct machine's IAsyncStateMachine.MoveNext only runs the body's: not a frame of its own in stack traces)
+      match ((clo_type.LookupMember ("Advance"), Manager.NameTree.LookupSystemType ("System.Diagnostics.StackTraceHiddenAttribute")))
+      {
+        | ([advance is MethodBuilder], Some (hidden)) =>
+          def emitter = clo_type.TyManager.ClrEmitter;
+          clo_type.DoBeforeFinalization (fun () { emitter.SetAttribute (advance.GetMethodInfo (), Manager.AttributeCompiler.MakeEmittedAttribute (hidden)) })
+        | _ => ()
+      }
       // (compiler-made, as C#'s: .NET's stack traces then name the function for its MoveNext)
       match (Manager.NameTree.LookupSystemType ("System.Runtime.CompilerServices.CompilerGeneratedAttribute"))
       {
@@ -1224,7 +1313,8 @@ using Nemerle.Compiler.Utility;
       }
     }
 
-    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string], parent_fields : Hashtable [int, IField]) : void
+    SetEnumeratorBody (clo_type : TypeBuilder, subst : Subst, parm_field_names : list [string], parent_fields : Hashtable [int, IField],
+                       struct_machine : bool, clo_mtype : FixedType) : void
     {
       match (current_local_fun.body) {
         | FunBody.Typed (DefValIn (_, _, DefValIn (_, _, DefFunctionsIn ([fh], _)))) =>
@@ -1236,8 +1326,18 @@ using Nemerle.Compiler.Utility;
           def child = Typer3 (this, meth);
           child.current_subst = subst;
           child.enumerator_parents = parent_fields;
+          when (struct_machine) child.struct_machine = clo_type;
           child.Run ();
 
+          if (struct_machine)
+          {
+            // the function starts its machine and returns its task
+            def start = SingleMemberLookup (clo_type, "Start") :> IMethod;
+            current_local_fun.body = FunBody.Typed (
+              TExpr.Call (current_local_fun.ReturnType,
+                          TExpr.MethodRef (clo_mtype.TypeOfMember (start), PlainRef (current_closure), start, [], true), [], false))
+          }
+          else {
           def meth = SingleMemberLookup (clo_type, "Dispose") :> MethodBuilder;
           meth.GetHeader ().used_closures = fh.GetParents ();
           meth.GetHeader ().is_in_closure_of = fh.id;
@@ -1256,6 +1356,7 @@ using Nemerle.Compiler.Utility;
           }
 
           current_local_fun.body = FunBody.Typed (PlainRef (current_closure));
+          }
 
         | FunBody.Typed (t)
         | _ with t = null => Nemerle.Compiler.UtilMacros.ice ($ "oops, t=$t")
@@ -1282,8 +1383,10 @@ using Nemerle.Compiler.Utility;
         }
 
         def uses_yield = current_local_fun.yield_type != null;
+        // an async function's state machine as C#'s: a struct (the async macros make the method, _N_asyncs_F)
+        def struct_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncs_");
         def is_enumerable =
-          if (uses_yield)
+          if (uses_yield && !struct_machine)
             match (current_local_fun.ReturnType.Fix ()) {
               | Class (tc, _) =>
                 tc.Equals (InternalType.Generic_IEnumerable_tc) ||
@@ -1301,6 +1404,8 @@ using Nemerle.Compiler.Utility;
                 internal this () {}
               }
             ]>
+          else if (struct_machine)
+            PrepareAsyncStructMachine (fix_type (current_local_fun.ReturnType))
           else
             if (is_enumerable)
               PrepareEnumerableObject (fix_type (current_local_fun.yield_type));
@@ -1323,7 +1428,8 @@ using Nemerle.Compiler.Utility;
           else
             current_local_fun;
 
-        def closure_val = LocalValue(closure_val_fun, "_N_" + closureName, clo_mtype, LocalValue.Kind.Plain(), is_mutable = false);
+        // (a struct state machine is a value: its fields are set through its local)
+        def closure_val = LocalValue(closure_val_fun, "_N_" + closureName, clo_mtype, LocalValue.Kind.Plain(), is_mutable = struct_machine);
         closure_val.Register();
         closure_val.UseFrom(closure_val_fun);
         current_closure = closure_val;
@@ -1347,6 +1453,10 @@ using Nemerle.Compiler.Utility;
             {
               match (decl.ValKind)
               {
+                // (a struct machine's method body becomes the call of Start: the iterator's function value, and the
+                // `_' it is given to there, are not kept)
+                | _ when struct_machine && decl.DefinedIn : object == current_local_fun
+                         && (decl.Name == "_N_yielding_function" || decl.Name.StartsWith ("_N_wildcard")) => false
                 | Function(TFunHeader where(usage = UsedAsFirstClass), _) => true
                 | Function => false
                 | _ => true
@@ -1393,9 +1503,14 @@ using Nemerle.Compiler.Utility;
             parm_field_names ::= name.Id;
         }
 
-        def ctor = SingleMemberLookup (clo_type, ".ctor");
-        def ctor_ref = TExpr.StaticRef (ctor.GetMemType (), clo_mtype, ctor, []);
-        def ctor_call = TExpr.Call (clo_mtype, ctor_ref, [], false);
+        def ctor_call =
+          if (struct_machine) TExpr.DefaultValue (clo_mtype)
+          else
+          {
+            def ctor = SingleMemberLookup (clo_type, ".ctor");
+            def ctor_ref = TExpr.StaticRef (ctor.GetMemType (), clo_mtype, ctor, []);
+            TExpr.Call (clo_mtype, ctor_ref, [], false)
+          };
 
         //clo_type.MarkWithSpecialName ();
         Manager.MarkAsUsed (clo_type);
@@ -1421,7 +1536,7 @@ using Nemerle.Compiler.Utility;
 
         when (uses_yield)
         {
-          SetEnumeratorBody (clo_type, subst, parm_field_names, parent_fields);
+          SetEnumeratorBody (clo_type, subst, parm_field_names, parent_fields, struct_machine, clo_mtype);
           RegisterStateMachine (clo_type);
         }
 
@@ -2669,6 +2784,13 @@ using Nemerle.Compiler.Utility;
             when
               m.MemberKind == MemberKinds.Constructor && m.DeclaringType.IsDelegate =>
             EmitDelegateCtor (expr.Type, sr, parm.expr)
+
+          // in a struct state machine's MoveNext: the body's waits and result go to the struct (its builder)
+          | TExpr.Call (TExpr.StaticRef (_, m is IMethod, typarms) as func, parms, _)
+              when struct_machine != null && m.DeclaringType.FullName == "Nemerle.Async.Machine" =>
+            def target = SingleMemberLookup (struct_machine, m.Name) :> IMethod;
+            def self = TExpr.This (local_function_type.GetMemType ());
+            EmitCall (expr.Location, expr.Type, TExpr.MethodRef (func.Type, self, target, if (m.Name == "Return") [] else typarms, true), parms, false)
 
           | TExpr.Call (func, parms, is_tail) =>
             EmitCall (expr.Location, expr.Type, func, parms, is_tail)

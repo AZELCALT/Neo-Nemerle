@@ -5133,13 +5133,22 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           }
 
           _ = _N_yielding_function;
-          null
+          $(if (IsStructMachine ()) <[ $(TExpr.DefaultValue (GetTopTyper ().current_fun.ReturnType) : typed) ]> else <[ null ]>)
         ]>;
 
       new_body
     }
 
+    /// Whether the method being typed is an async function whose state machine is a struct (the async macros make it:
+    /// it returns its task, and its yields are where it waits, see Typer3).
+    IsStructMachine () : bool
+    {
+      def top = GetTopTyper ();
+      top.current_fun.decl == null && top.current_method_builder != null && top.current_method_builder.Name.StartsWith ("_N_asyncs_")
+    }
+
     CanYield () : bool {
+      if (IsStructMachine ()) true else
       match (GetTopTyper().current_fun.ReturnType.Fix()) {
         | Class (tc, _) =>
           [InternalType.Generic_IEnumerator_tc, InternalType.Generic_IEnumerable_tc,
@@ -5152,6 +5161,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       def func = GetTopTyper().current_fun;
 
+      if (IsStructMachine ()) InternalType.Object else
       match (func.ReturnType.Fix())
       {
         | Class (tc, [t])
@@ -5180,8 +5190,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         Manager.MacroColors.InGlobalColor (fun () {
           <[
             {
-              _N_current = $expr;
+              // (the state first: what is yielded may hand the state machine over, as an async struct's await does
+              // to its builder, which copies it)
               _N_state = $(state_no : int);
+              _N_current = $expr;
               _N_MoveNext_exit (true);
               $(label : typed)
             }

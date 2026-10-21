@@ -68,6 +68,24 @@ public sealed class AsyncDriver[T] : IAsyncStateMachine
   public SetStateMachine(machine : IAsyncStateMachine) : void { builder.SetStateMachine(machine) }
 }
 
+/// What the body of an async function calls where its state machine is a struct (as C#'s: the compiler makes it,
+/// see Typer3): these calls become calls on the struct itself, which has the builder. They are never run as they are.
+public module Machine
+{
+  /// Never true: `when (Machine.Never) yield null' makes a body that never waits an iterator all the same.
+  public Never : bool = false;
+
+  /// The body waits for `awaiter' (the struct hands it, and itself, to its builder): what its `yield' yields, so the
+  /// struct has its next state when the builder copies it.
+  public AwaitUnsafe[A](_awaiter : ref A) : object where A : ICriticalNotifyCompletion { throw InvalidOperationException("Machine.AwaitUnsafe runs in a state machine only") }
+
+  /// As AwaitUnsafe, for an awaiter that is only an INotifyCompletion.
+  public AwaitSafe[A](_awaiter : ref A) : object where A : INotifyCompletion { throw InvalidOperationException("Machine.AwaitSafe runs in a state machine only") }
+
+  /// The value the body ends with: its task's result.
+  public Return[T](_value : T) : void { throw InvalidOperationException("Machine.Return runs in a state machine only") }
+}
+
 /// An async lambda run where a `void' delegate is wanted (an event handler, as C#'s `async void'): nothing waits for its
 /// task, so what it ends with is thrown on the thread pool, where it ends the process unless handled.
 public module AsyncVoid

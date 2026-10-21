@@ -159,6 +159,9 @@ exception, which `await` on the task throws again, with its original stack trace
 cancels it. A `void` async function is for an event handler: nothing waits for it, and what it throws ends the
 process, as in C#.
 
+As in C#, an async function is compiled to a *state machine*: a struct that keeps its locals between its waits.
+A function that finishes without waiting allocates nothing, and one that waits moves the struct to the heap once.
+
 An `async` function cannot have `ref` or `out` parameters, and the compiler refuses an `await` where it cannot work:
 
 - in a `lock`: the rest of the body may run on another thread, which cannot release the lock (wait with
