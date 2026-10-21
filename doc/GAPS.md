@@ -10,8 +10,6 @@ unless it says so. These edges will be closed, which can change what happens the
   copy of `Nemerle.dll` a plugin was loaded with. A value of a type the plugin loaded itself (its own copy of a
   library) is another type to the host, as anywhere in .NET; numbers, strings, framework types and the slots' own
   boxes are shared as they are.
-## Async
-
 
 ## Targets
 
