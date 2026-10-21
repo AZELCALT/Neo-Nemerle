@@ -6,10 +6,11 @@ unless it says so. These edges will be closed, which can change what happens the
 
 ## Scopes and spaces
 
-- **A slot shared across copies of `Nemerle.dll` holds values, not types.** Scope storage is the process's, whichever
-  copy of `Nemerle.dll` a plugin was loaded with. A value of a type the plugin loaded itself (its own copy of a
-  library) is another type to the host, as anywhere in .NET; numbers, strings, framework types and the slots' own
-  boxes are shared as they are.
+- **A value of another copy of a type is copied when a slot is read** (chapter 11, scripts as plugins). The reader
+  gets its own copy, not the writer's object: writing to it changes nothing in the slot until it is written back.
+  Arrays of such values are copied too; a generic collection of them (`List[Point]`) is not, and reading one as
+  the other copy's is an error that names both. A script that references a library its host has loaded shares the
+  host's copy, so none of this applies there.
 
 ## Targets
 

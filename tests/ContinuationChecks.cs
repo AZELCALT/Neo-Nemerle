@@ -29,6 +29,13 @@ static class ContinuationChecks
         }
         Check(raw != null, "missing .nemir section");
         var store = Store.FromImage(image);
+        if (args[2] == "--identities")
+        {
+            // the types whose values cross copies of them through scopes, with their shapes
+            foreach (var t in store.Identities)
+                Console.WriteLine(t.Name + " : " + t.Base + " {" + string.Join("; ", t.Fields.Select(f => f.Field0 + " : " + f.Field1)) + "}");
+            return 0;
+        }
         if (args[2] == "--macros")
         {
             // E5: every macro defined in the binary is indexed, and its mark is the exact span of its definition

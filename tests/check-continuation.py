@@ -516,6 +516,92 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         raise SystemExit('FAILED: scope declaration and access printed %r' % output)
     print('PASS: `scope A;` creates the scope where it is written, every use is access to it (a use before it, or of a '
           'scope nobody declared, fails instead of making an empty copy)', flush=True)
+    # a type is its CLR copy and name, so a plugin's own copy of a type is another type to .NET. Nemerle closes that for
+    # values that cross through a scope: (1) a script that references a library the host has loaded gets the host's
+    # copy (the same assembly: name, version, key, and the same build when it has no key); (2) a compilation records
+    # the types its scope slots reach (with their shape) in its continuation section, and a value of another copy of
+    # such a type is copied field by field when it is read as this one; a type no slot reaches has no record
+    shapes = ('public class Point\n{\n  public X : int;\n  public Y : int;\n  public this(x : int, y : int) { X = x; Y = y }\n'
+              '  public override ToString() : string { $"($X, $Y)" }\n}\n'
+              'public variant Shape\n{\n  | Dot { at : Point }\n  | Line { from : Point; to : Point }\n}\n'
+              'public class Hidden { public N : int; public this(n : int) { N = n } }\n')
+    ident = w / 'identity'; (ident / 'plugin').mkdir(parents=True); (ident / 'other').mkdir()
+    (ident / 'shapes.n').write_text(shapes)
+    (ident / 'plugin/shapes.n').write_text(shapes)
+    (ident / 'other/shapes.n').write_text(shapes.replace('  public Y : int;\n', '  public Y : int;\n  public Z : int;\n'))
+    (ident / 'plugin/plug.n').write_text(
+        'scope B;\nscope.B.registery("p", type("shapes.Point"));\nscope.B.registery("s", type("shapes.Shape"));\n'
+        'public Run() : string\n{\n'
+        '  def a = Nemerle.Scopes.Scope.Access("main.A");\n'
+        '  def p = a.Read.[shapes.Point]("p");\n'
+        '  def line = match (a.Read.[shapes.Shape]("s")) { | shapes.Shape.Line(f, t) => $"line $f $t" | _ => "?" };\n'
+        '  a.Set("p", shapes.Point(p.X + 4, p.Y + 4));\n'
+        '  def hidden = try { _ = a.Read.[shapes.Hidden]("h"); "read" }\n'
+        '               catch { | e is System.InvalidCastException => if (e.Message.Contains("no record of its shape")) "no record" else e.Message };\n'
+        '  $"$p $line $hidden"\n}\n')
+    (ident / 'other/plug.n').write_text(
+        'scope B;\nscope.B.registery("p", type("shapes.Point"));\n'
+        'public Run() : string\n{\n'
+        '  try { _ = Nemerle.Scopes.Scope.Access("main.A").Read.[shapes.Point]("p"); "read" }\n'
+        '  catch { | e is System.InvalidCastException => if (e.Message.Contains("of another shape")) "another shape" else e.Message }\n}\n')
+    for d in ('plugin', 'other'):
+        run([T / 'ncc', ident / d / 'plug.n', ident / d / 'shapes.n', '-source-root:' + str(ident / d), '-target:library',
+             '-out:' + str(ident / d / (d + '.dll')), '-no-color'])
+    (ident / 'main.n').write_text(
+        'using System.IO;\nusing System.Reflection;\n'
+        'scope A;\nscope.A.registery("p", type("shapes.Point"));\nscope.A.registery("s", type("shapes.Shape"));\n'
+        'scope.A.p = shapes.Point(3, 4);\n'
+        'scope.A.s = shapes.Shape.Line(shapes.Point(1, 2), shapes.Point(5, 6));\n'
+        'Nemerle.Scopes.Scope.Access("main.A").Set("h", shapes.Hidden(1));\n'
+        'def call(dir : string) : string\n{\n'
+        '  def plugin = Assembly.LoadFrom(Path.Combine(System.AppContext.BaseDirectory, dir, dir + ".dll"));\n'
+        '  mutable run : MethodInfo = null;\n'
+        '  foreach (t in plugin.GetTypes()) when (run == null) run = t.GetMethod("Run");\n'
+        '  run.Invoke(null, null) :> string\n}\n'
+        'System.Console.WriteLine(call("plugin"));\nSystem.Console.WriteLine(scope.A.p);\nSystem.Console.WriteLine(call("other"));\n')
+    run([T / 'ncc', ident / 'main.n', ident / 'shapes.n', '-source-root:' + str(ident), '-out:' + str(ident / 'main.exe'),
+         '-launcher-', '-no-color'])
+    shutil.copy2(T / 'Nemerle.dll', ident / 'Nemerle.dll')
+    shutil.copy2(T / 'ncc.runtimeconfig.json', ident / 'main.runtimeconfig.json')
+    output = [l for l in run(['dotnet', ident / 'main.exe'], cwd=ident).stdout.split('\n') if l.strip()]
+    if output != ['(3, 4) line (1, 2) (5, 6) no record', '(7, 8)', 'another shape']:
+        raise SystemExit('FAILED: values of another copy of a type through a scope printed %r' % output)
+    recorded = reader(ident / 'main.exe', T, '--identities')
+    names = sorted(l.split(' : ')[0] for l in recorded.splitlines())
+    # (a file's types are nested in its module's class: shapes+Point)
+    if names != ['shapes+Point', 'shapes+Shape', 'shapes+Shape+Dot', 'shapes+Shape+Line']:
+        raise SystemExit('FAILED: the host records the types its slots reach, and only those\n' + recorded)
+    print('PASS: a plugin\'s own copy of a type a scope slot reaches is the host\'s to Nemerle (read, variant, written '
+          'back), a type no slot reaches has no record, and a copy of another shape is reported', flush=True)
+    # (1) the host's copy: a script referencing a library the host has loaded shares its types
+    common = w / 'common'; common.mkdir()
+    (common / 'box.n').write_text('public class Box { public N : int; public this(n : int) { N = n } }\n')
+    run([T / 'ncc', common / 'box.n', '-source-root:' + str(common), '-target:library', '-out:' + str(common / 'box.dll'), '-no-color'])
+    for f in T.iterdir():
+        if f.is_file() and f.suffix in {'.dll', '.json', '.nitrametadata'}:
+            shutil.copy2(f, common / f.name)
+    (common / 'use.n').write_text('def b = Nemerle.Scopes.Scope.Access("main.A").Read.[box.Box]("b");\n'
+                                  'System.Console.WriteLine($"$(b.N) $(object.ReferenceEquals(b.GetType(), typeof(box.Box)))");\n')
+    (common / 'main.n').write_text(
+        'scope A;\nscope.A.registery("b", type("box.Box"));\nscope.A.b = box.Box(42);\n'
+        'def host = Nemerle.Scripting.host.ScriptHost();\n'
+        'def definition = Nemerle.Scripting.contracts.ScriptDefinition();\n'
+        'definition.TargetReferenceDirectory = System.Environment.GetCommandLineArgs()[1];\n'
+        'definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);\n'
+        'definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "box.dll"));\n'
+        'def file = System.IO.Path.Combine(System.AppContext.BaseDirectory, "use.n");\n'
+        'def compiled = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText(file), file), definition);\n'
+        'if (!compiled.Success) foreach (d in compiled.Diagnostics) System.Console.WriteLine("error " + d.Message)\n'
+        'else\n{\n'
+        '  def result = host.Evaluate(compiled.Script, Nemerle.Scripting.contracts.ScriptInputs());\n'
+        '  when (result.Error != null) System.Console.WriteLine("error " + result.Error.ToString());\n}\n')
+    run([T / 'ncc', common / 'main.n', '-source-root:' + str(common), '-out:' + str(common / 'main.exe'), '-no-color',
+         '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll'), '-r:' + str(common / 'box.dll')])
+    shutil.copy2(T / 'ncc.runtimeconfig.json', common / 'main.runtimeconfig.json')
+    output = [l for l in run(['dotnet', common / 'main.exe', T / 'references'], cwd=common).stdout.split('\n') if l.strip()]
+    if output != ['42 True']:
+        raise SystemExit('FAILED: a script referencing a library its host has loaded printed %r, expected the host\'s type' % output)
+    print('PASS: a script referencing a library its host has loaded gets the host\'s copy (one type, nothing recorded)', flush=True)
     # a grammar that does not parse is reported at its own line and column, with the text there (it was the
     # file's 1:1 with an offset), also below other code in the file
     badgrammar = w / 'badgrammar'; badgrammar.mkdir()

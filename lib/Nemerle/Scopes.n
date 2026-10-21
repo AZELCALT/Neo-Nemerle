@@ -93,7 +93,8 @@ public sealed class Scope
       | null => Default(typeof(T)) :> T
       | content is Content => content.As.[T]()
       | value when Content.Foreign(value) => Content.Of(value).As.[T]()
-      | value => value :> T
+      | value when value is T => value :> T
+      | value => Identity.Convert(value, typeof(T)) :> T
     }
   }
 
@@ -136,9 +137,9 @@ public sealed class Content
 
   public As[T]() : T
   {
-    unless (typeof(T).IsInstanceOfType(Value) || Value == null && !typeof(T).IsValueType)
-      throw InvalidCastException("the slot holds " + (if (Type == null) "nothing" else Type.ToString()) + ", not " + typeof(T).ToString());
-    Value :> T
+    if (typeof(T).IsInstanceOfType(Value) || Value == null && !typeof(T).IsValueType) Value :> T
+    else if (Value != null && Identity.Recorded(Value.GetType()) && Identity.Recorded(typeof(T))) Identity.Convert(Value, typeof(T)) :> T
+    else throw InvalidCastException("the slot holds " + (if (Type == null) "nothing" else Type.ToString()) + ", not " + typeof(T).ToString())
   }
 
   /// The content as a `T` for code that uses it: checked as `As` does, except that a use taking any object (or a
@@ -168,4 +169,213 @@ public sealed class Content
   }
 
   public override ToString() : string { if (Value == null) "" else Value.ToString() }
+}
+
+/// Another copy of a type, as Nemerle knows it: the CLR's identity of a type is its assembly's copy and its name, so a
+/// plugin that loaded its own copy of a library (or compiled the same code itself) has other types. A compilation
+/// records the types whose values cross copies through a scope (a slot's type, what its fields hold, the types
+/// derived from them) with their shape, in its binary's continuation section (.nemir); a value of one copy read as
+/// the other is copied field by field. Its copy is a new value: writing it changes the reader's copy only. A type no
+/// slot reaches has no record, and stays the CLR's alone.
+internal module Identity
+{
+  sealed class Record
+  {
+    public Base : string;
+    public Fields : List[string * string] = List();
+    public this(b : string) { Base = b }
+  }
+
+  // (the records of each binary, read once)
+  records : System.Runtime.CompilerServices.ConditionalWeakTable[System.Reflection.Assembly, Dictionary[string, Record]] =
+    System.Runtime.CompilerServices.ConditionalWeakTable();
+
+  /// Whether `type' has a record of its own (the compilation that defined it recorded it).
+  public Recorded(type : Type) : bool { Of(type) != null }
+
+  Name(type : Type) : string { type.FullName ?? type.Name }
+
+  Of(type : Type) : Record
+  {
+    if (type == null || type.IsArray || type.Assembly.IsDynamic) null
+    else
+    {
+      mutable table;
+      lock (records)
+        unless (records.TryGetValue(type.Assembly, out table))
+        {
+          table = try { Read(Section(type.Assembly)) } catch { | _ is Exception => Dictionary() };
+          records.Add(type.Assembly, table)
+        }
+      mutable record;
+      if (table.TryGetValue(Name(type), out record)) record else null
+    }
+  }
+
+  /// The continuation section of a binary: the one its loader kept (an image loaded from memory, a script), else the
+  /// one in its file.
+  Section(assembly : System.Reflection.Assembly) : array[byte]
+  {
+    mutable section = null;
+    match (AppDomain.CurrentDomain.GetData("Nemerle.Sections"))
+    {
+      | kept is System.Runtime.CompilerServices.ConditionalWeakTable[System.Reflection.Assembly, array[byte]] => _ = kept.TryGetValue(assembly, out section)
+      | _ => ()
+    }
+    if (section != null || String.IsNullOrEmpty(assembly.Location)) section
+    else
+    {
+      def image = System.IO.File.ReadAllBytes(assembly.Location);
+      def pe = BitConverter.ToInt32(image, 0x3C);
+      when (pe > 0 && pe + 24 <= image.Length && BitConverter.ToUInt32(image, pe) == 0x4550u)
+      {
+        def count = BitConverter.ToUInt16(image, pe + 6) :> int;
+        def table = pe + 24 + BitConverter.ToUInt16(image, pe + 20);
+        for (mutable i = 0; i < count && table + i * 40 + 40 <= image.Length; i++)
+        {
+          def at = table + i * 40;
+          when (System.Text.Encoding.ASCII.GetString(image, at, 8).TrimEnd(array['\0']) == ".nemir")
+          {
+            def size = BitConverter.ToInt32(image, at + 8);
+            def raw = BitConverter.ToInt32(image, at + 20);
+            when (size > 0 && raw > 0 && raw + size <= image.Length)
+            {
+              section = array(size);
+              Array.Copy(image, raw, section, 0, size)
+            }
+          }
+        }
+      }
+      section
+    }
+  }
+
+  /// The type records of a continuation section (its format: Nemerle.Compiler's ContinuationStore).
+  Read(data : array[byte]) : Dictionary[string, Record]
+  {
+    def result = Dictionary();
+    mutable pos = 0;
+    def next() : int { def b = data[pos] :> int; pos++; b }
+    def number() : int
+    {
+      def b = next();
+      if ((b & 0x80) == 0) b
+      else if ((b & 0xC0) == 0x80) ((b & 0x3F) << 8) | next()
+      else { def b1 = next(); def b2 = next(); def b3 = next(); ((b & 0x1F) << 24) | (b1 << 16) | (b2 << 8) | b3 }
+    }
+    def text() : string { def n = number(); def s = System.Text.Encoding.UTF8.GetString(data, pos, n); pos += n; s }
+    when (data != null && data.Length > 8 && data[0] == 0x4E && data[1] == 0x45 && data[2] == 0x4D && data[3] == 0x43)
+    {
+      pos = 4;
+      when (number() == 1)
+      {
+        _ = text();
+        def strings = array(number());
+        for (mutable i = 0; i < strings.Length; i++) strings[i] = text();
+        repeat (number())
+        {
+          def kind = next();
+          def length = number();
+          def end = pos + length;
+          when (kind == 6)
+            repeat (number())
+            {
+              def name = strings[number()];
+              def record = Record(strings[number()]);
+              repeat (number()) { def field = strings[number()]; record.Fields.Add((field, strings[number()])) }
+              result[name] = record
+            }
+          pos = end
+        }
+      }
+    }
+    result
+  }
+
+  /// A value of `type' made without running a constructor (its fields are then set): the runtime's own way.
+  Uninitialized(type : Type) : object
+  {
+#if NETSTANDARD2_0
+    // (the runtime this library runs on has one of the two: .NET's RuntimeHelpers, .NET Framework's FormatterServices)
+    mutable make = typeof(System.Runtime.CompilerServices.RuntimeHelpers).GetMethod("GetUninitializedObject", array[typeof(Type)]);
+    when (make == null)
+      match (Type.GetType("System.Runtime.Serialization.FormatterServices, mscorlib"))
+      {
+        | null => ()
+        | services => make = services.GetMethod("GetUninitializedObject", array[typeof(Type)])
+      }
+    make.Invoke(null, array[type : object])
+#else
+    System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type)
+#endif
+  }
+
+  sealed class Same : IEqualityComparer[object]
+  {
+    public Equals(a : object, b : object) : bool { ReferenceEquals(a, b) }
+    public GetHashCode(o : object) : int { System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o) }
+  }
+
+  /// `value' (of another copy of a type) as a value of `target', copied field by field when both copies recorded the
+  /// same type; anything else is an error that says which.
+  public Convert(value : object, target : Type) : object { Convert(value, target, Dictionary(Same())) }
+
+  Convert(value : object, target : Type, copies : Dictionary[object, object]) : object
+  {
+    mutable done;
+    if (value == null || target.IsInstanceOfType(value)) value
+    else if (copies.TryGetValue(value, out done)) done
+    else
+    {
+      def source = value.GetType();
+      def describe(t : Type) { Name(t) + " (" + t.Assembly.GetName().Name + ", " + (if (String.IsNullOrEmpty(t.Assembly.Location)) "loaded from memory" else t.Assembly.Location) + ")" }
+      if (source.IsArray && target.IsArray && source.GetArrayRank() == target.GetArrayRank() && source.GetArrayRank() == 1)
+      {
+        def from = value :> Array;
+        def copy = Array.CreateInstance(target.GetElementType(), from.Length);
+        copies[value] = copy;
+        for (mutable i = 0; i < from.Length; i++) copy.SetValue(Convert(from.GetValue(i), target.GetElementType(), copies), i);
+        copy
+      }
+      else
+      {
+        // (a value of a type derived from the slot's: the reader's copy of that type)
+        def actual = if (Name(source) == Name(target)) target else target.Assembly.GetType(Name(source));
+        when (actual == null || !target.IsAssignableFrom(actual))
+          throw InvalidCastException("the slot holds " + describe(source) + ", not " + describe(target));
+        // (the two copies, and each base that is not shared, recorded as the same type)
+        mutable s = source; mutable t = actual;
+        while (s != null && s != t)
+        {
+          def rs = Of(s); def rt = Of(t);
+          when (rs == null || rt == null)
+            throw InvalidCastException("the slot holds " + describe(s) + ", another copy of " + describe(t) + ", and "
+              + (if (rs == null) "the first" else "the second") + " has no record of its shape: a type is recorded by the compilation that "
+              + "defines it when a scope slot reaches it (its type, a field of it, a type derived from it)");
+          when (Name(s) != Name(t) || rs.Base != rt.Base || rs.Fields.Count != rt.Fields.Count)
+            throw InvalidCastException("the slot holds " + describe(s) + ", a copy of " + describe(t) + " of another shape (base or field count)");
+          for (mutable i = 0; i < rs.Fields.Count; i++)
+            unless (rs.Fields[i].Equals(rt.Fields[i]))
+              throw InvalidCastException("the slot holds " + describe(s) + ", a copy of " + describe(t) + " of another shape: field "
+                + rs.Fields[i][0] + " : " + rs.Fields[i][1] + " there is " + rt.Fields[i][0] + " : " + rt.Fields[i][1] + " here");
+          s = s.BaseType; t = t.BaseType;
+        }
+        def copy = Uninitialized(actual);
+        copies[value] = copy;
+        def flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
+        s = source; t = actual;
+        while (s != null && s != typeof(object))
+        {
+          foreach (field in s.GetFields(flags))
+          {
+            def to = t.GetField(field.Name, flags);
+            to.SetValue(copy, Convert(field.GetValue(value), to.FieldType, copies))
+          }
+          s = s.BaseType; t = t.BaseType;
+        }
+        copy
+      }
+    }
+  }
 }

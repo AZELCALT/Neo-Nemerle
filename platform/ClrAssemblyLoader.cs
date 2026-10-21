@@ -450,16 +450,40 @@ namespace Nemerle.Platform
         {
 #if MODERN_CLR
             var context = new ScriptContext(shared, references, nativeReferences);
+            Assembly loaded;
             using (var pe = new MemoryStream(image, false))
             {
-                if (symbols == null) return context.LoadFromStream(pe);
-                using (var pdb = new MemoryStream(symbols, false)) return context.LoadFromStream(pe, pdb);
+                if (symbols == null) loaded = context.LoadFromStream(pe);
+                else using (var pdb = new MemoryStream(symbols, false)) loaded = context.LoadFromStream(pe, pdb);
             }
+            KeepSection(loaded, image);
+            return loaded;
 #else
             return symbols == null ? Assembly.Load(image) : Assembly.Load(image, symbols);
 #endif
         }
 #if MODERN_CLR
+        // the continuation section of an image loaded from memory, which has no file to read it from again: Nemerle's
+        // runtime reads the type records there (Nemerle.Scopes, a value of another copy of a type), kept as long as the
+        // assembly is (a process-wide slot, as the scopes' storage, in types of the core library only)
+        static void KeepSection(Assembly assembly, byte[] image)
+        {
+            byte[] section;
+            try { section = ClrCompilerSection.ReadBytes(image); }
+            catch (InvalidDataException) { return; }
+            if (section == null) return;
+            var domain = AppDomain.CurrentDomain;
+            lock (domain)
+            {
+                var kept = domain.GetData("Nemerle.Sections") as System.Runtime.CompilerServices.ConditionalWeakTable<Assembly, byte[]>;
+                if (kept == null)
+                {
+                    kept = new System.Runtime.CompilerServices.ConditionalWeakTable<Assembly, byte[]>();
+                    domain.SetData("Nemerle.Sections", kept);
+                }
+                kept.AddOrUpdate(assembly, section);
+            }
+        }
         sealed class ScriptContext : AssemblyLoadContext
         {
             readonly System.Collections.Generic.Dictionary<string, Assembly> shared = new System.Collections.Generic.Dictionary<string, Assembly>();
@@ -511,8 +535,38 @@ namespace Nemerle.Platform
                     File.Exists(Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location), name.Name + ".dll")))
                     return Default.LoadFromAssemblyName(name);
                 string path;
-                if (references.TryGetValue(name.FullName, out path)) return LoadFromAssemblyPath(path);
+                if (references.TryGetValue(name.FullName, out path)) return Loaded(name, path) ?? LoadFromAssemblyPath(path);
                 throw new FileNotFoundException("No explicit script dependency for " + name.FullName);
+            }
+            // the host's copy of a reference, when the host has loaded the same assembly: the script then shares its
+            // types (and values in a scope) with the host, as the same CLR types. The same is the same name, version
+            // and key, and for one without a key the same build (its module's MVID): another build of it is the
+            // script's own copy
+            static Assembly Loaded(AssemblyName name, string path)
+            {
+                var hosts = new System.Collections.Generic.List<AssemblyLoadContext> { Default };
+                var host = GetLoadContext(typeof(ClrAssemblyLoader).Assembly);
+                if (host != null && host != Default && !host.IsCollectible) hosts.Add(host);
+                Guid? build = null;
+                foreach (var context in hosts)
+                    foreach (var assembly in context.Assemblies)
+                    {
+                        if (assembly.IsDynamic || assembly.FullName != name.FullName) continue;
+                        var key = assembly.GetName().GetPublicKeyToken();
+                        if (key != null && key.Length > 0) return assembly;
+                        if (build == null) build = Mvid(path);
+                        if (build == assembly.ManifestModule.ModuleVersionId) return assembly;
+                    }
+                return null;
+            }
+            static Guid Mvid(string path)
+            {
+                using (var stream = File.OpenRead(path))
+                using (var pe = new System.Reflection.PortableExecutable.PEReader(stream))
+                {
+                    var metadata = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+                    return metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+                }
             }
         }
 #endif

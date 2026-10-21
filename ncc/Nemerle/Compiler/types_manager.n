@@ -312,6 +312,69 @@ using Nemerle.Compiler.Utility;
      * Supertypes are always processed before subtypes otherwise
      * source code order is retained.
      */
+    /// The types whose values cross copies of them through the scopes' storage: those of this compilation that a
+    /// slot's type names, what their fields hold, their bases and the types derived from them. Each is recorded with
+    /// its shape in the continuation section (ContinuationIdentity), so that another copy of it (a plugin's, compiled
+    /// with the same code) is the same type to Nemerle when a slot is read (Nemerle.Scopes.Scope.Read). A type no
+    /// slot reaches records nothing.
+    RecordIdentities () : void
+    {
+      def clrName (ti : Nemerle.Compiler.type_info.TypeInfo) : string
+      {
+        if (ti.DeclaringType == null) ti.FullName else clrName (ti.DeclaringType) + "+" + ti.Name
+      }
+      def typeName (t : FixedType) : string
+      {
+        | FixedType.Class (ti, []) => clrName (ti)
+        | FixedType.Class (ti, args) => clrName (ti) + "[" + string.Join (",", args.Map (a => typeName (a.Fix ())).ToArray ()) + "]"
+        | FixedType.Array (t, rank) => typeName (t.Fix ()) + "[" + string (',', rank - 1) + "]"
+        | t => t.ToString ()
+      }
+      def recorded = SCG.List.[TypeBuilder] ();
+      def reach (t : FixedType) : void
+      {
+        | FixedType.Class (tb is TypeBuilder, args) =>
+          unless (recorded.Contains (tb)) recorded.Add (tb);
+          foreach (a in args) reach (a.Fix ())
+        | FixedType.Class (_, args) | FixedType.Tuple (args) => foreach (a in args) reach (a.Fix ())
+        | FixedType.Array (t, _) => reach (t.Fix ())
+        | _ => ()
+      }
+      foreach (scope in Manager.Continuation.Scopes)
+        foreach (binding in scope.Bindings)
+          try { reach (Manager.CoreEnv.BindFixedType (Nemerle.Compiler.main_parser.MainParser.ParseExpr (Manager.CoreEnv, binding.Clr, Location.Default, false))) }
+          catch { | _ is System.Exception => () }   // (a type this compilation cannot name is not one of its own)
+      def all = SCG.List.[TypeBuilder] ();
+      Iter (all.Add);
+      def fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                   | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
+      mutable done = 0;
+      mutable grew = true;
+      while (grew)
+      {
+        // (what the recorded types' fields hold and their bases; then the types derived from them, which a slot may hold)
+        for (; done < recorded.Count; done++)
+        {
+          def tb = recorded [done];
+          foreach (field in tb.GetFields (fields)) reach (field.GetMemType ());
+          match (tb.BaseType) { | null => () | b => reach (FixedType.Class (b, [])) }
+        }
+        def before = recorded.Count;
+        foreach (tb in all)
+          unless (recorded.Contains (tb))
+            when (tb.BaseType is TypeBuilder && recorded.Contains (tb.BaseType :> TypeBuilder)) recorded.Add (tb);
+        grew = recorded.Count > before || done < recorded.Count;
+      }
+      foreach (tb in recorded)
+      {
+        def identity = Nemerle.Compiler.continuation.ContinuationIdentity ();
+        identity.Name = clrName (tb);
+        identity.Base = match (tb.BaseType) { | null => "" | b => clrName (b) };
+        foreach (field in tb.GetFields (fields)) identity.Fields.Add ((field.Name, typeName (field.GetMemType ())));
+        Manager.Continuation.Identities.Add (identity);
+      }
+    }
+
     public Iter(f : TypeBuilder -> void) : void
     {
       Iter(infos.Reverse (), f);
@@ -852,6 +915,8 @@ using Nemerle.Compiler.Utility;
             }
             Manager.Continuation.Scopes.Add(stored);
           }
+        when (Manager.Options.ContinuationSection && Manager.Continuation != null && Manager.Continuation.Scopes.Count > 0)
+          RecordIdentities ();
         // the spaces go with the scopes, so that a continuing compilation (a plugin script) can dial into them;
         // a space this compilation itself continued from belongs to that other binary
         when (Manager.Options.ContinuationSection && Manager.Continuation != null && Manager.Options.NitraSources != null

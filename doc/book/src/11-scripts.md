@@ -191,6 +191,17 @@ the application sees 50
 The plugin is `plugin.ns` to the compiler, so its space is `dial:.plugin.G`. `using main;` imports the application's
 file, which is what makes its scope `A` (`main.A`) the plugin's `scope.A`.
 
+A slot can hold a value of the application's own types too, and a plugin reads it as that type. To .NET a type is a
+copy of an assembly and a name, so two copies of one library are two types; Nemerle keeps them one for what crosses
+a scope. A script that references a library the application has loaded gets the application's copy of it (the same
+name, version and key, or the same build when it has no key), so its values are the same types. A plugin with a copy
+of its own (compiled with the same code, or loaded in a context of its own) reads a value of the other copy as its
+own: each compilation records the types its slots reach (the slot's type, what its fields hold, the types derived
+from it) with their fields in its continuation section, and the read copies the value field by field when both
+copies record the same. The copy is the reader's: writing to it changes the reader's value only, until it is written
+back to the slot. Two copies of different fields are an error that names the field; a type no slot reaches records
+nothing, and its value read as another copy is an error that says so.
+
 ## Script kinds
 
 A library can declare a **kind of script**, as Kotlin's `@KotlinScript` does. A class marked `[ScriptDefinition(ext)]`

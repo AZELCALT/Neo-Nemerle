@@ -75,6 +75,20 @@ public sealed class ContinuationBinding
   public mutable Clr : string = "object";
 }
 
+/// A type whose values cross copies of it through a scope's storage (a slot's type, what its fields hold, the types
+/// derived from it), recorded by the compilation that defines it: its name and its shape. Two copies of one type (a
+/// host's and a plugin's, each compiled with it) are one type to Nemerle when both record the same: a value read from
+/// a slot as the other copy is copied field by field (Nemerle.Scopes.Scope.Read). A type no slot reaches has none.
+public sealed class ContinuationIdentity
+{
+  /// The CLR name (nested types with `+').
+  public mutable Name : string = "";
+  /// The base type's name (as written for fields, see below), "" for none.
+  public mutable Base : string = "";
+  /// The type's own instance fields in order, each with its type's name.
+  public Fields : SCG.List[string * string] = SCG.List();
+}
+
 /// A space stored with the scopes: enough to rebuild it in a continuing compilation, so a dial
 /// (dial:.file::member) reaches it and its mapping can register the space's resolver again.
 public sealed class ContinuationSpace
@@ -134,6 +148,7 @@ public sealed class ContinuationStore
   static TypeKind : byte = 3;
   static ScopeKind : byte = 4;
   static ModuleKind : byte = 5;
+  static IdentityKind : byte = 6;
 
   public mutable CompilerVersion : string = "";
   /// The compiled grammar image (one assembly for all grammars of the binary), uncompressed; null when none.
@@ -146,9 +161,11 @@ public sealed class ContinuationStore
   public Spaces : SCG.List[ContinuationSpace] = SCG.List();
   /// The file modules and their top-level code.
   public Modules : SCG.List[ContinuationModule] = SCG.List();
+  /// The types whose values cross copies of them through scopes.
+  public Identities : SCG.List[ContinuationIdentity] = SCG.List();
 
   public IsEmpty : bool
-  { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 && Scopes.Count == 0 && Spaces.Count == 0 && Modules.Count == 0 } }
+  { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 && Scopes.Count == 0 && Spaces.Count == 0 && Modules.Count == 0 && Identities.Count == 0 } }
 
   /// Offsets in the source text of a location (lines and columns are 1-based), or (-1, -1) when unknown.
   public static Span(text : string, location : Nemerle.Compiler.AST.Location) : int * int
@@ -375,6 +392,16 @@ public sealed class ContinuationStore
         WriteInt(modules, m.Exports.Count); foreach (x in m.Exports) WriteInt(modules, str(x));
       }
     }
+    def identities = MemoryStream();
+    when (Identities.Count > 0)
+    {
+      WriteInt(identities, Identities.Count);
+      foreach (t in Identities)
+      {
+        WriteInt(identities, str(t.Name)); WriteInt(identities, str(t.Base)); WriteInt(identities, t.Fields.Count);
+        foreach ((name, type) in t.Fields) { WriteInt(identities, str(name)); WriteInt(identities, str(type)) }
+      }
+    }
     def output = MemoryStream();
     output.Write(Magic, 0, Magic.Length);
     WriteInt(output, FormatVersion);
@@ -382,7 +409,7 @@ public sealed class ContinuationStore
     WriteInt(output, strings.Count);
     foreach (s in strings) WriteString(output, s);
     def subsections = (if (grammar.Length > 0) 1 else 0) + (if (macros.Length > 0) 1 else 0) + (if (types.Length > 0) 1 else 0)
-                      + (if (scopes.Length > 0) 1 else 0) + (if (modules.Length > 0) 1 else 0);
+                      + (if (scopes.Length > 0) 1 else 0) + (if (modules.Length > 0) 1 else 0) + (if (identities.Length > 0) 1 else 0);
     WriteInt(output, subsections);
     when (grammar.Length > 0)
     {
@@ -408,6 +435,11 @@ public sealed class ContinuationStore
     {
       output.WriteByte(ModuleKind);
       WriteBlob(output, modules.ToArray());
+    }
+    when (identities.Length > 0)
+    {
+      output.WriteByte(IdentityKind);
+      WriteBlob(output, identities.ToArray());
     }
     output.ToArray()
   }
@@ -492,6 +524,14 @@ public sealed class ContinuationStore
           store.Spaces.Add(s);
         }
       }
+      when (kind == IdentityKind)
+        repeat (payload.Int())
+        {
+          def t = ContinuationIdentity();
+          t.Name = strings[payload.Int()]; t.Base = strings[payload.Int()];
+          repeat (payload.Int()) { def name = strings[payload.Int()]; t.Fields.Add((name, strings[payload.Int()])) }
+          store.Identities.Add(t);
+        }
       when (kind == ModuleKind)
         repeat (payload.Int())
         {
