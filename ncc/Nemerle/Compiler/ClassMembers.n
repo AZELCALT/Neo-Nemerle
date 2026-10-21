@@ -1767,7 +1767,7 @@ public class MethodBuilder : MemberBuilder, IMethod
     // ---- merged from generation/HierarchyEmitter.n ----
     internal override CreateEmitBuilder (tb : Emit.TypeBuilder) : void
     {
-      when (SkipEmiting)
+      when (SkipEmiting || IsTypedOnly)
         return;
 
       if (MemberKind == MemberKinds.Constructor)
@@ -1779,9 +1779,13 @@ public class MethodBuilder : MemberBuilder, IMethod
     /**
      * Emits a method's body
      */
+    /// An async file's copy of its top-level code (_N_state_flow), typed for the types it gives the file's state: never
+    /// run, and not emitted (nor its closures and state machines, see Typer.RunSecondPass).
+    public IsTypedOnly : bool { get { Name == "_N_state_flow" && IsStatic && IsPrivate } }
+
     internal CompileAfterTyping () : void
     {
-      when (SkipEmiting)
+      when (SkipEmiting || IsTypedOnly)
         return;
 
       def setup_method (emitter) {

@@ -151,7 +151,9 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     (aprog / 'asyncprog.nproj').write_text('name = "asyncprog"\n[compiler]\noptions = ["-debug+"]\n')
     (aprog / 'main.n').write_text('using System.Threading.Tasks;\n\nasync Compute(n : int) : Task[int]\n{\n  def start = n * 2;\n'
                                   '  await Task.Delay(10);\n  def middle = start + 1;\n  await Task.Delay(10);\n  middle * 10\n}\n\n'
-                                  'System.Console.WriteLine(await Compute(4))\n')
+                                  'System.Console.WriteLine(await Compute(4));\n'
+                                  'def scaled = async (k : int) =>\n{\n  def shifted = k + 1;\n  await Task.Delay(10);\n  shifted * 3\n};\n'
+                                  'System.Console.WriteLine(await scaled(4))\n')
     r = subprocess.run([str(tc / 'ncc'), 'build', str(aprog)], capture_output=True, text=True)
     check(r.returncode == 0, 'the async program\'s build: ' + r.stdout + r.stderr)
     proc = subprocess.Popen([str(debugger), '--interpreter=vscode'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -160,7 +162,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     request('initialize', {'adapterID': 'nemerle', 'linesStartAt1': True, 'columnsStartAt1': True, 'pathFormat': 'path'})
     n = send('launch', {'program': 'dotnet', 'args': [str(aprog / 'out/asyncprog.dll')], 'cwd': str(aprog), 'justMyCode': True})
     wait(lambda m: m.get('event') == 'initialized' or (m.get('type') == 'response' and m.get('request_seq') == n), 'initialized')
-    request('setBreakpoints', {'source': {'path': str(aprog / 'main.n')}, 'breakpoints': [{'line': 7}]})
+    request('setBreakpoints', {'source': {'path': str(aprog / 'main.n')}, 'breakpoints': [{'line': 7}, {'line': 17}]})
     request('configurationDone')
     stopped = wait(lambda m: m.get('event') == 'stopped', 'the breakpoint after an await')
     thread = stopped['body']['threadId']
@@ -177,7 +179,15 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     check(frame['line'] == 9 and 'Compute' in frame['name'], 'a step over an await lands on the line after it (main.n:9): %s' % frame)
     check(values(frame).get('middle') == '9', 'the local set before the await')
     print('PASS: an async function: a breakpoint after an await, its locals, and a step over an await')
+    # an async lambda (its state machine a struct, as C#'s): a breakpoint after its await, its parameter and local
     request('continue', {'threadId': stepped['body']['threadId']})
+    stopped = wait(lambda m: m.get('event') == 'stopped', 'the breakpoint in the async lambda')
+    frame = request('stackTrace', {'threadId': stopped['body']['threadId']})['stackFrames'][0]
+    check(frame['line'] == 17, 'stopped in the async lambda after its await (main.n:17): %s' % frame)
+    local = values(frame)
+    check(local.get('shifted') == '5' and local.get('k') == '4', 'the async lambda\'s parameter and local: %s' % local)
+    print('PASS: an async lambda: a breakpoint after an await, and its locals')
+    request('continue', {'threadId': stopped['body']['threadId']})
     wait(lambda m: m.get('event') in ('exited', 'terminated'), 'the end of the async program')
     try: request('disconnect', {})
     except SystemExit: pass

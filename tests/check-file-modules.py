@@ -761,6 +761,37 @@ Console.WriteLine(log.Rev());
     if got != '''28 40 -1
 [a1, a2, finally a, cancelled at 3, plain 1, plain 2, waiting, closed 1, early 4, early 0]''':
         raise RuntimeError('async exits: got\n' + got)
+    # an async lambda given where a ValueTask is wanted; and stack traces with C#'s frames (each function once, but a
+    # rethrow after a wait, once more)
+    source('async/values.n', '''using System;
+using System.Threading.Tasks;
+
+Twice(f : Func[ValueTask[int]]) : ValueTask[int] { f() }
+Done(f : Func[ValueTask]) : ValueTask { f() }
+
+async Boom() : Task[int] { await Task.Delay(1); throw InvalidOperationException("boom") }
+async Rethrow() : Task[int] { try { await Boom() } catch { | _ => await Task.Delay(1); throw } }
+async Plain() : Task[int] { await Boom() }
+
+def typed : Func[ValueTask[int]] = async () => { await Task.Yield(); 5 };
+Console.WriteLine((await typed()) + (await Twice(async () => 6)));
+await Done(async () => { await Task.Delay(1); Console.WriteLine("done") });
+def frames(t : Task[int]) : string
+{
+  try { _ = t.Result; "" }
+  catch { | e is AggregateException => string.Join(" ", $[l.Trim().Split(' ')[1] | l in e.InnerException.StackTrace.Split('\\n')]) }
+}
+Console.WriteLine(frames(Rethrow()));
+Console.WriteLine(frames(Plain()))
+''')
+    run([runtime, compiler, work / 'async/values.n', '-debug+', '-source-root:' + str(work / 'async'), '-out:' + str(work / 'async-values.exe'), '-no-color', *modern_references])
+    shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'async-values.runtimeconfig.json')
+    got = run([runtime, work / 'async-values.exe']).stdout.strip()
+    if got != '''11
+done
+values.Boom() values.Rethrow() values.Rethrow()
+values.Boom() values.Plain()''':
+        raise RuntimeError('async values and traces: got\n' + got)
     source('async/iterators.n', '''using System;
 using System.Collections.Generic;
 using System.Linq;

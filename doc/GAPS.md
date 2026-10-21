@@ -12,8 +12,10 @@ unless it says so. These edges will be closed, which can change what happens the
   boxes are shared as they are.
 ## Async
 
-- **An async lambda returns a `Task` or `Task[T]`** (or is given as a `void` delegate), not a `ValueTask`, and is not
-  an async stream.
+- **An async lambda's own task is a `Task` or `Task[T]`.** Given where a delegate that returns a `ValueTask` is wanted,
+  its task is wrapped in one (C# makes it a `ValueTask` machine, which does not allocate a task); a delegate's
+  constructor (`Func.[ValueTask[int]](async () => ...)`) does not convert it. An async lambda is not an async
+  stream.
 - **A function with a lambda in it has a class state machine**, which its lambdas share: one allocation per call
   (112 bytes for a small one that does not wait, where C# allocates 88: a struct, and a class for the locals the
   lambdas use only). Async functions and lambdas without lambdas in them get C#'s struct, and async streams C#'s

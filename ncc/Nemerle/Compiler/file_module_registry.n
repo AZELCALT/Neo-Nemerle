@@ -294,7 +294,11 @@ public sealed class FileModuleRegistry
       def type = manager.NameTree.LookupInternalType(NList.FromArray(name.Split('.'))) :> TypeBuilder;
       def body = code.Body;
       def task = <[ System.Threading.Tasks.Task ]>;
-      def define(decl : ClassMember) : void { type.Define(Nemerle.Compiler.UtilMacros.locate(code.Location, decl)) }
+      // (at the code's place: a method without one has no document in the debug information; a program's main file
+      // records none, its code's statements have theirs)
+      def place = if (code.Location.FileIndex != 0) code.Location
+                  else match (body) { | first :: _ when first.Location.FileIndex != 0 => first.Location + body.Last.Location | _ => code.Location };
+      def define(decl : ClassMember) : void { decl.Location = place; type.Define(decl) }
       // the code as it would be without waiting, never run: typed first, as a file's Main and static constructor are
       // (in import order), it gives the file's state its types before the fields are made (the async function's
       // code is typed later, in its state machine)

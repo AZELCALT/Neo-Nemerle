@@ -173,8 +173,9 @@ An `async` function cannot have `ref` or `out` parameters, and the compiler refu
 
 A lambda or local function is async when written so: `async (x) => ...`, `async x => ...`, `async fun (x) { ... }`
 and `async def f(x) : Task[T] { ... }`. Its body waits as an async function's does, and it returns a `Task[T]`, or a
-`Task` when its body has no value. One given where a `void` delegate is wanted, an event handler, is started and
-not waited for, as C#'s `async void`: what it throws ends the process, unless handled.
+`Task` when its body has no value (given where a `Func[ValueTask[T]]` is wanted, a `ValueTask[T]`). One given where
+a `void` delegate is wanted, an event handler, is started and not waited for, as C#'s `async void`: what it throws
+ends the process, unless handled.
 
 ```nemerle
 using System;

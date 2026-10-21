@@ -177,7 +177,7 @@ using Nemerle.Compiler.Utility;
         _module_builder.DefineDocument (Path.GetFullPath (Location.GetFileName(fileIndex)), 
           SymDocumentType.Text, SymLanguageType.ILAssembly, SymLanguageVendor.Microsoft);
       else {
-        Message.Warning ("missing debug location, this is probably some internal compiler error"); 
+        Message.Warning ($"missing debug location in $(_method_builder.DeclaringType.FullName).$(_method_builder.Name), this is probably some internal compiler error"); 
         def loc = LocationStack.Top();
         if (loc != Location.Default)
           DefineDebugDocument (loc.FileIndex);

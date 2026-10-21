@@ -509,10 +509,11 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
     def first = Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ when (Nemerle.Async.Machine.Never) yield null ]>);
     // (one block: the parameter's `def' is in the body's scope)
     def body = PExpr.Sequence(m.Body.Location, first :: tokens.Rev() + [Spill(m.Body, true), <[ () ]>]);
-    def method = if (m.Attributes %&& NemerleModifiers.Static)
+    // (at F's place: a method without one has no document in the debug information)
+    def method = Nemerle.Compiler.UtilMacros.locate(loc, if (m.Attributes %&& NemerleModifiers.Static)
                    <[ decl: private static $(iterator : name) (..$parameters) : $returned { $body } ]>
                  else
-                   <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>;
+                   <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>);
     (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
     tb.Define(method);
     m.Body = Nemerle.Compiler.UtilMacros.locate(loc, <[ $(iterator : name) (..$arguments) ]>);
@@ -545,10 +546,11 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
                  <[ $first;
                     $(Ending(m.Body, last => Nemerle.Compiler.UtilMacros.locate(last.Location,
                         <[ def value = $last; $(Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ Nemerle.Async.Machine.Return(value) ]>)) ]>))) ]>;
-    def method = if (m.Attributes %&& NemerleModifiers.Static)
+    // (at F's place: a method without one has no document in the debug information)
+    def method = Nemerle.Compiler.UtilMacros.locate(loc, if (m.Attributes %&& NemerleModifiers.Static)
                    <[ decl: private static $(iterator : name) (..$parameters) : $returned { $body } ]>
                  else
-                   <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>;
+                   <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>);
     (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
     tb.Define(method);
     m.Body = Nemerle.Compiler.UtilMacros.locate(loc, <[ $(iterator : name) (..$arguments) ]>);
@@ -585,10 +587,11 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
                   $(Ending(m.Body, last => Nemerle.Compiler.UtilMacros.locate(last.Location,
                       <[ def value = $last; $(Nemerle.Compiler.UtilMacros.locate(m.Body.Location.AsGenerated(), <[ $(driver : name).Result = value ]>)) ]>))) ]>;
   def ienumerable = <[ System.Collections.Generic.IEnumerable[object] ]>;
-  def method = if (m.Attributes %&& NemerleModifiers.Static)
+  // (at F's place: a method without one has no document in the debug information)
+  def method = Nemerle.Compiler.UtilMacros.locate(loc, if (m.Attributes %&& NemerleModifiers.Static)
                  <[ decl: private static $(iterator : name) (..$parameters) : $ienumerable { $body } ]>
                else
-                 <[ decl: private $(iterator : name) (..$parameters) : $ienumerable { $body } ]>;
+                 <[ decl: private $(iterator : name) (..$parameters) : $ienumerable { $body } ]>);
   (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
   tb.Define(method);
   def start = <[ $(iterator : name) (..$arguments) ]>;

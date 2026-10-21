@@ -640,6 +640,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       
       when (StopAfterPhase > 0 && StopAfterPhase == 1)
         return;
+      // (an async file's copy of its top-level code, typed for the types it gives the file's state and never run or
+      // emitted: no closures or state machines of its own, whose debug information would be a second copy of the code's)
+      when (meth.IsTypedOnly)
+        return;
       
       def t2 = Typer2 (current_type, meth, this);
       t2.Run ();
@@ -1468,14 +1472,18 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       // an async lambda (a function returning a Task) where a `void' delegate is wanted (an event handler): the delegate
       // starts it and leaves its Task, as C#'s `async void' does (what it throws comes out on the thread pool)
+      // (the type arguments of a Task, or of a ValueTask: [] or [T]; null for another type)
+      def taskArguments(t : TypeVar, name : string) : list[TypeVar]
+      {
+        match (t.Hint) { | Some(FixedType.Class(tc, args)) when tc.FullName == name => args | _ => null }
+      }
+      def returned(t : TypeVar) : TypeVar
+      {
+        match (t.Hint) { | Some(FixedType.Fun(_, to)) => to | _ => null }
+      }
       def returnsTask(t : TypeVar) : bool
       {
-        match (t.Hint)
-        {
-          | Some(FixedType.Fun(_, to)) =>
-            match (to.Hint) { | Some(FixedType.Class(tc, [])) => tc.FullName == "System.Threading.Tasks.Task" | _ => false }
-          | _ => false
-        }
+        returned(t) != null && taskArguments(returned(t), "System.Threading.Tasks.Task") is []
       }
       // an async lambda: its body starts the state machine the async macros make (_N_async_local_<n>)
       def startsStateMachine(e : TExpr) : bool
@@ -1510,8 +1518,35 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           }
         | _ => false
       }
+      // an async lambda given where a delegate that returns a ValueTask (or ValueTask[T]) is wanted, as C# allows: its
+      // task, as the ValueTask
+      def valued(target : TypeVar)
+      {
+        match (TryExtractFunType(target.Hint))
+        {
+          | (del, null, args, ret) when del != null && returned(expr.Type) != null =>
+            def wanted = taskArguments(ret, "System.Threading.Tasks.ValueTask");
+            def made = taskArguments(returned(expr.Type), "System.Threading.Tasks.Task");
+            if (wanted != null && made != null && wanted.Length == made.Length && !expr.Type.TryRequire(FixedType.Fun(TypeVar.FromList(args), args.Length, ret)))
+            {
+              def names = args.Map(_ => Macros.NewSymbol("argument"));
+              def parameters = names.Map(n => <[ parameter: $(n : name) ]>);
+              def arguments = names.Map(n => <[ $(n : name) ]>);
+              def task = <[ $(expr : typed)(..$arguments) ]>;
+              def value = match (made) { | [t] => <[ System.Threading.Tasks.ValueTask.[$(t : typed)]($task) ]> | _ => <[ System.Threading.Tasks.ValueTask($task) ]> };
+              TypeExpr(<[ fun (..$parameters) { $value } ]>)
+            }
+            else null
+          | _ => null
+        }
+      }
+      def as_value_task =
+        if (IsFunctional(expr) && returned(expr.Type) != null && taskArguments(returned(expr.Type), "System.Threading.Tasks.Task") != null && isAsyncLambda(expr))
+          valued(target)
+        else null;
       def adapted =
-        if (IsFunctional(expr) && returnsTask(expr.Type) && isAsyncLambda(expr))
+        if (as_value_task != null) as_value_task
+        else if (IsFunctional(expr) && returnsTask(expr.Type) && isAsyncLambda(expr))
           match (TryExtractFunType(target.Hint))
           {
             | (del, null, args, ret) when del != null && ret.Hint is Some(FixedType.Void)
