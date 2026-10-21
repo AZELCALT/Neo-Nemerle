@@ -357,6 +357,9 @@ using Nemerle.Compiler.Utility;
     internal mutable static_method : IMethod;
     internal mutable typarms_to_pass : list[TypeVar]; 
     internal mutable closure_type : FixedType.Class;
+    /// An async function's struct state machine with lambdas in it: its field holding the class (as C#'s display
+    /// class) with the locals the lambdas use, which is this function's closure for them (closure_type).
+    internal mutable display_field : IField;
     // end
 
     public this (loc          : Location,
@@ -397,6 +400,7 @@ using Nemerle.Compiler.Utility;
       static_method             = null;
       typarms_to_pass           = null;
       closure_type              = null;
+      display_field             = null;
     }
 
     public CompareTo (other : TFunHeader) : int

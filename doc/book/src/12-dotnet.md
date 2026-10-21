@@ -162,7 +162,8 @@ handler: nothing waits for it, and what it throws ends the process, as in C#.
 
 As in C#, an async function is compiled to a *state machine*: a struct that keeps its locals between its waits.
 A function that finishes without waiting allocates nothing, and one that waits moves the struct to the heap once.
-An async lambda's is a struct too; a function with lambdas in it, which share its locals, has a class.
+An async lambda's is a struct too, and the locals that lambdas in a function share are a class's, which the struct
+has (as C#'s display class).
 
 An `async` function cannot have `ref` or `out` parameters, and the compiler refuses an `await` where it cannot work:
 

@@ -661,7 +661,19 @@ macro __async_lambda(e)
   def lower(body : PExpr, declared : PExpr, forgotten : bool, parameters : list[Name]) : PExpr
   {
     def iterator = Macros.NewSymbol("async_local");   // _N_async_local_<n>: typed as an iterator
-    Macros.Manager().UserData["Nemerle.AsyncMacros.struct:" + iterator.Id] = true;   // (its awaits are the machine's)
+    def manager = Macros.Manager();
+    manager.UserData["Nemerle.AsyncMacros.struct:" + iterator.Id] = true;   // (its awaits are the machine's)
+    // a lambda is typed as a Task's first; given where a ValueTask is wanted, it is made again from its code, as a
+    // ValueTask's (Typer.NonLiteralCast asks, with `wanted'), and the first one is dropped
+    when (declared == null)
+    {
+      manager.UserData["Nemerle.AsyncMacros.source:" + iterator.Id] = e;
+      when (manager.UserData.Contains("Nemerle.AsyncMacros.wanted"))
+      {
+        manager.UserData.Remove("Nemerle.AsyncMacros.wanted");   // (this lambda's, not those in it)
+        manager.UserData["Nemerle.AsyncMacros.valuetask:" + iterator.Id] = true;
+      }
+    }
     // (its machine is a struct, as C#'s, unless lambdas in it share its locals: then a class)
     when (Lambdas(body)) Macros.Manager().UserData["Nemerle.AsyncMacros.class:" + iterator.Id] = true;
     def body = Returning(Spill(body));
@@ -697,10 +709,15 @@ macro __async_lambda(e)
     | PExpr.DefFunctions(functions) =>
       foreach (f in functions) f.body = lower(f.body, declared(f.header.ReturnType), f.header.ReturnType is PExpr.Void, Named(f.header.Parameters));
       e
-    | _ when lambda(false) != null => lambda(false)
     | _ =>
-      Message.Error(e.Location, "`async' makes a lambda (`async fun', `async (x) => ...') or a local function (`async def') async");
-      e
+      // (made once: making it records its machine, see lower)
+      match (lambda(false))
+      {
+        | null =>
+          Message.Error(e.Location, "`async' makes a lambda (`async fun', `async (x) => ...') or a local function (`async def') async");
+          e
+        | made => made
+      }
   }
 }
 
@@ -747,7 +764,13 @@ macro __async_result(body)
   def machine = (typer.CurrentFunction :: typer.CurrentFunction.GetParents()).Find(h => h.Name.StartsWith("_N_async_local_"));
   def task(args)
   {
-    Nemerle.Compiler.fixed_type.FixedType.Class(manager.LookupTypeInfo("System.Threading.Tasks.Task", args.Length), args)
+    // (a ValueTask when the lambda is made again for one, see __async_lambda)
+    def name = match (machine)
+      {
+        | Some(h) when manager.UserData.Contains("Nemerle.AsyncMacros.valuetask:" + h.Name) => "System.Threading.Tasks.ValueTask"
+        | _ => "System.Threading.Tasks.Task"
+      };
+    Nemerle.Compiler.fixed_type.FixedType.Class(manager.LookupTypeInfo(name, args.Length), args)
   }
   // a declared task with a value (Task[T], ValueTask[T]), or none
   def valued = match (machine)

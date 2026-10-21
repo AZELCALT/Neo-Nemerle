@@ -506,12 +506,37 @@ using Nemerle.Compiler.Utility;
     }
 
     #region Local reference through closures
-    /** Return code referencing closure of [hd].  */
+    /** Return code referencing closure of [hd]: for a function whose struct state machine keeps the locals its lambdas
+        use apart (display_field), the class that has them, which is what the lambdas get.  */
     ClosureRef (hd : TFunHeader) : TExpr
+    {
+      Displayed (hd, ClosureRefRaw (hd))
+    }
+
+    /// `machine', a reference to the state machine of `hd' (or what else ClosureRefRaw gives): its display class, when
+    /// it has one.
+    Displayed (hd : TFunHeader, machine : TExpr) : TExpr
+    {
+      def owner = if (hd.Name == "_N_yielding_function") hd.decl.DefinedIn else hd;
+      match (owner.display_field)
+      {
+        | null => machine
+        | field =>
+          match (machine.Type.Hint)
+          {
+            | Some (FixedType.Class (tc, _)) when tc.Equals (field.DeclaringType) =>
+              TExpr.FieldMember (machine.FixedType ().TypeOfMember (field), machine, field)
+            | _ => machine
+          }
+      }
+    }
+
+    /** The closure of [hd] itself (a state machine, not its display class).  */
+    ClosureRefRaw (hd : TFunHeader) : TExpr
     {
       //Message.Debug ($"clo ref: $(hd.name)");
       if (hd.usage == FunctionUsage.UsedJustOnce && !hd.ConvertToLoopWithClosure)
-        ClosureRef(hd.decl.DefinedIn)
+        ClosureRefRaw(hd.decl.DefinedIn)
       // a loop with its own closure, in a method that is a closure itself (an iterator's MoveNext): the loop's
       // locals are in the loop's object, not in this
       else if (current_method.is_in_closure_of != 0 && hd.ConvertToLoopWithClosure && GetClosure(hd.id) != null)
@@ -582,7 +607,13 @@ using Nemerle.Compiler.Utility;
               current_local_fun.ConvertToLoopWithClosure = false;
 
             assert(decl.ClosureField != null);
-            def clo_ref = ClosureRef(decl.DefinedIn);
+            // (a local of a state machine is its field, or its display class's when lambdas use it)
+            def raw = ClosureRefRaw(decl.DefinedIn);
+            def clo_ref = match (raw.Type.Hint)
+              {
+                | Some (FixedType.Class (tc, _)) when tc.Equals (decl.ClosureField.DeclaringType) => raw
+                | _ => Displayed (decl.DefinedIn, raw)
+              };
 
             TExpr.FieldMember (clo_ref.FixedType().TypeOfMember (decl.ClosureField), clo_ref, decl.ClosureField)
           }
@@ -1673,13 +1704,12 @@ using Nemerle.Compiler.Utility;
         // an async function's state machine as C#'s: a struct (the async macros make the method, _N_asyncs_F)
         def local_machine = uses_yield && current_local_fun.decl != null && current_local_fun.Name.StartsWith ("_N_async_local_")
                             && Manager.UserData.Contains ("Nemerle.AsyncMacros.struct:" + current_local_fun.Name);
-        def local_class = local_machine && Manager.UserData.Contains ("Nemerle.AsyncMacros.class:" + current_local_fun.Name);
-        def struct_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncs_")
-                             || local_machine && !local_class;
-        // (as a class, for a function with lambdas in it: _N_asyncc_F)
-        def class_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncc_")
-          // (and an async lambda's or local function's, with lambdas in it)
-          || local_class;
+        // (with lambdas in it, _N_asyncc_F or an async lambda's: a struct too, as C#'s, and the locals the lambdas use are a
+        // class's, its display class, see below)
+        def struct_machine = uses_yield && current_local_fun.decl == null && the_method != null
+                             && (the_method.Name.StartsWith ("_N_asyncs_") || the_method.Name.StartsWith ("_N_asyncc_"))
+                             || local_machine;
+        def class_machine = false;
         // an async stream's, as C#'s: a class that is the stream (_N_asyncm_F)
         def stream_machine = uses_yield && current_local_fun.decl == null && the_method != null && the_method.Name.StartsWith ("_N_asyncm_");
         // (what the stream is enumerated with is kept in a field of its own: its copies combine it with their tokens)
@@ -1771,6 +1801,47 @@ using Nemerle.Compiler.Utility;
         mutable parm_field_names = [];
         mutable hoisted = 0;
 
+        // a struct state machine with lambdas in it: the locals they use (a nested function's, not inlined in MoveNext)
+        // are fields of a class the machine has (<>8__locals, as C#'s display class), which is the closure the lambdas
+        // get; the machine's other locals stay its own fields
+        // (code of the machine itself: the function, its body's, and what is inlined in them, as a loop; a lambda's state
+        // machine function, called once, is not)
+        def inlined (h : TFunHeader) : bool
+        {
+          if (h.id == current_local_fun.id) true
+          else if (h.decl == null) false
+          else if (h.Name == "_N_yielding_function") h.decl.DefinedIn.id == current_local_fun.id
+          else h.usage == FunctionUsage.UsedJustOnce && h.yield_type == null && !h.cannot_inline && inlined (h.decl.DefinedIn)
+        }
+        def used_by_lambda (decl : LocalValue) : bool
+        {
+          mutable used = false;
+          foreach (h in decl.UsedIn) when (!inlined (h)) used = true;
+          used
+        }
+        def displaced = if (struct_machine) vars.Filter (used_by_lambda) else [];
+        mutable display = null;
+        mutable display_mtype = null;
+        mutable display_field = null;
+        mutable display_subst = null;
+        unless (displaced.IsEmpty)
+        {
+          def display_name = Macros.NewSymbol ("display").NewName ($"<>c__DisplayClass$(Manager.GetNewId ())");
+          def d = CurrentType.DefineNestedType (<[ decl: class $(display_name : name) { internal this () {} } ]>, do_fixup = false);
+          // (its own copies of the type parameters: one belongs to one generic type)
+          def (display_tp, subst) = CopyFunTyparms (add_class_tyvars = true);
+          display_subst = subst;
+          d.forced_typarms = display_tp;
+          d.FixupDefinedClass ();
+          display = d;
+          display_mtype = FixedType.Class (d, FunAndClassTyparmsRefs ());
+          display_field = clo_type.DefineAndReturn (<[ decl: internal mutable $("<>8__locals" : dyn) : $(fix_type (display_mtype) : typed); ]>) :> IField;
+          Manager.MarkAsAssigned (display_field);
+          current_local_fun.display_field = display_field;
+          current_local_fun.closure_type = display_mtype;
+        }
+        def display_names = Hashtable ();
+
         foreach (decl in vars)
         {
           def name =
@@ -1802,8 +1873,21 @@ using Nemerle.Compiler.Utility;
             else
               Macros.NewSymbol (decl.Name);
           //Message.Debug ($"clo field: $name $(fix_type (decl.Type)) tv=$new_tp");
-          def ptdecl = <[ decl: internal mutable $(name : name) : $(fix_type (decl.Type) : typed); ]>;
-          def fld = clo_type.DefineAndReturn (ptdecl);
+          // (in the display class, named as C#'s: by the local's own name)
+          def in_display = display != null && displaced.Contains (decl);
+          def name =
+            if (in_display && !decl.Name.StartsWith ("_N_") && !display_names.Contains (decl.Name)
+                && (decl.ValKind is LocalValue.Kind.Plain || decl.ValKind is LocalValue.Kind.FunParm))
+              Nemerle.Compiler.Parsetree.Name (decl.Name)
+            else if (in_display && decl.ValKind is LocalValue.Kind.ClosurisedThisPointer)
+              Nemerle.Compiler.Parsetree.Name ("<>4__this")
+            else name;
+          when (in_display) display_names [name.Id] = true;
+          def field_type = if (!in_display) fix_type (decl.Type)
+                           else if (display_subst == null) decl.Type.DeepFix ()
+                           else display_subst.Apply (decl.Type.DeepFix ());
+          def ptdecl = <[ decl: internal mutable $(name : name) : $(field_type : typed); ]>;
+          def fld = if (in_display) display.DefineAndReturn (ptdecl) else clo_type.DefineAndReturn (ptdecl);
           decl.ClosureField = fld :> IField;
           Manager.MarkAsAssigned (decl.ClosureField);
           when((is_enumerable || stream_machine) && (decl.ValKind is LocalValue.Kind.FunParm || decl.ValKind is LocalValue.Kind.ClosurisedThisPointer))
@@ -1850,10 +1934,20 @@ using Nemerle.Compiler.Utility;
 
         clo_type.Compile ();
 
+        // (the display class is made with the machine, before the parameters are stored, some in it)
+        def allocate =
+          if (display == null) []
+          else
+          {
+            when (display != null) { Manager.MarkAsUsed (display); display.Compile () }
+            def ctor = SingleMemberLookup (display, ".ctor");
+            [TExpr.Assign (InternalType.Void, TExpr.FieldMember (display_mtype, PlainRef (closure_val), display_field),
+                           TExpr.Call (display_mtype, TExpr.StaticRef (ctor.GetMemType (), display_mtype, ctor, []), [], false))]
+          };
         if (kept_by_enumerator)
           [TExpr.Assign (InternalType.Void, ClosureValueRef (closure_val), ctor_call)]
         else
-          parent_stores + [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
+          allocate + parent_stores + [TExpr.DefValIn (InternalType.Void, closure_val, ctor_call, null)]
       }
     }
 

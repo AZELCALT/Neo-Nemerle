@@ -1518,23 +1518,88 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           }
         | _ => false
       }
-      // an async lambda given where a delegate that returns a ValueTask (or ValueTask[T]) is wanted, as C# allows: its
-      // task, as the ValueTask
+      // the async lambda's state machine function (_N_async_local_<n>), in its typed or its parsed code
+      def machineName(e : TExpr) : string
+      {
+        | TExpr.DebugInfo(e, _) | TExpr.MacroEnvelope(_, _, e, _) | TExpr.DefValIn(_, _, e) | TExpr.Block(_, e) => machineName(e)
+        | TExpr.Sequence(a, b) => match (machineName(a)) { | null => machineName(b) | n => n }
+        | TExpr.DefFunctionsIn(functions, rest) =>
+          match (functions.Find(f => f.Name.StartsWith("_N_async_local_"))) { | Some(f) => f.Name | None => machineName(rest) }
+        | _ => null
+      }
+      // the async lambda's code, as written (`async (x) => ...'): what the async macros keep for its machine (its body
+      // typed, or not yet: then its machine's function is in its parsed code)
+      def lambdaSource(e : TExpr) : PExpr
+      {
+        | TExpr.DebugInfo(e, _) | TExpr.MacroEnvelope(_, _, e, _) => lambdaSource(e)
+        | TExpr.DefFunctionsIn([lambda], _) =>
+          match (lambda.body)
+          {
+            | FunBody.Typed(body) =>
+              match (machineName(body))
+              {
+                | null => null
+                | name when Manager.UserData.Contains("Nemerle.AsyncMacros.source:" + name) => Manager.UserData["Nemerle.AsyncMacros.source:" + name] :> PExpr
+                | _ => null
+              }
+            | FunBody.Parsed(body) =>
+              mutable found = null;
+              _ = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+                {
+                  match (node)
+                  {
+                    | PExpr.DefFunctions(functions) when !after && found == null =>
+                      match (functions.Find(f => f.header.PName.Id.StartsWith("_N_async_local_")))
+                      {
+                        | Some(f) when Manager.UserData.Contains("Nemerle.AsyncMacros.source:" + f.header.PName.Id) =>
+                          found = Manager.UserData["Nemerle.AsyncMacros.source:" + f.header.PName.Id] :> PExpr
+                        | _ => ()
+                      }
+                    | _ => ()
+                  }
+                  node
+                });
+              found
+            | _ => null
+          }
+        | _ => null
+      }
+      // an async lambda given where a delegate that returns a ValueTask (or ValueTask[T]) is wanted, as C# allows: it is
+      // made again from its code, as a ValueTask's state machine (the Task's typed first is dropped)
       def valued(target : TypeVar)
       {
-        match (TryExtractFunType(target.Hint))
+        // (a delegate, or a function type: a delegate's constructor takes its Invoke's)
+        def signature = match (target.Hint)
+          {
+            | Some(FixedType.Fun as f) => def (args, ret) = f.Decompose; (null, null, args, ret)
+            | hint => TryExtractFunType(hint)
+          };
+        match (signature)
         {
-          | (del, null, args, ret) when del != null && returned(expr.Type) != null =>
+          | (_, null, args, ret) when args != null && ret != null && returned(expr.Type) != null =>
             def wanted = taskArguments(ret, "System.Threading.Tasks.ValueTask");
             def made = taskArguments(returned(expr.Type), "System.Threading.Tasks.Task");
-            if (wanted != null && made != null && wanted.Length == made.Length && !expr.Type.TryRequire(FixedType.Fun(TypeVar.FromList(args), args.Length, ret)))
+            def source = lambdaSource(expr);
+            if (wanted != null && made != null && wanted.Length == made.Length && source != null
+                && !expr.Type.TryRequire(FixedType.Fun(TypeVar.FromList(args), args.Length, ret)))
             {
-              def names = args.Map(_ => Macros.NewSymbol("argument"));
-              def parameters = names.Map(n => <[ parameter: $(n : name) ]>);
-              def arguments = names.Map(n => <[ $(n : name) ]>);
-              def task = <[ $(expr : typed)(..$arguments) ]>;
-              def value = match (made) { | [t] => <[ System.Threading.Tasks.ValueTask.[$(t : typed)]($task) ]> | _ => <[ System.Threading.Tasks.ValueTask($task) ]> };
-              TypeExpr(<[ fun (..$parameters) { $value } ]>)
+              if (solver.IsTopLevel)
+              {
+                Manager.UserData["Nemerle.AsyncMacros.wanted"] = true;
+                try { TypeExpr(<[ Nemerle.AsyncMacros.__async_lambda($source) ]>) }
+                finally { Manager.UserData.Remove("Nemerle.AsyncMacros.wanted") }
+              }
+              else
+              {
+                // (while overloads are tried, where its `yield's cannot be typed: its Task as the ValueTask, which has the
+                // type the remade one has)
+                def names = args.Map(_ => Macros.NewSymbol("argument"));
+                def parameters = names.Map(n => <[ parameter: $(n : name) ]>);
+                def arguments = names.Map(n => <[ $(n : name) ]>);
+                def task = <[ $(expr : typed)(..$arguments) ]>;
+                def value = match (made) { | [t] => <[ System.Threading.Tasks.ValueTask.[$(t : typed)]($task) ]> | _ => <[ System.Threading.Tasks.ValueTask($task) ]> };
+                TypeExpr(<[ fun (..$parameters) { $value } ]>)
+              }
             }
             else null
           | _ => null
