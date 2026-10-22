@@ -184,11 +184,13 @@ System.Console.WriteLine($"$(Add(10)): $(Show())")
 A top-level value's type comes from the whole top-level code: `mutable items = [];` is a list whose element type a
 later `items ::= 1` gives. A function, a lambda or a local function reads the value's storage, so it may be written
 above the value's binding and sees whatever the storage holds when it runs. Binding a name again writes the same
-storage: `def x = 5; def x = x * 2;` leaves 10. If the new binding has another type, the storage holds a `Content`
-(the value and its current type). Functions read it as its final type, or through the Content itself
-(`x.As.[string]()`, `x.Is.[int]()`). Code that takes any object (a parameter of type `object`) gets the Content
-itself, so the value keeps its type. If any code still needs one of its earlier types, the type change is an error at
-the binding that changes it:
+storage: `def x = 5; def x = x * 2;` leaves 10.
+
+A top-level value follows the rules of chapter 2: a `def` bound again, or a `mutable` without a type, may change
+type, and the top-level code knows its type after each binding or assignment. Its storage is of that one type, or a
+container when the type changes (which the compiler handles). Code outside the top-level code (a function, a lambda)
+reads the value whenever it runs, so it does not rely on any one of its types: it checks it first, with `match` or
+`if (x is T)`, which give it the value as the type checked. A use without a check is an error there:
 
 ```nemerle,fail
 def y = 5;
@@ -198,8 +200,22 @@ System.Console.WriteLine(Twice())
 ```
 
 ```text
-`y' changes type here (from int to string), but line 3 uses it as int
+`y' is a top-level value of several types (int, string)
 ```
+
+```nemerle
+def y = 5;
+def y = y.ToString() + "!";
+Shout() : string { match (y) { | s is string => s.ToUpper() | _ => "a number" } }
+System.Console.WriteLine(Shout())
+```
+
+```text
+5!
+```
+
+A top-level `mutable` that a function of the file assigns can change at any time (an async function's assignment
+comes later): the top-level code reads it from its storage too, and checks it when it has several types.
 
 Before its first binding a value does not exist yet. Reading it there gives `NotYet`, which nothing accepts:
 

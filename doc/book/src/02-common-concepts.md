@@ -62,6 +62,89 @@ WriteLine(x)
 10
 ```
 
+A name keeps its kind: a `def` is not bound again as a `mutable`, nor the other way round.
+
+### A mutable whose type changes
+
+A `mutable` written without a type can be given a value of another type. That is not dynamic typing: the compiler
+follows the code, and after each assignment it knows the one type the value has.
+
+```nemerle
+using System.Console;
+
+mutable answer = 42;
+WriteLine(answer + 1);
+answer = "forty-two";
+WriteLine(answer.Length)
+```
+
+```text
+43
+9
+```
+
+Where the compiler cannot know which type the value has (after an `if` that changes it on one way only, around a loop,
+inside a lambda, which runs whenever it is called), the value has a *set* of types. A use without a check must fit
+every type in the set (`WriteLine(value)` takes an `int` and a `string` alike); a check picks the types it handles:
+
+```nemerle
+using System.Console;
+
+def describe(n : int) : string
+{
+  mutable value = n;
+  when (n > 10) value = "big";
+  match (value)
+  {
+    | i is int => $"the number $i"
+    | s is string => s
+  }
+}
+
+WriteLine(describe(3));
+WriteLine(describe(30))
+```
+
+```text
+the number 3
+big
+```
+
+`if (value is string)` is a check too: inside it, `value` is a `string`. A use that does not fit one of the types is
+an error, which says which:
+
+```nemerle,fail
+def doubled(n : int) : int
+{
+  mutable value = n;
+  when (n > 10) value = "big";
+  value * 2
+}
+System.Console.WriteLine(doubled(3))
+```
+
+```text
+`value' can be string or int here, and this does not fit it as string
+```
+
+A `mutable` with a type written down (`mutable count : int = 0`) keeps that type. One written without a value
+(`mutable total;`) is *NotYet* until the code gives it one: reading it where some way to the read has not assigned
+it is an error. An `out` argument assigns it.
+
+```nemerle,fail
+def total(c : bool) : int
+{
+  mutable sum;
+  when (c) sum = 1;
+  sum
+}
+System.Console.WriteLine(total(true))
+```
+
+```text
+`sum' is NotYet here
+```
+
 ## Types and inference
 
 Every value has a type, fixed at compile time. You rarely write it down: the compiler infers types from how values are

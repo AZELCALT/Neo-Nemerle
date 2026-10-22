@@ -164,6 +164,7 @@ public class MacroRegistry
     {
       | _ is Typer.SwitchToYielding            => throw;
       | _ is RestartInErrorMode                => throw;
+      | _ is Typer.FlowRestart                 => throw;
       | _ is Nemerle.Compiler.typer.CompletionResult => throw;
       | _ is Nemerle.Compiler.Utility.Recovery => throw;
       | e => 

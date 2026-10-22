@@ -1101,7 +1101,7 @@ public abstract class TypeUnifier
 
   public TryUnify(t1 : TypeSymbol, t2 : TypeSymbol) : bool
   {
-    mutable updatedVariables;
+    mutable updatedVariables : LightList[TypeVarSymbol];
     def result = Unify(t1, t2, ref updatedVariables);
     ResetTypeVars(ref updatedVariables);
     result
@@ -1109,7 +1109,7 @@ public abstract class TypeUnifier
 
   public Unify(t1 : TypeSymbol, t2 : TypeSymbol) : bool
   {
-    mutable updatedVariables;
+    mutable updatedVariables : LightList[TypeVarSymbol];
     def result = Unify(t1, t2, ref updatedVariables);
     unless (result)
       ResetTypeVars(ref updatedVariables);
@@ -1131,7 +1131,7 @@ public abstract class TypeUnifier
         true
 
       | (TypeVarSymbol as v1, TypeVarSymbol as v2) =>
-        mutable newBaseTypeConstraint;
+        mutable newBaseTypeConstraint = null;
         match (v1.IsBaseTypeConstraintEvaluated, v2.IsBaseTypeConstraintEvaluated)
         {
           | (false, false) => ()
@@ -1150,7 +1150,7 @@ public abstract class TypeUnifier
               return false; // base type constraints are not compatible
         }
 
-        mutable newDerivedTypeConstraint;
+        mutable newDerivedTypeConstraint = null;
         match (v1.IsDerivedTypeConstraintEvaluated, v2.IsDerivedTypeConstraintEvaluated)
         {
           | (false, false) => ()
@@ -1169,7 +1169,7 @@ public abstract class TypeUnifier
               return false; // derived type constraints are not compatible
         }
 
-        mutable type;
+        mutable type = null;
         when (newBaseTypeConstraint : object != null && newDerivedTypeConstraint : object != null)
         {
           if (newBaseTypeConstraint.Equals(newDerivedTypeConstraint))
@@ -1207,9 +1207,9 @@ public abstract class TypeUnifier
 
       | _ =>
         mutable ti1 = t1';
-        mutable args1;
+        mutable args1 : LightList[TypeSymbol];
         mutable ti2 = t2';
-        mutable args2;
+        mutable args2 : LightList[TypeSymbol];
 
         when (t1'.DecomposeType() is VSome(s))
         {

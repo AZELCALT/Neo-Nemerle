@@ -259,7 +259,7 @@ public class TypeBuilder : TypeInfo
   internal CalcAccessibility() : void
   {
     mutable resuleAccessModifiers = NemerleModifiers.None;
-    mutable resuleAccessModifiersLoc;
+    mutable resuleAccessModifiersLoc : Location;
     mutable resuleOtherModifiers = NemerleModifiers.None;
      
     foreach (ast in AstParts)

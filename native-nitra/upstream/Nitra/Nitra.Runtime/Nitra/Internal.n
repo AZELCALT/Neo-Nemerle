@@ -620,7 +620,7 @@ public module DotUtils
     {
       def batchSize = 200;
       def sourceFileNamesBatch = List(batchSize);
-      for (mutable i; i < batchSize && sourceFileNames.Count > 0; ++i)
+      for (mutable i = 0; i < batchSize && sourceFileNames.Count > 0; ++i)
         sourceFileNamesBatch.Add(sourceFileNames.Dequeue());
 
       def si = ProcessStartInfo();
@@ -795,7 +795,7 @@ public module ExtensibleRuleParseTreeConstructor
     def (subruleStarts, _parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
     def host = parseResult.ParserHost;
 
-    mutable resultParseTree;
+    mutable resultParseTree = null;
 
     for (mutable i = 0; i < subruleStarts.Length - 1; ++i)
     {
@@ -1296,7 +1296,7 @@ public class TokenEnumerator
       def state = _parseResult.rawTree[_rawTreePtr + ExtensibleRuleParser.RawTreeOfs.State];
       def invalidState = state >= 0 && _sequence.Subrules[_subruleIndex].State >= state;
       def ruleInfo = rules[_subruleIndex];
-      mutable fullSize;
+      mutable fullSize = 0;
 
       unless (invalidState)
       {
@@ -2848,7 +2848,7 @@ public mask Recovery
       }
       else
       {
-        mutable lastState;
+        mutable lastState = null;
         for (mutable i = 0; i < if (subrule.Min == 0) 1 else subrule.Min; ++i)
         {
           lastState = builder.AddState(ParsingState.Subsequence(subruleRule, canConsumeErrorTokens, rule, subrule.Item));
@@ -2883,7 +2883,7 @@ public mask Recovery
       if (subrule.Max.HasValue)
       {
         def count = subrule.Max.Value;
-        mutable ruleState;
+        mutable ruleState = null;
         for (mutable i = 0; i < count; ++i)
         {
           ruleState = builder.AddState(ParsingState.Subsequence(subruleRule, false, rule, subrule.Item));
@@ -2906,8 +2906,8 @@ public mask Recovery
       else
       {
         def count = if (subrule.Min == 0) 1 else subrule.Min;
-        mutable ruleState;
-        mutable separatorState;
+        mutable ruleState = null;
+        mutable separatorState = null;
         for (mutable i = 0; i < count; ++i)
         {
           ruleState = builder.AddState(ParsingState.Subsequence(subruleRule, false, rule, subrule.Item));

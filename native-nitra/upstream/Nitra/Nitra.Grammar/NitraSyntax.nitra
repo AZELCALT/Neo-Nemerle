@@ -482,7 +482,7 @@ syntax module NitraSyntax : NitraLang
     [Cached] CalcIsTypingAllowed(value : bool) : bool = value;
     CollectSymbolMembers(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void
     {
-      mutable isTypingAllowed;
+      mutable isTypingAllowed = false;
 
       if (astSymbol.IsDeclaration)
         when (symbolSymbolRef is SymbolRef.Some(symbolSymbol))

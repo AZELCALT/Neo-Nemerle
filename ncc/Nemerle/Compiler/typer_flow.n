@@ -1,0 +1,120 @@
+// The flow of values, as the typer follows it (Typer: TypeLocalDefinition, TypeLocal, the assignments, TypeMatch, the
+// nested functions). A `def` without a type has its value's type; a `mutable` without one has a type that follows the
+// flow: after each assignment the compiler knows its one type, and where it cannot know which one (a branch that
+// assigns another type on some ways only, a loop, a lambda that runs later) the value has a set of types. A use must
+// fit each of them, or check first (`match (x) { | n is int => ... }`, `if (x is int)`), which picks those it handles.
+// Its storage is an object only when its type changes; otherwise it is of its one type, as ever. A `mutable x;`
+// without a value is NotYet until each way to a read has assigned it.
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.type_var;
+using Nemerle.Compiler.fixed_type;
+using SCG = System.Collections.Generic;
+
+/// What a method's typing learned about its values, kept across its typing attempts: the typing starts again when it
+/// learns more (a value whose type changes, a type a nested function assigns), and learns only more, so it ends.
+public sealed class FlowFacts
+{
+  /// The untyped mutables whose type changes, by their key (Key): their storage is an object.
+  public Storage : SCG.HashSet[string] = SCG.HashSet();
+  /// The types each is given inside nested functions and delayed code (lambdas, loops), which run later or again: the
+  /// code around them may see these after them.
+  public Assigned : SCG.Dictionary[string, SCG.List[FixedType]] = SCG.Dictionary();
+  /// The types each is given anywhere: a nested function may run at any point, so it starts with all of them.
+  public Everywhere : SCG.Dictionary[string, SCG.List[FixedType]] = SCG.Dictionary();
+  /// Whether this attempt learned something (the typing then starts again).
+  public mutable Grew : bool;
+  /// How many times the typing started again.
+  public mutable Attempts : int;
+
+  /// A value's key: its name and where it is declared.
+  public static Key(name : string, location : Nemerle.Compiler.AST.Location) : string
+  {
+    name + "@" + location.FileIndex.ToString() + ":" + location.Line.ToString() + ":" + location.Column.ToString()
+  }
+
+  public MakeStorage(key : string) : void { when (Storage.Add(key)) Grew = true }
+
+  /// A type given to a value: inside nested code (`nested'), or anywhere.
+  public Assign(key : string, type : FixedType, nested : bool) : void
+  {
+    def add(table : SCG.Dictionary[string, SCG.List[FixedType]]) : void
+    {
+      mutable types;
+      unless (table.TryGetValue(key, out types)) { types = SCG.List(); table[key] = types }
+      unless (types.Exists(t => t.Equals(type))) { types.Add(type); Grew = true }
+    }
+    add(Everywhere);
+    when (nested) add(Assigned)
+  }
+
+  static Of(table : SCG.Dictionary[string, SCG.List[FixedType]], key : string) : list[FixedType]
+  {
+    mutable types;
+    if (table.TryGetValue(key, out types)) NList.FromArray(types.ToArray()) else []
+  }
+
+  /// The types nested code gives the value (the code around it may see them after it).
+  public AssignedTo(key : string) : list[FixedType] { Of(Assigned, key) }
+
+  /// The types given to the value anywhere (nested code starts with them).
+  public AssignedAnywhere(key : string) : list[FixedType] { Of(Everywhere, key) }
+}
+
+/// A local whose flow the typer follows (an untyped `mutable`, or a value bound to one of several types).
+public sealed class LocalFlow
+{
+  public Key : string;
+  /// Its storage is an object (its type changes); else its storage is its one type.
+  public Storage : bool;
+  /// Declared without a value (`mutable x;`): NotYet until assigned.
+  public Valueless : bool;
+  /// The typer of the function that declares it: an assignment in another (a nested function) runs later or again.
+  public Owner : object;
+  /// How deep in delayed code typed later it is declared (an assignment deeper is nested code to it).
+  public Depth : int;
+  /// A file's top-level value, as the top-level code's local: nested code (a lambda) reads it whenever it runs, so it
+  /// checks it first when it is of several types, as the file's functions do.
+  public mutable TopLevel : bool;
+  public this(key : string, storage : bool, valueless : bool, owner : object, depth : int)
+  { Key = key; Storage = storage; Valueless = valueless; Owner = owner; Depth = depth }
+}
+
+/// A local at a point of the flow: its types there, and whether some way to it has not assigned it yet.
+[Record]
+public sealed class FlowPoint
+{
+  public Types : list[TypeVar];
+  public Unassigned : bool;
+
+  /// Its distinct types (a set of one is the value's type).
+  public Distinct : list[TypeVar]
+  {
+    get
+    {
+      mutable result = [];
+      foreach (t in Types)
+        unless (result.Exists(r => SameType(r, t))) result ::= t;
+      result.Rev()
+    }
+  }
+
+  public static SameType(a : TypeVar, b : TypeVar) : bool
+  {
+    a : object == b || a.IsFixed && b.IsFixed && a.FixedValue.Equals(b.FixedValue)
+  }
+
+  /// The two flows joined: the types of both, unassigned when either is.
+  public static Join(a : FlowPoint, b : FlowPoint) : FlowPoint
+  {
+    if (a == null) b else if (b == null) a else FlowPoint(a.Types + b.Types.Filter(t => !a.Types.Exists(r => SameType(r, t))), a.Unassigned || b.Unassigned)
+  }
+}
+
+/// The flows where a condition (a match of `true` and `false`, as `a && b`) is true and where it is false.
+[Record]
+public sealed class FlowCondition
+{
+  public WhenTrue : SCG.Dictionary[Nemerle.Compiler.local_value.LocalValue, FlowPoint];
+  public WhenFalse : SCG.Dictionary[Nemerle.Compiler.local_value.LocalValue, FlowPoint];
+}

@@ -549,12 +549,15 @@ public class FieldBuilder : MemberBuilder, IField
       | <[ _ ]> when par.Manager.Options.Script != null
           && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name) => ()
       | <[ _ ]> when par.Manager.ModuleBindings.ContainsKey(par.FullName + "." + fieldAst.Name) => ()
+      // (a script's state: its type is the types its statements give it, see TypesManager.DecideModuleState)
+      | <[ _ ]> when par.Manager.FileModuleRegistry.Flowing.Contains(par.FullName + "." + fieldAst.Name) => ()
       | <[ _ ]> => Message.Error ("type inference for fields is available only when assigning literal value to them")
       | _ => ()
     }
 
     ty = if (par.Manager.Options.Script != null && par.Manager.Options.Script.InferredInitializers.ContainsKey(fieldAst.Name)
-             || par.Manager.ModuleBindings.ContainsKey(par.FullName + "." + fieldAst.Name))
+             || par.Manager.ModuleBindings.ContainsKey(par.FullName + "." + fieldAst.Name)
+             || fieldAst.ty is <[ _ ]> && par.Manager.FileModuleRegistry.Flowing.Contains(par.FullName + "." + fieldAst.Name))
       par.Manager.InternalType.Object else par.BindFixedType (fieldAst.ty);
 
     when (ty.Equals (InternalType.Void))
@@ -1168,6 +1171,9 @@ public class MethodBuilder : MemberBuilder, IMethod
   mutable overridden_method         : IMethod;
 
   public ImplementedMethods : list[FixedType.Class * IMethod] { get; internal set; }
+
+  /// What typing the body learned about its values' flow, kept across its typing attempts (see typer_flow).
+  public FlowFacts : Nemerle.Compiler.typer_flow.FlowFacts = Nemerle.Compiler.typer_flow.FlowFacts();
 
   public SkipEmiting : bool { get; set; }
   

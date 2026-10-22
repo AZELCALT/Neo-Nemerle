@@ -422,7 +422,9 @@ try:
     while time.time() < deadline and 'n : int' not in hover_text(code, 'n * 2'): time.sleep(0.5)
     check('main.Compute : int -> System.Threading.Tasks.Task[int]' in hover_text(code, 'Compute'), 'hover where a function is declared: %s' % hover_text(code, 'Compute'))
     check('main.Compute' in hover_text(code, 'Compute(4)') and 'main.lambda' in hover_text(code, 'lambda(2)')
-          and 'main.total' in hover_text(code, 'total ', 1) and 'Pen.Width' in hover_text(code, 'Width)'),
+          # (a top-level `mutable' is the top-level code's local there, the module's value elsewhere)
+          and ('main.total' in hover_text(code, 'total ', 1) or 'total : int' in hover_text(code, 'total ', 1))
+          and 'Pen.Width' in hover_text(code, 'Width)'),
           'the names in a $ string that waits, at their places: %s / %s / %s' % (hover_text(code, 'Compute(4)'), hover_text(code, 'lambda(2)'), hover_text(code, 'total ', 1)))
     def complete_at(text, version, marker):
         c.notify('textDocument/didChange', {'textDocument': {'uri': luri, 'version': version}, 'contentChanges': [{'text': text}]})

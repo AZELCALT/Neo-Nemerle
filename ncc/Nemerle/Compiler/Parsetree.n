@@ -1484,7 +1484,7 @@ using Nemerle.Compiler.Utility;
   {
     public this(header : PFunHeader, body : PExpr)
     {
-      mutable loc;
+      mutable loc : Location;
 
       when (header != null)
         loc = header.Location;

@@ -174,13 +174,16 @@ public module Macros
     foreach (PExpr.Ellipsis(PExpr.Spliced) in @list)
     {
       def code = SCG.List();
-      code.Add(<[ def result = SCG.List(); ]>);
+      // (a name of its own: the code it builds sits among the user's names)
+      // (not `result': the boot compiler's quotations still name theirs so)
+      def lifted = Macros.NewSymbol("lifted");
+      code.Add(<[ def $(lifted : name) = SCG.List(); ]>);
       foreach (elem in @list)
       {
-        | PExpr.Ellipsis(PExpr.Spliced(expr)) => code.Add(<[ Nemerle.Compiler.macros.Macros.AddChoose(result, $expr); ]>);
-        | _                                   => code.Add(<[ result.Add($(f(elem))); ]>);
+        | PExpr.Ellipsis(PExpr.Spliced(expr)) => code.Add(<[ Nemerle.Compiler.macros.Macros.AddChoose($(lifted : name), $expr); ]>);
+        | _                                   => code.Add(<[ $(lifted : name).Add($(f(elem))); ]>);
       }
-      code.Add(<[ result.NToList() ]>);
+      code.Add(<[ $(lifted : name).NToList() ]>);
 
       return <[ {..$(code.NToList()) } ]>;
     }

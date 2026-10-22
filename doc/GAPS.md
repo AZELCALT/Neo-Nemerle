@@ -12,6 +12,13 @@ unless it says so. These edges will be closed, which can change what happens the
   Reading or writing the slot with the other copy is an error that says so; a slot of no fixed type (a `Content`)
   takes either.
 
+## Values
+
+- **A top-level value's types are those the top-level code gives it.** Its storage (one type, or a container) is
+  decided from the top-level code. When that code gives it one type, a function of the file that assigns it a value
+  of another type is an error there (`expected int`), as before; a container takes any. A function's own locals
+  follow the flow in full.
+
 ## Targets
 
 - **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time

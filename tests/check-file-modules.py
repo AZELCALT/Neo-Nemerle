@@ -1100,8 +1100,9 @@ cases = [
     ('refined', 'mutable items = [];\nitems ::= 1;\nitems ::= 2;\nSum() : int { items.FoldLeft(0, _ + _) }\nSystem.Console.WriteLine(Sum());', ['3']),
     ('rebound', 'def x = 5;\ndef x = x * 2;\nShow() : void { System.Console.WriteLine(x) }\nShow();', ['10']),
     ('retyped', 'def y = 5;\ndef y = y.ToString() + "!";\nSystem.Console.WriteLine(y.Length);\nShow() : void { System.Console.WriteLine(y.As.[string]()) }\nShow();', ['2', '5!']),
-    ('final-type', 'def y = 5;\ndef y = y.ToString() + "?";\nShow() : void { System.Console.WriteLine(y.Length) }\nShow();', ['2']),
-    ('open-use', 'def y = 5;\ndef y = "five";\nKeep(o : object) : string { match (o) { | c is Nemerle.Scopes.Content => "container of " + c.Type.Name + ": " + c.As.[string]() | _ => "bare" } }\nShow() : void { System.Console.WriteLine(Keep(y)) }\nShow();', ['container', 'of', 'String:', 'five']),
+    # (a function reads a top-level value of several types whenever it runs: it checks it first)
+    ('checked', 'def y = 5;\ndef y = y.ToString() + "?";\nShow() : void { match (y) { | s is string => System.Console.WriteLine(s.Length) | _ => () } }\nShow();', ['2']),
+    ('checked-if', 'def y = 5;\ndef y = "five";\nShow() : void { if (y is string) System.Console.WriteLine(y) else System.Console.WriteLine("int") }\nShow();', ['five']),
     ('splice-using', 'using System.Math;\nF() : string { $"$(Abs(-3))" }\nSystem.Console.WriteLine($"$(Abs(-4)) $(F())");', ['4', '3']),
     ('shadowing', 'def y = 5;\ndef y = "five";\nF() : int { def y = 3; y + 1 }\ndef g = fun (y : int) { y * 2 };\nSystem.Console.WriteLine(F());\nSystem.Console.WriteLine(g(4));\nSystem.Console.WriteLine(y);', ['4', '8', 'five']),
     ('tuple', 'def pair = (1, 2);\nSum() : int { def (a, b) = pair; a + b }\nSystem.Console.WriteLine(Sum());', ['3']),
@@ -1116,7 +1117,7 @@ for name, text, expected in cases + [(n + '-debug', t, e) for (n, t, e) in cases
     if got != expected: raise RuntimeError('top-level state ' + name + ': ' + ' '.join(got))
 source('init/main.n', 'def y = 5;\ndef y = y.ToString();\nBad() : int { y + 1 }\nSystem.Console.WriteLine(Bad());')
 run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-bad.exe'), '-no-color', *modern_references],
-    False, 'changes type here (from int to string), but line 3 uses it as int')
+    False, "`y' is a top-level value of several types (int, string)")
 # a user's macro in the top-level code expands once (the inference pass that types a quiet copy of the code leaves
 # it for the real code): a macro that counts its expansions sees one
 counter = work / 'counter'; counter.mkdir()

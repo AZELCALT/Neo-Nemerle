@@ -474,6 +474,14 @@ using Nemerle.Compiler.Utility;
         // how many times each value has been bound so far, while the top-level code is built
         def seen : SCG.Dictionary[string, int] = SCG.Dictionary();
         def mutables : SCG.HashSet[string] = SCG.HashSet();
+        // the untyped top-level `mutable's: their type follows the flow (typer_flow). The top-level code has each as a
+        // local, written through to the module's field; after a call of a file function that assigns it (a writer) the
+        // local is read back from the field, which code anywhere may have changed
+        def flowing : SCG.HashSet[string] = SCG.HashSet();
+        // (all the untyped `mutable's; those a file function writes are the field's alone, read and written there)
+        def untyped : SCG.HashSet[string] = SCG.HashSet();
+        def written : SCG.HashSet[string] = SCG.HashSet();
+        def flowDecl : SCG.Dictionary[string, Location] = SCG.Dictionary();
         // the field itself, `module.name`, built directly (a name may be a keyword written `@def`)
         def moduleExpr = moduleName.Split('.').FoldLeft(null, (part, acc : PExpr) => if (acc == null) <[ $(part : dyn) ]> else <[ $acc.$(part : dyn) ]>);
         def fieldRef(name : Name) : PExpr { <[ $moduleExpr.$(name : name) ]> }
@@ -510,9 +518,10 @@ using Nemerle.Compiler.Utility;
                 }
                 when (isPublic && bindings[name.Id] > 1)
                   Message.Error(expression.Location, $"public top-level value `$(name.Id)' is bound more than once");
-                if (bindings[name.Id] > 1 && !mutables.Contains(name.Id))
+                if (flowing.Contains(name.Id) || bindings[name.Id] > 1 && !mutables.Contains(name.Id))
                 {
-                  // a rebound `def`: the top-level code sees each binding (with its own type), the storage follows
+                  // a rebound `def', an untyped `mutable': the top-level code sees each binding (with its own type) as a
+                  // local, the storage follows
                   statements.Add(expression);
                   statements.Add(<[ Nemerle.Compiler.__state_store($(key : string), $(fieldRef(name)), $identifier) ]>);
                 }
@@ -523,6 +532,17 @@ using Nemerle.Compiler.Utility;
           match (expression)
           {
             | PExpr.Define(pattern, value) => binding(pattern, value)
+            // (`mutable x;': the field, and the local, NotYet until the top-level code assigns it)
+            | PExpr.DefMutable(PExpr.Ref(name), null) when untyped.Contains(name.Id) =>
+              unless (seen.ContainsKey(name.Id))
+              {
+                seen[name.Id] = 1;
+                field(name, <[ _ ]>, true, expression.Location);
+                // (its type is the inference pass's, see DecideModuleState)
+                lex.Manager.ModuleBindings[moduleName + "." + name.Id] = <[ Nemerle.Compiler.__state_hole() ]>
+              }
+              // (the top-level code's local, unless a function writes it)
+              when (flowing.Contains(name.Id)) statements.Add(expression)
             | PExpr.DefMutable(name, value) => binding(name, value)
             | _ => statements.Add(expression)
           }
@@ -544,7 +564,14 @@ using Nemerle.Compiler.Utility;
             }
           foreach (name in order)
             for (mutable k = 1; k <= bindings[name]; k++)
-              hoisted.Add(<[ mutable $(stateName(name, k) : dyn) = Nemerle.Compiler.__state_hole() ]>);
+              hoisted.Add(
+                if (untyped.Contains(name))
+                {
+                  // (a value whose type follows the flow: followed in this copy too, so it is where it is declared)
+                  def at = flowDecl[name];
+                  PExpr.DefMutable(at, PExpr.Ref(at, Name.NameInCurrentColor(stateName(name, k), at, fileParser.env)), <[ Nemerle.Compiler.__state_hole() ]>)
+                }
+                else <[ mutable $(stateName(name, k) : dyn) = Nemerle.Compiler.__state_hole() ]>);
           def current : SCG.Dictionary[string, int] = SCG.Dictionary();
           def rename(e : PExpr) : PExpr
           {
@@ -602,6 +629,9 @@ using Nemerle.Compiler.Utility;
               | _ => body.Add(rename(expression))
             }
           }
+          // (the types a flowing value has anywhere in the top-level code: its storage is of one, or a Content)
+          foreach (name in untyped)
+            body.Add(<[ Nemerle.Compiler.__state_type($(moduleName + "." + name : string), 0, $(stateName(name, bindings[name]) : dyn)) ]>);
           body.NToList()
         }
         while (topstream != null)
@@ -878,43 +908,53 @@ using Nemerle.Compiler.Utility;
                 Message.Error(node.Location, "a space is a top-level declaration, not an expression; read its results through scope bindings and dials");
               node
             });
+        foreach ((expression, _) in collected)
+          match (expression)
+          {
+            | PExpr.DefMutable(PExpr.Ref(name), _) =>
+              _ = untyped.Add(name.Id);
+              unless (flowDecl.ContainsKey(name.Id)) flowDecl[name.Id] = name.Location
+            | _ => ()
+          }
+        // (a value a file function writes may change at any time, an async function's later: it is its field's)
+        when (untyped.Count > 0)
+          foreach (pair in StateWriters(members, untyped)) written.UnionWith(pair.Value);
+        flowing.UnionWith(untyped);
+        flowing.ExceptWith(written);
         foreach ((expression, isPublic) in collected) state(expression, isPublic);
+        // the top-level code writes a flowing value through to its field where it assigns it
+        when (flowing.Count > 0)
+          for (mutable i = 0; i < statements.Count; i++)
+            statements[i] = StateThrough(statements[i], flowing, moduleName, fieldRef);
         // a `def` bound more than once may change type, and then its storage is a Content: the file's functions and
         // the lambdas of its top-level code read it through a checked read whose type is what the read needs
         def retypable = SCG.HashSet.[string]();
         foreach (pair in bindings) when (pair.Value > 1 && !mutables.Contains(pair.Key)) _ = retypable.Add(pair.Key);
-        def checkedReads(e : PExpr, inLambdasOnly : bool) : PExpr
+        // (the file's functions also read the flowing values from their fields: checked, as any value of several types)
+        def readByFunctions = SCG.HashSet(retypable);
+        readByFunctions.UnionWith(untyped);
+        def checkedReads(e : PExpr, inLambdasOnly : bool, names : SCG.HashSet[string]) : PExpr
         {
-          mutable depth = 0;
-          Macros.TraverseExpr(None(), e, false, (inPattern, after, node) =>
-          {
-            match (node)
-            {
-              | _ is PExpr.Lambda | _ is PExpr.DefFunctions => if (after) { depth--; node } else { depth++; node }
-              | PExpr.Ref(n) when after && !inPattern && retypable.Contains(n.Id) && (!inLambdasOnly || depth > 0) =>
-                <[ Nemerle.Compiler.__state_read($(moduleName + "." + n.Id : string), $(fieldRef(n))) ]>
-              // `y.As.[string]()`, `y.Is.[int]()`...: code that uses the Content itself reads it as it is
-              | PExpr.Member(PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [_, raw]), Splicable.Name(api) as member)
-                  when after && called.Id == "__state_read" && ["As", "Is", "Value", "Type", "Call"].Contains(api.Id) =>
-                PExpr.Member(node.Location, raw, member)
-              // `y.Length`: a member of the value itself, whose type then is the value's final one
-              | PExpr.Member(PExpr.Call(PExpr.Member(_, Splicable.Name(called)) as f, [key, raw]), member) when after && called.Id == "__state_read" =>
-                PExpr.Member(node.Location, PExpr.Call(f, [key, raw, <[ true ]>]), member)
-              | _ => node
-            }
-          })
+          StateReads(e, inLambdasOnly, names, moduleName, fieldRef, fileParser.env)
         }
-        when (retypable.Count > 0)
-        {
+        when (readByFunctions.Count > 0)
           foreach (member is ClassMember.Function in members)
             match (member.body)
             {
-              | FunBody.Parsed(body) when !member.header.Parameters.Exists(p => retypable.Contains(p.Name)) =>
-                member.body = FunBody.Parsed(checkedReads(body, false))
+              | FunBody.Parsed(body) =>
+                def names = SCG.HashSet(readByFunctions);
+                names.ExceptWith(member.header.Parameters.Map(p => p.Name));
+                when (names.Count > 0) member.body = FunBody.Parsed(checkedReads(body, false, names))
               | _ => ()
             }
-          for (mutable i = 0; i < statements.Count; i++) statements[i] = checkedReads(statements[i], true);
-        }
+        // (the top-level code's lambdas read a rebound `def' from its storage; a flowing value they share with the
+        // top-level code, as its local, see typer_flow's top-level rule)
+        when (retypable.Count > 0)
+          for (mutable i = 0; i < statements.Count; i++) statements[i] = checkedReads(statements[i], true, retypable);
+        // (a value a function writes is read and written in its field by the top-level code too, checked as anywhere)
+        when (written.Count > 0)
+          for (mutable i = 0; i < statements.Count; i++) statements[i] = checkedReads(statements[i], false, written);
+        foreach (name in flowing) _ = registry.Flowing.Add(moduleName + "." + name);
         registry.Usings[moduleName] = usings.NToList();
         when (statements.Count > 0)
         {
@@ -1046,6 +1086,141 @@ using Nemerle.Compiler.Utility;
       }
     }
 
+    /// The reads and writes of top-level values of several types in code outside the top-level code (`names', of
+    /// `owner': a file module, a script): a read is `__state_read', checked, unless it is what a check matches on
+    /// (`match (x)', `if (x is T)', which bind `x' as the type checked); a write is `__state_store' (see StateMacro).
+    static StateAssignOperators : list[string] = ["+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=", "<<=", ">>=", "::=", "++", "--"];
+
+    /// The functions among `members' that assign values of `flowing' (`x = v', `x += v', `x++'), with those values.
+    static StateWriters(members : SCG.IEnumerable[ClassMember], flowing : SCG.HashSet[string]) : SCG.Dictionary[string, SCG.List[string]]
+    {
+      def writers = SCG.Dictionary();
+      foreach (member is ClassMember.Function in members)
+        match (member.body)
+        {
+          | FunBody.Parsed(body) =>
+            def found = SCG.HashSet();
+            _ = Macros.TraverseExpr(None(), body, false, (_, after, node) =>
+            {
+              when (!after)
+                match (node)
+                {
+                  | PExpr.Assign(PExpr.Ref(n), _) when flowing.Contains(n.Id) => _ = found.Add(n.Id)
+                  | PExpr.Call(PExpr.Ref(op), PExpr.Ref(n) :: _) when StateAssignOperators.Contains(op.Id) && flowing.Contains(n.Id) => _ = found.Add(n.Id)
+                  | _ => ()
+                }
+              node
+            });
+            found.ExceptWith(member.header.Parameters.Map(p => p.Name));
+            when (found.Count > 0) writers[member.Name] = SCG.List(found)
+          | _ => ()
+        }
+      writers
+    }
+
+    /// The top-level code (of `owner': a file module, a script) with each flowing value as its local, written through
+    /// to the value's field where it is assigned (a value a function writes is not flowing: it is its field's).
+    static StateThrough(e : PExpr, flowing : SCG.HashSet[string], owner : string, fieldRef : Name -> PExpr) : PExpr
+    {
+      Macros.TraverseExpr(None(), e, false, (inPattern, after, node) =>
+      {
+        def store(n : Name) : PExpr
+        {
+          <[ { $node; Nemerle.Compiler.__state_store($(owner + "." + n.Id : string), $(fieldRef(n)), $(PExpr.Ref(node.Location, n))) } ]>
+        }
+        match (node)
+        {
+          | PExpr.Assign(PExpr.Ref(n), _) when after && !inPattern && flowing.Contains(n.Id) => store(n)
+          | PExpr.Call(PExpr.Ref(op), PExpr.Ref(n) :: _) when after && StateAssignOperators.Contains(op.Id) && flowing.Contains(n.Id) => store(n)
+          | _ => node
+        }
+      })
+    }
+
+    static StateReads(e : PExpr, inLambdasOnly : bool, names : SCG.HashSet[string], owner : string, fieldRef : Name -> PExpr, env : GlobalEnv) : PExpr
+    {
+      def keyOf(n : Name) : string { owner + "." + n.Id }
+      // `if (x is T) a else b', `when (x is T) a', `unless (x is T) a': a check, which binds `x' as a T where it holds
+      def narrowings(e : PExpr, names : SCG.HashSet[string]) : PExpr
+      {
+        Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+          match (node)
+          {
+            | PExpr.MacroCall(m, _, [SyntaxElement.Expression(PExpr.Is(PExpr.Ref(n) as r, t)), SyntaxElement.Expression(a), SyntaxElement.Expression(b)])
+                when after && m.Id == "if" && names.Contains(n.Id) =>
+              <[ match ($r) { | $(n : name) is $t => $a | _ => $b } ]>
+            | PExpr.MacroCall(m, _, [SyntaxElement.Expression(PExpr.Is(PExpr.Ref(n) as r, t)), SyntaxElement.Expression(a)])
+                when after && (m.Id == "when" || m.Id == "whenmacro") && names.Contains(n.Id) =>
+              <[ match ($r) { | $(n : name) is $t => ($a : void) | _ => () } ]>
+            | PExpr.MacroCall(m, _, [SyntaxElement.Expression(PExpr.Is(PExpr.Ref(_) as r, t)), SyntaxElement.Expression(a)])
+                when after && m.Id == "unless" && names.Contains((r :> PExpr.Ref).name.Id) =>
+              <[ match ($r) { | _ is $t => () | _ => ($a : void) } ]>
+            | _ => node
+          })
+      }
+      // a read of the storage is `__state_read(key, field)': a case that binds the name (`| x is int =>') has its own
+      def unread(e : PExpr, key : string, n : Name) : PExpr
+      {
+        Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+          match (node)
+          {
+            | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), PExpr.Literal(Literal.String(k)) :: _)
+                when after && called.Id == "__state_read" && k == key => PExpr.Ref(node.Location, n)
+            | _ => node
+          })
+      }
+      def binds(pattern : PExpr, n : string) : bool
+      {
+        match (pattern)
+        {
+          | PExpr.Is(PExpr.Ref(b), _) | PExpr.Ref(b) | PExpr.As(_, Splicable.Name(b)) => b.Id == n
+          | _ => false
+        }
+      }
+      def assignOperators = [("+=", "+"), ("-=", "-"), ("*=", "*"), ("/=", "/"), ("%=", "%"), ("|=", "|"), ("&=", "&"),
+                             ("^=", "^"), ("<<=", "<<"), (">>=", ">>"), ("::=", "::")];
+      def checkedReads(e : PExpr, inLambdasOnly : bool, names : SCG.HashSet[string]) : PExpr
+      {
+        mutable depth = 0;
+        Macros.TraverseExpr(None(), narrowings(e, names), false, (inPattern, after, node) =>
+        {
+          def isRead(e : PExpr) : bool
+          {
+            | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), _ :: _ :: _) => called.Id == "__state_read"
+            | _ => false
+          }
+          match (node)
+          {
+            | _ is PExpr.Lambda | _ is PExpr.DefFunctions => if (after) { depth--; node } else { depth++; node }
+            | PExpr.Ref(n) when after && !inPattern && names.Contains(n.Id) && (!inLambdasOnly || depth > 0) =>
+              <[ Nemerle.Compiler.__state_read($(keyOf(n) : string), $(fieldRef(n))) ]>
+            // a write goes to the storage, as the value's type there is
+            | PExpr.Assign(PExpr.Call(_, [key, field]) as target, value) when after && isRead(target) =>
+              <[ Nemerle.Compiler.__state_store($key, $field, $value) ]>
+            | PExpr.Call(PExpr.Ref(op), [PExpr.Call(_, [key, field]) as target, value]) when after && isRead(target) && assignOperators.Exists(o => o[0] == op.Id) =>
+              def operator = assignOperators.Find(o => o[0] == op.Id).Value[1];
+              <[ Nemerle.Compiler.__state_store($key, $field, $(PExpr.Call(node.Location, PExpr.Ref(node.Location, Name(operator)), [target, value]))) ]>
+            | PExpr.Call(PExpr.Ref(op), [PExpr.Call(_, [key, field]) as target]) when after && isRead(target) && (op.Id == "++" || op.Id == "--") =>
+              def operator = if (op.Id == "++") "+" else "-";
+              <[ Nemerle.Compiler.__state_store($key, $field, $(PExpr.Call(node.Location, PExpr.Ref(node.Location, Name(operator)), [target, <[ 1 ]>]))) ]>
+            // a check: what it matches on is the value; a case that binds its name has the value as the type it checks
+            | PExpr.Match(PExpr.Call(_, [PExpr.Literal(Literal.String(key)) as k, field]) as subject, cases, _) when after && isRead(subject) =>
+              def n = Name(key.Substring(key.LastIndexOf('.') + 1));
+              def cases = cases.Map(c =>
+                if (c.patterns.Exists(p => binds(p, n.Id))) MatchCase(c.patterns, unread(c.body, key, Name.NameInCurrentColor(n.Id, c.body.Location, env)))
+                else c);
+              PExpr.Match(node.Location, <[ Nemerle.Compiler.__state_subject($k, $field) ]>, cases)
+            // `y.As.[string]()`, `y.Is.[int]()`...: code that uses the Content itself reads it as it is
+            | PExpr.Member(PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [_, raw]), Splicable.Name(api) as member)
+                when after && called.Id == "__state_read" && ["As", "Is", "Value", "Type", "Call"].Contains(api.Id) =>
+              PExpr.Member(node.Location, raw, member)
+            | _ => node
+          }
+        })
+      }
+      checkedReads(e, inLambdasOnly, names)
+    }
+
     static ParseScript(lex : LexerBase, mutable groups : Token.LooseGroup) : list[TopDeclaration]
     {
       def manager = lex.Manager;
@@ -1071,6 +1246,18 @@ using Nemerle.Compiler.Utility;
       }
       def parser = MainParser(scriptEnv);
       def members : SCG.List[ClassMember] = SCG.List();
+      // the script's state, as a file's top-level state: an untyped `mutable', or a `def' bound more than once, is the
+      // statements' local, written through to its field, whose type is the types the statements give it (FileModuleRegistry.Flowing,
+      // StateMacro, the inference pass _N_state_types)
+      def stateMutables : SCG.HashSet[string] = SCG.HashSet();
+      def stateRebound : SCG.HashSet[string] = SCG.HashSet();
+      def stateSeen : SCG.HashSet[string] = SCG.HashSet();
+      def stateWritten : SCG.HashSet[string] = SCG.HashSet();
+      def pending : SCG.List[PExpr] = SCG.List();
+      // (the statements and the members in source order, added once the state is known: a member's initializer runs
+      // where it is written, among the statements)
+      def ordered : SCG.List[void -> void] = SCG.List();
+      def parsedMembers : SCG.List[ClassMember] = SCG.List();
       def expressions : SCG.List[PExpr] = SCG.List();
       def scriptUsings : SCG.List[string] = SCG.List();
       def backingFields : SCG.List[ClassMember] = SCG.List();
@@ -1215,6 +1402,27 @@ using Nemerle.Compiler.Utility;
           }
           match (identifier)
           {
+            | PExpr.Ref(name) when stateMutables.Contains(name.Id) || stateRebound.Contains(name.Id) =>
+              def key = data.TypeName + "." + name.Id;
+              when (stateSeen.Add(name.Id))
+              {
+                def mods = AttributesAndModifiers(NemerleModifiers.Public | NemerleModifiers.Mutable, []);
+                add([ClassMember.Field(expression.Location, Splicable.Name(name), mods, ty, null)], "", true);
+                _ = manager.FileModuleRegistry.Flowing.Add(key);
+              }
+              if (stateWritten.Contains(name.Id))
+              {
+                // (a value a function writes: its field's alone)
+                when (value != null)
+                  expressions.Add(<[ Nemerle.Compiler.__state_store($(key : string), this.$(name.Id : usesite), $value) ]>);
+              }
+              else
+              {
+                expressions.Add(expression);
+                // (`mutable x;' has no value to store yet: NotYet until assigned)
+                when (value != null)
+                  expressions.Add(<[ Nemerle.Compiler.__state_store($(key : string), this.$(name.Id : usesite), $(PExpr.Ref(name.Location, name))) ]>);
+              }
             | PExpr.Ref(name) =>
               def mods = AttributesAndModifiers(NemerleModifiers.Public |
                 (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
@@ -1280,17 +1488,105 @@ using Nemerle.Compiler.Utility;
               parser.env = GlobalEnv(newEnv, ["mask"]);
             | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
-            | token when IsMemberStart(token, true) => add(parser.ParseClassMembers(groups, "class").NToList(), "", true);
+            | token when IsMemberStart(token, true) =>
+              def declared = parser.ParseClassMembers(groups, "class").NToList();
+              parsedMembers.AddRange(declared);
+              ordered.Add(() => add(declared, "", true));
             // (`await' waits in a script's top-level code, as in a file's: the script's statements then wait, below)
             | _ =>
               def wasAsync = parser.in_async;
               parser.in_async = true;
               def parsed = try { parser.parse_expr_sequence(groups) } finally { parser.in_async = wasAsync };
-              foreach (expression in parsed) addExpression(expression);
+              pending.AddRange(parsed);
+              foreach (e in parsed) ordered.Add(() => addExpression(e));
           }
         }
         finally { groups.Next = next; }
         groups = next;
+      }
+      // (the statements, once what is the script's state is known: its untyped `mutable's and the `def's bound again)
+      def counts = SCG.Dictionary.[string, int]();
+      foreach (e in pending)
+        match (e) { | PExpr.Define(PExpr.Ref(n), _) => counts[n.Id] = (if (counts.ContainsKey(n.Id)) counts[n.Id] else 0) + 1 | _ => () }
+      foreach (e in pending)
+        match (e)
+        {
+          | PExpr.DefMutable(PExpr.Ref(n), _) => _ = stateMutables.Add(n.Id)
+          | PExpr.Define(PExpr.Ref(n), _) when counts[n.Id] > 1 => _ = stateRebound.Add(n.Id)
+          | _ => ()
+        }
+      // (a binding whose value reads the state is typed where it is, in the statements: state too)
+      def mentions(e : PExpr) : bool
+      {
+        mutable found = false;
+        _ = Macros.TraverseExpr(None(), e, false, (_, _, node) =>
+        {
+          match (node) { | PExpr.Ref(n) when stateMutables.Contains(n.Id) || stateRebound.Contains(n.Id) => found = true | _ => () }
+          node
+        });
+        found
+      }
+      mutable grew = stateMutables.Count > 0 || stateRebound.Count > 0;
+      while (grew)
+      {
+        grew = false;
+        foreach (e in pending)
+        {
+          def (n, value) = match (e)
+            {
+              | PExpr.Define(PExpr.Ref(n), value) | PExpr.Define(PExpr.TypeEnforcement(PExpr.Ref(n), _), value) => (n, value)
+              | _ => (null, null)
+            };
+          when (n != null && value != null && !stateRebound.Contains(n.Id) && !stateMutables.Contains(n.Id) && mentions(value))
+          {
+            _ = stateRebound.Add(n.Id);
+            grew = true
+          }
+        }
+      }
+      // (a value a function writes may change at any time: its field's alone, read and written there)
+      when (stateMutables.Count > 0)
+        foreach (pair in StateWriters(parsedMembers, stateMutables)) stateWritten.UnionWith(pair.Value);
+      def firstState = expressions.Count;
+      foreach (action in ordered) action();
+      when (stateMutables.Count > 0 || stateRebound.Count > 0)
+      {
+        ModuleInitMacro.Register(manager);
+        def fieldRef(n : Name) : PExpr { <[ this.$(n.Id : usesite) ]> }
+        def stateNames = SCG.HashSet(stateMutables);
+        stateNames.UnionWith(stateRebound);
+        // the statements write a mutable through to its field; one a function writes they read and write in the field
+        def flowing = SCG.HashSet(stateMutables);
+        flowing.ExceptWith(stateWritten);
+        for (mutable i = firstState; i < expressions.Count; i++)
+        {
+          expressions[i] = StateThrough(expressions[i], flowing, data.TypeName, fieldRef);
+          when (stateWritten.Count > 0)
+            expressions[i] = StateReads(expressions[i], false, stateWritten, data.TypeName, fieldRef, parser.env)
+        }
+        // the script's functions check a value of several types before they use it
+        foreach (member is ClassMember.Function in members)
+          match (member.body)
+          {
+            | FunBody.Parsed(body) =>
+              def names = SCG.HashSet(stateNames);
+              names.ExceptWith(member.header.Parameters.Map(p => p.Name));
+              when (names.Count > 0) member.body = FunBody.Parsed(StateReads(body, false, names, data.TypeName, fieldRef, parser.env))
+            | _ => ()
+          }
+        // the inference pass: the statements, each store a record of the types there (a typed-only copy)
+        mutable index = 0;
+        def inferred = expressions.NToList().Map(e => Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+          match (node)
+          {
+            | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [key, _, value]) when after && called.Id == "__state_store" =>
+              index++;
+              <[ Nemerle.Compiler.__state_type($key, $(index : int), $value) ]>
+            // (what a function may have assigned is not this code's: its types are its own, see StateWriters)
+            | PExpr.Assign(_, PExpr.Call(PExpr.Member(_, Splicable.Name(called)), _)) when after && called.Id == "__state_reload" => <[ () ]>
+            | _ => node
+          }));
+        add([<[ decl: private _N_state_types() : void { ..$inferred } ]>], "", false)
       }
       // the files the script imports run their top-level code first, at its start
       when (scriptUsings.Count > 0)
@@ -1951,7 +2247,7 @@ using Nemerle.Compiler.Utility;
         parse_top_extensions (mods, MacroTargets.Class);
 
         mutable members = SCG.List();
-        mutable bodyBracesGroup;
+        mutable bodyBracesGroup : Token.BracesGroup;
 
         unless (key == "type")
         {
@@ -2267,7 +2563,7 @@ using Nemerle.Compiler.Utility;
       parse_top_extensions (modifiers, MacroTargets.Method);
 
       mutable loc        = h.Location;
-      mutable bodyBracesGroup;
+      mutable bodyBracesGroup : Token.BracesGroup;
 
       def tok          = peek_token();
       def bodyLocation = if (tok == null) loc.FromEnd() else CalcTokenLocation(tok);
@@ -3957,8 +4253,8 @@ using Nemerle.Compiler.Utility;
 
     parse_match_case () : MatchCase
     {
-      mutable patternsLocation;
-      mutable arrowLocation;
+      mutable patternsLocation : Location;
+      mutable arrowLocation : Location;
 
       def loop2 (acc)
       {

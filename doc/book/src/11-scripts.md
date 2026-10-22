@@ -37,7 +37,8 @@ Arguments after `--` reach the script as `args`.
 A script is a file like any other: it can declare functions, classes, `grammar`s and `space`s. Its top-level code,
 spaces included, is what runs. `nscript` compiles it with the compiler itself (it is the same compiler, in the
 process), so a script is Nemerle as a compiled file is, `await` in its top-level code included: the script's code
-then runs as an async function, and the script ends when it does.
+then runs as an async function, and the script ends when it does. Its values follow a file's rules (chapter 7): a
+`mutable` may change type, and the script's functions check a value of several types before they use it.
 
 ```nemerle,script
 using System.Threading.Tasks;

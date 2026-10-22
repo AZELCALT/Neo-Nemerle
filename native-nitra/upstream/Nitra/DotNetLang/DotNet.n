@@ -160,7 +160,7 @@ public sealed class BaseTypeReferenceSet : ICollector
       }
 
       def ancestorTypes = HashSet(_parentTypes);
-      mutable parentClassScope;
+      mutable parentClassScope = null;
       mutable parentFullScope = EmptyScope.Instance : Scope;
       mutable ancestorsFullScope = EmptyScope.Instance : Scope;
       

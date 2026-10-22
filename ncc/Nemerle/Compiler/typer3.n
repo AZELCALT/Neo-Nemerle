@@ -1376,7 +1376,7 @@ using Nemerle.Compiler.Utility;
 
       def contains_yield(expr : TExpr) : bool
       {
-        mutable contains;
+        mutable contains = false;
 
         def look_for_yield(expr : TExpr)
         {

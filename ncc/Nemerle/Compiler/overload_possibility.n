@@ -460,12 +460,12 @@ public class OverloadPossibility : TypedBase, System.IEquatable[OverloadPossibil
                 try
                 {
                   messenger.NeedMessage = true;
-                  def res = overload.Compile ();
-                  unless (res is TExpr.Error)
+                  def compiled = overload.Compile ();
+                  unless (compiled is TExpr.Error)
                   {
                     if (overload.ExtensionMethodObject == null)
                       ReportError(messenger,
-                        $"$(overload.Member) was expected to have type $expectedDesc, while it has got $(res.Type)");
+                        $"$(overload.Member) was expected to have type $expectedDesc, while it has got $(compiled.Type)");
                     else
                       ReportError(messenger,
                         $"the extension $(overload.Member) not compatible with type $(overload.ExtensionMethodObject.Type)");

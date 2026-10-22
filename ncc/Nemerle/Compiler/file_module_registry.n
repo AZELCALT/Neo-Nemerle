@@ -128,6 +128,9 @@ public sealed class FileModuleRegistry
   public State : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
   /// Per module: the types it exports (global, at the top level).
   public Exports : Hashtable[string, list[string]] = Hashtable();
+  /// The untyped top-level `mutable's (`module.name'): their type follows the flow; the top-level code has each as a
+  /// local, and its nested code (lambdas) checks one of several types before using it, as the file's functions do.
+  public Flowing : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
 
   /// A file whose module is a referenced binary's (the same file, see ManagerClass.SharedModules): not one of this
   /// compilation's modules, which uses the binary's.
@@ -548,7 +551,7 @@ internal sealed class ModuleInitMacro : IMacro
     def ns = manager.NameTree.ExactPath(["Nemerle", "Compiler"]);
     when (ns.LookupMacro(["__module_init"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleInitMacro());
     when (ns.LookupMacro(["__module_binding_value"]).IsNone) manager.MacrosRegistry.RegisterMacro(ModuleBindingMacro());
-    foreach (macroName in ["__state_hole", "__state_type", "__state_bind", "__state_store", "__state_read"])
+    foreach (macroName in ["__state_hole", "__state_type", "__state_bind", "__state_store", "__state_read", "__state_subject", "__state_reload"])
       when (ns.LookupMacro([macroName]).IsNone) manager.MacrosRegistry.RegisterMacro(StateMacro(macroName));
   }
 
@@ -625,7 +628,10 @@ internal sealed class StateMacro : IMacro
     {
       def short = key.Substring(key.LastIndexOf('.') + 1);
       def method = ctx.CurrentMethodBuilder;
-      def topLevelCode = FileModuleRegistry.IsTopLevelCode(method);
+      def script = manager.Options.Script;
+      // (a script's statements are its top-level code: its constructor, or its async top-level code)
+      def topLevelCode = FileModuleRegistry.IsTopLevelCode(method)
+        || script != null && method != null && ctx.CurrentType.FullName == script.TypeName && (method.IsConstructor || method.Name.Contains("top_level"));
       def header = if (method != null) method.GetHeader() else null;
       // (an async file's top-level code is typed in its state machine's function)
       def inTopLevel(v : Nemerle.Compiler.local_value.LocalValue) { v.DefinedIn : object == header || v.DefinedIn != null && v.DefinedIn.Name == "_N_yielding_function" }
@@ -637,12 +643,19 @@ internal sealed class StateMacro : IMacro
     match (name, exprs)
     {
       | ("__state_read", PExpr.Literal(Literal.String(key)) :: _) when shadowing(key) != null => shadowing(key)
+      // (a local of that name where the code is: the code's own, as a read's)
+      | ("__state_store", [PExpr.Literal(Literal.String(key)), _, value]) when shadowing(key) != null => <[ $(shadowing(key)) = $value ]>
+      | ("__state_subject", [PExpr.Literal(Literal.String(key)), _]) when shadowing(key) != null => shadowing(key)
       | ("__state_hole", []) =>
         <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]>
       | ("__state_type", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), value]) =>
-        def typed = ctx.TypeExpr(value);
         unless (manager.StateTypes.ContainsKey(key)) manager.StateTypes[key] = System.Collections.Generic.Dictionary();
-        manager.StateTypes[key][k :> int] = typed.Type;
+        // (a value whose type changes has all its types: each is recorded)
+        match (ctx.FlowTypesOf(value))
+        {
+          | null => manager.StateTypes[key][k :> int] = ctx.TypeExpr(value).Type
+          | types => foreach (t in types with i) manager.StateTypes[key][(k :> int) * 1000 - i - 1] = t
+        }
         <[ () ]>
       | ("__state_bind", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), field, value]) =>
         match (storage(key))
@@ -655,27 +668,34 @@ internal sealed class StateMacro : IMacro
             <[ def value = $(manager.ModuleTypedBindings[key] : typed); _N_skip_write_check($field) = value ]>
           | _ => <[ _N_skip_write_check($field) = $value ]>
         }
-      | ("__state_read", [PExpr.Literal(Literal.String(key)), field, PExpr.Literal(Literal.Bool(true))]) =>
-        // a member of the value is used: the read is of the value's final type
-        match (storage(key))
-        {
-          | "content" when manager.StateTypes.ContainsKey(key) =>
-            def types = System.Collections.Generic.List.[FixedType]();
-            foreach (pair in manager.StateTypes[key]) types.Add(pair.Value.Fix());
-            <[ $field.As.[$(PExpr.TypedType(types[types.Count - 1]))]() ]>
-          | _ => field
-        }
-      | ("__state_read", [PExpr.Literal(Literal.String(key)), field]) =>
+      // a read outside the top-level code (a function, a lambda) of a value of several types: it runs whenever it is
+      // called, so it checks the value first (`match (x) { | n is int => ... }', `if (x is int)'), see __state_subject
+      | ("__state_read", PExpr.Literal(Literal.String(key)) :: field :: _) =>
         match (storage(key))
         {
           | "content" =>
-            // the type the read needs is inferred from its use, and checked once everything is typed; a use that
-            // takes any object gets the Content itself (Read), with its type
-            def needed = ctx.FreshTypeVar();
-            manager.StateReads.Add((key, needed, field.Location));
-            <[ $field.Read.[$(PExpr.TypedType(needed))]() ]>
+            def name = key.Substring(key.LastIndexOf('.') + 1);
+            def types = System.Collections.Generic.List.[string]();
+            when (manager.StateTypes.ContainsKey(key))
+              foreach (pair in manager.StateTypes[key])
+                unless (types.Contains(pair.Value.ToString())) types.Add(pair.Value.ToString());
+            def listed = string.Join(", ", types.ToArray());
+            def first = if (types.Count > 0) types[0] else "T";
+            // (once per read: the code around it may be typed more than once)
+            when (manager.StateReportedReads.Add(field.Location.ToString()))
+            Message.Error(field.Location,
+              $"`$name' is a top-level value of several types ($listed): code outside the top-level code reads it whenever it "
+               "runs, so it checks it first (match ($name) { | v is $first => ... })");
+            field
           | _ => field
         }
+      // what a check of a top-level value matches on: its content when it is of several types
+      | ("__state_subject", [PExpr.Literal(Literal.String(key)), field]) =>
+        match (storage(key)) { | "content" => <[ $field.Value ]> | _ => field }
+      // the top-level code reads a value back after a call that may have assigned it: its content when it is of several
+      // types (which the code then checks)
+      | ("__state_reload", [PExpr.Literal(Literal.String(key)), field]) =>
+        match (storage(key)) { | "content" => <[ $field.Value ]> | _ => field }
       | ("__state_store", [PExpr.Literal(Literal.String(key)), field, local]) =>
         match (storage(key))
         {

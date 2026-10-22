@@ -1044,7 +1044,7 @@ internal abstract class BaseAstEmitter
     {
       if (symbol.IsAbstract)
       {
-        mutable unused;
+        mutable unused = false;
         PrepareExprForInheritableEvaluation(symbol, rawExpr, false, ref unused);
       }
       else
@@ -1557,7 +1557,7 @@ internal abstract class BaseAstEmitter
 
     def makeCondition(properties : SCG.List[DependencyPath], collectorProperties : SCG.List[DependencyPath], trueExpr : PExpr, falseExpr : PExpr = null) : PExpr
     {
-      mutable pred;
+      mutable pred = null;
       when (properties.Count > 0)
         PExprUtils.CombineAnd(ref pred, GenerateHasValueCheck(properties, dependentProperties));
 
@@ -1594,7 +1594,7 @@ internal abstract class BaseAstEmitter
     def makeIsEvaluatedCheck(path : DependencyPath, dependentProperties) : PExpr * SCG.HashSet[DependencyPath]
     {
       def checkedPaths = SCG.HashSet();
-      mutable acc;
+      mutable acc = null;
 
       def loop(_ : ValueOption[DependencyPath])
       {
@@ -1703,7 +1703,7 @@ internal abstract class BaseAstEmitter
   // ---- merged from Generation/Ast/BaseAstEmitter.PrepareExprForInheritableEvaluation.n ----
   private static PrepareExprForInheritableEvaluation(symbol : PropertyContainerSymbol, expr : PExpr, isQuotation : bool, isModified : ref bool) : PExpr
   {
-    mutable isChildrenModified;
+    mutable isChildrenModified = false;
 
     def result = result:
     {
@@ -1874,7 +1874,7 @@ internal abstract class BaseAstEmitter
 
   private static PrepareExprForInheritableEvaluation(symbol : PropertyContainerSymbol, case : MatchCase, isQuotation : bool, isModified : ref bool) : MatchCase
   {
-    mutable isChildrenModified;
+    mutable isChildrenModified = false;
 
     def newBody = PrepareExprForInheritableEvaluation(symbol, case.body, isQuotation, ref isChildrenModified);
     def result =
@@ -1891,7 +1891,7 @@ internal abstract class BaseAstEmitter
 
   private static PrepareExprForInheritableEvaluation(symbol : PropertyContainerSymbol, func : Function_decl, isQuotation : bool, isModified : ref bool) : Function_decl
   {
-    mutable isChildrenModified;
+    mutable isChildrenModified = false;
 
     def newBody = PrepareExprForInheritableEvaluation(symbol, func.body, isQuotation, ref isChildrenModified);
     def result =
@@ -1916,7 +1916,7 @@ internal abstract class BaseAstEmitter
 
   private static PrepareExprForInheritableEvaluation(symbol : PropertyContainerSymbol, case : TryCase, isQuotation : bool, isModified : ref bool) : TryCase
   {
-    mutable isChildrenModified;
+    mutable isChildrenModified = false;
 
     def result = result:
     {
@@ -1949,7 +1949,7 @@ internal abstract class BaseAstEmitter
 
   private static PrepareExprForInheritableEvaluation(symbol : PropertyContainerSymbol, element : SyntaxElement, isQuotation : bool, isModified : ref bool) : SyntaxElement
   {
-    mutable isChildrenModified;
+    mutable isChildrenModified = false;
 
     def result = result:
     {
@@ -2287,14 +2287,14 @@ internal abstract class BaseAstEmitter
       | _ => assert(false)
     }
 
-    mutable acc;
+    mutable acc = null;
     foreach (g in properties.Where(_.IsDependent).GroupBy(makeKey))
     {
       match (g.Key)
       {
         | (DependencyPath.This, true) when !debug => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.Select(getBitField)));
         | (path, true) when !debug && g.Count() > 1 =>
-          mutable bitMask;
+          mutable bitMask = 0;
           foreach (item in g)
             bitMask |= getMask(item);
           PExprUtils.CombineAnd(ref acc, <[ unchecked($(CompilePath(path)).PropertiesEvalState & $(bitMask : int) == $(bitMask : int) ) ]>);
@@ -4591,7 +4591,7 @@ public sealed class BitField
     mutable acc : PExpr;
     foreach (g in bits.GroupBy(bit => bit.FieldName))
     {
-      mutable bitMask;
+      mutable bitMask = 0;
       foreach (bit in g)
         bitMask |= bit.Mask;
 
@@ -5270,7 +5270,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     {
       when (IsSubruleAcceptedForParseTree(subrule))
       {
-        mutable needRuleParserStandardMode;
+        mutable needRuleParserStandardMode = false;
         def valueExpr = CompileSubruleValueStandardMode(subrule, parentRawTreePtr, ref needRuleParserStandardMode);
 
         def statementsStandardMode = SCG.List();
@@ -5466,7 +5466,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       def statementsRecoveryMode      = SCG.List();
       def statementsEmptyRecoveryMode = SCG.List();
 
-      mutable needRuleParserStandardMode;
+      mutable needRuleParserStandardMode = false;
 
       foreach (subrule in sequence.NonMarkerSubrules)
       {
@@ -8040,10 +8040,10 @@ internal abstract class MethodEmitter : IVariableEmitter
         mutable parseState : int; _ = parseState;
         mutable newPos     : int; _ = newPos;
         mutable $(RawTreePtr(sequence).Var) = int.MinValue;
-        mutable $(RawTreeStart(sequence));
+        mutable $(RawTreeStart(sequence)) : int;
       ]>);
       foreach (subrule in sequence.NonMarkerSubrules)
-        code.Add(<[ mutable $(ParsedSize(subrule).Var); ]>);
+        code.Add(<[ mutable $(ParsedSize(subrule).Var) : int; ]>);
       code.Add(<[ _ = $(sequence.ToString()) ]>);
       code.Add(memoizeCode);
       //code.AddRange(_fields.Map(subrule => <[ _ = $(subrule.Print()) ]>));
@@ -8464,7 +8464,7 @@ internal abstract class MethodEmitter : IVariableEmitter
       foreach (predicate in predicates with i)
       {
         code.Add(startCode[i]);
-        code.Add(<[ mutable $(RawTreePtr(predicate).Var) ]>);
+        code.Add(<[ mutable $(RawTreePtr(predicate).Var) : int ]>);
         code.Add(GotoParseLabel(predicate.NonMarkerSubrules[0]));
 
         def expr =
@@ -8859,9 +8859,9 @@ internal abstract class RuleParserEmitter : IConstantEmitter
               [Nemerle.Diagnostics.CompileStatistic("Reflection:HeadPredicate")]
               private $(name : global)(mutable curTextPos : int, text : string, parseResult : ParseResult) : bool
               {
-                mutable newPos; _ = newPos;
-                mutable tmpSize; _ = tmpSize;
-                mutable parseState; _= parseState;
+                mutable newPos : int; _ = newPos;
+                mutable tmpSize : int; _ = tmpSize;
+                mutable parseState : int; _= parseState;
                 predicateResult:
                 {
                   $headPredicateCode;
@@ -9123,7 +9123,7 @@ internal sealed class SimpleRuleParserEmitter : RuleParserEmitter
 
     public Define() : list[PExpr]
     {
-      _variables.Map(var => <[ mutable $(var : global) ]>)
+      _variables.Map(var => <[ mutable $(var : global) : int ]>)
     }
   }
 
@@ -11149,7 +11149,7 @@ public mask Serialization
       def memberMap = members.ToDictionary(m => m.Name);
       def ctors     = typeInfo.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
 
-      mutable result;
+      mutable result = null;
 
       foreach (ctor in ctors)
         when (ctor.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"))

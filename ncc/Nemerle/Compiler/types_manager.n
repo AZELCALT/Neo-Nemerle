@@ -765,19 +765,30 @@ using Nemerle.Compiler.Utility;
       foreach (inference is MethodBuilder in ti.LookupMember("_N_state_types"))
       {
         def prefix = ti.FullName + ".";
-        def keys = System.Collections.Generic.List.[string]();
-        foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) keys.Add(key);
-        foreach (key in keys) _ = Manager.StateTypes.Remove(key);
+        def forget()
+        {
+          def keys = System.Collections.Generic.List.[string]();
+          foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) keys.Add(key);
+          foreach (key in keys) _ = Manager.StateTypes.Remove(key);
+        }
         def quietErrors = Manager.QuietErrors;
         Manager.QuietMessages++;
         Manager.StateInference++;
+        // (an `await' there waits by blocking: this copy is typed, never run)
+        Manager.UserData["Nemerle.AsyncMacros.blocking"] = true;
         try
         {
           def typer = Manager.ComponentsFactory.CreateTyper(inference);
           typer.StopAfterPhase = 1;
-          try { typer.RunFullTyping() } catch { | _ => Manager.QuietErrors++ }
+          // (typed again when the flow of its values learns more, see typer_flow: what the last attempt recorded goes)
+          def run()
+          {
+            forget();
+            try typer.RunFullTyping() catch { | _ is RestartRunBodyTyperException => run() }
+          }
+          try { run() } catch { | _ => Manager.QuietErrors++ }
         }
-        finally { Manager.QuietMessages--; Manager.StateInference--; }
+        finally { Manager.QuietMessages--; Manager.StateInference--; Manager.UserData.Remove("Nemerle.AsyncMacros.blocking") }
         inference.SkipEmiting = true;
         when (Manager.QuietErrors == quietErrors)
         {
@@ -804,8 +815,6 @@ using Nemerle.Compiler.Utility;
           Manager.StateStorage[key] = "typed";
           _ = Manager.ModuleBindings.Remove(key);
         }
-        else if (field.IsMutable)
-          Message.Error(field.Location, $"`$name' is bound with different types; a mutable top-level value keeps one type")
         else
           match (Manager.CoreEnv.LookupType(["Nemerle", "Scopes", "Content"]))
           {
@@ -1266,8 +1275,8 @@ using Nemerle.Compiler.Utility;
 
       mutable hitFileVersion = false;
       mutable hitAssemblyVersion = false;
-      mutable assemblyVersionString;
-      mutable location;
+      mutable assemblyVersionString : string;
+      mutable location : Location;
       foreach ((env, attr) in assembly_attributes)
       {
         /* store resolved attribute */

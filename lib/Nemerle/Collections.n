@@ -1380,7 +1380,7 @@ public module NList
     public static NLast[T](this source : SCG.IEnumerable[T]) : T
     {
       mutable exists = false;
-      mutable cur;
+      mutable cur : T;
 
       foreach (e in source)
       {
@@ -2259,7 +2259,7 @@ public module NList
       {
         def loop(iters)
         {
-          mutable ok;
+          mutable ok = false;
           
           foreach (iter in iters with i)
           {
@@ -6028,9 +6028,10 @@ internal module TwoThreeTree
 
     public Insert(value : T, cmp : T * T -> int, options : InsertOptions, size : ref int) : Node[T]
     {
-      mutable retL;
-      mutable retV;
-      mutable retH;
+      // (the nested insert gives them their values)
+      mutable retL : Node[T];
+      mutable retV : T;
+      mutable retH : Node[T];
       mutable replaced = false;
       def eq(options, value)
       {

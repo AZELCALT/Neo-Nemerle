@@ -2053,10 +2053,10 @@ public sealed class ConcreteListParseTree[T] : ListParseTree[T]
   {
     visitor.Enter(this);
     mutable result = this;
-    mutable isDirty;
+    mutable isDirty = false;
     when (applyItems)
     {
-      mutable newItems;
+      mutable newItems : array[T];
       for (mutable i = 0; i < items.Length; ++i)
       {
         def newItem = visitor.Visit(items[i] :> ParseTree) :> T;
@@ -2827,8 +2827,8 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
   internal Parse() : void
   {
     def statistics = this.ParseSession.Statistics;
-    mutable parseStatistics;
-    mutable recoveryStatistics;
+    mutable parseStatistics : StatisticsTask.Single;
+    mutable recoveryStatistics : StatisticsTask.Single;
     when (statistics != null)
     {
       def overalleParseStatistics = statistics.ReplaceContainerSubtask("Parse");
@@ -3219,7 +3219,7 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
   
   public TryGetDynamicSyntaxExtension(syntaxModuleFullName : string) : GrammarDescriptor
   {
-    mutable descriptor;
+    mutable descriptor : GrammarDescriptor;
     if (this.ParseSession._dynamicExtensionsMap?.TryGetValue(syntaxModuleFullName, out descriptor))
       descriptor
     else
@@ -3807,7 +3807,7 @@ public class SourceSnapshot : IPrettyPrintSource
     {
       def lineIndexesBuffer = SCG.List(text.Length / 25);
       lineIndexesBuffer.Add(0);
-      mutable pos;
+      mutable pos = 0;
       while (pos < text.Length)
       {
         match (text[pos])
@@ -3889,7 +3889,7 @@ public variant StatisticsTask
       {
         get
         {
-          mutable result;
+          mutable result = TimeSpan.Zero;
           foreach (t in _tasks.Values)
             result += t.Total;
           result
@@ -4349,7 +4349,7 @@ public abstract class WalkerBase[TContext]
   private GetExtensions[T](parseResult : IParseResult, minRuleId : int, extensions : array[T], begin : int, end : int, ambiguity : out List[ExtensionAmbiguity[T]]) : T
     where T : ExtensionRuleParser
   {
-    mutable firstParser;
+    mutable firstParser = null;
 
     foreach (extension in extensions)
     {
@@ -4821,7 +4821,7 @@ public mask Errors
 
         public GetHashCode(xs : List[Error]) : int
         {
-          mutable hash;
+          mutable hash = 0;
 
           foreach (x in xs)
             hash = (hash << 1) ^ Comparer.GetHashCode(x);
@@ -4932,7 +4932,7 @@ public mask Errors
             }
             def isAllTokensIsSameExtensions(tokens : List[Error]) : bool
             {
-              mutable current;
+              mutable current = null;
               foreach (t in tokens)
               {
                 | Leaf(SubruleInfo as info, _) =>
@@ -4991,7 +4991,7 @@ public mask Errors
             }
             def isAllTokensEquals(tokens : List[Error]) : bool
             {
-              mutable current;
+              mutable current = null;
               foreach (t in tokens)
               {
                 | Leaf =>
@@ -7053,7 +7053,7 @@ public mask Typing
 
     public AddNode([NotNull] partName : string) : HierarchyNode
     {
-      mutable child;
+      mutable child = null;
       if (_children?.TryGetValue(partName, out child))
         child
       else

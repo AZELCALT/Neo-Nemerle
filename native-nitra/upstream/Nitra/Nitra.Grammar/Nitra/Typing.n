@@ -334,7 +334,7 @@ public abstract class EnteredScopeContext : Context
   {
     def bindManyTails(symbols : list[Symbol], tail : list[Location]) : list[T]
     {
-      mutable buffer;
+      mutable buffer : LightList[T];
       foreach (x in symbols)
         BindPathTail(x, tail, ref buffer);
       buffer.ToNList()
@@ -1155,7 +1155,7 @@ public variant RuleType
           when (chemicalType : object == null)
           {
             def members = LightList();
-            mutable hasStaticString;
+            mutable hasStaticString = false;
             foreach (t in this.Types)
               match (t.ChemicalType)
               {
@@ -1439,7 +1439,7 @@ public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
     if (IsDeclaration)
     {
       mutable baseSymbols = [];
-      mutable sealedSymbolFromBase;
+      mutable sealedSymbolFromBase = null;
       foreach (baseAst in Parents)
       {
         when (baseAst.Symbol is SymbolRef.Some(s))
@@ -2551,7 +2551,7 @@ public sealed class NitraExternalSymbolPropertyReader : DefaultExternalSymbolPro
   {
     def nemerleType = project.GetNemerleType(symbol.PropertyContainer);
 
-    mutable ntype;
+    mutable ntype = null;
     foreach (property is IProperty in nemerleType.TypeInfo.LookupMember(symbol.Name, false))
     {
       ntype = ReflectNType(project, nemerleType.TypeOfMember(property));
@@ -2631,7 +2631,7 @@ public sealed class NitraExternalSymbolPropertyReader : DefaultExternalSymbolPro
 
     def nemerleType = project.GetNemerleType(symbol.DeclaringRule);
 
-    mutable signature;
+    mutable signature = null;
     foreach (method is IMethod in nemerleType.TypeInfo.LookupMember(symbol.Name, false))
     {
       def loc        = project.MakeFakeNitraLocation(method.NameLocation);
@@ -4562,10 +4562,10 @@ public module TypingUtils
 
     def rulesWithoutVoid = symbol.Rule.Rules.FilterToArray(rule => !(rule.Type is RuleType.Void));
     def end = rulesWithoutVoid.Length - 1;
-    mutable firstIsArg;
-    mutable lastIsArg;
-    mutable infix;
-    mutable prevIsArg;
+    mutable firstIsArg = false;
+    mutable lastIsArg = false;
+    mutable infix = false;
+    mutable prevIsArg = false;
     foreach (rule in rulesWithoutVoid with i)
     {
       def currIsArg = isArgument(rule);

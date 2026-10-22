@@ -1445,7 +1445,7 @@ public abstract class LexerBase
 
   protected get_string (end_ch : char, is_dollarized : bool) : Token.StringLiteral
   {
-    mutable tok;
+    mutable tok : Token.StringLiteral;
     def startLine = line; def startCol = col - 1;
     def buf = StringBuilder ();
     def rawString = StringBuilder ();

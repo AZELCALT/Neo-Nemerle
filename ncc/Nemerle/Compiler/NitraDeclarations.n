@@ -89,7 +89,7 @@ internal sealed class NitraDeclarationReader
       {
         def extend=r.Eat("extend"); def kind=r.Take().Text;
         unless(kind=="syntax" || kind=="token" || kind=="regex" || kind=="void") r.Fail("invalid rule kind");
-        mutable name=r.Name(); mutable target;
+        mutable name=r.Name(); mutable target : string;
         when(extend) { target=name; if(r.Eat("=")) target=r.Name(); else name="@extension"+mod.Rules.Count.ToString(); }
         def rule=NitraRule(); rule.Name=name; rule.Scope=scope; rule.Kind=kind; rule.Module=mod; rule.Base=target;
         rule.ExplicitSpaces=Flag(attrs,"ExplicitSpaces","ImplicitSpaces",kind!="syntax" || (if(owner!=null) owner.ExplicitSpaces else mod.ExplicitSpaces));
