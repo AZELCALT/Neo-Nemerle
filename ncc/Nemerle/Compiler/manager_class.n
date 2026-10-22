@@ -687,11 +687,19 @@ using Nemerle.Compiler.XmlDump;
           foreach (member in members)
             match (member)
             {
-              | ClassMember.TypeDeclaration(inner) when (inner is TopDeclaration.Class || inner is TopDeclaration.Variant)
-                                                       && (inner.typarms == null || inner.typarms.tyvars.IsEmpty) =>
+              | ClassMember.TypeDeclaration(inner) when inner is TopDeclaration.Class || inner is TopDeclaration.Variant =>
                 def code = Nemerle.Compiler.continuation.ContinuationStore.CodeHash(
                   Nemerle.Compiler.continuation.ContinuationStore.SourceText(inner.Location, false), inner.Name);
-                if (types.ContainsKey(code)) SharedTypes[inner] = PExpr.FromQualifiedIdentifier(this, types[code])
+                if (types.ContainsKey(code))
+                {
+                  // (a generic one with its own parameters: `type Pt[T] = shapes.Box[T]')
+                  def target = PExpr.FromQualifiedIdentifier(this, types[code].Split('`')[0]);
+                  SharedTypes[inner] = match (if (inner.typarms == null) [] else inner.typarms.tyvars)
+                    {
+                      | [] => target
+                      | parameters => PExpr.Indexer(inner.Location, target, parameters.Map(p => PExpr.Ref(p.GetName()) : PExpr))
+                    }
+                }
                 else nested(inner)
               | _ => ()
             }

@@ -319,9 +319,12 @@ using Nemerle.Compiler.Utility;
     /// slot reaches records nothing.
     RecordIdentities () : void
     {
+      // (as .NET names it: nested with `+', a generic one with its arity, Box`1)
       def clrName (ti : Nemerle.Compiler.type_info.TypeInfo) : string
       {
-        if (ti.DeclaringType == null) ti.FullName else clrName (ti.DeclaringType) + "+" + ti.Name
+        def own = if (ti.DeclaringType == null) ti.FullName else clrName (ti.DeclaringType) + "+" + ti.Name;
+        def arity = ti.TyparmsCount - (if (ti.DeclaringType == null) 0 else ti.DeclaringType.TyparmsCount);
+        if (arity > 0 && !own.Contains ("`")) own + "`" + arity.ToString () else own
       }
       def typeName (t : FixedType) : string
       {
@@ -372,7 +375,7 @@ using Nemerle.Compiler.Utility;
         identity.Base = match (tb.BaseType) { | null => "" | b => clrName (b) };
         foreach (field in tb.GetFields (fields)) identity.Fields.Add ((field.Name, typeName (field.GetMemType ())));
         identity.Code = Nemerle.Compiler.continuation.ContinuationStore.CodeHash (
-          Nemerle.Compiler.continuation.ContinuationStore.SourceText (tb.Location, false), tb.Name);
+          Nemerle.Compiler.continuation.ContinuationStore.SourceText (tb.Location, false), tb.Name.Split ('`')[0]);
         Manager.Continuation.Identities.Add (identity);
       }
       // (and the file modules that define them, by their file's code: the same file elsewhere is the same module)

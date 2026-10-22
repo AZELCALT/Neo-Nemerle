@@ -96,6 +96,14 @@ programs = {
     # (bindings that read earlier ones and the local functions above them, `mutable' as `def')
     'bindings': ('def T() : int { 5 }\ndef a = T();\nmutable t = a;\nt += 1;\ndef b = t * 2;\n'
                  'System.Console.WriteLine($"$a $t $b")\n', '5 6 12'),
+    # (a local async stream with the token its enumeration is given, as C#'s [EnumeratorCancellation])
+    'cancel': ('using System;\nusing System.Collections.Generic;\nusing System.Threading;\nusing System.Runtime.CompilerServices;\n'
+               'using System.Threading.Tasks;\n'
+               'async def S(n : int, [EnumeratorCancellation] token : CancellationToken = default(CancellationToken)) : IAsyncEnumerable[int]\n'
+               '{ for (mutable i = 0; i < n && !token.IsCancellationRequested; i++) { await Task.Yield(); yield i } }\n'
+               'def source = CancellationTokenSource();\nmutable t = 0;\n'
+               'await foreach (x in S(10).WithCancellation(source.Token)) { t += x; when (x == 3) source.Cancel() }\n'
+               'Console.WriteLine(t)\n', '6'),
     'plain': ('async def T() : System.Threading.Tasks.Task[int] { await System.Threading.Tasks.Task.Yield(); 2 }\n'
               'def n = T().Result;\nSystem.Console.WriteLine(n * 21)\n', '42'),
 }

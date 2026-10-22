@@ -193,9 +193,12 @@ public sealed class NitraSharedScope : NitraSemanticScope
   static NamesType(token : string) : bool
   {
     def aliases=["object","string","int","uint","long","ulong","short","ushort","byte","sbyte","char","bool","float","double","decimal"];
+    def manager=Nemerle.Compiler.manager_class.ManagerClass.Instance;
     aliases.Contains(token)
-    || Nemerle.Compiler.manager_class.ManagerClass.Instance!=null && token.Length>0 && char.IsLetter(token[0]) && !token.Contains(" ")
-       && Nemerle.Compiler.manager_class.ManagerClass.Instance.CoreEnv.LookupType(NList.FromArray(token.Split('.'))).IsSome
+    || manager!=null && token.Length>0 && char.IsLetter(token[0]) && !token.Contains(" ")
+       && (manager.CoreEnv.LookupType(NList.FromArray(token.Split('.'))).IsSome
+           // (a generic type's instance, `shapes.Box[int]': a type expression)
+           || token.Contains("[") && manager.CoreEnv.LookupType(NList.FromArray(token.Substring(0, token.IndexOf('[')).Split('.'))).IsSome)
   }
   // every use reaches the one storage that the declaration (`scope A;', Declare) created: access, never a new one
   storage() : PExpr { <[ Nemerle.Scopes.Scope.Access($(Name : string)) ]> }

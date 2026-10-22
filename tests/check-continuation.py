@@ -524,7 +524,8 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     shapes = ('public class Point\n{\n  public mutable X : int;\n  public Y : int;\n  public this(x : int, y : int) { X = x; Y = y }\n'
               '  public override ToString() : string { $"($X, $Y)" }\n}\n'
               'public variant Shape\n{\n  | Dot { at : Point }\n  | Line { from : Point; to : Point }\n}\n'
-              'public class Hidden { public N : int; public this(n : int) { N = n } }\n')
+              'public class Hidden { public N : int; public this(n : int) { N = n } }\n'
+              'public class Box[T] { public V : T; public this(v : T) { V = v } }\n')
     ident = w / 'identity'
     for d in ('same', 'renamed', 'apart', 'other', 'util'):
         (ident / d).mkdir(parents=True)
@@ -533,8 +534,10 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     (ident / 'main.n').write_text(
         'using System.IO;\nusing System.Reflection;\n'
         'scope A;\nscope.A.registery("p", type("shapes.Point"));\nscope.A.registery("s", type("shapes.Shape"));\n'
+        'scope.A.registery("b", type("shapes.Box[int]"));\n'
         'scope.A.p = shapes.Point(3, 4);\n'
         'scope.A.s = shapes.Shape.Line(shapes.Point(1, 2), shapes.Point(5, 6));\n'
+        'scope.A.b = shapes.Box(9);\n'
         'System.Console.WriteLine(util.Twice(1));\n'
         'def call(dir : string) : string\n{\n'
         '  def plugin = Assembly.LoadFrom(Path.Combine(System.AppContext.BaseDirectory, dir, dir + ".dll"));\n'
@@ -556,11 +559,13 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         '  def line = match (a.Read.[shapes.Shape]("s")) { | shapes.Shape.Line(f, t) => $"line $f $t" | _ => "?" };\n'
         '  $"same: $p $line $(typeof(shapes.Point).Assembly.GetName().Name)"\n}\n')
     # the same type under another name: that type
-    (ident / 'renamed/mine.n').write_text(shapes.split('public variant')[0].replace('Point', 'Pt'))
+    (ident / 'renamed/mine.n').write_text(shapes.split('public variant')[0].replace('Point', 'Pt')
+                                          + shapes.split('\n')[-2].replace('Box', 'Bx') + '\n')
     (ident / 'renamed/plug.n').write_text(
         'public Run() : string\n{\n'
         '  def p = Nemerle.Scopes.Scope.Access("main.A").Read.[mine.Pt]("p");\n'
-        '  $"renamed: $p $(typeof(mine.Pt).Assembly.GetName().Name)"\n}\n')
+        '  def b = Nemerle.Scopes.Scope.Access("main.A").Read.[mine.Bx[int]]("b");\n'
+        '  $"renamed: $p $(b.V) $(typeof(mine.Pt).Assembly.GetName().Name)"\n}\n')
     # the same code compiled apart (not against the host): another .NET type, which the read reports
     (ident / 'apart/shapes.n').write_text(shapes)
     (ident / 'apart/plug.n').write_text(
@@ -574,7 +579,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     shutil.copy2(T / 'Nemerle.dll', ident / 'Nemerle.dll')
     shutil.copy2(T / 'ncc.runtimeconfig.json', ident / 'main.runtimeconfig.json')
     output = [l for l in run(['dotnet', ident / 'main.exe'], cwd=ident).stdout.split('\n') if l.strip()]
-    if output != ['2', 'same: (7, 4) line (1, 2) (5, 6) main', 'renamed: (7, 4) main', 'apart: compiled apart', '(7, 4) True']:
+    if output != ['2', 'same: (7, 4) line (1, 2) (5, 6) main', 'renamed: (7, 4) 9 main', 'apart: compiled apart', '(7, 4) True']:
         raise SystemExit('FAILED: a scope slot\'s value through copies of its type printed %r' % output)
     # a file module the host has with other code, or one the host has no record of, is an error, not a second copy
     (ident / 'other/shapes.n').write_text(shapes.replace('  public Y : int;\n', '  public Y : int;\n  public Z : int;\n'))
@@ -588,7 +593,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     recorded = reader(ident / 'main.exe', T, '--identities')
     names = sorted(l.split(' : ')[0] for l in recorded.splitlines())
     # (a file's types are nested in its module's class: shapes+Point)
-    if names != ['shapes+Point', 'shapes+Shape', 'shapes+Shape+Dot', 'shapes+Shape+Line']:
+    if names != ['shapes+Box`1', 'shapes+Point', 'shapes+Shape', 'shapes+Shape+Dot', 'shapes+Shape+Line']:
         raise SystemExit('FAILED: the host records the types its slots reach, and only those\n' + recorded)
     print('PASS: a scope slot\'s value is one object: a plugin with the same file module or the same type under another '
           'name uses the host\'s type (a write through it is the host\'s), a copy compiled apart is reported, and a '

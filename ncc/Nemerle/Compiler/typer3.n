@@ -962,7 +962,9 @@ using Nemerle.Compiler.Utility;
     {
       def item = match (stream.Fix ()) { | Class (_, [t]) => t | _ => InternalType.Object };
       def name = StateMachineName ("");
-      def cancels = Manager.UserData.Contains ("Nemerle.AsyncMacros.cancel:" + the_method.Name);
+      // (a local async stream records it by its own function's name, a method's by the method's)
+      def machine_name = if (current_local_fun.decl != null) current_local_fun.Name else the_method.Name;
+      def cancels = Manager.UserData.Contains ("Nemerle.AsyncMacros.cancel:" + machine_name);
       def has_mutable_parm = current_local_fun.Parameters.Exists (fun (fp) { fp.decl.IsMutable });
       def enumeration =
       {
