@@ -671,7 +671,10 @@ public class FieldBuilder : MemberBuilder, IField
             | functions => PExpr.Sequence(value.Location, functions + [value])
           };
         Manager.UserData["Nemerle.AsyncMacros.blocking"] = true;
-        def typed = try { typer.TypeExpr(value) } finally { Manager.UserData.Remove("Nemerle.AsyncMacros.blocking") };
+        // (in a script that waits the value is typed again where it is, which reports on it: this typing only probes)
+        when (script.Waits) Manager.QuietMessages++;
+        def typed = try { typer.TypeExpr(value) }
+                    finally { Manager.UserData.Remove("Nemerle.AsyncMacros.blocking"); when (script.Waits) Manager.QuietMessages-- };
         ResolveDelayed(typed);
         ty = typed.Type.DeepFix();
         // Cached initializer trees also enter speculative overload checks.
@@ -1277,7 +1280,14 @@ public class MethodBuilder : MemberBuilder, IMethod
               typer.RunFullTyping();
             catch { _ is RestartRunBodyTyperException => loop(); }
           }
-          loop();
+          // (an async file's typed-only copy of its top-level code: typed for the types it gives the file's state, as
+          // the inference pass's copy is, quietly; the code itself, in its state machine, is what reports on it)
+          if (IsTypedOnly)
+          {
+            Manager.QuietMessages++;
+            try loop() finally Manager.QuietMessages--
+          }
+          else loop();
 
         | _ => ()
       }

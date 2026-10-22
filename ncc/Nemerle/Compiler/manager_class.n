@@ -235,8 +235,6 @@ using Nemerle.Compiler.XmlDump;
     /// Types this compilation declares that a continued binary already has (a scope slot reaches them there): made as
     /// aliases of that binary's, so they are one type (see ShareContinuedTypes).
     public SharedTypes : System.Collections.Generic.Dictionary[TopDeclaration, PExpr] = System.Collections.Generic.Dictionary();
-    /// The reads of top-level values reported as unchecked (StateMacro), once each.
-    public StateReportedReads : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
     /// Whether a binary continued from stores shared scopes: `scope.A.x` in a source then reads them, although
     /// `scope` is an ordinary name elsewhere.
     public ContinuesScopes : bool { get; private set; }

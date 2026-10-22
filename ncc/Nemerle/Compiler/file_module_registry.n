@@ -13,6 +13,7 @@ using Nemerle.Compiler.namespace_tree;
 using Nemerle.Compiler.type_builder;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.SolverMacros;
 using Nemerle.Compiler.ClassMembers;
 using Nemerle.Compiler.Lexer;
 using Nemerle.Compiler.MacroClassGen;
@@ -681,9 +682,8 @@ internal sealed class StateMacro : IMacro
                 unless (types.Contains(pair.Value.ToString())) types.Add(pair.Value.ToString());
             def listed = string.Join(", ", types.ToArray());
             def first = if (types.Count > 0) types[0] else "T";
-            // (once per read: the code around it may be typed more than once)
-            when (manager.StateReportedReads.Add(field.Location.ToString()))
-            Message.Error(field.Location,
+            // (as the typer reports: in its pass that reports, once)
+            ReportLocatedError(field.Location, manager.Solver.CurrentMessenger,
               $"`$name' is a top-level value of several types ($listed): code outside the top-level code reads it whenever it "
                "runs, so it checks it first (match ($name) { | v is $first => ... })");
             field

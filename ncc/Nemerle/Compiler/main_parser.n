@@ -1661,6 +1661,7 @@ using Nemerle.Compiler.Utility;
       mutable waits = ScriptInitializerMacro.Waits(body);
       // (a binding's value waits in its initializer, which the statements read through `__script_binding_value')
       foreach (value in data.InferredInitializers.Values) when (ScriptInitializerMacro.Waits(value)) waits = true;
+      data.Waits = waits;
       def run =
         if (!waits) capture
         else

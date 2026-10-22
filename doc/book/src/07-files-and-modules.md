@@ -214,8 +214,10 @@ System.Console.WriteLine(Shout())
 5!
 ```
 
-A top-level `mutable` that a function of the file assigns can change at any time (an async function's assignment
-comes later): the top-level code reads it from its storage too, and checks it when it has several types.
+The type of a top-level value changes in the top-level code only. A function of the file that assigns it gives it a
+value of a type it already has there: another type is an error, as anywhere a value's type is fixed. Since such a
+function can assign it at any time (an async function's assignment comes later), the top-level code then reads it
+from its storage too, and checks it when it has several types.
 
 Before its first binding a value does not exist yet. Reading it there gives `NotYet`, which nothing accepts:
 

@@ -390,6 +390,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
         // (the flow of the values starts again with what the last attempt learned, see typer_flow)
         def parsed_body = current_fun.body;
+        // (and as an iterator only where it started as one: a yield found while typing switches it, see SwitchToYielding)
+        def was_yielding = inside_yielding_function;
+        def yield_type = current_fun.yield_type;
         def facts = current_method_builder.FlowFacts;
         facts.Grew = false;
         flow = SCG.Dictionary ();
@@ -402,6 +405,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           messenger.Cleanup ();
           debugInfos = [];
           current_fun.body = parsed_body;
+          inside_yielding_function = was_yielding;
+          current_fun.yield_type = yield_type;
+          yield_labels = null;
           InitLocalContext (LocalContext.Empty);
           throw RestartRunBodyTyperException ()
         }
@@ -428,7 +434,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               try { RunDelayedTypings() } catch { | _ is FlowRestart => restart_flow () }
               // (nested code assigned a value types the code around it did not know: again, knowing them; the facts
               // only grow and the types are finitely many, and types that never compare equal stop after a few)
-              when (facts.Grew && facts.Attempts < 16) restart_flow ();
+              when (facts.Grew && facts.Attempts < 16 && errorCount == Message.ErrorCount) restart_flow ();
               MaybeDumpTypedTree ("after delayed typings");
               // an imported file's top-level code (its static constructor) holds the type's lock: threads started there
               when (Manager.Options.FileModules && current_fun.decl == null && current_method_builder.Name == ".cctor"
@@ -490,6 +496,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               }
               when (Manager.IsIntelliSenseMode || errorCount == Message.ErrorCount)
                 try { RunDelayedTypings () } catch { | _ is FlowRestart => restart_flow () }
+              // (as above: what nested code assigns, the code around it types again knowing; an attempt that reported
+              // errors stands, its errors said once)
+              when (facts.Grew && facts.Attempts < 16 && errorCount == Message.ErrorCount) restart_flow ();
               when (errorCount == Message.ErrorCount)
               {
                 RunSecondPass (current_method_builder);
@@ -2211,7 +2220,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 finally { solver.PopState (); flow = resumed };
               when (wrong)
               {
-                ReportLocatedError (use.Location, messenger,
+                FlowError (use.Location,
                   $"`$(local.Name)' can be $(FlowTypes (types)) here, and this does not fit it as $t: check `$(local.Name)' first "
                    "(match ($(local.Name)) { | v is $t => ... })");
                 return TExpr.Error ()
@@ -2222,7 +2231,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             {
               | [_] | [] => ()
               | _ =>
-                ReportLocatedError (use.Location, messenger,
+                FlowError (use.Location,
                   $"`$(local.Name)' can be $(FlowTypes (types)) here, and this gives another type for each ("
                    + string.Join (", ", results.Rev ().Map (r => $"$(r[1]) as $(r[0])").ToArray ())
                    + $"): check `$(local.Name)' first (match ($(local.Name)) { | v is $(types.Head) => ... })");
@@ -3449,12 +3458,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             match (FlowSet (n))
             {
               | (null, _) => (null, [])
-              // (a top-level value read by nested code: that code runs whenever it is called, so it checks first)
-              | (local, types) when local.Flow.TopLevel && (local.Flow.Owner : object != this || flow_nested > local.Flow.Depth) =>
-                ReportLocatedError (child.Location, messenger,
-                  $"`$(local.Name)' is a top-level value of several types ($(FlowTypes (types))): code outside the top-level code "
-                   $"reads it whenever it runs, so it checks it first (match ($(local.Name)) { | v is $(types.Head) => ... })");
-                (null, [])
+              // (a top-level value read by nested code: not used as each type, see FlowUnchecked)
+              | (local, _) when FlowUnchecked (local) => (null, [])
               | (_, types) => (child, types)
             }
           | _ => (null, [])
@@ -3541,6 +3546,13 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       }
     }
 
+    /// Whether `local' is a top-level value read here by code outside the top-level code (a lambda, a local function):
+    /// that code runs whenever it is called, so it checks a value of several types before it uses it.
+    FlowUnchecked (local : LocalValue) : bool
+    {
+      local.Flow.TopLevel && (local.Flow.Owner : object != this || flow_nested > local.Flow.Depth)
+    }
+
     /// The followed local `name' is (null when it is not one).
     FlowLocal (name : PT.Name) : LocalValue
     {
@@ -3574,8 +3586,14 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       {
         | [one] => TypeExpr (Nemerle.Compiler.UtilMacros.locate (location, <[ ($(raw : typed) :> $(PExpr.TypedType (one))) ]>), expected)
         | [] => _ = Expect (expected, InternalType.Object, "value reference"); raw
+        // (a read no check is around: once, where it is)
+        | many when FlowUnchecked (local) =>
+          FlowError (location,
+            $"`$(local.Name)' is a top-level value of several types ($(FlowTypes (many))): code outside the top-level code "
+             $"reads it whenever it runs, so it checks it first (match ($(local.Name)) { | v is $(many.Head) => ... })");
+          raw
         | many =>
-          ReportLocatedError (location, messenger,
+          FlowError (location,
             $"`$(local.Name)' can be $(FlowTypes (many)) here: check it first (match ($(local.Name)) { | v is $(many.Head) => ... })");
           raw
       }
@@ -3599,11 +3617,19 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       def method = current_method_builder;
       def script = Manager.Options.Script;
-      parent_typer.IsNone && flow_nested == 0 && method != null
+      // (the code itself, or an iterator's body, which its yielding function holds: an async top-level code's)
+      def own = match (parent_typer) { | None => true | Some (p) => current_fun.Name == "_N_yielding_function" && p.parent_typer.IsNone };
+      own && flow_nested == 0 && method != null
         && (Manager.Options.FileModules && Nemerle.Compiler.file_module_registry.FileModuleRegistry.IsTopLevelCode (method)
             // (a script's statements: its constructor, or its async top-level code)
             || script != null && current_type.FullName == script.TypeName && (method.IsConstructor || method.Name.Contains ("top_level")))
         && Manager.FileModuleRegistry.Flowing.Contains (current_type.FullName + "." + name.Id)
+    }
+
+    /// Reports a flow error.
+    FlowError (location : Location, message : string) : void
+    {
+      ReportLocatedError (location, messenger, message)
     }
 
     /// A read of a followed value where some way to it has not assigned it: NotYet.
@@ -3612,7 +3638,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       match (FlowOf (local))
       {
         | point when point != null && point.Unassigned && !flow_out =>
-          ReportLocatedError (location, messenger,
+          FlowError (location,
             $"`$(local.Name)' is NotYet here: it is declared at line $(local.Location.Line) without a value, and not every "
              "way to this line gives it one (give it one where it is declared, or on each way here)")
         | _ => ()

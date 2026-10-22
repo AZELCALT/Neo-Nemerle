@@ -22,6 +22,7 @@ print('Type flow artifacts:', work, flush=True)
 
 W = 'System.Console.WriteLine'
 YES = 'System.Environment.GetCommandLineArgs().Length > 0'   # true, as the compiler cannot know
+AWAIT = 'await System.Threading.Tasks.Task.Yield();\n'
 # (name, source, expected output, or the text of the expected error)
 cases = [
     # linear: after each assignment, its one type
@@ -56,6 +57,12 @@ cases = [
     ('notyet-out', f'Run() : void {{ mutable x; _ = int.TryParse("5", out x); {W}(x + 1) }}\nRun()\n', '6', None),
     ('notyet-do', f'Run() : void {{ mutable x; do {{ x = 3 }} while (false); {W}(x) }}\nRun()\n', '3', None),
     ('notyet-function', f'mutable x;\nx = 5;\nF() : int {{ x }}\n{W}(F())\n', '5', None),
+    # the same in code that waits (an async file's top-level code, a waiting script)
+    ('async-linear', f'mutable x = 1;\n{AWAIT}x = "one";\n{W}(x.Length)\n', '3', None),
+    ('async-lambda', f'mutable x = 1;\n{AWAIT}x = "one";\ndef show = () => {W}(x);\nx = 2;\nshow()\n', None, 'is a top-level value of several types'),
+    # (an error in code that waits is reported once: its typed-only copy does not report it again)
+    ('async-type-error', f'{AWAIT}def n : int = "text";\n{W}(n)\n', None, 'expected int'),
+    ('async-lambda-checked', f'mutable x = 1;\n{AWAIT}x = "one";\ndef show = () => match (x) {{ | s is string => {W}(s) | n is int => {W}(n) }};\nx = 2;\nshow()\n', '2', None),
 ]
 
 def compile_file(name, text):
@@ -88,6 +95,8 @@ for name, text, expected, error in cases:
         if error is not None:
             if output is not None or error not in messages:
                 failures.append('%s as a %s: expected the error %r, got %r %r' % (name, kind, error, output, messages[-400:]))
+            elif messages.count(error) != 1:
+                failures.append('%s as a %s: the error %r is reported %d times' % (name, kind, error, messages.count(error)))
         elif output != expected:
             failures.append('%s as a %s: printed %r, expected %r\n%s' % (name, kind, output, expected, messages[-600:]))
 if failures:

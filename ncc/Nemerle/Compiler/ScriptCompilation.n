@@ -30,6 +30,9 @@ public sealed class ScriptCompilationData
   public mutable DefaultImports : array[string];
   public TypedInitializers : Dictionary[string, TExpr] = Dictionary();
   public InferredInitializers : Dictionary[string, PExpr] = Dictionary();
+  /// The script waits: its statements are an async method's, which types the bindings' values where they are (their
+  /// inference, for the fields' types, only probes them, see FieldBuilder.InferScriptType).
+  public mutable Waits : bool;
   /// The top-level local functions written before a binding: in scope where its value's type is found, as where it runs.
   public InferenceFunctions : Dictionary[string, list[PExpr]] = Dictionary();
   public PreviousTypeNames : Dictionary[string, string] = Dictionary();
