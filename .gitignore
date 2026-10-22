@@ -64,3 +64,7 @@ __pycache__/
 
 # the installer writes the editor extension next to itself
 /install/*.vsix
+
+# Claude Code settings of this machine (permission rules)
+/.claude/settings.json
+/.claude/settings.local.json
