@@ -62,6 +62,8 @@ cases = [
     ('async-lambda', f'mutable x = 1;\n{AWAIT}x = "one";\ndef show = () => {W}(x);\nx = 2;\nshow()\n', None, 'is a top-level value of several types'),
     # (an error in code that waits is reported once: its typed-only copy does not report it again)
     ('async-type-error', f'{AWAIT}def n : int = "text";\n{W}(n)\n', None, 'expected int'),
+    # an error in the last statement is its own (a script's result waits for the call's type, it asks nothing of it)
+    ('last-call-error', f'{W}(1 + "x" * 2)\n', None, 'got string'),
     ('async-lambda-checked', f'mutable x = 1;\n{AWAIT}x = "one";\ndef show = () => match (x) {{ | s is string => {W}(s) | n is int => {W}(n) }};\nx = 2;\nshow()\n', '2', None),
 ]
 
@@ -97,6 +99,8 @@ for name, text, expected, error in cases:
                 failures.append('%s as a %s: expected the error %r, got %r %r' % (name, kind, error, output, messages[-400:]))
             elif messages.count(error) != 1:
                 failures.append('%s as a %s: the error %r is reported %d times' % (name, kind, error, messages.count(error)))
+            elif 'each overload has an error' in messages:
+                failures.append('%s as a %s: the error is followed by others it causes\n%s' % (name, kind, messages[-600:]))
         elif output != expected:
             failures.append('%s as a %s: printed %r, expected %r\n%s' % (name, kind, output, expected, messages[-600:]))
 if failures:
