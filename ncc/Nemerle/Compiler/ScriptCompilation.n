@@ -5,6 +5,7 @@ using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.AST;
 using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.expr_walker;
 using Nemerle.Compiler.fixed_type;
 using Nemerle.Compiler.Lexer;
 using Nemerle.Compiler.MacroClassGen;
@@ -106,13 +107,15 @@ internal sealed class ScriptResultMacro : IMacro
             <[ def value = $(typed : typed); this.$(resultName : usesite) = array[false : object, (value : object), typeof($(ty : typed)) : object] ]>
         }
         if (!ctx.Manager.Options.Script.CaptureResult) none
-        // (the value's type may wait for the expression's own typing, as an overload chosen later: an error there is
-        // its own, and an expression of no type (`throw') has no value, so the result is then nothing, not a value
-        // asked of it)
+        // (the value's type may wait for the expression's own typing, as an overload chosen later; typed, a type still
+        // open (`null') is the value's, as ever; not typed (an error there, which is its own), the result is nothing,
+        // not a value asked of it)
         else ctx.DelayMacro(last => match (typed.Type.Hint)
           {
             | Some(ty) => Some(capture(ty))
-            | None => if (last || ctx.Manager.DelayedTypingsSecondPass) Some(none) else None()
+            | None when last || ctx.Manager.DelayedTypingsSecondPass =>
+              if (ExprWalker().IsTyped(typed)) Some(capture(typed.Type.Fix())) else Some(none)
+            | None => None()
           });
       | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal script result capture"); null
     }

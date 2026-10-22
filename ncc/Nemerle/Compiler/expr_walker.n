@@ -821,6 +821,24 @@ using Nemerle.Compiler.typer;
       result
     }
 
+    /// Is the expression typed: no errors and no unresolved delayed typings (a type may still be open, as `null's)
+    public IsTyped(expression : TExpr) : bool
+    {
+      mutable result = true;
+
+      Walk(expression, info =>
+      {
+        match (info.Node)
+        {
+          | TExpr.Error
+          | TExpr.Delayed(susp) when !susp.IsResolved => result = false; info.Stop();
+          | _ => ()
+        }
+      });
+
+      result
+    }
+
     /// Is subexpression nave all types infered, have no unresolved and no errors
     public IsWellTyped(expression : TExpr) : WellTyped
     {

@@ -85,6 +85,7 @@ public static class ScriptingChecks {
   Check((int)Eval("mask math { Double(n : int) : int { n * 2 } F(Double : int) : int { Double + 1 } }\nx.math.F(4)\n").Value==5,"local shadowing");
   Check((int)Eval("A() : int { 7 }\nx.A()\n").Value==7,"file-qualified root function");
   Check(Eval("null : string\n").Kind==ScriptResultKind.Value && Eval("null : string\n").Value==null,"null value");
+  Check(Eval("null\n").Kind==ScriptResultKind.Value && Eval("null\n").Value==null,"bare null value");
   Check(Eval("()\n").Kind==ScriptResultKind.Void,"void result");
   var error=host.Evaluate(Compile("throw System.InvalidOperationException(\"user failure\")\n"),new ScriptInputs());
   Check(error.Kind==ScriptResultKind.Error && error.Error is InvalidOperationException,"user exception");
