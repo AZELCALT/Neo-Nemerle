@@ -236,8 +236,72 @@ public module Checker
       finally { ManagerClass.Instance = previous; }
       when (completer != null) { result["completion"] = completer.Items; result["signatures"] = completer.Signatures }
       when (renameType != null) RenameType(manager, files, overlay, facts, types, renameType, result);
+      when (completer == null && renameType == null) Imports(manager, files, diagnostics);
     }
     result
+  }
+
+  static Unbound : Regex = Regex(@"^unbound (?:type )?name `([A-Za-z_][A-Za-z0-9_]*)'(?!\s+in\s)");
+
+  /// For each name the compilation could not find, what a `using' of which would find it (the code actions offer
+  /// them): a namespace with a public type of that name, or a workspace module with a type or function of that name.
+  static Imports(manager : ManagerClass, files : SCG.List[string], diagnostics : JsonArray) : void
+  {
+    def wanted = SCG.Dictionary.[string, SCG.List[string]](StringComparer.Ordinal);
+    foreach (d in diagnostics)
+    {
+      def m = Unbound.Match(d["message"].GetValue.[string]());
+      when (m.Success && !wanted.ContainsKey(m.Groups[1].Value)) wanted[m.Groups[1].Value] = SCG.List();
+    }
+    when (wanted.Count > 0)
+    {
+      def modules = SCG.HashSet.[string](StringComparer.Ordinal);
+      foreach (f in files)
+      {
+        def index = Location.GetFileIndex(f);
+        when (manager.FileModuleRegistry.IsModule(index)) _ = modules.Add(manager.FileModuleRegistry.Name(index));
+      }
+      def add(name : string, from : string) : void { unless (wanted[name].Contains(from)) wanted[name].Add(from) }
+      def walk(node : NamespaceTree.Node, path : string, depth : int) : void
+      {
+        when (depth < 12 && node.Children != null)
+          foreach (child in node.Children.Values)
+          {
+            def name = child.PartName;
+            def full = if (path == "") name else path + "." + name;
+            match (child.Value)
+            {
+              | NamespaceTree.TypeInfoCache.NamespaceReference => walk(child, full, depth + 1)
+              | NamespaceTree.TypeInfoCache.Cached(ti) when modules.Contains(full) =>
+                // a module: its types and its functions
+                foreach (n in wanted.Keys.ToArray())
+                  when (ti.GetNestedTypes().Exists(t => t.Name == n && t.IsPublic) || ti.LookupMember(n).Exists(m => m.IsStatic && !m.IsPrivate))
+                    add(n, full);
+                walk(child, full, depth + 1)
+              | NamespaceTree.TypeInfoCache.Cached(ti) when wanted.ContainsKey(name) && path != "" && !modules.Contains(path) =>
+                when (ti.IsPublic && ti.DeclaringType == null) add(name, path)
+              // (a guard would be the last alternative's only)
+              | NamespaceTree.TypeInfoCache.NotLoaded(_) | NamespaceTree.TypeInfoCache.NotLoadedList(_) | NamespaceTree.TypeInfoCache.CachedAmbiguous(_) =>
+                when (wanted.ContainsKey(name) && path != "" && !modules.Contains(path)) add(name, path)
+              | NamespaceTree.TypeInfoCache.No => walk(child, full, depth + 1)
+              | _ => ()
+            }
+          }
+      }
+      def previous = ManagerClass.Instance;
+      ManagerClass.Instance = manager;
+      try { walk(manager.NameTree.NamespaceTree, "", 0) } catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("imports: " + e) }
+      finally { ManagerClass.Instance = previous }
+      foreach (d in diagnostics)
+      {
+        def m = Unbound.Match(d["message"].GetValue.[string]());
+        when (m.Success && wanted[m.Groups[1].Value].Count > 0)
+        {
+          def found = wanted[m.Groups[1].Value].OrderBy(x => x, StringComparer.Ordinal).Take(8);
+          d["imports"] = JsonArray(found.Select(x => JsonValue.Create(x) : JsonNode).ToArray());
+        }
+      }
+    }
   }
 
   static LocalId(decl : LocalValue) : string

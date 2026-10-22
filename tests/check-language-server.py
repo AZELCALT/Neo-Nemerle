@@ -88,8 +88,9 @@ c = Client()
 init = c.request('initialize', {'processId': None, 'rootUri': None, 'capabilities': {}})
 caps = init['capabilities']; legend = caps['semanticTokensProvider']['legend']['tokenTypes']
 sync = caps['textDocumentSync']
-check(sync['change'] == 1 and sync['openClose'] and 'save' in sync and caps['foldingRangeProvider'] and caps['documentSymbolProvider'],
-      'capabilities (whole texts, and saves for the index): %s' % sync)
+check(sync['change'] == 2 and sync['openClose'] and 'save' in sync and caps['foldingRangeProvider'] and caps['documentSymbolProvider'],
+      'capabilities (changed ranges, and saves for the index): %s' % sync)
+check(caps.get('documentFormattingProvider') and caps.get('documentRangeFormattingProvider'), 'formatting capabilities: %s' % caps)
 check(caps['hoverProvider'] and caps['definitionProvider'], 'hover and definition capabilities')
 c.notify('initialized', {})
 
@@ -513,5 +514,97 @@ try:
     print('PASS: signature help, document highlight, workspace symbols, inlay hints and tokens by meaning (Nemerle and Nitra)')
 finally:
     shutil.rmtree(more, ignore_errors=True)
+# 10. changes by range, and formatting: lines indented by their braces, their own way of lining up kept; strings and
+# comments as they are; nothing changed where the brackets do not balance or the indentation is the code's
+def edited(text, edits):
+    lines = text.split('\n')
+    for e in sorted(edits, key=lambda e: e['range']['start']['line'], reverse=True):
+        assert e['range']['start']['line'] == e['range']['end']['line']
+        l = e['range']['start']['line']; line = lines[l]
+        lines[l] = line[:e['range']['start']['character']] + e['newText'] + line[e['range']['end']['character']:]
+    return '\n'.join(lines)
+c = Client()
+c.request('initialize', {'processId': None, 'rootUri': None, 'capabilities': {}})
+c.notify('initialized', {})
+uri = open_doc('sync.n', 'A() : int { 1 }\n')
+# (two changes in one message: the second's range is of the text after the first)
+c.notify('textDocument/didChange', {'textDocument': {'uri': uri, 'version': 2}, 'contentChanges': [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'text': 'Alpha'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 0}}, 'text': 'Beta() : string { "\u00e9t\u00e9" }\nGamma() : int { 3 }\n'},
+    {'range': {'start': {'line': 1, 'character': 20}, 'end': {'line': 1, 'character': 21}}, 'text': 'E'}]})
+c.wait_diagnostics(uri, 2)
+symbols = c.request('textDocument/documentSymbol', {'textDocument': {'uri': uri}})
+check(sorted(names(symbols)) == ['Alpha', 'Beta', 'Gamma'], 'changes by range applied in order: %s' % list(names(symbols)))
+spaces = {'tabSize': 2, 'insertSpaces': True}
+messy = ('Run(x : int) : string\n{\n      def s = "a { string";   \n      def c = \'{\';\n      def m = <#multi {\n   line#>;\n'
+         '      when (x > 1)\n        System.Console.WriteLine(s +\n                                 c.ToString());\n'
+         '    match (x)\n  {\n| 1 => "one"\n| _ =>\n  /* block { */ m\n}\n}\n')
+neat = ('Run(x : int) : string\n{\n  def s = "a { string";\n  def c = \'{\';\n  def m = <#multi {\n   line#>;\n'
+        '  when (x > 1)\n    System.Console.WriteLine(s +\n                             c.ToString());\n'
+        '  match (x)\n  {\n    | 1 => "one"\n    | _ =>\n      /* block { */ m\n  }\n}\n')
+uri = open_doc('messy.n', messy)
+formatted = edited(messy, c.request('textDocument/formatting', {'textDocument': {'uri': uri}, 'options': spaces}))
+check(formatted == neat, 'a file formatted:\n%s' % formatted)
+c.notify('textDocument/didChange', {'textDocument': {'uri': uri, 'version': 2}, 'contentChanges': [{'text': neat}]})
+check(c.request('textDocument/formatting', {'textDocument': {'uri': uri}, 'options': spaces}) == [], 'a formatted file stays as it is')
+# a range: only its lines; four columns
+edits = c.request('textDocument/rangeFormatting', {'textDocument': {'uri': uri}, 'options': {'tabSize': 4, 'insertSpaces': True},
+                                                   'range': {'start': {'line': 2, 'character': 0}, 'end': {'line': 3, 'character': 0}}})
+check(sorted((e['range']['start']['line'], e['newText']) for e in edits) == [(2, '    def s = "a { string";'), (3, "    def c = '{';")],
+      'a range formatted, four columns: %s' % edits)
+# the styles kept: cases as far in as their `match', a block given to a call as far in as the call, a variant's
+# members beside its cases, a `|' that goes on with a line
+kept = ('F(x : int) : int\n{\n  match (x) {\n  | 1 => 1\n  | _ => 2\n  }\n}\n'
+        'G() : void\n{\n  locate (loc, {\n  def y = 1;\n  _ = y\n  })\n}\n'
+        'variant V\n{\n  | A\n  | B\n  public N : int { get { 0 } }\n}\n'
+        'H() : int\n{\n  def flags = 1\n             | 2;\n  flags\n}\n')
+uri = open_doc('kept.n', kept)
+check(c.request('textDocument/formatting', {'textDocument': {'uri': uri}, 'options': spaces}) == [], 'the styles kept')
+for name, text in (('unbalanced.n', 'F() : void\n{\n      def x = (1;\n}\n'), ('indent.n', '#pragma indent\nF() : void\n      def x = 1\n'),
+                   ('script.ns', 'def x = 1;\nwhen (x > 0)\n{\n      System.Console.WriteLine(x)\n}\n')):
+    uri = open_doc(name, text)
+    edits = c.request('textDocument/formatting', {'textDocument': {'uri': uri}, 'options': spaces})
+    if name == 'script.ns': check([e['newText'] for e in edits] == ['  System.Console.WriteLine(x)'], 'a script formatted: %s' % edits)
+    else: check(edits == [], '%s is not changed: %s' % (name, edits))
+c.request('shutdown', None); c.notify('exit', None)
+check(c.proc.wait(timeout=30) == 0, 'clean exit')
+print('PASS: changes by range; formatting (braces, alignment and styles kept, strings and comments untouched, a range, '
+      'nothing where brackets do not balance or with #pragma indent)')
+
+# 11. quick fixes: a name the compiler could not find gets a `using' of each namespace or module that has it (or the
+# name written with it); an unused value its name prefixed with `_'
+fixes = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-lsp-fixes-'))
+try:
+    (fixes / 'shapes.n').write_text('public class Circle { public R : int = 2; }\npublic Area(c : Circle) : int { 3 * c.R * c.R }\n')
+    code = '// a header\nusing System;\n\ndef sb = StringBuilder();\n_ = sb.Append(Area(Circle()));\nConsole.WriteLine(sb);\nF() : void { def unused = 1; }\nF()\n'
+    (fixes / 'main.n').write_text(code)
+    c = Client()
+    caps = c.request('initialize', {'processId': None, 'rootUri': fixes.as_uri(), 'capabilities': {}})['capabilities']
+    check(caps.get('codeActionProvider'), 'the code action capability: %s' % caps)
+    c.notify('initialized', {})
+    uri = (fixes / 'main.n').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': uri, 'languageId': 'nemerle', 'version': 1, 'text': code}})
+    c.pump(lambda m: True if m.get('method') == 'textDocument/publishDiagnostics' and m['params']['uri'] == uri
+           and any('StringBuilder' in d['message'] for d in m['params']['diagnostics']) else None, 'typed diagnostics')
+    def actions(line):
+        found = c.request('textDocument/codeAction', {'textDocument': {'uri': uri}, 'range': {'start': {'line': line, 'character': 0},
+                          'end': {'line': line, 'character': 80}}, 'context': {'diagnostics': []}})
+        return {x['title']: x for x in found}
+    on = actions(3)
+    check('Add `using System.Text;\'' in on and 'Write `System.Text.StringBuilder\'' in on, 'a .NET type\'s namespace: %s' % list(on))
+    add = on['Add `using System.Text;\'']
+    check(add.get('isPreferred') and add['diagnostics'][0]['message'].startswith('unbound name'), 'the fix of its diagnostic: %s' % add)
+    check(edited(code, add['edit']['changes'][uri]) == code.replace('using System;\n', 'using System;\nusing System.Text;\n'),
+          'the using goes after the others: %s' % add['edit'])
+    on = actions(4)
+    check('Add `using shapes;\'' in on and 'Write `shapes.Area\'' in on and 'Write `shapes.Circle\'' in on,
+          'a workspace module\'s function and type: %s' % list(on))
+    on = actions(6)
+    check(list(on) == ['Prefix `unused\' with `_\''] and edited(code, on['Prefix `unused\' with `_\'']['edit']['changes'][uri]).count('def _unused = 1') == 1,
+          'an unused value: %s' % list(on))
+    c.request('shutdown', None); c.notify('exit', None)
+    print('PASS: quick fixes (a using of the namespace or module that has the name, the name written with it; an unused value)')
+finally:
+    shutil.rmtree(fixes, ignore_errors=True)
 shutil.rmtree(testdata, ignore_errors=True)
 print('PASS: %d language server checks' % checks)

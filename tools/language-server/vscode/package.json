@@ -13,6 +13,10 @@
   "main": "./extension.js",
   "activationEvents": ["onDebugResolve:nemerle", "onDebugDynamicConfigurations:nemerle"],
   "contributes": {
+    "configurationDefaults": {
+      "[nemerle]": { "editor.tabSize": 2, "editor.insertSpaces": true },
+      "[nemerle-script]": { "editor.tabSize": 2, "editor.insertSpaces": true }
+    },
     "breakpoints": [{ "language": "nemerle" }],
     "debuggers": [{
       "type": "nemerle",

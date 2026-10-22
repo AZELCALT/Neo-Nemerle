@@ -28,6 +28,8 @@ with zipfile.ZipFile(a.vsix) as z:
 ext = w / 'unpacked/extension'
 manifest = json.loads((ext / 'package.json').read_text())
 assert manifest['contributes']['grammars'][0]['language'] == 'nemerle'
+# the formatting indents by two columns, as the language's code is written
+assert all(manifest['contributes']['configurationDefaults'][l]['editor.tabSize'] == 2 for l in ('[nemerle]', '[nemerle-script]'))
 json.loads((ext / 'syntaxes/nemerle.tmLanguage.json').read_text())
 # the icons: the marketplace one is a PNG the manifest names, the file icons the logo's SVGs
 assert manifest['icon'] == 'images/icon.png' and (ext / manifest['icon']).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'

@@ -59,6 +59,9 @@ public sealed class Server
   // files on disk (at the start, and after each save), checking again only what changed
   mutable index : SymbolIndex;
   indexWanted : AutoResetEvent = AutoResetEvent(false);
+  // the names each workspace file declares at its top level, by the hash of its text (worker thread only): the
+  // modules a quick fix may import, those the typed check did not compile among them
+  declared : SCG.Dictionary[string, string * SCG.HashSet[string]] = SCG.Dictionary();
 
   public this(input : Stream, output : Stream, references : string, root : string, fileNameNamespaces : bool, log : TextWriter,
               typecheck : bool, libraries : SCG.List[string])
@@ -121,9 +124,10 @@ public sealed class Server
               def changes = p["contentChanges"].AsArray();
               when (changes.Count > 0)
               {
+                // each change in order: a range of the text as it is after the ones before it, or the whole text
                 lock (documents)
                   when (documents.ContainsKey(uri))
-                  { def doc = documents[uri]; doc.Text = Str(changes[changes.Count - 1]["text"]); doc.Version = version; }
+                  { def doc = documents[uri]; foreach (change in changes) doc.Text = Changed(doc.Text, change); doc.Version = version; }
                 jobs.Add(Job.Analyze(uri, version))
               }
             | "textDocument/didClose" =>
@@ -133,7 +137,8 @@ public sealed class Server
             | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol"
             | "textDocument/hover" | "textDocument/definition" | "textDocument/completion" | "textDocument/references"
             | "textDocument/prepareRename" | "textDocument/rename" | "textDocument/documentHighlight" | "textDocument/inlayHint"
-            | "textDocument/signatureHelp" | "workspace/symbol" =>
+            | "textDocument/signatureHelp" | "workspace/symbol" | "textDocument/formatting" | "textDocument/rangeFormatting"
+            | "textDocument/codeAction" =>
               jobs.Add(Job.Request(id.DeepClone(), method, message["params"].DeepClone()))
             | _ => when (id != null) transport.RespondError(id, -32601, "method not supported: " + method)
           }
@@ -146,6 +151,26 @@ public sealed class Server
   }
 
   static Str(n : JsonNode) : string { if (n == null) null else n.GetValue.[string]() }
+
+  /// A text after a change: its range replaced by the change's text (positions are lines and UTF-16 columns), or the
+  /// change's text when it has no range.
+  static Changed(text : string, change : JsonNode) : string
+  {
+    def range = change["range"];
+    if (range == null) Str(change["text"])
+    else
+    {
+      def lines = LineMap(text);
+      def offset(p : JsonNode)
+      {
+        def line = Int(p["line"]);
+        if (line >= lines.LineCount) text.Length
+        else Math.Min(lines.LineStart(line) + Int(p["character"]), lines.LineEnd(line))
+      }
+      def start = offset(range["start"]); def stop = Math.Max(start, offset(range["end"]));
+      text.Substring(0, start) + Str(change["text"]) + text.Substring(stop)
+    }
+  }
   static Int(n : JsonNode) : int { if (n == null) 0 else n.GetValue.[int]() }
 
   Capabilities() : JsonNode
@@ -156,8 +181,8 @@ public sealed class Server
     legend["tokenTypes"] = types; legend["tokenModifiers"] = modifiers;
     def tokens = JsonObject(); tokens["legend"] = legend; tokens["full"] = JsonValue.Create(true);
     def caps = JsonObject();
-    // whole texts on change; saves are told too (the index follows the files on disk)
-    def sync = JsonObject(); sync["openClose"] = JsonValue.Create(true); sync["change"] = JsonValue.Create(1 : int);
+    // the changed ranges on change; saves are told too (the index follows the files on disk)
+    def sync = JsonObject(); sync["openClose"] = JsonValue.Create(true); sync["change"] = JsonValue.Create(2 : int);
     def save = JsonObject(); save["includeText"] = JsonValue.Create(false); sync["save"] = save;
     caps["textDocumentSync"] = sync;
     caps["semanticTokensProvider"] = tokens;
@@ -168,6 +193,8 @@ public sealed class Server
     caps["documentHighlightProvider"] = JsonValue.Create(true);
     caps["workspaceSymbolProvider"] = JsonValue.Create(true);
     caps["inlayHintProvider"] = JsonValue.Create(true);
+    caps["documentFormattingProvider"] = JsonValue.Create(true);
+    caps["documentRangeFormattingProvider"] = JsonValue.Create(true);
     when (typecheck)
     {
       def completion = JsonObject(); completion["triggerCharacters"] = JsonArray(array[JsonValue.Create(".") : JsonNode]);
@@ -178,6 +205,8 @@ public sealed class Server
       def signature = JsonObject();
       signature["triggerCharacters"] = JsonArray(array[JsonValue.Create("(") : JsonNode, JsonValue.Create(",")]);
       caps["signatureHelpProvider"] = signature;
+      def actions = JsonObject(); actions["codeActionKinds"] = JsonArray(array[JsonValue.Create("quickfix") : JsonNode]);
+      caps["codeActionProvider"] = actions;
     }
     def info = JsonObject(); info["name"] = JsonValue.Create("nemerle-lsp"); info["version"] = JsonValue.Create("0.2");
     def r = JsonObject(); r["capabilities"] = caps; r["serverInfo"] = info; r
@@ -218,6 +247,11 @@ public sealed class Server
                 | "textDocument/documentHighlight" => transport.Respond(id, Highlights(doc, r, parameters["position"]))
                 | "textDocument/inlayHint" => transport.Respond(id, InlayHints(doc, r, parameters["range"]))
                 | "textDocument/signatureHelp" => transport.Respond(id, SignatureHelp(doc, r, parameters["position"]))
+                | "textDocument/formatting" => transport.Respond(id, Formatting(r, parameters["options"], 0, int.MaxValue))
+                | "textDocument/rangeFormatting" =>
+                  def range = parameters["range"];
+                  transport.Respond(id, Formatting(r, parameters["options"], Int(range["start"]["line"]), Int(range["end"]["line"])))
+                | "textDocument/codeAction" => transport.Respond(id, CodeActions(doc, r, parameters["range"]))
                 | "textDocument/references" =>
                   def context = parameters["context"];
                   transport.Respond(id, References(doc, parameters["position"], context != null && context["includeDeclaration"] != null && context["includeDeclaration"].GetValue.[bool]()))
@@ -495,6 +529,118 @@ public sealed class Server
         when (inside && size < bestSize) { best = f; bestSize = size; }
       }
     best
+  }
+
+  /// The edits that format the lines from `first' to `last' (see format.n): one per line that changes.
+  Formatting(r : AnalysisResult, options : JsonNode, first : int, last : int) : JsonNode
+  {
+    def tabSize = if (options != null && options["tabSize"] != null) Int(options["tabSize"]) else 2;
+    def spaces = options == null || options["insertSpaces"] == null || options["insertSpaces"].GetValue.[bool]();
+    def edits = JsonArray();
+    foreach ((line, text) in format.Lines(r, tabSize, spaces, first, last))
+    {
+      def start = r.Lines.LineStart(line);
+      def stop = { def e = r.Lines.LineEnd(line); if (e > start && r.Text[e - 1] == '\r') e - 1 else e };
+      def x = JsonObject(); x["range"] = Range(r, start, stop); x["newText"] = JsonValue.Create(text);
+      edits.Add(x);
+    }
+    edits
+  }
+
+  static Unbound : Regex = Regex(@"^unbound (?:type )?name `([A-Za-z_][A-Za-z0-9_]*)'(?!\s+in\s)");
+
+  /// The workspace modules (other than the file at `path') declaring `name' at their top level.
+  ModulesWith(name : string, path : string) : SCG.List[string]
+  {
+    def found = SCG.List();
+    when (root != null)
+    {
+      when (analyzer == null) analyzer = Analyzer(references, root, fileNameNamespaces);
+      foreach (file in (if (index != null) index else SymbolIndex(root)).Workspace())
+        when (file.Key.EndsWith(".n", StringComparison.Ordinal) && file.Key != path)
+        {
+          def hash = SymbolIndex.HashOf(file.Value);
+          mutable known;
+          unless (declared.TryGetValue(file.Key, out known) && known[0] == hash)
+          {
+            known = (hash, SCG.HashSet(analyzer.Analyze(file.Key, 0, file.Value).Symbols.Select(x => x.Name)));
+            declared[file.Key] = known;
+          }
+          when (known[1].Contains(name))
+            found.Add(Path.ChangeExtension(Path.GetRelativePath(root, file.Key), null).Replace(Path.DirectorySeparatorChar, '.'))
+        }
+    }
+    found
+  }
+
+  static UnusedValue : Regex = Regex(@"^(?:N168: )?.* ([A-Za-z_][A-Za-z0-9_']*) was never used");
+  static UsingLine : Regex = Regex(@"^\s*using\s[^;]*;");
+
+  /// The quick fixes for the latest check's diagnostics in a range: a name it could not find gets a `using' of each
+  /// namespace or module that has it (or the name written with it), an unused value its name prefixed with `_'.
+  CodeActions(doc : Document, r : AnalysisResult, range : JsonNode) : JsonNode
+  {
+    def actions = JsonArray();
+    def path = PathOf(doc.Uri);
+    def first = Int(range["start"]["line"]); def last = Int(range["end"]["line"]);
+    def action(title : string, diagnostic : JsonObject, edits : list[int * int * string], preferred : bool) : void
+    {
+      def changes = JsonObject(); def items = JsonArray();
+      foreach ((start, stop, text) in edits) { def e = JsonObject(); e["range"] = Range(r, start, stop); e["newText"] = JsonValue.Create(text); items.Add(e) }
+      changes[doc.Uri] = items;
+      def edit = JsonObject(); edit["changes"] = changes;
+      def x = JsonObject(); x["title"] = JsonValue.Create(title); x["kind"] = JsonValue.Create("quickfix");
+      x["diagnostics"] = JsonArray(array[diagnostic.DeepClone()]); x["edit"] = edit;
+      when (preferred) x["isPreferred"] = JsonValue.Create(true);
+      actions.Add(x)
+    }
+    // where a `using' goes: after the file's last one at its start, else before its first line of code
+    def usingAt() : int * string
+    {
+      mutable line = 0; mutable after = -1; mutable code = -1;
+      while (code < 0 && line < r.Lines.LineCount)
+      {
+        def text = r.Text.Substring(r.Lines.LineStart(line), r.Lines.LineEnd(line) - r.Lines.LineStart(line)).Trim();
+        if (UsingLine.IsMatch(text)) after = line
+        else unless (text.Length == 0 || text.StartsWith("//", StringComparison.Ordinal)) code = line;
+        ++line
+      }
+      if (after >= 0) (r.Lines.LineEnd(after) + 1, "")
+      else if (code >= 0) (r.Lines.LineStart(code), "\n")
+      else (r.Text.Length, "")
+    }
+    when (path != null && typedDiagnostics.ContainsKey(path))
+      foreach (d in typedDiagnostics[path])
+        when (Int(d["line"]) - 1 <= last && Int(d["endLine"]) - 1 >= first)
+        {
+          def start = r.Lines.Offset(Int(d["line"]), Int(d["column"]));
+          def stop = r.Lines.Offset(Int(d["endLine"]), Int(d["endColumn"]));
+          def written = r.Text.Substring(start, Math.Max(0, stop - start));
+          def diagnostic = JsonObject();
+          diagnostic["range"] = Range(r, start, stop); diagnostic["severity"] = JsonValue.Create(Int(d["severity"]));
+          diagnostic["source"] = JsonValue.Create("nemerle"); diagnostic["message"] = JsonValue.Create(Str(d["message"]));
+          def unused = UnusedValue.Match(Str(d["message"]));
+          // (the check may be of an older text: a fix is offered only where the text still says what it found)
+          if (unused.Success && written == unused.Groups[1].Value)
+            action("Prefix `" + written + "' with `_'", diagnostic, [(start, stop, "_" + written)], true)
+          else
+          {
+            def unbound = Unbound.Match(Str(d["message"]));
+            when (unbound.Success && written == unbound.Groups[1].Value)
+            {
+              // what the check found (namespaces, the modules it compiled), and the workspace's other modules
+              def found = SCG.List.[string]();
+              when (d["imports"] != null) foreach (from in d["imports"].AsArray()) found.Add(Str(from));
+              foreach (from in ModulesWith(written, path)) unless (found.Contains(from)) found.Add(from);
+              def (at, blank) = usingAt();
+              foreach (from in found)
+                action("Add `using " + from + ";'", diagnostic, [(at, at, "using " + from + ";\n" + blank)], found.Count == 1);
+              foreach (from in found)
+                action("Write `" + from + "." + written + "'", diagnostic, [(start, stop, from + "." + written)], false)
+            }
+          }
+        }
+    actions
   }
 
   Hover(doc : Document, r : AnalysisResult, position : JsonNode) : JsonNode
@@ -1017,20 +1163,20 @@ public sealed class Server
       | (places, _) when places != null =>
         def x = JsonObject(); x["range"] = range; x["placeholder"] = JsonValue.Create(word); x
       | _ =>
-    match (symbol)
-    {
-      | (null, _, _, _) => null
-      | (target, name, kind, facts) when Renamable.Contains(kind) && target["nameLine"] != null =>
-        // the range at the cursor: the use's or the declaration's name
-        def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
-        def path = PathOf(doc.Uri);
-        mutable range = null;
-        foreach (f when f["nameLine"] != null && Str(f["path"]) == path in facts)
-          when (range == null && Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))) range = NameRange(f);
-        when (range == null) range = NameRange(target);
-        def x = JsonObject(); x["range"] = range; x["placeholder"] = JsonValue.Create(name); x
-      | _ => null
-    }
+        match (symbol)
+        {
+          | (null, _, _, _) => null
+          | (target, name, kind, facts) when Renamable.Contains(kind) && target["nameLine"] != null =>
+            // the range at the cursor: the use's or the declaration's name
+            def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
+            def path = PathOf(doc.Uri);
+            mutable range = null;
+            foreach (f when f["nameLine"] != null && Str(f["path"]) == path in facts)
+              when (range == null && Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))) range = NameRange(f);
+            when (range == null) range = NameRange(target);
+            def x = JsonObject(); x["range"] = range; x["placeholder"] = JsonValue.Create(name); x
+          | _ => null
+        }
     }
   }
 
@@ -1046,39 +1192,39 @@ public sealed class Server
     if (newName == null || !Identifier.IsMatch(newName) || Keywords.Contains(newName)) (null, "`" + newName + "' is not a name")
     else
     {
-    // a member or a local: its uses from the index, with no compilation
-    def fast = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
-    if (fast != null && Renamable.Contains(Str(fast["kind"])) && fast["target"]["nameLine"] != null)
-      RenameUses(fast["target"].AsObject(), UsesOf(Str(fast["id"])), newName)
-    else
-    {
-    def symbol = Symbol(doc, position);
-    match (TypeAt(doc, position))
-    {
-      | (null, why) when why != null => (null, why)
-      | (places, _) when places != null =>
-        // a type: every place its name is written
-        def changes = JsonObject();
-        foreach (s in places)
+      // a member or a local: its uses from the index, with no compilation
+      def fast = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
+      if (fast != null && Renamable.Contains(Str(fast["kind"])) && fast["target"]["nameLine"] != null)
+        RenameUses(fast["target"].AsObject(), UsesOf(Str(fast["id"])), newName)
+      else
+      {
+        def symbol = Symbol(doc, position);
+        match (TypeAt(doc, position))
         {
-          def uri = UriOf(Str(s["path"]));
-          unless (changes.ContainsKey(uri)) changes[uri] = JsonArray();
-          def e = JsonObject(); e["range"] = RangeOf(Int(s["line"]), Int(s["column"]), Int(s["line"]), Int(s["endColumn"]));
-          e["newText"] = JsonValue.Create(newName); changes[uri].AsArray().Add(e);
+          | (null, why) when why != null => (null, why)
+          | (places, _) when places != null =>
+            // a type: every place its name is written
+            def changes = JsonObject();
+            foreach (s in places)
+            {
+              def uri = UriOf(Str(s["path"]));
+              unless (changes.ContainsKey(uri)) changes[uri] = JsonArray();
+              def e = JsonObject(); e["range"] = RangeOf(Int(s["line"]), Int(s["column"]), Int(s["line"]), Int(s["endColumn"]));
+              e["newText"] = JsonValue.Create(newName); changes[uri].AsArray().Add(e);
+            }
+            def x = JsonObject(); x["changes"] = changes; (x, null)
+          | _ =>
+            match (symbol)
+            {
+              | (null, _, _, _) => (null, "there is nothing to rename here")
+              | (_, _, kind, _) when !Renamable.Contains(kind) => (null, "a " + kind + " cannot be renamed here")
+              | (target, _, _, _) when target["nameLine"] == null => (null, "the declaration's name is not found in its source")
+              | (target, _, _, facts) =>
+                def key = Key(target);
+                RenameUses(target, facts.Where(f => f["target"] != null && Key(f["target"]) == key).Select(f => f.AsObject()).ToList(), newName)
+            }
         }
-        def x = JsonObject(); x["changes"] = changes; (x, null)
-      | _ =>
-    match (symbol)
-    {
-      | (null, _, _, _) => (null, "there is nothing to rename here")
-      | (_, _, kind, _) when !Renamable.Contains(kind) => (null, "a " + kind + " cannot be renamed here")
-      | (target, _, _, _) when target["nameLine"] == null => (null, "the declaration's name is not found in its source")
-      | (target, _, _, facts) =>
-        def key = Key(target);
-        RenameUses(target, facts.Where(f => f["target"] != null && Key(f["target"]) == key).Select(f => f.AsObject()).ToList(), newName)
-    }
-    }
-    }
+      }
     }
   }
 

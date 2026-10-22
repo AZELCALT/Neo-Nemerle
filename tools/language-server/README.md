@@ -53,9 +53,24 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   a type are told apart (from the check's facts, the `declaration` modifier where one is declared), over the parse's
   tokens; a grammar block's rule and module names are types, over Nitra's spans.
 
-Supported requests: `textDocument/didOpen`, `didChange` (full sync), `didClose`, `publishDiagnostics`,
-`semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`, `signatureHelp`,
-`documentHighlight`, `inlayHint`, `references`, `prepareRename`, `rename` and `workspace/symbol`.
+- **Formatting** (a document, or a range of its lines) indents each line by the braces it is in, and keeps how it
+  lines up inside them: a continued line, a case's body under its case, arguments under a parenthesis (or a `{` with
+  code after it), the trailing spaces removed. The styles of the language's code are kept as they are written: cases
+  as far in as their `match`, a block given to a call (`locate (loc, {`) as far in as the call, a variant's members
+  beside its cases. A block's lines move with the indentation most of them have, so a line out of place does not move
+  the others. Strings and comments are left as they are, as are directives and comments at the start of a line (code
+  put aside). A file whose brackets do not balance, or with `#pragma indent` (where indentation is the code's), is not
+  changed. The editor's tab size is the indentation (the extension sets 2 for Nemerle files).
+- **Quick fixes** (code actions) for the latest check's diagnostics: a name the compiler could not find gets a `using`
+  of each namespace with a public type of that name, and of each workspace module declaring it (the modules the check
+  compiled, and the workspace's other files, parsed for their declarations and kept while their text is the same), or
+  the name written with it; a value never used gets its name prefixed with `_`. A fix is offered only where the text
+  still says what the check found.
+
+Supported requests: `textDocument/didOpen`, `didChange` (incremental: the changed ranges), `didClose`,
+`publishDiagnostics`, `semanticTokens/full`, `foldingRange`, `documentSymbol`, `hover`, `definition`, `completion`,
+`signatureHelp`, `documentHighlight`, `inlayHint`, `references`, `prepareRename`, `rename`, `formatting`,
+`rangeFormatting`, `codeAction` and `workspace/symbol`.
 
 Options: `--references DIR`, `--source-root DIR`, `--file-name-namespaces`, `--library DLL` (repeatable, for the
 typed check), `--no-typecheck`, `--log FILE`.

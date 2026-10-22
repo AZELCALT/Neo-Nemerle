@@ -1,0 +1,211 @@
+// Formatting a document: each line is indented by the braces it is in, and keeps its own way of lining up inside
+// them (a continued line, a case's body, arguments under a parenthesis). Strings and comments are left as they are, and
+// a document whose brackets do not balance is not changed.
+using System;
+using analysis;
+using SCG = System.Collections.Generic;
+
+/// A bracket open at the end of a line: the indentation of the line that opens it, as it was and as it becomes.
+public sealed class Open
+{
+  /// A `{': its lines are one indentation further than the line that opens it; a `(' or `[' moves its lines with
+  /// that line, so what lines up under it still does.
+  public Brace : bool;
+  public Char : char;
+  /// Where it is (the top level is -1).
+  public At : int;
+  public OldOpener : int;
+  public NewOpener : int;
+  /// The indentation most of its lines had (its cases and comments aside): its lines keep theirs relative to it.
+  public mutable OldBase : int = -1;
+  /// The indentation its latest case (`| ...') had: a case lines up with the braces' lines, and the lines after it
+  /// (its body) keep theirs relative to it.
+  public mutable Case : int = -1;
+  /// How far in its lines are from the line that opens it: one indentation, or none when its first line is a case as
+  /// far in as that line (`match (x) {' with its cases under the `match'), or it is a block given to a call whose lines
+  /// are.
+  public mutable Step : int = -1;
+  /// A `{' ending a line whose `(' is still open (`locate (loc, {'): a block given to a call, whose lines may be as
+  /// far in as that line.
+  public mutable Argument : bool;
+  public this(brace : bool, c : char, at : int, oldOpener : int, newOpener : int)
+  { Brace = brace; Char = c; At = at; OldOpener = oldOpener; NewOpener = newOpener }
+}
+
+/// The lines from `first' to `last' (0-based) that change, with their new text (without the line break).
+public Lines(r : AnalysisResult, tabSize : int, insertSpaces : bool, first : int, last : int) : SCG.List[int * string]
+{
+  def text = r.Text;
+  def unit = Math.Max(1, tabSize);
+  // the strings and comments: nothing in them is a bracket, and a line that starts inside one keeps its text
+  def opaque = SCG.List.[int * int * bool]();
+  foreach ((start, length, kind) in r.Tokens)
+    when (kind == Legend.Comment || kind == Legend.String || kind == Legend.Regexp) opaque.Add((start, start + length, kind == Legend.Comment));
+  opaque.Sort((a, b) => a[0].CompareTo(b[0]));
+  // 0 outside them, 1 in a comment, 2 in a string
+  def within(offset : int) : int
+  {
+    // (the last span starting at or before the offset, and any before it that is longer)
+    mutable lo = 0; mutable hi = opaque.Count - 1; mutable found = -1;
+    while (lo <= hi) { def mid = (lo + hi) / 2; if (opaque[mid][0] <= offset) { found = mid; lo = mid + 1 } else hi = mid - 1 }
+    mutable result = 0;
+    for (mutable i = found; i >= 0 && i > found - 8 && result == 0; --i)
+      when (offset < opaque[i][1] && offset >= opaque[i][0]) result = if (opaque[i][2]) 1 else 2;
+    result
+  }
+  def inside(offset : int) : bool { within(offset) != 0 }
+  def startsInside(offset : int) : bool { offset > 0 && inside(offset) && inside(offset - 1) }
+  def columns(s : string) : int
+  {
+    mutable n = 0;
+    foreach (c in s) n = if (c == '\t') (n / unit + 1) * unit else n + 1;
+    n
+  }
+  def indentation(n : int) : string
+  {
+    if (insertSpaces) string(' ', n) else string('\t', n / unit) + string(' ', n % unit)
+  }
+  def lineAt(line : int) : int * int * string * int * int
+  {
+    def start = r.Lines.LineStart(line);
+    def stop = { def e = r.Lines.LineEnd(line); if (e > start && text[e - 1] == '\r') e - 1 else e };
+    def content = text.Substring(start, stop - start);
+    def ws = content.Length - content.TrimStart(' ', '\t').Length;
+    (start, stop, content, ws, columns(content.Substring(0, ws)))
+  }
+  def isBracket(c : char) : bool { c == '{' || c == '(' || c == '[' }
+  def isCloser(c : char) : bool { c == '}' || c == ')' || c == ']' }
+  // the last character of code at an offset (a string's is `"')
+  def code(i : int, previous : char) : char
+  {
+    match (within(i)) { | 0 when !Char.IsWhiteSpace(text[i]) => text[i] | 2 => '"' | _ => previous }
+  }
+  // first how far in the lines of each bracket mostly are (a line out of place does not move the others), of those
+  // that start something (after a `{', `;' or `}', not a line that goes on with the one before)
+  def counts = SCG.Dictionary.[int, SCG.Dictionary[int, int]]();
+  def openers = SCG.Stack.[int]();
+  openers.Push(-1);
+  mutable before = '{';
+  for (mutable line = 0; line < r.Lines.LineCount; ++line)
+  {
+    def (start, stop, content, ws, oldIndent) = lineAt(line);
+    when (!startsInside(start) && ws < content.Length && (before == '{' || before == ';' || before == '}'))
+    {
+      def lead = content[ws];
+      unless (isCloser(lead) || lead == '|' || lead == '#' || lead == '/' && inside(start + ws))
+      {
+        def at = openers.Peek();
+        unless (counts.ContainsKey(at)) counts[at] = SCG.Dictionary();
+        counts[at][oldIndent] = (if (counts[at].ContainsKey(oldIndent)) counts[at][oldIndent] else 0) + 1;
+      }
+    }
+    for (mutable i = start; i < stop; ++i)
+    {
+      before = code(i, before);
+      unless (inside(i))
+        if (isBracket(text[i])) openers.Push(i)
+        else when (isCloser(text[i]) && openers.Count > 1) _ = openers.Pop();
+    }
+  }
+  def baseOf(at : int) : int
+  {
+    mutable best = -1; mutable most = 0;
+    when (counts.ContainsKey(at))
+      foreach (pair in counts[at]) when (pair.Value > most || pair.Value == most && pair.Key < best) { best = pair.Key; most = pair.Value }
+    best
+  }
+  def changed = SCG.List();
+  def stack = SCG.Stack.[Open]();
+  // the top level: its lines start at column 0
+  def root = Open(true, '\0', -1, -unit, -unit);
+  root.OldBase = baseOf(-1);
+  stack.Push(root);
+  mutable balanced = true;
+  // the last character of the code before the line (a case follows a `{', `;' or `}')
+  mutable previous = '{';
+  for (mutable line = 0; line < r.Lines.LineCount && balanced; ++line)
+  {
+    def (start, stop, content, ws, oldIndent) = lineAt(line);
+    mutable newIndent = oldIndent;
+    // (whether the line has a `=>' of its own, as a match case does)
+    def arrow() : bool
+    {
+      mutable found = false;
+      for (mutable i = start + ws; i + 1 < stop && !found; ++i) when (text[i] == '=' && text[i + 1] == '>' && !inside(i)) found = true;
+      found
+    }
+    def updated =
+      if (startsInside(start)) content
+      else if (ws == content.Length) ""
+      // (a directive, and a comment at the start of its line, as code put aside, stay where they are)
+      else if (content[ws] == '#' || ws == 0 && content.StartsWith("/", StringComparison.Ordinal) && inside(start)) content.TrimEnd(' ', '\t')
+      else
+      {
+        def top = stack.Peek();
+        def lead = content[ws];
+        newIndent =
+          if (isCloser(lead) && stack.Count > 1)
+            if (top.Brace) top.NewOpener + Math.Max(0, oldIndent - top.OldOpener) else Math.Max(0, oldIndent + top.NewOpener - top.OldOpener)
+          else if (top.Brace)
+          {
+            // (a comment does not say how far in the lines are: code put aside is often not where the code is)
+            def comment = lead == '/' && inside(start + ws);
+            when (top.Step < 0 && !comment) top.Step = if (lead == '|' && oldIndent == top.OldOpener || top.Argument && top.OldBase == top.OldOpener) 0 else unit;
+            def step = if (top.Step < 0) unit else top.Step;
+            // (a `|' that goes on with the line before, as `a\n | b', is not a case)
+            if (lead == '|' && (ws + 1 >= content.Length || content[ws + 1] != '|')
+                && (previous == '{' || previous == ';' || previous == '}' || top.Case >= 0 && oldIndent <= top.Case || arrow()))
+            {
+              top.Case = oldIndent;
+              top.NewOpener + step
+            }
+            // (a line less far in than the case before it is that case's body all the same; one as far in is beside it,
+            // as a variant's members after its cases)
+            else if (top.Case >= 0 && oldIndent < top.Case) top.NewOpener + step + unit
+            else if (top.Case < 0 && top.OldBase < 0) top.NewOpener + step
+            else top.NewOpener + step + Math.Max(0, oldIndent - (if (top.Case >= 0) top.Case else top.OldBase))
+          }
+          else Math.Max(0, oldIndent + top.NewOpener - top.OldOpener);
+        // (the spaces after the text are its own unless a string or comment goes on to the next line)
+        def rest = if (stop > start && inside(stop - 1) && inside(Math.Min(stop, text.Length - 1))) content.Substring(ws) else content.Substring(ws).TrimEnd(' ', '\t');
+        indentation(newIndent) + rest
+      };
+    // (a `{' with code after it on its line is lined up with, as a parenthesis)
+    def ends(i : int) : bool
+    {
+      mutable j = i + 1;
+      while (j < stop && (text[j] == ' ' || text[j] == '\t' || within(j) == 1)) ++j;
+      j >= stop
+    }
+    // (a bracket opened on an earlier line and closed on this one: a `{' after it is indented from where it began,
+    // as `when (a &&\n    b) {' from the `when')
+    mutable began = (oldIndent, newIndent);
+    for (mutable i = start; i < stop && balanced; ++i)
+    {
+      previous = code(i, previous);
+      unless (inside(i))
+        match (text[i])
+        {
+          | c when isBracket(c) =>
+            def (oldOpener, newOpener) = if (c == '{') began else (oldIndent, newIndent);
+            def opened = Open(c == '{' && ends(i), c, i, oldOpener, newOpener);
+            opened.OldBase = baseOf(i);
+            opened.Argument = opened.Brace && !stack.Peek().Brace && stack.Peek().At >= start;
+            when (opened.Argument && opened.OldBase == oldOpener) opened.Step = 0;
+            stack.Push(opened)
+          | c when isCloser(c) =>
+            def opener = if (c == '}') '{' else if (c == ')') '(' else '[';
+            if (stack.Count > 1 && stack.Peek().Char == opener)
+            {
+              def closed = stack.Pop();
+              when (closed.At >= 0 && closed.At < start && !closed.Brace) began = (closed.OldOpener, closed.NewOpener)
+            }
+            else balanced = false
+          | _ => ()
+        }
+    }
+    when (line >= first && line <= last && updated != content) changed.Add((line, updated));
+  }
+  // (where the indentation is the code's, as with `#pragma indent', it is not changed)
+  if (balanced && stack.Count == 1 && !text.Contains("#pragma indent")) changed else SCG.List()
+}
