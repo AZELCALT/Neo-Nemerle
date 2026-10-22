@@ -191,16 +191,21 @@ the application sees 50
 The plugin is `plugin.ns` to the compiler, so its space is `dial:.plugin.G`. `using main;` imports the application's
 file, which is what makes its scope `A` (`main.A`) the plugin's `scope.A`.
 
-A slot can hold a value of the application's own types too, and a plugin reads it as that type. To .NET a type is a
-copy of an assembly and a name, so two copies of one library are two types; Nemerle keeps them one for what crosses
-a scope. A script that references a library the application has loaded gets the application's copy of it (the same
-name, version and key, or the same build when it has no key), so its values are the same types. A plugin with a copy
-of its own (compiled with the same code, or loaded in a context of its own) reads a value of the other copy as its
-own: each compilation records the types its slots reach (the slot's type, what its fields hold, the types derived
-from it) with their fields in its continuation section, and the read copies the value field by field when both
-copies record the same. The copy is the reader's: writing to it changes the reader's value only, until it is written
-back to the slot. Two copies of different fields are an error that names the field; a type no slot reaches records
-nothing, and its value read as another copy is an error that says so.
+A slot can hold a value of the application's own types too, and it is one value: every reader gets the same object,
+and a write through it is seen by all. To .NET a type is a copy of an assembly and a name, so a type compiled twice is
+two types, and an object is of one of them. A plugin compiled against the application (a script always is) makes no
+copy of the types the application's slots reach:
+
+- the same file module (the plugin compiles the same `shapes.n`) is the application's module, so `shapes.Point` there
+  is the application's type;
+- a type with the same code under another name (the same fields and members, its behaviour) is an alias of the
+  application's type;
+- a file module the application has with other code is an error: a module is one in the program.
+
+The application records those types, with their code, in its continuation section, and only those: a type no slot
+reaches records nothing. A copy compiled apart, without the application, is another .NET type, and reading or writing
+the slot with it is an error that says it is the same code compiled apart, or what differs. A slot of no fixed type
+holds a `Content` instead, any value with its type, which the reader asks for as the type it expects.
 
 ## Script kinds
 

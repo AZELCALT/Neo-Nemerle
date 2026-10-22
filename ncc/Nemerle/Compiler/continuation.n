@@ -75,10 +75,11 @@ public sealed class ContinuationBinding
   public mutable Clr : string = "object";
 }
 
-/// A type whose values cross copies of it through a scope's storage (a slot's type, what its fields hold, the types
-/// derived from it), recorded by the compilation that defines it: its name and its shape. Two copies of one type (a
-/// host's and a plugin's, each compiled with it) are one type to Nemerle when both record the same: a value read from
-/// a slot as the other copy is copied field by field (Nemerle.Scopes.Scope.Read). A type no slot reaches has none.
+/// A type a scope's slots reach (a slot's type, what its fields hold, the types derived from it), recorded by the
+/// compilation that defines it: its name, its shape and its code. A compilation that continues from the binary and
+/// declares the same type (the same fields and members, its behaviour, under any name) uses this one instead of
+/// making its own: one type, so the slot's value is the same object to both (ManagerClass.ShareContinuedTypes,
+/// before the types are made). A type no slot reaches records nothing.
 public sealed class ContinuationIdentity
 {
   /// The CLR name (nested types with `+').
@@ -87,6 +88,8 @@ public sealed class ContinuationIdentity
   public mutable Base : string = "";
   /// The type's own instance fields in order, each with its type's name.
   public Fields : SCG.List[string * string] = SCG.List();
+  /// The hash of its declaration's text (normalized, its own name left out): its members, what it does.
+  public mutable Code : string = "";
 }
 
 /// A space stored with the scopes: enough to rebuild it in a continuing compilation, so a dial
@@ -163,6 +166,9 @@ public sealed class ContinuationStore
   public Modules : SCG.List[ContinuationModule] = SCG.List();
   /// The types whose values cross copies of them through scopes.
   public Identities : SCG.List[ContinuationIdentity] = SCG.List();
+  /// The file modules that define such types, with the hash of their file's text (normalized): a continuing
+  /// compilation with the same file uses the binary's module instead of compiling its own.
+  public IdentityModules : SCG.List[string * string] = SCG.List();
 
   public IsEmpty : bool
   { get { GrammarImage == null && Grammars.Count == 0 && Macros.Count == 0 && Types.Count == 0 && Scopes.Count == 0 && Spaces.Count == 0 && Modules.Count == 0 && Identities.Count == 0 } }
@@ -183,6 +189,20 @@ public sealed class ContinuationStore
     }
     if (text == null || location.Line <= 0) (-1, -1)
     else (offset(location.Line, location.Column), offset(location.EndLine, location.EndColumn))
+  }
+
+  /// The source text at a location (a declaration's, a file's when `whole'), or "" when the file cannot be read.
+  public static SourceText(location : Nemerle.Compiler.AST.Location, whole : bool) : string
+  {
+    def path = if (location.FileIndex == 0) null else Nemerle.Compiler.AST.Location.GetFileName(location.FileIndex);
+    def text = if (path == null || !File.Exists(path)) null else File.ReadAllText(path);
+    if (text == null) ""
+    else if (whole) text
+    else
+    {
+      def (start, end) = Span(text, location);
+      if (start < 0 || end < start) "" else text.Substring(start, end - start)
+    }
   }
 
   /// The marks of a grammar's declarations, depth first, each with its parent's index. `delta` moves the document's
@@ -294,6 +314,16 @@ public sealed class ContinuationStore
   }
 
   /// 64-bit FNV-1a over the UTF-16 code units of the text.
+  /// The hash of a declaration's code, with its own name left out (a copy under another name has the same), or of a
+  /// whole file's (no name): normalized text, so layout does not count.
+  public static CodeHash(text : string, name : string) : string
+  {
+    def normal = Normalize(text);
+    def named = if (string.IsNullOrEmpty(name)) normal
+                else System.Text.RegularExpressions.Regex.Replace(normal, "(?<![A-Za-z0-9_'])" + System.Text.RegularExpressions.Regex.Escape(name) + "(?![A-Za-z0-9_'])", " %self% ");
+    Hash(named).ToString("x16")
+  }
+
   public static Hash(text : string) : ulong
   {
     mutable h : ulong = 14695981039346656037UL;
@@ -400,7 +430,10 @@ public sealed class ContinuationStore
       {
         WriteInt(identities, str(t.Name)); WriteInt(identities, str(t.Base)); WriteInt(identities, t.Fields.Count);
         foreach ((name, type) in t.Fields) { WriteInt(identities, str(name)); WriteInt(identities, str(type)) }
+        WriteInt(identities, str(t.Code));
       }
+      WriteInt(identities, IdentityModules.Count);
+      foreach ((name, hash) in IdentityModules) { WriteInt(identities, str(name)); WriteInt(identities, str(hash)) }
     }
     def output = MemoryStream();
     output.Write(Magic, 0, Magic.Length);
@@ -525,13 +558,17 @@ public sealed class ContinuationStore
         }
       }
       when (kind == IdentityKind)
+      {
         repeat (payload.Int())
         {
           def t = ContinuationIdentity();
           t.Name = strings[payload.Int()]; t.Base = strings[payload.Int()];
           repeat (payload.Int()) { def name = strings[payload.Int()]; t.Fields.Add((name, strings[payload.Int()])) }
+          t.Code = strings[payload.Int()];
           store.Identities.Add(t);
         }
+        repeat (payload.Int()) { def name = strings[payload.Int()]; store.IdentityModules.Add((name, strings[payload.Int()])) }
+      }
       when (kind == ModuleKind)
         repeat (payload.Int())
         {

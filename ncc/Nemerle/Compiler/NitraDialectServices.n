@@ -207,7 +207,7 @@ public sealed class NitraSharedScope : NitraSemanticScope
   {
     def type=SlotType(name,typer);
     if(type=="object") <[ $(storage()).Register($(name : string), null) ]>
-    else <[ $(storage()).Register($(name : string), Nemerle.Scopes.Scope.Default(typeof($(typeExpr(type))))) ]>
+    else <[ $(storage()).Register($(name : string), Nemerle.Scopes.Scope.Default(typeof($(typeExpr(type)))), typeof($(typeExpr(type)))) ]>
   }
   /// The code that reads slot `name`, as its type.
   public Read(name : string) : PExpr { Read(name,null) }

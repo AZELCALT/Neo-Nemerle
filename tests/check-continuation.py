@@ -516,64 +516,84 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         raise SystemExit('FAILED: scope declaration and access printed %r' % output)
     print('PASS: `scope A;` creates the scope where it is written, every use is access to it (a use before it, or of a '
           'scope nobody declared, fails instead of making an empty copy)', flush=True)
-    # a type is its CLR copy and name, so a plugin's own copy of a type is another type to .NET. Nemerle closes that for
-    # values that cross through a scope: (1) a script that references a library the host has loaded gets the host's
-    # copy (the same assembly: name, version, key, and the same build when it has no key); (2) a compilation records
-    # the types its scope slots reach (with their shape) in its continuation section, and a value of another copy of
-    # such a type is copied field by field when it is read as this one; a type no slot reaches has no record
-    shapes = ('public class Point\n{\n  public X : int;\n  public Y : int;\n  public this(x : int, y : int) { X = x; Y = y }\n'
+    # a scope's slot is one value, the same object to every reader. To .NET a type is a copy of an assembly and a name,
+    # so a type compiled twice is two types; a compilation that continues from the binary declaring the scope makes no
+    # copy of the types its slots reach: the same file module is the binary's module, the same type under another name
+    # an alias of the binary's type (the binary records them, with their code, in its continuation section). A copy
+    # compiled apart is another type, and reading or writing the slot with it says so.
+    shapes = ('public class Point\n{\n  public mutable X : int;\n  public Y : int;\n  public this(x : int, y : int) { X = x; Y = y }\n'
               '  public override ToString() : string { $"($X, $Y)" }\n}\n'
               'public variant Shape\n{\n  | Dot { at : Point }\n  | Line { from : Point; to : Point }\n}\n'
               'public class Hidden { public N : int; public this(n : int) { N = n } }\n')
-    ident = w / 'identity'; (ident / 'plugin').mkdir(parents=True); (ident / 'other').mkdir()
+    ident = w / 'identity'
+    for d in ('same', 'renamed', 'apart', 'other', 'util'):
+        (ident / d).mkdir(parents=True)
     (ident / 'shapes.n').write_text(shapes)
-    (ident / 'plugin/shapes.n').write_text(shapes)
-    (ident / 'other/shapes.n').write_text(shapes.replace('  public Y : int;\n', '  public Y : int;\n  public Z : int;\n'))
-    (ident / 'plugin/plug.n').write_text(
-        'scope B;\nscope.B.registery("p", type("shapes.Point"));\nscope.B.registery("s", type("shapes.Shape"));\n'
-        'public Run() : string\n{\n'
-        '  def a = Nemerle.Scopes.Scope.Access("main.A");\n'
-        '  def p = a.Read.[shapes.Point]("p");\n'
-        '  def line = match (a.Read.[shapes.Shape]("s")) { | shapes.Shape.Line(f, t) => $"line $f $t" | _ => "?" };\n'
-        '  a.Set("p", shapes.Point(p.X + 4, p.Y + 4));\n'
-        '  def hidden = try { _ = a.Read.[shapes.Hidden]("h"); "read" }\n'
-        '               catch { | e is System.InvalidCastException => if (e.Message.Contains("no record of its shape")) "no record" else e.Message };\n'
-        '  $"$p $line $hidden"\n}\n')
-    (ident / 'other/plug.n').write_text(
-        'scope B;\nscope.B.registery("p", type("shapes.Point"));\n'
-        'public Run() : string\n{\n'
-        '  try { _ = Nemerle.Scopes.Scope.Access("main.A").Read.[shapes.Point]("p"); "read" }\n'
-        '  catch { | e is System.InvalidCastException => if (e.Message.Contains("of another shape")) "another shape" else e.Message }\n}\n')
-    for d in ('plugin', 'other'):
-        run([T / 'ncc', ident / d / 'plug.n', ident / d / 'shapes.n', '-source-root:' + str(ident / d), '-target:library',
-             '-out:' + str(ident / d / (d + '.dll')), '-no-color'])
+    (ident / 'util.n').write_text('public Twice(x : int) : int { x * 2 }\n')
     (ident / 'main.n').write_text(
         'using System.IO;\nusing System.Reflection;\n'
         'scope A;\nscope.A.registery("p", type("shapes.Point"));\nscope.A.registery("s", type("shapes.Shape"));\n'
         'scope.A.p = shapes.Point(3, 4);\n'
         'scope.A.s = shapes.Shape.Line(shapes.Point(1, 2), shapes.Point(5, 6));\n'
-        'Nemerle.Scopes.Scope.Access("main.A").Set("h", shapes.Hidden(1));\n'
+        'System.Console.WriteLine(util.Twice(1));\n'
         'def call(dir : string) : string\n{\n'
         '  def plugin = Assembly.LoadFrom(Path.Combine(System.AppContext.BaseDirectory, dir, dir + ".dll"));\n'
         '  mutable run : MethodInfo = null;\n'
         '  foreach (t in plugin.GetTypes()) when (run == null) run = t.GetMethod("Run");\n'
         '  run.Invoke(null, null) :> string\n}\n'
-        'System.Console.WriteLine(call("plugin"));\nSystem.Console.WriteLine(scope.A.p);\nSystem.Console.WriteLine(call("other"));\n')
-    run([T / 'ncc', ident / 'main.n', ident / 'shapes.n', '-source-root:' + str(ident), '-out:' + str(ident / 'main.exe'),
+        'def p = scope.A.p;\n'
+        'foreach (dir in ["same", "renamed", "apart"]) System.Console.WriteLine(call(dir));\n'
+        'System.Console.WriteLine($"$(scope.A.p) $(object.ReferenceEquals(p, scope.A.p))");\n')
+    run([T / 'ncc', ident / 'main.n', ident / 'shapes.n', ident / 'util.n', '-source-root:' + str(ident), '-out:' + str(ident / 'main.exe'),
          '-launcher-', '-no-color'])
+    # the same file, compiled against the host: the host's module, so the plugin works on the host's object
+    (ident / 'same/shapes.n').write_text(shapes)
+    (ident / 'same/plug.n').write_text(
+        'public Run() : string\n{\n'
+        '  def a = Nemerle.Scopes.Scope.Access("main.A");\n'
+        '  def p = a.Read.[shapes.Point]("p");\n'
+        '  p.X = 7;\n'
+        '  def line = match (a.Read.[shapes.Shape]("s")) { | shapes.Shape.Line(f, t) => $"line $f $t" | _ => "?" };\n'
+        '  $"same: $p $line $(typeof(shapes.Point).Assembly.GetName().Name)"\n}\n')
+    # the same type under another name: that type
+    (ident / 'renamed/mine.n').write_text(shapes.split('public variant')[0].replace('Point', 'Pt'))
+    (ident / 'renamed/plug.n').write_text(
+        'public Run() : string\n{\n'
+        '  def p = Nemerle.Scopes.Scope.Access("main.A").Read.[mine.Pt]("p");\n'
+        '  $"renamed: $p $(typeof(mine.Pt).Assembly.GetName().Name)"\n}\n')
+    # the same code compiled apart (not against the host): another .NET type, which the read reports
+    (ident / 'apart/shapes.n').write_text(shapes)
+    (ident / 'apart/plug.n').write_text(
+        'public Run() : string\n{\n'
+        '  try { _ = Nemerle.Scopes.Scope.Access("main.A").Read.[shapes.Point]("p"); "apart: read" }\n'
+        '  catch { | e is System.InvalidCastException => "apart: " + (if (e.Message.Contains("compiled apart")) "compiled apart" else e.Message) }\n}\n')
+    for d, extra in (('same', ['shapes.n']), ('renamed', ['mine.n']), ('apart', ['shapes.n'])):
+        refs = [] if d == 'apart' else ['-r:' + str(ident / 'main.exe')]
+        run([T / 'ncc', ident / d / 'plug.n', *[ident / d / f for f in extra], '-source-root:' + str(ident / d), '-target:library',
+             '-out:' + str(ident / d / (d + '.dll')), '-no-color', *refs])
     shutil.copy2(T / 'Nemerle.dll', ident / 'Nemerle.dll')
     shutil.copy2(T / 'ncc.runtimeconfig.json', ident / 'main.runtimeconfig.json')
     output = [l for l in run(['dotnet', ident / 'main.exe'], cwd=ident).stdout.split('\n') if l.strip()]
-    if output != ['(3, 4) line (1, 2) (5, 6) no record', '(7, 8)', 'another shape']:
-        raise SystemExit('FAILED: values of another copy of a type through a scope printed %r' % output)
+    if output != ['2', 'same: (7, 4) line (1, 2) (5, 6) main', 'renamed: (7, 4) main', 'apart: compiled apart', '(7, 4) True']:
+        raise SystemExit('FAILED: a scope slot\'s value through copies of its type printed %r' % output)
+    # a file module the host has with other code, or one the host has no record of, is an error, not a second copy
+    (ident / 'other/shapes.n').write_text(shapes.replace('  public Y : int;\n', '  public Y : int;\n  public Z : int;\n'))
+    (ident / 'util/util.n').write_text('public Twice(x : int) : int { x * 2 }\n')
+    for d, f, says in (('other', 'shapes.n', 'module shapes is in main.exe already, with other code'),
+                       ('util', 'util.n', 'module util is in main.exe already')):
+        r = subprocess.run([str(T / 'ncc'), str(ident / d / f), '-source-root:' + str(ident / d), '-target:library',
+                            '-out:' + str(ident / d / (d + '.dll')), '-no-color', '-r:' + str(ident / 'main.exe')], capture_output=True, text=True)
+        if r.returncode == 0 or says not in r.stdout + r.stderr:
+            raise SystemExit('FAILED: a second copy of a host module (%s) is not reported\n%s%s' % (d, r.stdout, r.stderr))
     recorded = reader(ident / 'main.exe', T, '--identities')
     names = sorted(l.split(' : ')[0] for l in recorded.splitlines())
     # (a file's types are nested in its module's class: shapes+Point)
     if names != ['shapes+Point', 'shapes+Shape', 'shapes+Shape+Dot', 'shapes+Shape+Line']:
         raise SystemExit('FAILED: the host records the types its slots reach, and only those\n' + recorded)
-    print('PASS: a plugin\'s own copy of a type a scope slot reaches is the host\'s to Nemerle (read, variant, written '
-          'back), a type no slot reaches has no record, and a copy of another shape is reported', flush=True)
-    # (1) the host's copy: a script referencing a library the host has loaded shares its types
+    print('PASS: a scope slot\'s value is one object: a plugin with the same file module or the same type under another '
+          'name uses the host\'s type (a write through it is the host\'s), a copy compiled apart is reported, and a '
+          'second copy of a host module with other code (or no record) is an error', flush=True)
+    # the host's copy: a script referencing a library the host has loaded shares its types
     common = w / 'common'; common.mkdir()
     (common / 'box.n').write_text('public class Box { public N : int; public this(n : int) { N = n } }\n')
     run([T / 'ncc', common / 'box.n', '-source-root:' + str(common), '-target:library', '-out:' + str(common / 'box.dll'), '-no-color'])

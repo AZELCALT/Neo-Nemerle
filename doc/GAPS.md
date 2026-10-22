@@ -6,11 +6,11 @@ unless it says so. These edges will be closed, which can change what happens the
 
 ## Scopes and spaces
 
-- **A value of another copy of a type is copied when a slot is read** (chapter 11, scripts as plugins). The reader
-  gets its own copy, not the writer's object: writing to it changes nothing in the slot until it is written back.
-  Arrays of such values are copied too; a generic collection of them (`List[Point]`) is not, and reading one as
-  the other copy's is an error that names both. A script that references a library its host has loaded shares the
-  host's copy, so none of this applies there.
+- **A slot's type is one .NET type.** A plugin compiled against the binary that declares the scope uses that binary's
+  types (chapter 11, scripts as plugins). Two binaries compiled apart, each with its own copy of a type, cannot share
+  a value of it: .NET makes an object of one copy, and Nemerle does not convert it (a copy would be another value).
+  Reading or writing the slot with the other copy is an error that says so; a slot of no fixed type (a `Content`)
+  takes either.
 
 ## Targets
 

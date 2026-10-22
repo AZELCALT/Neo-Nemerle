@@ -371,7 +371,19 @@ using Nemerle.Compiler.Utility;
         identity.Name = clrName (tb);
         identity.Base = match (tb.BaseType) { | null => "" | b => clrName (b) };
         foreach (field in tb.GetFields (fields)) identity.Fields.Add ((field.Name, typeName (field.GetMemType ())));
+        identity.Code = Nemerle.Compiler.continuation.ContinuationStore.CodeHash (
+          Nemerle.Compiler.continuation.ContinuationStore.SourceText (tb.Location, false), tb.Name);
         Manager.Continuation.Identities.Add (identity);
+      }
+      // (and the file modules that define them, by their file's code: the same file elsewhere is the same module)
+      def modules = SCG.HashSet ();
+      foreach (tb in recorded)
+      {
+        mutable owner = tb;
+        while (owner.DeclaringType is TypeBuilder) owner = owner.DeclaringType :> TypeBuilder;
+        when (owner : object != tb && Manager.FileModuleRegistry.IsModule (owner.Location.FileIndex) && modules.Add (owner.FullName))
+          Manager.Continuation.IdentityModules.Add ((owner.FullName, Nemerle.Compiler.continuation.ContinuationStore.CodeHash (
+            Nemerle.Compiler.continuation.ContinuationStore.SourceText (owner.Location, true), null)))
       }
     }
 

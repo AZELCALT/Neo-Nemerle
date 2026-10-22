@@ -232,6 +232,9 @@ using Nemerle.Compiler.XmlDump;
     public Continuation : Nemerle.Compiler.continuation.ContinuationStore { get; private set; }
     /// The binaries this compilation continues from: -continue entries and every reference with a continuation section.
     public ContinueFrom : list[string] { get; private set; }
+    /// Types this compilation declares that a continued binary already has (a scope slot reaches them there): made as
+    /// aliases of that binary's, so they are one type (see ShareContinuedTypes).
+    public SharedTypes : System.Collections.Generic.Dictionary[TopDeclaration, PExpr] = System.Collections.Generic.Dictionary();
     /// Whether a binary continued from stores shared scopes: `scope.A.x` in a source then reads them, although
     /// `scope` is an ordinary name elsewhere.
     public ContinuesScopes : bool { get; private set; }
@@ -611,6 +614,93 @@ using Nemerle.Compiler.XmlDump;
       when (Hierarchy != null) Hierarchy.Dispose ();
     }
 
+    /// The referenced binaries this compilation continues from, with their sections (their types are this
+    /// compilation's to use; a binary only continued from is an old build of its own files, which they replace).
+    ReferencedStores () : list[string * Nemerle.Compiler.continuation.ContinuationStore]
+    {
+      def referenced = System.Collections.Generic.HashSet.[string]();
+      foreach (lib when IO.File.Exists(lib) in Options.ReferencedLibraries) _ = referenced.Add(IO.Path.GetFullPath(lib));
+      mutable result = [];
+      foreach (path when referenced.Contains(path) in ContinueFrom)
+        match (try { Nemerle.Compiler.continuation.ContinuationStore.FromImage(IO.File.ReadAllBytes(path)) } catch { | _ is Exception => null })
+        {
+          | null => ()
+          | store => result ::= (path, store)
+        }
+      result.Rev()
+    }
+
+    /// One type for what crosses a scope: a compilation that references a binary and has a file module the binary has
+    /// too uses the binary's module when the file is the same (the binary records the modules that define the types
+    /// its scope slots reach, ContinuationIdentity, with their file's code): the file is not compiled here (the result,
+    /// the files to leave out). Another file of that module, or one the binary has no record of, is an error: a file
+    /// module is one module in the program.
+    SharedModules () : System.Collections.Generic.HashSet[int]
+    {
+      def skipped = System.Collections.Generic.HashSet();
+      when (Options.FileModules)
+      {
+        def modules = System.Collections.Generic.Dictionary.[string, string]();      // module -> the binary's file
+        def hashes = System.Collections.Generic.Dictionary.[string, string]();       // module -> its file's code
+        foreach ((path, store) in ReferencedStores())
+        {
+          foreach (m in store.Modules) modules[m.Module] = IO.Path.GetFileName(path);
+          foreach ((name, hash) in store.IdentityModules) hashes[name] = hash;
+        }
+        foreach (source when FileModuleRegistry.IsModule(source.FileIndex) in Options.Sources)
+        {
+          def name = FileModuleRegistry.Name(source.FileIndex);
+          when (modules.ContainsKey(name))
+          {
+            def at = Location(source.FileIndex, 1, 1);
+            if (hashes.ContainsKey(name) && hashes[name] == Nemerle.Compiler.continuation.ContinuationStore.CodeHash(
+                  Nemerle.Compiler.continuation.ContinuationStore.SourceText(at, true), null))
+            {
+              _ = skipped.Add(source.FileIndex);
+              FileModuleRegistry.Forget(source.FileIndex)
+            }
+            else
+              Message.Error(at,
+                if (hashes.ContainsKey(name))
+                  $"module $name is in $(modules[name]) already, with other code: a file module is one module in the program (use that one, or name this one differently)"
+                else
+                  $"module $name is in $(modules[name]) already: a file module is one module in the program (use that one, or name this one differently)")
+          }
+        }
+      }
+      skipped
+    }
+
+    /// A type with the code of a type a referenced binary recorded (its fields and members, its behaviour), under
+    /// another name: an alias of that binary's type, so they are one type (scan_type_hierarchy makes the alias).
+    ShareContinuedTypes (declarations : list[TopDeclaration]) : void
+    {
+      SharedTypes.Clear();
+      when (Options.FileModules)
+      {
+        def types = System.Collections.Generic.Dictionary.[string, string]();        // a type's code -> its name
+        foreach ((_, store) in ReferencedStores())
+          foreach (t in store.Identities) when (t.Code != "") types[t.Code] = t.Name.Replace('+', '.');
+        def nested(d : TopDeclaration) : void
+        {
+          def members = match (d) { | TopDeclaration.Class(decls = m) | TopDeclaration.Variant(decls = m) => m | _ => [] };
+          foreach (member in members)
+            match (member)
+            {
+              | ClassMember.TypeDeclaration(inner) when (inner is TopDeclaration.Class || inner is TopDeclaration.Variant)
+                                                       && (inner.typarms == null || inner.typarms.tyvars.IsEmpty) =>
+                def code = Nemerle.Compiler.continuation.ContinuationStore.CodeHash(
+                  Nemerle.Compiler.continuation.ContinuationStore.SourceText(inner.Location, false), inner.Name);
+                if (types.ContainsKey(code)) SharedTypes[inner] = PExpr.FromQualifiedIdentifier(this, types[code])
+                else nested(inner)
+              | _ => ()
+            }
+        }
+        when (types.Count > 0)
+          foreach (decl when FileModuleRegistry.IsModule(decl.Location.FileIndex) in declarations) nested(decl)
+      }
+    }
+
     protected InitCompiler () : void
     {
       MethodsStatistics.Clear();
@@ -923,7 +1013,9 @@ using Nemerle.Compiler.XmlDump;
             return;
           }
 #endif
-          def parseResults = Options.Sources.Map(Parser.Parse);
+          def skipped = SharedModules();
+          def parseResults = Options.Sources.Filter(s => !skipped.Contains(s.FileIndex)).Map(Parser.Parse);
+          ShareContinuedTypes(parseResults.Map(r => r.TopDeclarations).Flatten());
           when (Options.FileModules)
           {
             FileModuleRegistry.ReportImportCycles();

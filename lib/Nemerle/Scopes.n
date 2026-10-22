@@ -71,6 +71,20 @@ public sealed class Scope
     lock (slots) unless (slots.ContainsKey(name)) slots[name] = initial;
   }
 
+  /// Appends slot `name` of type `type` (what `scope.A.registery(name, type(...))` makes): a write checks the value
+  /// against it, as a read does.
+  public Register(name : string, initial : object, type : Type) : void
+  {
+    lock (slots)
+    {
+      unless (slots.ContainsKey(name)) slots[name] = initial;
+      unless (type == null || slots.ContainsKey(TypeKey(name))) slots[TypeKey(name)] = type
+    }
+  }
+
+  // (the slot's type, kept in the storage itself, in types of the core library: every copy of Nemerle.dll sees it)
+  static TypeKey(name : string) : string { "\0type:" + name }
+
   /// The value of slot `name`, or `fallback` while no code has registered or written it (the storage is global
   /// memory: a reader does not depend on the order in which the binaries of the process set it up).
   public Get(name : string, fallback : object) : object
@@ -94,14 +108,25 @@ public sealed class Scope
       | content is Content => content.As.[T]()
       | value when Content.Foreign(value) => Content.Of(value).As.[T]()
       | value when value is T => value :> T
-      | value => Identity.Convert(value, typeof(T)) :> T
+      | value => throw InvalidCastException(Identity.Explain(value.GetType(), typeof(T)))
     }
   }
 
-  /// Writes slot `name` (a slot that is not there yet is added).
+  /// Writes slot `name` (a slot that is not there yet is added). A slot of a type takes a value of that type only: one
+  /// type, the same object for every reader (a copy of the type compiled apart from it is another type).
   public Set(name : string, value : object) : void
   {
-    lock (slots) slots[name] = value
+    lock (slots)
+    {
+      mutable type;
+      when (value != null && !(value is Content) && !Content.Foreign(value) && slots.TryGetValue(TypeKey(name), out type))
+        match (type)
+        {
+          | t is Type when !t.IsInstanceOfType(value) => throw InvalidCastException(Identity.Explain(value.GetType(), t))
+          | _ => ()
+        }
+      slots[name] = value
+    }
   }
 }
 
@@ -138,8 +163,8 @@ public sealed class Content
   public As[T]() : T
   {
     if (typeof(T).IsInstanceOfType(Value) || Value == null && !typeof(T).IsValueType) Value :> T
-    else if (Value != null && Identity.Recorded(Value.GetType()) && Identity.Recorded(typeof(T))) Identity.Convert(Value, typeof(T)) :> T
-    else throw InvalidCastException("the slot holds " + (if (Type == null) "nothing" else Type.ToString()) + ", not " + typeof(T).ToString())
+    else if (Value == null) throw InvalidCastException("the slot holds nothing, not " + typeof(T).ToString())
+    else throw InvalidCastException(Identity.Explain(Value.GetType(), typeof(T)))
   }
 
   /// The content as a `T` for code that uses it: checked as `As` does, except that a use taking any object (or a
@@ -171,27 +196,24 @@ public sealed class Content
   public override ToString() : string { if (Value == null) "" else Value.ToString() }
 }
 
-/// Another copy of a type, as Nemerle knows it: the CLR's identity of a type is its assembly's copy and its name, so a
-/// plugin that loaded its own copy of a library (or compiled the same code itself) has other types. A compilation
-/// records the types whose values cross copies through a scope (a slot's type, what its fields hold, the types
-/// derived from them) with their shape, in its binary's continuation section (.nemir); a value of one copy read as
-/// the other is copied field by field. Its copy is a new value: writing it changes the reader's copy only. A type no
-/// slot reaches has no record, and stays the CLR's alone.
+/// Why a value is not of a slot's type. To .NET a type is a copy of an assembly and a name, so a type compiled
+/// twice is two types, and an object is of one of them. A compilation that continues from the binary declaring the
+/// scope makes no copy of the types its slots reach (ManagerClass.ShareContinuedTypes): one type, one object. A copy
+/// compiled apart from it is another type: the records in both binaries' continuation sections (.nemir) tell whether
+/// it is the same code, compiled apart, or another type.
 internal module Identity
 {
   sealed class Record
   {
     public Base : string;
     public Fields : List[string * string] = List();
+    public mutable Code : string = "";
     public this(b : string) { Base = b }
   }
 
   // (the records of each binary, read once)
   records : System.Runtime.CompilerServices.ConditionalWeakTable[System.Reflection.Assembly, Dictionary[string, Record]] =
     System.Runtime.CompilerServices.ConditionalWeakTable();
-
-  /// Whether `type' has a record of its own (the compilation that defined it recorded it).
-  public Recorded(type : Type) : bool { Of(type) != null }
 
   Name(type : Type) : string { type.FullName ?? type.Name }
 
@@ -210,6 +232,30 @@ internal module Identity
       mutable record;
       if (table.TryGetValue(Name(type), out record)) record else null
     }
+  }
+
+  /// What a read or a write says when the value is of another type than the slot's.
+  public Explain(source : Type, target : Type) : string
+  {
+    def describe(t : Type) { Name(t) + " (" + t.Assembly.GetName().Name + ")" }
+    def rs = Of(source); def rt = Of(target);
+    def head = "the slot is " + describe(target) + ", and the value is " + describe(source);
+    if (rs != null && rt != null && rs.Code != "" && rs.Code == rt.Code)
+      head + ": the same code, compiled apart, so another .NET type; compile it against the binary that declares the "
+           + "scope (-r), which makes it that binary's type"
+    else if (Name(source) == Name(target) && rs != null && rt != null)
+    {
+      mutable differs = "its members";
+      for (mutable i = 0; i < Math.Min(rs.Fields.Count, rt.Fields.Count); i++)
+        when (differs == "its members" && !rs.Fields[i].Equals(rt.Fields[i]))
+          differs = "field " + rs.Fields[i][0] + " : " + rs.Fields[i][1] + " (the slot's: " + rt.Fields[i][0] + " : " + rt.Fields[i][1] + ")";
+      when (differs == "its members" && rs.Fields.Count != rt.Fields.Count) differs = "its fields";
+      head + ", another type of the same name: " + differs + " differ"
+    }
+    else if (Name(source) == Name(target))
+      head + ": a type of the same name compiled apart, so another .NET type; compile it against the binary that "
+           + "declares the scope (-r), which makes it that binary's type"
+    else head
   }
 
   /// The continuation section of a binary: the one its loader kept (an image loaded from memory, a script), else the
@@ -283,6 +329,7 @@ internal module Identity
               def name = strings[number()];
               def record = Record(strings[number()]);
               repeat (number()) { def field = strings[number()]; record.Fields.Add((field, strings[number()])) }
+              record.Code = strings[number()];
               result[name] = record
             }
           pos = end
@@ -290,92 +337,5 @@ internal module Identity
       }
     }
     result
-  }
-
-  /// A value of `type' made without running a constructor (its fields are then set): the runtime's own way.
-  Uninitialized(type : Type) : object
-  {
-#if NETSTANDARD2_0
-    // (the runtime this library runs on has one of the two: .NET's RuntimeHelpers, .NET Framework's FormatterServices)
-    mutable make = typeof(System.Runtime.CompilerServices.RuntimeHelpers).GetMethod("GetUninitializedObject", array[typeof(Type)]);
-    when (make == null)
-      match (Type.GetType("System.Runtime.Serialization.FormatterServices, mscorlib"))
-      {
-        | null => ()
-        | services => make = services.GetMethod("GetUninitializedObject", array[typeof(Type)])
-      }
-    make.Invoke(null, array[type : object])
-#else
-    System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type)
-#endif
-  }
-
-  sealed class Same : IEqualityComparer[object]
-  {
-    public Equals(a : object, b : object) : bool { ReferenceEquals(a, b) }
-    public GetHashCode(o : object) : int { System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o) }
-  }
-
-  /// `value' (of another copy of a type) as a value of `target', copied field by field when both copies recorded the
-  /// same type; anything else is an error that says which.
-  public Convert(value : object, target : Type) : object { Convert(value, target, Dictionary(Same())) }
-
-  Convert(value : object, target : Type, copies : Dictionary[object, object]) : object
-  {
-    mutable done;
-    if (value == null || target.IsInstanceOfType(value)) value
-    else if (copies.TryGetValue(value, out done)) done
-    else
-    {
-      def source = value.GetType();
-      def describe(t : Type) { Name(t) + " (" + t.Assembly.GetName().Name + ", " + (if (String.IsNullOrEmpty(t.Assembly.Location)) "loaded from memory" else t.Assembly.Location) + ")" }
-      if (source.IsArray && target.IsArray && source.GetArrayRank() == target.GetArrayRank() && source.GetArrayRank() == 1)
-      {
-        def from = value :> Array;
-        def copy = Array.CreateInstance(target.GetElementType(), from.Length);
-        copies[value] = copy;
-        for (mutable i = 0; i < from.Length; i++) copy.SetValue(Convert(from.GetValue(i), target.GetElementType(), copies), i);
-        copy
-      }
-      else
-      {
-        // (a value of a type derived from the slot's: the reader's copy of that type)
-        def actual = if (Name(source) == Name(target)) target else target.Assembly.GetType(Name(source));
-        when (actual == null || !target.IsAssignableFrom(actual))
-          throw InvalidCastException("the slot holds " + describe(source) + ", not " + describe(target));
-        // (the two copies, and each base that is not shared, recorded as the same type)
-        mutable s = source; mutable t = actual;
-        while (s != null && s != t)
-        {
-          def rs = Of(s); def rt = Of(t);
-          when (rs == null || rt == null)
-            throw InvalidCastException("the slot holds " + describe(s) + ", another copy of " + describe(t) + ", and "
-              + (if (rs == null) "the first" else "the second") + " has no record of its shape: a type is recorded by the compilation that "
-              + "defines it when a scope slot reaches it (its type, a field of it, a type derived from it)");
-          when (Name(s) != Name(t) || rs.Base != rt.Base || rs.Fields.Count != rt.Fields.Count)
-            throw InvalidCastException("the slot holds " + describe(s) + ", a copy of " + describe(t) + " of another shape (base or field count)");
-          for (mutable i = 0; i < rs.Fields.Count; i++)
-            unless (rs.Fields[i].Equals(rt.Fields[i]))
-              throw InvalidCastException("the slot holds " + describe(s) + ", a copy of " + describe(t) + " of another shape: field "
-                + rs.Fields[i][0] + " : " + rs.Fields[i][1] + " there is " + rt.Fields[i][0] + " : " + rt.Fields[i][1] + " here");
-          s = s.BaseType; t = t.BaseType;
-        }
-        def copy = Uninitialized(actual);
-        copies[value] = copy;
-        def flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
-        s = source; t = actual;
-        while (s != null && s != typeof(object))
-        {
-          foreach (field in s.GetFields(flags))
-          {
-            def to = t.GetField(field.Name, flags);
-            to.SetValue(copy, Convert(field.GetValue(value), to.FieldType, copies))
-          }
-          s = s.BaseType; t = t.BaseType;
-        }
-        copy
-      }
-    }
   }
 }

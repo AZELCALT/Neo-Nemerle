@@ -55,7 +55,9 @@ public class ScanTypeHierarchy
   {
     def handle_type (parent, ns_node, t : TopDeclaration)
     {
-      
+      // (a type a continued binary has, the same code: an alias of that one, see ManagerClass.ShareContinuedTypes)
+      mutable shared;
+      def t = if (Manager.SharedTypes.TryGetValue (t, out shared)) TopDeclaration.Alias (t.Location, t.name, t.modifiers, t.typarms, shared) else t;
       match (t) {
         | TopDeclaration.Macro as t =>
           def fileScope = Manager.Options.FileModules && parent != null && parent.IsModule;
