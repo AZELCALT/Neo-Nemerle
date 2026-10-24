@@ -156,17 +156,17 @@ internal sealed class NitraSourceSession
     def sorted=SCG.List(names); sorted.Sort(StringComparer.Ordinal);
     String.Join("__",sorted.ToArray())
   }
-  private IsBlockHeader(text : string, file : string, start : int, keyword : string) : bool
+  private IsBlockHeader(text : string, file : string, start : int, keyword : string, indented : bool) : bool
   {
     try
     {
       def reader=GReader(text,file,start,text.Length); reader.Need(keyword);
       if(reader.Eat("("))
       { _=reader.Name(); while(reader.Eat(",")) _=reader.Name(); reader.Need(")"); }
-      else unless(reader.Is("{") || reader.Is("[") || reader.Is("as")) _=reader.Name();
+      else unless(reader.Is("{") || (indented && reader.Is(":")) || reader.Is("[") || reader.Is("as")) _=reader.Name();
       when(reader.Eat("as")) _=reader.Name();
       when(reader.Eat("[")) { _=reader.Name(); while(reader.Eat(",")) _=reader.Name(); reader.Need("]"); }
-      reader.Is("{")
+      reader.Is("{") || (indented && reader.Is(":"))
     }
     catch { | _ is ArgumentException => false }
   }
@@ -199,6 +199,7 @@ internal sealed class NitraSourceSession
     foreach(source in manager.Options.Sources)
     {
       def text=source.GetText(); def chars=text.ToCharArray(); def file=Location.GetFileName(source.FileIndex);
+      def indented=manager.Options.IndentationSyntax || NitraSourceScan.HasIndentPragma(text);
       def r=GReader(text,file,0,text.Length); mutable depth=0; mutable previous="";
       while(!r.Is("<eof>"))
       {
@@ -244,7 +245,7 @@ internal sealed class NitraSourceSession
             markSources[name]=(Nemerle.Compiler.NitraDeclarations.NitraDeclarationReader(nativeSource,file).Read(),block.Start+1-prefix.Length,block.Start+1);
           definitions.Add(name,document); owners.Add(name,source.FileIndex); GrammarBlocks.Add((name,source.FileIndex,t.Start,block.End)); Blank(chars,t.Start,block.End);
         }
-        else if(!t.Quoted && previous!="." && t.Text=="space" && IsBlockHeader(text,file,t.Start,"space"))
+        else if(!t.Quoted && previous!="." && t.Text=="space" && IsBlockHeader(text,file,t.Start,"space",indented))
         {
           // a space is a top-level declaration of the file: it talks to the program through scopes and dials, not as
           // a value inside a function, type or expression. Inside braces it is never at the top level; at the top
@@ -257,11 +258,13 @@ internal sealed class NitraSourceSession
           }
           def z=NitraSourceZone(); z.Id=zones.Count; z.File=source.FileIndex; z.Start=t.Start; z.Source=text;
           if(r.Eat("(")) { z.Names.Add(r.Name()); while(r.Eat(",")) z.Names.Add(r.Name()); r.Need(")"); }
-          else unless(r.Is("{") || r.Is("[") || r.Is("as")) z.Names.Add(r.Name());
+          else unless(r.Is("{") || (indented && r.Is(":")) || r.Is("[") || r.Is("as")) z.Names.Add(r.Name());
           when(r.Eat("as")) z.Alias=r.Name();
           when(r.Eat("[")) { z.Scopes.Add(r.Name()); while(r.Eat(",")) z.Scopes.Add(r.Name()); r.Need("]"); }
           z.FileOwner=FileOwner(source.FileIndex);
-          def block=r.Block(); z.Body=block.Start+1; z.End=block.End-1; zones.Add(z);
+          def colon=indented && r.Is(":");
+          def block=if(colon) r.IndentedBlock(t.Start) else r.Block();
+          z.Body=block.Start+1; z.End=if(colon) block.End else block.End-1; zones.Add(z);
           Blank(chars,t.Start,block.End); Insert(chars,t.Start,block.End,array["__g","(",z.Id.ToString(),")",";"]);
         }
         else if(!t.Quoted && previous!="." && t.Text=="scope" && depth==0 && !r.Is("."))

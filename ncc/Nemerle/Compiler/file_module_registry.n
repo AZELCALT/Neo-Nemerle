@@ -22,6 +22,7 @@ using Nemerle.Compiler.typer;
 using Nemerle.Compiler.type_info;
 using Nemerle.Compiler.expr_walker;
 using Nemerle.Compiler.fixed_type;
+using Nemerle.Compiler.Source;
 
 /// Compilation-local file ownership. Index before parsing ordinary imports.
 public sealed class FileModuleRegistry
@@ -29,8 +30,189 @@ public sealed class FileModuleRegistry
   manager : ManagerClass;
   paths : Hashtable[int, list[string]] = Hashtable();
   owners : Hashtable[string, int] = Hashtable();
+  mutable standaloneStart : int;
 
   public this(manager : ManagerClass) { this.manager = manager; }
+
+  public IsScriptSource(fileIndex : int) : bool
+  {
+    manager.Options.Script != null && !manager.Options.Sources.IsEmpty
+      && manager.Options.Sources.Head.FileIndex == fileIndex
+  }
+
+  /// Discover only named imports, starting beside each importing file. The queue also handles transitive imports.
+  public DiscoverSources() : void
+  {
+    when (manager.Options.Script == null && manager.Options.Sources.Length == 1 && !manager.Options.TargetIsLibrary)
+      standaloneStart = manager.Options.Sources.Head.FileIndex;
+    def sources = System.Collections.Generic.List.[ISource]();
+    sources.AddRange(manager.Options.Sources);
+    def selected = System.Collections.Generic.HashSet.[string](StringComparer.Ordinal);
+    foreach (source in sources) _ = selected.Add(Path.GetFullPath(Location.GetFileName(source.FileIndex)));
+    def directories = Hashtable.[string, list[ISource]]();
+    def registrations = Hashtable.[int, list[string]]();
+    def registration(source : ISource) : list[string]
+    {
+      unless (registrations.Contains(source.FileIndex)) registrations[source.FileIndex] = RegisteredFolder(source, false);
+      registrations[source.FileIndex]
+    }
+    def candidates(directory : string) : list[ISource]
+    {
+      unless (directories.Contains(directory))
+      {
+        mutable found = [];
+        when (Directory.Exists(directory))
+        {
+          def files = Directory.GetFiles(directory, "*.n");
+          System.Array.Sort(files, StringComparer.Ordinal);
+          foreach (file in files)
+            found ::= FileSource(file, false, false) : ISource;
+        }
+        directories[directory] = found.Rev();
+      }
+      directories[directory]
+    }
+    for (mutable i = 0; i < sources.Count; i++)
+    {
+      def source = sources[i];
+      def extension = Path.GetExtension(Location.GetFileName(source.FileIndex));
+      unless (extension.Equals(".n", StringComparison.OrdinalIgnoreCase) || extension.Equals(".ns", StringComparison.OrdinalIgnoreCase)) continue;
+      def here = Path.GetDirectoryName(Path.GetFullPath(Location.GetFileName(source.FileIndex)));
+      foreach (name in SourceUsings(source))
+      {
+        def relative = name.ToString(Path.DirectorySeparatorChar.ToString());
+        def search = if (here == Root) [here] else [here, Root];
+        mutable imported = false;
+        foreach (directory in search)
+        {
+          when (imported) break;
+          def target = Path.Combine(directory, relative);
+          def direct = target + ".n";
+          def external = manager.NameTree != null && HasClrNamespace(name);
+          def choices = if (external) []
+                        else if (File.Exists(direct)) [FileSource(direct, false, false) : ISource]
+                        else if (Directory.Exists(target) && !external) candidates(target)
+                        else candidates(directory).Filter(candidate =>
+                        {
+                          def folder = registration(candidate);
+                          !folder.IsEmpty && (folder == name
+                            || folder + [Path.GetFileNameWithoutExtension(Location.GetFileName(candidate.FileIndex))] == name)
+                        });
+          foreach (candidate in choices)
+          {
+            imported = true;
+            def path = Path.GetFullPath(Location.GetFileName(candidate.FileIndex));
+            when (selected.Add(path)) sources.Add(candidate);
+          }
+        }
+      }
+    }
+    manager.Options.Sources = NList.FromArray(sources.ToArray());
+  }
+
+  SourceUsings(source : ISource) : list[list[string]]
+  {
+    def lexer = LexerString(manager, source.GetText(), Location(source.FileIndex, 1, 1));
+    lexer.Keywords = LexerBase.BaseKeywords;
+    def read() : Token
+    {
+      try { lexer.GetToken() } catch { | _ is LexerBase.PragmaIndent => read() }
+    }
+    mutable imports = [];
+    mutable depth = 0;
+    mutable ended = false;
+    while (!ended)
+    {
+      match (read())
+      {
+        | Token.EndOfFile => ended = true;
+        | Token.BeginBrace | Token.BeginRound | Token.BeginSquare | Token.BeginQuote => depth++;
+        | Token.EndBrace | Token.EndRound | Token.EndSquare | Token.EndQuote => depth--;
+        | Token.Keyword("using") when depth == 0 =>
+          mutable name = [];
+          mutable done = false;
+          while (!done)
+            match (read())
+            {
+              | Token.Identifier(part) => name ::= part;
+              | Token.Operator("=") => name = [];
+              | Token.Operator(".") | Token.WhiteSpace | Token.NewLine | Token.Comment => ();
+              | Token.EndOfFile => ended = true; done = true;
+              | _ => done = true;
+            }
+          unless (name.IsEmpty) imports ::= name.Rev();
+        | _ => ();
+      }
+    }
+    imports.Rev()
+  }
+
+  public ResolveUsing(name : list[string], loc : Location) : list[string]
+  {
+    when (loc.FileIndex == 0) return name;
+    def directory = Path.GetDirectoryName(Path.GetFullPath(loc.File));
+    def target = Path.Combine(directory, name.ToString(Path.DirectorySeparatorChar.ToString()));
+    foreach (pair in paths)
+    {
+      def physical = Path.GetFullPath(Location.GetFileName(pair.Key));
+      def modulePath = pair.Value;
+      // A registration replaces the physical identity; local lookup must not create a second name for it.
+      def defaultName = Path.ChangeExtension(Path.GetRelativePath(Root, physical), null).Replace(Path.DirectorySeparatorChar, '.');
+      when (modulePath.ToString(".") == defaultName && physical == target + ".n") return modulePath;
+    }
+    def relative = Path.GetRelativePath(Root, target);
+    def folder = NString.Split(relative.Replace(Path.DirectorySeparatorChar, '.'), '.');
+    if (IsDirectory(folder)) folder else name
+  }
+
+  /// A registration is the first directive and names the logical folder of the entire file.
+  /// Use the lexer rather than matching source text: comments, strings and conditionals keep their normal meaning.
+  public RegisteredFolder(source : ISource, reportErrors : bool = true) : list[string]
+  {
+    def lexer = LexerString(manager, source.GetText(), Location(source.FileIndex, 1, 1));
+    lexer.Keywords = LexerBase.BaseKeywords;
+    def read() : Token
+    {
+      try { lexer.GetToken() }
+      catch { | _ is LexerBase.PragmaIndent => read() }
+    }
+    def next() : Token
+    {
+      mutable token = read();
+      while (token is Token.WhiteSpace || token is Token.NewLine || token is Token.Comment || token is Token.Indent)
+        token = read();
+      token
+    }
+    unless (next() is Token.Identifier("register")) return [];
+    mutable parts = [];
+    mutable wantName = true;
+    mutable finished = false;
+    while (!finished)
+    {
+      def token = next();
+      match (token)
+      {
+        | Token.Identifier(name) when wantName => parts ::= name; wantName = false;
+        | Token.Operator(".") when !wantName => wantName = true;
+        | Token.Semicolon when !wantName => finished = true;
+        | _ =>
+          when (reportErrors) Message.Error(token.Location, "register requires a dotted logical folder followed by `;'; it applies to the whole file, without a block");
+          return [];
+      }
+    }
+    parts.Rev()
+  }
+
+  /// Immediate files only; opening a folder never opens the members inside those files.
+  public FolderModules(folder : list[string], loc : Location) : list[string]
+  {
+    def prefix = folder.ToString(".") + ".";
+    def names = System.Collections.Generic.SortedSet.[string](StringComparer.Ordinal);
+    foreach (name in owners.Keys.NToList() + External.Keys.NToList())
+      when (name.StartsWith(prefix, StringComparison.Ordinal) && name.IndexOf('.', prefix.Length) < 0)
+        _ = names.Add(name);
+    NList.FromArray(System.Linq.Enumerable.ToArray(names))
+  }
 
   /// Source root: -source-root, else the project path (its directory when it names a project file), else the
   /// current directory.
@@ -56,6 +238,7 @@ public sealed class FileModuleRegistry
     def files = Hashtable.[string, string]();
     foreach (source in manager.Options.Sources)
     {
+      when (IsScriptSource(source.FileIndex)) continue;
       def file = Path.GetFullPath(Location.GetFileName(source.FileIndex));
       // Only Nemerle sources (.n, and .ns scripts) are file modules; other parsers (e.g. .nitra) keep their own rules.
       unless (String.Equals(Path.GetExtension(file), ".n", StringComparison.OrdinalIgnoreCase)
@@ -67,9 +250,11 @@ public sealed class FileModuleRegistry
         continue;
       }
       def relative = if (shortNames) Path.GetFileNameWithoutExtension(file) else Path.ChangeExtension(file.Substring(prefix.Length), null);
-      def parts = NString.Split(relative.Replace(Path.DirectorySeparatorChar, '.'), '.');
+      def registered = RegisteredFolder(source);
+      def parts = if (registered.IsEmpty) NString.Split(relative.Replace(Path.DirectorySeparatorChar, '.'), '.')
+                  else registered + [Path.GetFileNameWithoutExtension(file)];
       // Splitting dots would silently change a dotted filename into a directory.
-      def components = NString.Split(relative, Path.DirectorySeparatorChar);
+      def components = if (registered.IsEmpty) NString.Split(relative, Path.DirectorySeparatorChar) else parts;
       unless (components.ForAll(part => Regex.IsMatch(part, "^[A-Za-z_][A-Za-z0-9_]*$")))
       {
         Message.Error(loc, "file module path components must be identifiers: " + relative);
@@ -93,6 +278,15 @@ public sealed class FileModuleRegistry
       files.Add(name, file);
       paths.Add(source.FileIndex, parts);
     }
+    // Project `main` settings and -main:file identify a physical source; emission needs its registered CLR name.
+    when (manager.Options.MainClass != null)
+      foreach (fileIndex in paths.Keys)
+        when (Path.ChangeExtension(Path.GetRelativePath(root, Location.GetFileName(fileIndex)), null)
+                .Replace(Path.DirectorySeparatorChar, '.') == manager.Options.MainClass)
+        {
+          manager.Options.MainClass = Name(fileIndex);
+          break;
+        }
   }
 
   /// True when the source was indexed as a file module (generated or synthetic sources are not).
@@ -108,7 +302,10 @@ public sealed class FileModuleRegistry
     def options = manager.Options;
     if (options.TargetIsLibrary || options.Script != null) false
     else if (options.MainClass != null) Name(fileIndex) == options.MainClass
-    else if (paths.Values.Exists(p => p is ["main"])) paths[fileIndex] is ["main"]
+      || Path.ChangeExtension(Path.GetRelativePath(Root, Location.GetFileName(fileIndex)), null).Replace(Path.DirectorySeparatorChar, '.') == options.MainClass
+    else if (standaloneStart != 0) fileIndex == standaloneStart
+    else if (paths.Keys.NToList().Exists(i => Path.GetFullPath(Location.GetFileName(i)) == Path.Combine(Root, "main.n")))
+      Path.GetFullPath(Location.GetFileName(fileIndex)) == Path.Combine(Root, "main.n")
     else paths.Count == 1
   }
 
@@ -392,7 +589,7 @@ public sealed class FileModuleRegistry
   public IsDirectory(name : list[string]) : bool
   {
     def prefix = name.ToString(".") + ".";
-    ModulePrefix(name) == null && owners.Keys.NToList().Exists(_.StartsWith(prefix, StringComparison.Ordinal))
+    ModulePrefix(name) == null && (owners.Keys.NToList() + External.Keys.NToList()).Exists(_.StartsWith(prefix, StringComparison.Ordinal))
   }
 
   public HasClrNamespace(name : list[string]) : bool
@@ -536,8 +733,14 @@ internal sealed class ModuleInitMacro : IMacro
           def type = Nemerle.Compiler.main_parser.MainParser.ParseExpr(ctx.Env, name);
           def registry = ctx.Manager.FileModuleRegistry;
           if (registry.Async.Contains(name) || registry.External.Contains(name) && registry.External[name].Kind == "async-initializer")
-            // an async file's top-level code: this file's is async too (MakeAsyncFiles), and waits for it
-            <[ Nemerle.AsyncMacros.__await($type._N_top_level_ready()) ]>
+          {
+            def script = ctx.Manager.Options.Script;
+            // A synchronous script constructor can import a waiting module too. Its host already waits for
+            // construction; imported source modules still use the normal async-file lowering.
+            if (script != null && ctx.CurrentType.FullName == script.TypeName && !script.Waits)
+              <[ $type._N_top_level_ready().GetAwaiter().GetResult() ]>
+            else <[ Nemerle.AsyncMacros.__await($type._N_top_level_ready()) ]>
+          }
           else
             <[ System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof($type).TypeHandle) ]>
         });
@@ -680,13 +883,17 @@ internal sealed class StateMacro : IMacro
             when (manager.StateTypes.ContainsKey(key))
               foreach (pair in manager.StateTypes[key])
                 unless (types.Contains(pair.Value.ToString())) types.Add(pair.Value.ToString());
-            def listed = string.Join(", ", types.ToArray());
-            def first = if (types.Count > 0) types[0] else "T";
+            def listed = match (types.Count) { | 0 => "of several types" | 1 => types[0]
+                                               | n => string.Join(", ", types.GetRange(0, n - 1).ToArray()) + " or " + types[n - 1] };
+            def lines = if (manager.StateLines.ContainsKey(key)) manager.StateLines[key].ConvertAll(l => l.Line.ToString()) else System.Collections.Generic.List();
+            def declared = match (lines.Count) { | 0 => "" | 1 => $" (declared at line $(lines[0]))" | _ => " (declared at lines " + string.Join(", ", lines.ToArray()) + ")" };
+            def check = $"match ($name) { " + string.Join(" ", types.ConvertAll(t => $"| v is $t => ...").ToArray()) + " }";
             // (as the typer reports: in its pass that reports, once)
             ReportLocatedError(field.Location, manager.Solver.CurrentMessenger,
-              $"`$name' is a top-level value of several types ($listed): code outside the top-level code reads it whenever it "
-               "runs, so it checks it first (match ($name) { | v is $first => ... })");
-            field
+              $"`$name' is $listed$declared: it is a top-level value, and this code can run at any time, so check which it is "
+               $"first: $check");
+            // (reported where it is: what uses it then is not an error of its own)
+            <[ $(Nemerle.Compiler.Typedtree.TExpr.Error() : typed) ]>
           | _ => field
         }
       // what a check of a top-level value matches on: its content when it is of several types

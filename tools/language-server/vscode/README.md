@@ -20,6 +20,12 @@ codium --install-extension nemerle-0.2.0.vsix    # VSCodium
 
 Or in the editor: Extensions view, `...` menu, *Install from VSIX...*.
 
+Project files (`.nproj`) use the silver Nemerle logo and have project-file highlighting. Source files (`.n`) use
+the main logo and scripts (`.ns`) the yellow variant. A file-icon theme can override the language's supplied icon.
+
+Linux file managers get the same three icons through `sh install/install-file-icons.sh` in the repository. The
+regular Linux installer runs this step too. Refresh the file manager after installing.
+
 ## Debugging
 
 Run and Debug (F5) builds the folder's project with `ncc build` and debugs `out/<name>.exe`: breakpoints in `.n`

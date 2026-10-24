@@ -130,6 +130,15 @@ public sealed class Scope
   }
 }
 
+/// The types a value held in a Content can be: a file's top-level value whose type changes is kept in one, and its
+/// field says which types its content is (for C# and other languages, which see a Content).
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+public sealed class ContentTypesAttribute : Attribute
+{
+  public Types : array[Type];
+  public this(params types : array[Type]) { Types = types }
+}
+
 /// What a slot of no fixed type holds: the content and the type it currently is. Reading it asks for a type, which
 /// is checked, so a wrong guess is reported as such instead of failing as a bad cast somewhere else. A dial member
 /// with several forms is held the same way: `Call` runs the form whose parameters fit the arguments.

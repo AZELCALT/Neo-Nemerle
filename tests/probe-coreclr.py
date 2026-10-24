@@ -20,13 +20,14 @@ for folder in (args.support, args.compiler):
         if path.suffix in ('.dll', '.exe'): shutil.copy2(path, work / path.name)
 sdk_version, sdk_root = subprocess.check_output(['dotnet', '--list-sdks'], text=True).splitlines()[-1].split(' ', 1)
 sdk = pathlib.Path(sdk_root.strip('[]')) / sdk_version
-# The compiler's optional CodeDOM facade is a separate compatibility dependency.
-shutil.copy2(sdk / 'System.CodeDom.dll', work / 'System.CodeDom.dll')
+# Keep the CodeDOM implementation that shipped with this compiler. A newer (or older) installed SDK's DLL is not
+# necessarily compatible with the compiler's assembly reference or runtime target.
+if not (work / 'System.CodeDom.dll').is_file():
+    raise RuntimeError('The compiler toolchain is missing its matching System.CodeDom.dll')
 ref = max((sdk.parent.parent / 'packs/Microsoft.NETCore.App.Ref').iterdir(),
           key=lambda p: tuple(int(v) for v in p.name.split('.')))
 tfm = 'net' + ref.name.split('.')[0] + '.0'
-cecil = sorted(pathlib.Path('/usr/lib/mono/gac/Mono.Cecil').glob('0.11*__*/Mono.Cecil.dll'))[-1]
-shutil.copy2(cecil, work / 'Mono.Cecil.dll')
+cecil = work / 'Mono.Cecil.dll'
 rsp = work / 'platform.rsp'
 rsp.write_text('\n'.join(['-nologo', '-nostdlib+', '-define:MODERN_CLR', '-target:library',
     '-out:"' + str(work / 'Nemerle.Platform.dll') + '"',

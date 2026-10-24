@@ -302,7 +302,11 @@ public sealed class Project
   public static Template(name : string, library : bool) : string
   {
     def b = StringBuilder();
-    _ = b.Append("# The project ").Append(name).Append(". Its sources are every .n file under this folder; a file's path is its module.\n");
+    _ = b.Append("# The project ").Append(name).Append(". Run `ncc build` here to build it; `ncc run` builds and starts a program.\n");
+    _ = b.Append("# Every .n file under this folder is a source; out/, bin/, obj/ and nested projects are excluded.\n");
+    _ = b.Append("# util/text.n is module util.text. Start that file with `register library.words;` to name it library.words.text.\n");
+    _ = b.Append("# `using library.words.text;` opens its members; `using library.words;` lets you write text.Member(...).\n");
+    _ = b.Append("# Local using paths discover .n files; external libraries still need references below.\n");
     _ = b.Append("name = \"").Append(name).Append("\"\n");
     _ = b.Append("version = \"0.1.0\"\n");
     if (library) _ = b.Append("kind = \"library\"\n")
@@ -311,6 +315,7 @@ public sealed class Project
     _ = b.Append("# output = \"out\"\n");
     _ = b.Append("# target = \"netstandard2.0\"     # default: the compiler's .NET; or net8.0, netstandard2.1, net48, ...\n\n");
     _ = b.Append("[references]\n");
+    _ = b.Append("# Paths below are relative to this project. Add a library here before using its modules.\n");
     _ = b.Append("# assemblies = [\"lib/Engine.dll\"]\n");
     _ = b.Append("# projects = [\"../engine\"]\n");
     _ = b.Append("# packages = { \"Newtonsoft.Json\" = \"13.0.3\" }\n");

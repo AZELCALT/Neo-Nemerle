@@ -72,6 +72,9 @@ print('PASS: source-run, compile, artifact-run and artifact evaluation without c
 parity = work / 'parity'
 parity.mkdir()
 programs = {
+    'inferred_async_binding': ('using System.Threading.Tasks;\n'
+                               'async def Value() : Task[int] { await Task.Yield(); 5 }\n'
+                               'def answer = Value().Result;\nawait Task.Yield();\nSystem.Console.WriteLine(answer)\n', '5'),
     'wait': ('using System.Threading.Tasks;\ndef x = await Task.FromResult(41);\nSystem.Console.WriteLine(x + 1)\n', '42'),
     'each': ('using System;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n'
              'async Numbers(n : int) : IAsyncEnumerable[int] { for (mutable i = 1; i <= n; i++) { await Task.Yield(); yield i } }\n'

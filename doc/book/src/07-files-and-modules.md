@@ -1,7 +1,7 @@
 # Files are modules
 
-In Nemerle as revived here, **a source file is its namespace**. There are no `namespace` blocks. Where a file sits
-decides the name of everything in it, and the only way to use another file is to name it.
+In Nemerle as revived here, **a source file is its module**. There are no `namespace` blocks. Its path supplies its
+name by default; `register` gives the whole file a logical folder instead. Other files use its module name.
 
 ## A file is a module
 
@@ -34,8 +34,71 @@ HELLO!
 quiet...
 ```
 
-A file's directory is never opened for it: `util/other.n` reaches its sibling as `util.text`, not as `text`. Imports
-are per file, and nothing leaks from one file into another.
+A file's directory is not opened implicitly. `util/other.n` can explicitly open its sibling with `using text;`,
+or use the full name `util.text`. Imports are per file, and nothing leaks from one file into another.
+
+Use `using the_symbol.file_name;` to open a file module: the dotted prefix identifies its containing path, and the
+last component identifies the file without `.n`. For example, `using game.physics.body;` opens the module from
+`game/physics/body.n`. The same spelling works when that module comes from a referenced Nemerle library.
+
+`using` performs name lookup in the current compilation and its referenced .NET assemblies. It can open a file
+module, a mask, or a CLR namespace such as `System`; a separate `import` keyword is not needed. Named local `.n`
+sources are discovered beside the importing file and under the source root, including their own imports. External
+assembly references still belong in the [project file](13-projects.md#the-project-file) or compiler options.
+Opening a containing folder, such as `using game.physics;`, makes its immediate file names available for qualified use.
+
+## Logical folders: `register`
+
+Write `register the_symbol;` as the first directive of a file, before its `using`s and declarations. It replaces the
+physical containing path with a logical folder. The filename still supplies the final component:
+
+```nemerle
+// file: implementation/text.n
+register library.words;
+public Shout(s : string) : string { s.ToUpper() }
+
+// file: main.n
+using library.words.text;
+System.Console.WriteLine(Shout("hello"))
+```
+
+```text
+HELLO
+```
+
+The module is `library.words.text`, wherever `text.n` sits under the source root. Moving it to another directory
+preserves that identity; renaming the file changes the final component. `implementation.text` is no longer an
+alternative name. The declaration applies to the entire file: one registration, no blocks, and no splitting a file
+between logical folders. Two files cannot own the same module name. Registration does not change visibility; it
+works the same way in a library, whose consumers use the registered name.
+
+## Shorter qualification: using a folder
+
+`using library.words;` makes the immediate file names in that physical or logical folder available. Each use
+still names its file; the files' members do not become bare names:
+
+```nemerle
+// file: implementation/text.n
+register library.words;
+public Shout(s : string) : string { s.ToUpper() }
+
+// file: main.n
+using library.words;
+System.Console.WriteLine(text.Shout("hello"))
+```
+
+```text
+HELLO
+```
+
+Here `text.Shout(...)` works, while bare `Shout(...)` requires `using library.words.text;`. Subfolders are not opened
+recursively. A folder import opens its immediate modules in ordinal name order, including their normal top-level
+initialization. It works with source modules and modules from referenced Nemerle libraries. As with other `using`s,
+an unresolved namespace is diagnosed, and a name it cannot supply fails where it is used. A standalone compiler
+invocation warns when no `.nproj` is present, then continues. Scripts resolve local sources without that warning.
+Neither mode fetches DLLs or packages merely because a name appears in `using`.
+
+For one file with a chosen short name, use `using Words = library.words.text;`.
 
 ## Grouping inside a file: `mask`
 
@@ -200,7 +263,7 @@ System.Console.WriteLine(Twice())
 ```
 
 ```text
-`y' is a top-level value of several types (int, string)
+`y' is int or string (declared at lines 1, 2): it is a top-level value, and this code can run at any time
 ```
 
 ```nemerle
@@ -213,6 +276,11 @@ System.Console.WriteLine(Shout())
 ```text
 5!
 ```
+
+Other .NET languages see a top-level value of several types as what it is stored in, a `Nemerle.Scopes.Content`
+(its `Value`, and the `Type` it currently is). Its field says which types it can be, with
+`[Nemerle.Scopes.ContentTypes(typeof(int), typeof(string))]`, so C# code (and its tools) can read them by reflection
+and check for each.
 
 The type of a top-level value changes in the top-level code only. A function of the file that assigns it gives it a
 value of a type it already has there: another type is an error, as anywhere a value's type is fixed. Since such a
@@ -286,7 +354,7 @@ Only types are exported; functions and top-level values are reached through thei
 
 The rules keep names unambiguous for Nemerle and for C# code that uses Nemerle assemblies:
 
-- **No `namespace` declarations.** The file is the namespace:
+- **No `namespace` declarations.** The file owns one module name, optionally under a registered logical folder:
 
   ```nemerle,fail
   namespace Shapes { public class Circle {} }
@@ -297,7 +365,8 @@ The rules keep names unambiguous for Nemerle and for C# code that uses Nemerle a
   ```
 
 - **No `partial`.** A type lives in exactly one file.
-- **A file may not sit beside a directory of the same name** (`a.n` next to `a/b.n`). The file would be a type and the
+- **A module may not have the same name as a containing folder** (`a.n` next to `a/b.n`, unless registration separates
+  their identities). The file would be a type and the
   directory a namespace with the same name, which .NET languages reject.
 - **No member may have its file's name** (`text.n` cannot declare `class text`), because a class can't contain a member
   named like itself.
@@ -305,7 +374,8 @@ The rules keep names unambiguous for Nemerle and for C# code that uses Nemerle a
 
 ## The source root
 
-`ncc` takes paths relative to the source root: `-source-root:DIR`, or else the current directory. Every path component
+`ncc` takes module paths relative to the source root: `-source-root:DIR`, otherwise the containing project root,
+or the first source file's directory for a standalone compilation. Scripts start at their own directory. Every path component
 must be an identifier: `my-app/main.n` is not a valid module, `my_app/main.n` is.
 
 With `-file-name-namespaces`, a module is named by its file name only (`util/text.n` is `text`). File names must then

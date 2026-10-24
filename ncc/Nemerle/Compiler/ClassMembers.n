@@ -671,10 +671,35 @@ public class FieldBuilder : MemberBuilder, IField
             | functions => PExpr.Sequence(value.Location, functions + [value])
           };
         Manager.UserData["Nemerle.AsyncMacros.blocking"] = true;
-        // (in a script that waits the value is typed again where it is, which reports on it: this typing only probes)
+        // A waiting script types this value again at its execution site, which reports its errors. Isolate only
+        // the diagnostics here: local async functions and iterators need the root solver to lower their yields.
+        // Typing their bodies inside a speculative solver state would both violate that invariant and discard
+        // constraints belonging to the initializer tree cached below.
+        def infer() : TExpr
+        {
+          if (!script.Waits) typer.TypeExpr(value)
+          else
+          {
+            def messenger = Manager.Solver.CurrentMessenger;
+            messenger.PushState ();
+            try
+            {
+              def typed = typer.TypeExpr(value);
+              if (messenger.SeenError) null else typed
+            }
+            finally { messenger.PopState (); }
+          }
+        }
         when (script.Waits) Manager.QuietMessages++;
-        def typed = try { typer.TypeExpr(value) }
+        def typed = try { infer() }
                     finally { Manager.UserData.Remove("Nemerle.AsyncMacros.blocking"); when (script.Waits) Manager.QuietMessages-- };
+        when (typed == null)
+        {
+          ty = InternalType.Object;
+          script.TypedInitializers[Name] = TExpr.Error();
+          Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
+          return
+        }
         ResolveDelayed(typed);
         ty = typed.Type.DeepFix();
         // Cached initializer trees also enter speculative overload checks.

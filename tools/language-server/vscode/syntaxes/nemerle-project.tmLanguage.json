@@ -1,0 +1,19 @@
+{
+  "name": "Nemerle project",
+  "scopeName": "source.nemerle.project",
+  "patterns": [
+    { "name": "comment.line.number-sign.nemerle-project", "begin": "#", "end": "$" },
+    { "name": "string.quoted.double.nemerle-project", "begin": "\"", "end": "\"", "patterns": [
+      { "name": "constant.character.escape.nemerle-project", "match": "\\\\." }
+    ] },
+    { "name": "string.quoted.single.nemerle-project", "begin": "'", "end": "'" },
+    { "name": "entity.name.section.nemerle-project", "match": "^\\s*\\[[^\\]\\r\\n]+\\]" },
+    { "match": "^\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\s*(=)", "captures": {
+      "1": { "name": "variable.other.property.nemerle-project" },
+      "2": { "name": "keyword.operator.assignment.nemerle-project" }
+    } },
+    { "name": "constant.language.boolean.nemerle-project", "match": "\\b(?:true|false)\\b" },
+    { "name": "constant.numeric.nemerle-project", "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b" },
+    { "name": "punctuation.definition.array.nemerle-project", "match": "[\\[\\],]" }
+  ]
+}

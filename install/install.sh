@@ -49,6 +49,9 @@ extension_dirs() {
 }
 
 if [ $uninstall = 1 ]; then
+  if [ "$(uname -s)" = Linux ]; then
+    sh "$repo/install/install-file-icons.sh" --uninstall || true
+  fi
   rm -rf "$prefix"
   for tool in ncc nscript nemerle-lsp; do rm -f "$bin/$tool"; done
   extension_dirs | while read -r dir; do rm -rf "$dir"; done
@@ -102,6 +105,14 @@ launcher ncc ncc.exe "-target-references:\"$tc/references\" "
 launcher nscript nscript.exe ""
 [ $lsp = 1 ] && launcher nemerle-lsp nemerle-lsp.exe ""
 note installed "the commands in $bin"
+
+if [ "$(uname -s)" = Linux ]; then
+  if sh "$repo/install/install-file-icons.sh"; then
+    note installed "file-manager icons for .n, .ns and .nproj"
+  else
+    note skipped "file-manager icons (install shared-mime-info and run install/install-file-icons.sh)"
+  fi
+fi
 
 # --- the debugger: netcoredbg (MIT), which the extension debugs with; it looks in $prefix/tools/netcoredbg ---
 if [ $lsp = 1 ] && [ $debugger = 1 ]; then

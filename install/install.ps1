@@ -9,7 +9,8 @@ install\install.cmd
 install\install.cmd -Editor none
 install\install.cmd -Uninstall
 
-Needs only the .NET 10 runtime (https://dotnet.microsoft.com/download/dotnet/10.0). The editor extension's JavaScript
+Installs missing Windows prerequisites with winget (runtime for an install; SDK, Python and Mono for -Build).
+-NoDependencies uses existing prerequisites and disables online CodeDOM repair. The editor extension's JavaScript
 dependencies are downloaded from the npm registry as package-lock.json pins them (checked against its hashes); npm
 itself is used only when that cannot be done. -Build compiles everything from source first and needs Python 3 and the
 strong-name tool sn as well.
@@ -19,6 +20,7 @@ param(
   [switch]$Build,
   [switch]$NoLsp,
   [switch]$NoDebugger,
+  [switch]$NoDependencies,
   [ValidateSet('auto', 'code', 'codium', 'none')][string]$Editor = 'auto',
   [switch]$Uninstall
 )
@@ -43,6 +45,7 @@ function Invoke-Native([scriptblock]$command) {
 # what was installed and what was skipped (and why), printed at the end
 $notes = New-Object Collections.Generic.List[string]
 function Note([string]$what, [string]$text) { $notes.Add(('  {0,-10} {1}' -f $what, $text)) }
+. (Join-Path $PSScriptRoot 'dependencies.ps1')
 
 function Set-UserPath([string]$dir, [bool]$add) {
   $current = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -61,30 +64,38 @@ if ($Uninstall) {
   exit 0
 }
 
-# --- the .NET 10 runtime ---
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-  throw 'dotnet not found. Install the .NET 10 runtime: https://dotnet.microsoft.com/download/dotnet/10.0'
-}
-if (-not (& dotnet --list-runtimes | Where-Object { $_ -match '^Microsoft\.NETCore\.App 10\.' })) {
-  throw 'The .NET 10 runtime is missing. Install it: https://dotnet.microsoft.com/download/dotnet/10.0'
-}
+# --- install prerequisites, then refresh this process so no terminal restart is needed ---
+Install-NemerlePrerequisites
 
 # --- which toolchain ---
 $source = Join-Path $repo 'boot\coreclr'
-if ($Build) {
-  Write-Host 'Building from source (build\bootstrap.py --quick); this takes a few minutes...'
-  & python (Join-Path $repo 'build\bootstrap.py') --quick
-  if ($LASTEXITCODE -ne 0) { throw "The build failed; see $repo\out\bootstrap\logs" }
-  $source = Join-Path $repo 'out\bootstrap\toolchain'
+function Build-SourceToolchain {
+  $script:Build = $true
+  Install-NemerlePrerequisites
+  Write-Host 'Building from source (build\bootstrap.py --build-only); this takes a few minutes...'
+  $python = Find-InstallPython
+  $pythonCommand = $python.Command
+  $buildOutput = Join-Path $Prefix 'build'
+  $buildSeed = Join-Path ([IO.Path]::GetTempPath()) ('nemerle-install-boot-' + [Guid]::NewGuid().ToString('N'))
+  try {
+    Copy-Item -Recurse (Join-Path $repo 'boot\coreclr') $buildSeed
+    Repair-ToolchainCodeDom $buildSeed (Join-Path $repo 'boot\coreclr')
+    $pythonArgs = @($python.Arguments) + @((Join-Path $repo 'build\bootstrap.py'), '--build-only', '--boot', $buildSeed, '--output', $buildOutput)
+    & $pythonCommand @pythonArgs
+    if ($LASTEXITCODE -ne 0) { throw "The build failed; see $buildOutput\logs" }
+  } finally { Remove-Item -Recurse -Force $buildSeed -ErrorAction SilentlyContinue }
+  $script:source = Join-Path $buildOutput 'toolchain'
 }
+if ($Build) { Build-SourceToolchain }
 if (-not (Test-Path (Join-Path $source 'ncc.exe'))) { throw "No toolchain in $source" }
 
 Write-Host "Installing the toolchain from $source to $Prefix"
-$tc = Join-Path $Prefix 'toolchain'
+$finalToolchain = Join-Path $Prefix 'toolchain'
+$tc = Join-Path $Prefix ('.toolchain-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $Prefix, $bin | Out-Null
-Remove-Item -Recurse -Force $tc -ErrorAction SilentlyContinue
+try {
 Copy-Item -Recurse $source $tc
-Note 'installed' "the toolchain (ncc, nscript, Nitra) in $tc"
+Repair-ToolchainCodeDom $tc (Join-Path $repo 'boot\coreclr')
 
 # --- the language server, compiled from source with the installed compiler ---
 if (-not $NoLsp) {
@@ -102,20 +113,62 @@ if (-not $NoLsp) {
   if ($onWindows) { $nccArgs += '-launcher-' }
   $nccArgs = @($nccArgs | Where-Object { $_ })
   Invoke-Native { & dotnet (Join-Path $tc 'ncc.exe') $nccArgs *> $log }
+  if ($LASTEXITCODE -ne 0 -and -not $Build -and -not $NoDependencies) {
+    Write-Host 'The pinned compiler could not build this checkout''s language server; rebuilding the matching source toolchain.'
+    Copy-Item $log (Join-Path $Prefix 'lsp-bootstrap-build.log')
+    Build-SourceToolchain
+    Remove-Item -Recurse -Force $tc
+    Copy-Item -Recurse $source $tc
+    Repair-ToolchainCodeDom $tc (Join-Path $repo 'boot\coreclr')
+    Invoke-Native { & dotnet (Join-Path $tc 'ncc.exe') $nccArgs *> $log }
+  }
   if ($LASTEXITCODE -ne 0) { throw "Building the language server failed; see $log" }
   Copy-Item (Join-Path $tc 'ncc.runtimeconfig.json') (Join-Path $tc 'nemerle-lsp.runtimeconfig.json')
   Note 'installed' 'the language server (nemerle-lsp)'
 } else { Note 'skipped' 'the language server, the debugger and the editor extension: -NoLsp' }
 
+# Prove both entry points work before replacing an existing installation or changing PATH.
+$check = Join-Path ([IO.Path]::GetTempPath()) ('nemerle-install-check-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $check | Out-Null
+try {
+  $hello = Join-Path $check 'hello.n'
+  Set-Content -Path $hello -Value 'System.Console.WriteLine("Nemerle is installed")'
+  $testArgs = @($hello, "-source-root:$check", "-target-references:$(Join-Path $tc 'references')",
+                "-out:$(Join-Path $check 'hello.dll')", '-launcher-', '-no-color')
+  $compilerOutput = Invoke-Native { & dotnet (Join-Path $tc 'ncc.exe') @testArgs 2>&1 }
+  if ($LASTEXITCODE -ne 0) { throw "The staged compiler does not run: $compilerOutput" }
+  Copy-Item (Join-Path $tc 'Nemerle.dll') $check
+  $programOutput = Invoke-Native { & dotnet (Join-Path $check 'hello.dll') 2>&1 }
+  if ($LASTEXITCODE -ne 0 -or "$programOutput" -notmatch 'Nemerle is installed') { throw "The compiled program does not run: $programOutput" }
+  $scriptOutput = Invoke-Native { & dotnet (Join-Path $tc 'nscript.exe') run $hello --no-cache 2>&1 }
+  if ($LASTEXITCODE -ne 0 -or "$scriptOutput" -notmatch 'Nemerle is installed') { throw "The staged script host does not run: $scriptOutput" }
+} finally { Remove-Item -Recurse -Force $check }
+
+$previousToolchain = Join-Path $Prefix ('.toolchain-previous-' + [Guid]::NewGuid().ToString('N'))
+if (Test-Path $finalToolchain) { Move-Item $finalToolchain $previousToolchain }
+try { Move-Item $tc $finalToolchain }
+catch {
+  if (Test-Path $previousToolchain) { Move-Item $previousToolchain $finalToolchain }
+  throw
+}
+Remove-Item -Recurse -Force $previousToolchain -ErrorAction SilentlyContinue
+$tc = $finalToolchain
+Note 'installed' "the toolchain (ncc, nscript, Nitra) in $tc; compiler and scripting checks passed"
+} catch {
+  if ($tc -ne $finalToolchain) { Remove-Item -Recurse -Force $tc -ErrorAction SilentlyContinue }
+  throw
+}
+
 # --- launchers (bin is added to the user's PATH) ---
 function New-Launcher([string]$name, [string]$program, [bool]$references) {
+  $dotnetCommand = (Get-Command dotnet).Source
   if ($onWindows) {
     $extra = if ($references) { '-target-references:"%~dp0..\toolchain\references" ' } else { '' }
-    Set-Content -Encoding ASCII -Path (Join-Path $bin "$name.cmd") -Value "@dotnet `"%~dp0..\toolchain\$program`" $extra%*"
+    Set-Content -Encoding ASCII -Path (Join-Path $bin "$name.cmd") -Value "@`"$dotnetCommand`" `"%~dp0..\toolchain\$program`" $extra%*"
   } else {
     $extra = if ($references) { "-target-references:`"$tc/references`" " } else { '' }
     $path = Join-Path $bin $name
-    Set-Content -Encoding ASCII -Path $path -Value "#!/bin/sh`nexec dotnet `"$tc/$program`" $extra`"`$@`""
+    Set-Content -Encoding ASCII -Path $path -Value "#!/bin/sh`nexec `"$dotnetCommand`" `"$tc/$program`" $extra`"`$@`""
     & chmod 755 $path
   }
 }
@@ -246,6 +299,9 @@ function New-Vsix {
       $why = $_.Exception.Message
       Remove-Item -Recurse -Force (Join-Path $ext 'node_modules') -ErrorAction SilentlyContinue
       if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        if ($onWindows -and -not $NoDependencies) { Install-WinGetDependency 'OpenJS.NodeJS.LTS' 'Node.js LTS (extension dependency fallback)' }
+      }
+      if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         Write-Host "Skipping the editor extension: its dependencies could not be fetched ($why)."
         Note 'skipped' "the editor extension: its dependencies could not be fetched ($why)"; return $null
       }
@@ -319,6 +375,10 @@ function New-Vsix {
   } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
 }
 function Install-Vsix([string]$editorName, [string]$vsix) {
+  if ($onWindows -and -not (Get-Command $editorName -ErrorAction SilentlyContinue)) {
+    $id = if ($editorName -eq 'code') { 'Microsoft.VisualStudioCode' } else { 'VSCodium.VSCodium' }
+    Install-WinGetDependency $id $editorName
+  }
   # the editor's own command installs it (the old copied-in folder goes first)
   foreach ($name in $extension, $oldExtension) { Remove-Item -Recurse -Force (Join-Path $extensionRoots[$editorName] $name) -ErrorAction SilentlyContinue }
   Invoke-Native { & $editorName --install-extension $vsix --force *> $null }

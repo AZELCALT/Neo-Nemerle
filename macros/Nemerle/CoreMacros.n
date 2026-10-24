@@ -1457,6 +1457,18 @@ internal module Operators
   [Hygienic]
   public CacheAssignExpr (e : PT.PExpr) : PT.PExpr * PT.PExpr
   {
+    match (e)
+    {
+      // a name is read and assigned as itself, nothing to keep (a value whose type follows the flow is read as its type
+      // here, which is not what is assigned: see typer_flow)
+      | PT.PExpr.Ref => (<[ () ]>, e)
+      | _ => CacheAssignExprOf (e)
+    }
+  }
+
+  [Hygienic]
+  CacheAssignExprOf (e : PT.PExpr) : PT.PExpr * PT.PExpr
+  {
     def desc =
       match (e)
       {

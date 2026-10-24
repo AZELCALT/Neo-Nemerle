@@ -2,8 +2,20 @@
 
 ## Getting the compiler
 
-The toolchain lives in the repository. You need the .NET 10 SDK, Python 3 and Mono's `sn` tool (used to verify signed
-assemblies). Then:
+The toolchain lives in the repository. From the root of a cloned or downloaded repository on Windows, the installer handles missing prerequisites through winget:
+
+```bat
+install\install.cmd          rem install the toolchain; installs .NET 10 runtime if needed
+install\install.cmd -Build   rem build from source; also installs SDK, Python, Mono's sn and Git if needed
+```
+
+It checks the compiler and script host before replacing an existing installation. It also checks that the app-local
+`System.CodeDom.dll` matches the compiler, repairing it when necessary. There is no need to copy a DLL out of a
+different SDK. Prerequisites are available in the same installer process after installation; Windows may request
+elevation for system packages. `-NoDependencies` opts out of automatic prerequisite installation and online repair.
+
+For a source build on Linux or macOS, install the .NET 10 SDK, Python 3 and Mono's `sn` tool (used to verify signed
+assemblies), then:
 
 ```sh
 git clone https://github.com/AZELCALT/Neo-Nemerle.git
@@ -53,9 +65,31 @@ Three things are worth noticing already:
 A program that uses the standard library needs `Nemerle.dll` next to it at run time. It is in the toolchain directory;
 copy it with your program.
 
+## Using a neighboring file
+
+A standalone program does not need a project file. Put these two files together:
+
+```nemerle
+// file: helpers.n
+public Greeting(name : string) : string { $"Hello, $name!" }
+
+// file: main.n
+using helpers;
+System.Console.WriteLine(Greeting("Ada"))
+```
+
+```text
+Hello, Ada!
+```
+
+Compile only the entry file with `ncc main.n -out:hello.exe`. The compiler discovers `helpers.n` beside it, then
+resolves that file's imports too. With no `.nproj` it prints a warning and continues. `nscript run main.n` uses the
+same lookup without the project warning. References to external DLLs and packages still need to be declared.
+
 ## A project
 
-For more than one file, make a project. `ncc init` writes one, and `ncc run` builds and runs it:
+A project is useful when you want a named build, references, compiler options, or automatic inclusion of all your
+source files. `ncc init` writes a commented `.nproj` that explains the settings, and `ncc run` builds and runs it:
 
 ```sh
 ncc init hello
@@ -78,6 +112,12 @@ nscript run hello.n
 
 ## Where the source root is
 
-Every `.n` file is a module named by its path. `ncc` takes that path relative to the *source root*: the
-`-source-root:DIR` option, or the current directory. Chapter 7 explains this; for now, keep your files in one
-directory and compile from there.
+Every `.n` file is a module named by its path relative to the *source root*. `-source-root:DIR` sets it explicitly;
+otherwise the compiler uses the containing project root, or the first source file's directory for a standalone
+program. A script starts at its own directory. Each explicit `using helpers;` also looks beside the file that wrote
+it, so supporting files can use their own neighbors.
+
+For a name that stays the same after moving a file, start `text.n` with `register library.words;`. Its module then
+becomes `library.words.text`, used with `using library.words.text;`. A file has one identity and one registration for
+its entire contents. `using library.words;` instead makes file names available for calls such as `text.Shout(...)`.
+[Files are modules](07-files-and-modules.md) explains both forms.

@@ -19,7 +19,6 @@ using System.CodeDom.Compiler;
 using System.Configuration;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Reflection;
 using System.Collections;
 using System.Collections.Specialized;
@@ -38,6 +37,30 @@ using Nemerle.Compiler.Utility;
 public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
 {
   public this ()  {  }
+
+  // CompilerOptions is a command line, not a whitespace-delimited list. In particular Windows reference paths
+  // commonly contain "Program Files". Preserve backslashes and strip only the surrounding quote delimiters.
+  static SplitOptions(text : string) : list[string]
+  {
+    def result = SCG.List.[string]();
+    def token = StringBuilder();
+    mutable quote = '\0';
+    mutable started = false;
+    foreach (c in text)
+      if (quote != '\0')
+      {
+        if (c == quote) quote = '\0' else _ = token.Append(c);
+      }
+      else if (c == '"' || c == '\'') { quote = c; started = true; }
+      else if (Char.IsWhiteSpace(c))
+      {
+        when (started) { result.Add(token.ToString()); token.Length = 0; started = false; }
+      }
+      else { _ = token.Append(c); started = true; }
+    when (quote != '\0') throw ArgumentException("Unterminated quote", "CompilerOptions");
+    when (started) result.Add(token.ToString());
+    result.NToList()
+  }
 
   public CompileAssemblyFromDom (options : CompilerParameters,
                                  e : CodeCompileUnit) : CompilerResults
@@ -151,7 +174,7 @@ public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
 
     unless (options.CompilerOptions == null)
         Getopt.Parse (Message.Error, opts,
-            NList.FromArray (Regex.Split (options.CompilerOptions, @"\s")).Filter (fun (t) {t.Length > 0}));
+            SplitOptions(options.CompilerOptions));
 
     def fullOutput = System.IO.StringWriter ();
     man.InitOutput (fullOutput);

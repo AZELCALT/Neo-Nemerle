@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using static Nemerle.Compiler.manager_class;
 using static Nemerle.Scripting.contracts;
 using static Nemerle.Scripting.host;
@@ -207,6 +208,24 @@ public static class ScriptingChecks {
   catch(OperationCanceledException) { }
   Facilities();
   Check(ManagerClass.Instance==previous,"compiler context restoration");
+  var asyncBinding=Eval("using System.Threading.Tasks;\n"
+    + "async def Value() : Task[int] { await Task.Yield(); 5 }\n"
+    + "def answer = Value().Result;\nawait Task.Yield();\nanswer\n");
+  Check(asyncBinding.Kind==ScriptResultKind.Value && (int)asyncBinding.Value==5,
+    "an inferred binding may call a local async function in a waiting script");
+  var localStreams=Eval("using System;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n"
+    + "async def S(k : int) : IAsyncEnumerable[int] { yield k; await Task.Yield(); yield k * 2 }\n"
+    + "async def T() : Task[int] { await Task.Yield(); 5 }\n"
+    + "def start = T().Result;\nmutable total = start;\nawait foreach (item in S(10)) total += item;\ntotal\n");
+  Check(localStreams.Kind==ScriptResultKind.Value && (int)localStreams.Value==35,
+    "async initializer inference with a local async stream uses the root solver");
+  var badWaitingInitializer=host.Compile(new ScriptSource("using System.Threading.Tasks;\n"
+    + "await Task.Yield();\ndef bad = \"text\" * 2;\nbad\n",Path.Combine(root,"bad_waiting.n")));
+  var initializerErrors=badWaitingInitializer.Diagnostics.Where(x=>x.IsError).ToArray();
+  Check(!badWaitingInitializer.Success && initializerErrors.Length==2
+    && initializerErrors.All(x=>x.Line==3)
+    && initializerErrors.Select(x=>x.Message).Distinct().Count()==2,
+    "waiting initializer inference reports operator diagnostics once at the original source line");
   Console.WriteLine("PASS: scripting inputs, identity, exports, masks, inferred bindings/closures, session chaining/shadowing/failures, typed results, source history/replay, refiners, async cancellation, cache integrity and saved artifacts");
  }
  static void Facilities() {

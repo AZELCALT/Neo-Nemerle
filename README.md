@@ -49,8 +49,9 @@ foreach (shape in [Shape.Circle(1.0), Shape.Rectangle(2.0, 3.0)])
 
 ## Install
 
-You need the **.NET 10 runtime** ([download](https://dotnet.microsoft.com/download/dotnet/10.0)). Then clone the
-repository and run the installer for your system:
+Clone the repository and run the installer for your system. On Windows it installs a missing **.NET 10 runtime**
+through winget and continues in the same terminal. On Linux and macOS, install the runtime first
+([download](https://dotnet.microsoft.com/download/dotnet/10.0)):
 
 ```sh
 git clone https://github.com/AZELCALT/Neo-Nemerle.git
@@ -63,12 +64,13 @@ install\install.cmd           :: Windows (Command Prompt or PowerShell)
 ```
 
 The installer:
-1. copies the toolchain (compiler, standard library and macros, Nitra, scripting) into a folder of your own;
+1. stages the toolchain (compiler, standard library and macros, Nitra, scripting) in a folder of your own and verifies
+   that `System.CodeDom.dll` matches the compiler;
 2. builds the language server from source with that compiler;
 3. puts `ncc`, `nscript` and `nemerle-lsp` on your `PATH`;
 4. writes the VS Code / VSCodium extension as `install/nemerle-0.2.0.vsix` (it carries its language server; install
-   it by hand with *Extensions → … → Install from VSIX*), and installs it in the editor it finds (needs `npm`);
-5. checks that a script runs.
+   it by hand with *Extensions → … → Install from VSIX*), and installs it in the editor it finds;
+5. compiles and runs a small program and runs a script before replacing the previous toolchain or changing PATH.
 
 | | Linux / macOS (`install.sh`) | Windows (`install.cmd`, `install.ps1`) |
 |---|---|---|
@@ -77,11 +79,32 @@ The installer:
 | Build from source first | `--build` | `-Build` |
 | Skip the language server | `--no-lsp` | `-NoLsp` |
 | Skip the debugger (netcoredbg, fetched for the extension) | `--no-debugger` | `-NoDebugger` |
+| Use existing prerequisites; disable automatic prerequisite installation and online CodeDOM repair | — | `-NoDependencies` |
 | Editor extension (`none`: only the `.vsix`) | `--editor auto\|code\|codium\|none` | `-Editor auto\|code\|codium\|none` |
 | Remove everything | `--uninstall` | `-Uninstall` |
 
 `install/install.ps1` also runs under PowerShell 7 on Linux and macOS. The Windows-specific parts (`.cmd` launchers, the
 user `PATH`) have not been tested on Windows yet; please report problems.
+
+On Windows, `-Build` installs a missing .NET 10 SDK, Python 3, Mono's strong-name verification tool and Git through winget.
+If winget itself is missing, the installer attempts to bootstrap it with Microsoft's `Microsoft.WinGet.Client`
+PowerShell module. It refreshes PATH after installing prerequisites; Windows may still ask for elevation for the
+system packages. An explicitly selected missing editor (`-Editor code` or `-Editor codium`) is installed through
+winget too. The extension normally fetches its locked JavaScript dependencies directly; if that fails and npm is
+missing, Windows installs Node.js LTS before retrying.
+
+CodeDOM is an app-local dependency: the installer checks the compiler's assembly reference, uses a matching bundled
+DLL, and repairs a missing or incompatible copy from the matching NuGet package when necessary. It does not replace
+that DLL with an arbitrary SDK's copy. Builds select .NET 10 even when a newer major SDK/runtime is installed, and
+preserve paths containing spaces. If the pinned compiler cannot build this checkout's language server, installation
+rebuilds a matching source toolchain once rather than leaving half an install (`-NoDependencies` disables that retry).
+
+Source-build logs are kept in `<Prefix>/build/logs`; dependency installation is logged to `<Prefix>/dependencies.log`.
+Prerequisites installed through winget are shared system/user tools and are left in place when Nemerle is uninstalled.
+
+On Linux, `install.sh` also registers file-manager icons for `.n`, `.ns` and `.nproj` (silver for projects). To install
+just these icons, run `sh install/install-file-icons.sh`; remove them with the same command plus `--uninstall`.
+This uses the user's XDG data directory and needs `update-mime-database` from `shared-mime-info`.
 
 **Without installing**, everything also runs straight from the clone: `boot/coreclr/ncc` and `boot/coreclr/nscript`.
 
@@ -120,6 +143,8 @@ program, with `Nemerle.dll` and its references, in `out/`. See [Projects](doc/bo
 
 - **[The Nemerle Book](doc/book/src/SUMMARY.md):** the language from the ground up, from values and functions to
   pattern matching, files as modules, macros, grammars and scripts. Every example in it is compiled and tested.
+  Build HTML with `python3 build/build-book.py` (Windows: `py -3 build/build-book.py`); it uses a verified prebuilt
+  mdBook executable, with no Rust or Cargo installation. See the [book build instructions](doc/book/README.md).
 - **[CHANGELOG.md](CHANGELOG.md):** what this revival changed compared with upstream Nemerle.
 - **Reference notes:**
   - [doc/FILE-MODULES.md](doc/FILE-MODULES.md) for files as modules;

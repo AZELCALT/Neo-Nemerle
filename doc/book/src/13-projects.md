@@ -1,7 +1,9 @@
 # Projects
 
-A file compiles on its own with `ncc file.n`. Anything bigger is a *project*: a folder with one `.nproj` file.
-The folder is the source root, so every `.n` file under it is a module named by its path (chapter 7), and the
+A program compiles with `ncc file.n`, including the local files its `using`s discover. A *project* adds a named build,
+configured references and compiler options: a folder with one `.nproj` file.
+The folder is the source root, so every `.n` file under it is a module named by its path or its `register` directive
+([chapter 7](07-files-and-modules.md#logical-folders-register)), and the
 project file only says what the layout cannot: the project's name, what it references, and compiler options.
 
 ## Starting one
@@ -56,7 +58,11 @@ The project file is declarative: a small part of TOML, read by the compiler and 
 any code. This is the file `ncc init` writes, with every setting shown:
 
 ```toml
-# The project hello. Its sources are every .n file under this folder; a file's path is its module.
+# The project hello. Run `ncc build` here to build it; `ncc run` builds and starts a program.
+# Every .n file under this folder is a source; out/, bin/, obj/ and nested projects are excluded.
+# util/text.n is module util.text. Start that file with `register library.words;` to name it library.words.text.
+# `using library.words.text;` opens its members; `using library.words;` lets you write text.Member(...).
+# Local using paths discover .n files; external libraries still need references below.
 name = "hello"
 version = "0.1.0"
 # kind = "library"          # default: a program when main.n exists, a library otherwise
@@ -65,6 +71,7 @@ version = "0.1.0"
 # target = "netstandard2.0"     # default: the compiler's .NET; or net8.0, netstandard2.1, net48, ...
 
 [references]
+# Paths below are relative to this project. Add a library here before using its modules.
 # assemblies = ["lib/Engine.dll"]
 # projects = ["../engine"]
 # packages = { "Newtonsoft.Json" = "13.0.3" }
@@ -87,6 +94,16 @@ version = "0.1.0"
 
 The sources are not listed. They are every `.n` file under the folder, except `out/`, folders whose name starts with
 a dot, `bin/`, `obj/`, and folders that hold a project of their own.
+
+For example, add `util/text.n`, declare `public Shout(s : string) : string { s.ToUpper() }`, then write
+`using util.text;` in `main.n` and call `Shout("hello")`. Run `ncc run` again: the new file is included automatically.
+To move that file without changing callers, first give it a logical folder with `register library.words;` and change
+the caller to `using library.words.text;`. After that it may move anywhere under the project root with its name
+`text.n` intact. `using library.words;` instead keeps the file name in calls: `text.Shout("hello")`.
+
+`ncc build` and `ncc run` require a `.nproj` file; when it is missing, they explain how to create one with `ncc init`.
+For a standalone source, `ncc file.n` still works without a project. It warns when no `.nproj` exists and resolves local `using` paths beside each source file, including transitive
+imports. Scripts use the same resolution without the warning.
 
 Settings the file does not know are errors, not ignored, and every error points at its line and column:
 

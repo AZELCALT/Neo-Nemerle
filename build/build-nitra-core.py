@@ -10,6 +10,7 @@ import json
 import pathlib
 import shutil
 import subprocess
+from tooling import net10_csc, net10_runtime
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -86,10 +87,7 @@ if not native_compiler.is_file():
 if not native_compiler.is_file():
     raise FileNotFoundError('Native bootstrap is missing its Nitra compiler')
 prefix = 'Integrated.' if a.snapshot == 'Nitra' else ''
-runtime_rows = [line.split() for line in subprocess.check_output(
-    ['dotnet', '--list-runtimes'], text=True).splitlines() if line.startswith('Microsoft.NETCore.App ')]
-row = max(runtime_rows, key=lambda r: tuple(int(v) for v in r[1].split('.')))
-runtime = pathlib.Path(row[2].strip('[]')) / row[1]
+runtime = net10_runtime()
 references = ['System.Collections.Immutable', 'System.Xml.XDocument', 'System.Xml.ReaderWriter',
               'System.Xml.XmlDocument', 'System.Linq', 'System.Threading.Thread', 'System.Drawing.Primitives']
 report = {'full_integration_complete': False, 'bootstrap_only': True, 'stages': [],
@@ -141,8 +139,7 @@ for label, name, dependencies in stages:
     command += ['-r:' + str(runtime / (n + '.dll')) for n in references]
     command += ['-r:' + str(output / (prefix + n + '.dll')) for n in dependencies]
     if csharp:
-        sdk, sdk_root = subprocess.check_output(['dotnet', '--list-sdks'], text=True).splitlines()[-1].split(' ', 1)
-        csc = pathlib.Path(sdk_root.strip('[]')) / sdk / 'Roslyn/bincore/csc.dll'
+        csc = net10_csc()
         support = output / (prefix + name + '.Support.dll')
         response = work / (label + '-support.rsp')
         options = ['-nologo', '-nostdlib+', '-target:library', '-out:"' + str(support) + '"']

@@ -101,6 +101,14 @@ using Nemerle.ProjectCommands;
       Manager = ManagerClass(Options);
       Manager.InitOutput(Console.Out);
       parse_command_line();
+      unless (Options.Sources.IsEmpty)
+      {
+        def directory = IO.Path.GetDirectoryName(IO.Path.GetFullPath(Nemerle.Compiler.AST.Location.GetFileName(Options.Sources.Head.FileIndex)));
+        def project = Nemerle.Compiler.project.Project.FindUpward(directory);
+        when (Options.SourceRoot == null) Options.SourceRoot = if (project == null) directory else IO.Path.GetDirectoryName(project);
+        when (project == null)
+          Console.Error.WriteLine("warning: no .nproj build project found; compiling standalone sources with local using resolution (ncc init creates a project)");
+      }
       plan_launcher();
       when (Options.ParseGrammarSpaces) Manager.InitOutput(Console.Error);
 

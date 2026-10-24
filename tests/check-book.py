@@ -59,12 +59,13 @@ def check(chapter, line, tags, code, expected, folder):
         extra += [arg.replace('{toolchain}', str(T)).replace('{chapter}', str(folder)) for arg in m.group(1).split()]
     if kind == 'script':
         for dll in folder.glob('*.dll'): shutil.copy2(dll, root / dll.name)   # libraries and script kinds of the chapter
-        r = subprocess.run([str(T / 'nscript'), 'run', str(paths[0]), '--no-cache'], cwd=root, capture_output=True, text=True)
+        r = subprocess.run(['dotnet', str(T / 'nscript.exe'), 'run', str(paths[0]), '--no-cache'], cwd=root, capture_output=True, text=True)
         return r.returncode == 0 and (expected is None or r.stdout.strip() == expected.strip()), r.stdout + r.stderr
     library = kind.startswith('lib=')
     output = folder / (kind[4:] + '.dll') if library else root / 'main.exe'
     sources = [p for p in paths if p.suffix == '.n']
-    command = [str(T / 'ncc'), *map(str, sources), '-source-root:' + str(root), '-out:' + str(output), '-no-color', *extra]
+    command = ['dotnet', str(T / 'ncc.exe'), '-target-references:' + str(a.references.resolve()),
+               *map(str, sources), '-source-root:' + str(root), '-out:' + str(output), '-no-color', *extra]
     if library: command.insert(-len(extra) if extra else len(command), '-target:library')
     r = subprocess.run(command, cwd=root, capture_output=True, text=True)
     diagnostics = r.stdout + r.stderr
@@ -80,7 +81,8 @@ def check(chapter, line, tags, code, expected, folder):
         for f in T.iterdir():
             if f.is_file() and f.suffix in {'.dll', '.json', '.nitrametadata'} and not (root / f.name).exists():
                 shutil.copy2(f, root / f.name)
-        (root / 'references').symlink_to(T / 'references', target_is_directory=True)
+        # Copying also works on Windows without Developer Mode or symlink privileges.
+        shutil.copytree(a.references.resolve(), root / 'references')
     shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'main.runtimeconfig.json')
     r = subprocess.run(['dotnet', str(output)], cwd=root, capture_output=True, text=True, timeout=60)
     ok = r.returncode == 0 and (expected is None or r.stdout.rstrip() == expected.rstrip())

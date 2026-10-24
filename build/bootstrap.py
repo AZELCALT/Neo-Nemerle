@@ -12,6 +12,7 @@ Steps (each logs to <output>/logs/<step>.log):
 With --update-boot, boot/coreclr is replaced by the result, but only when every step passed.
 """
 import argparse, os, pathlib, re, shutil, subprocess, sys, time
+from tooling import artifact_path
 
 repo = pathlib.Path(__file__).resolve().parents[1]
 build, tests = repo / 'build', repo / 'tests'
@@ -34,7 +35,10 @@ p.add_argument('--output', type=pathlib.Path, default=repo / 'out/bootstrap', he
 p.add_argument('--quick', action='store_true', help='fast suites only (no Nitra suites, no differential)')
 p.add_argument('--no-comparison', action='store_true', help='skip the Nitra differential (the slowest suite)')
 p.add_argument('--update-boot', action='store_true', help='replace boot/coreclr with the result when everything passed')
+p.add_argument('--build-only', action='store_true', help='build the toolchain and tools without running the test suites (installer performs smoke checks)')
 a = p.parse_args()
+if a.build_only and a.update_boot:
+    p.error('--build-only cannot be combined with --update-boot; replacing the bootstrap requires the test suites')
 boot = a.boot.resolve()
 refs = (a.references or default_references()).resolve()
 out = a.output.resolve()
@@ -81,7 +85,7 @@ def finish():
         for f in keep:
             (shutil.copytree if f.is_dir() else shutil.copy2)(f, target / f.name)
         print('\nboot/coreclr updated from', toolchain)
-    print('\nAll steps passed. Toolchain:', toolchain)
+    print('\n' + ('Build completed (test suites skipped). Toolchain:' if a.build_only else 'All steps passed. Toolchain:'), toolchain)
     sys.exit(0)
 
 
@@ -93,13 +97,13 @@ shutil.copytree(boot, seed)
 step('platform', [py, build / 'build-coreclr-platform.py', '--toolchain', seed, '--references', refs])
 # 2. compiler, two stages from the seed
 text = step('compiler', [py, build / 'build-coreclr-toolchain.py', '--bootstrap', seed, '--references', refs])
-stage2 = pathlib.Path(re.findall(r'Verified CoreCLR source toolchain: (\S+)/ncc\.exe', text)[-1])
+stage2 = artifact_path(text, 'Verified CoreCLR source toolchain: ').parent
 shutil.copytree(stage2, toolchain)
 if not (toolchain / 'references').exists(): shutil.copytree(boot / 'references', toolchain / 'references')
 # 3. Nitra, built by the new compiler; the previous Nitra compiler (boot) generates its grammars
 text = step('nitra', [py, build / 'build-nitra-core.py', '--snapshot', 'Nitra', '--bootstrap', toolchain,
                       '--native-bootstrap', boot, '--references', refs])
-nitra = pathlib.Path(re.findall(r'(/tmp/nemerle-nitra-core-\w+/output)', text)[-1])
+nitra = artifact_path(text, 'Bootstrap artifacts (not an integrated grammar toolchain): ')
 for f in nitra.glob('Integrated.*'): shutil.copy2(f, toolchain / f.name)
 # 4. tools
 shutil.copy2(repo / 'doc/assets/logo/nemerle-128.png', toolchain / 'nemerle-icon.png')  # the runtime package's icon
@@ -116,8 +120,12 @@ suites = [
     ('targets', ['check-targets.py', '--toolchain', T]),
     ('debugger', ['check-debugger.py', '--toolchain', T]),
     ('installers', ['check-installers.py']),
+    ('build-tooling', ['check-build-tooling.py']),
+    ('windows-install-policy', ['check-windows-install.py']),
+    ('file-icons', ['check-file-icons.py']),
     ('runtime-only', ['check-runtime-only.py', '--compiler', T / 'ncc.exe', '--references', T / 'references']),
     ('grammar-regressions', ['check-grammar-regressions.py', '--toolchain', T, '--references', R]),
+    ('indentation', ['check-indentation.py', '--toolchain', T, '--references', R]),
     ('scripting', ['check-scripting.py', '--toolchain', T, '--references', T / 'references']),
     ('type-flow', ['check-type-flow.py', '--toolchain', T]),
     ('runtime-compilation', ['check-runtime-compilation.py', '--toolchain', T, '--references', T / 'references']),
@@ -141,11 +149,12 @@ if not a.quick:
         ('script-kinds', ['check-script-kinds.py', '--toolchain', T, '--references', R]),
         ('continuation', ['check-continuation.py', '--toolchain', T, '--references', R]),
         ('book', ['check-book.py', '--toolchain', T, '--references', R]),
+        ('script-book-usage', ['check-script-book-usage.py', '--toolchain', T]),
     ]
     if not a.no_comparison:
         suites.append(('nitra-comparison', ['check-nitra-comparison.py', '--toolchain', T, '--references', R,
                                             '--no-benchmarks', '--output', out / 'comparison.json']))
-for name, command in suites:
+for name, command in ([] if a.build_only else suites):
     step(name, [py, tests / command[0], *command[1:]], env={'NITRA_VERIFY': '1'} if name == 'nitra-comparison' else None,
          required=False)
 finish()

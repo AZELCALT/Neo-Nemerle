@@ -6,6 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+from tooling import net10_runtime, verify_strong_name
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--bootstrap', type=pathlib.Path, required=True)
@@ -19,9 +20,7 @@ print('CoreCLR source-build artifacts:', work, flush=True)
 previous = args.bootstrap.resolve()
 # The compiler is every file module under ncc/Nemerle/Compiler (source root ncc).
 sources = sorted(repo.glob('ncc/Nemerle/Compiler/*.n'))
-runtime_rows = [line.split() for line in subprocess.check_output(['dotnet', '--list-runtimes'], text=True).splitlines() if line.startswith('Microsoft.NETCore.App ')]
-selected_runtime = max(runtime_rows, key=lambda row: tuple(int(v) for v in row[1].split('.')))
-runtime = pathlib.Path(selected_runtime[2].strip('[]')) / selected_runtime[1]
+runtime = net10_runtime()
 # Explicit references to implementation assemblies used by the source compiler.
 # Output contracts are independently bound using --references.
 names = ['System.Linq', 'System.Collections.Specialized', 'System.ComponentModel.Primitives',
@@ -41,7 +40,7 @@ def build(label, compiler, source_files, output, references, key, extra=()):
         result = subprocess.run(command, cwd=repo, stdout=stream, stderr=subprocess.STDOUT)
     if result.returncode:
         print(log.read_text(), flush=True); raise SystemExit(result.returncode)
-    subprocess.run(['sn', '-vf', str(output)], check=True, stdout=subprocess.DEVNULL)
+    verify_strong_name(output)
     print('PASS:', label, flush=True)
 
 # The standard macros (file modules under macros/) are built first, by the bootstrap compiler with its own macros,

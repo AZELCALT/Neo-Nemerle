@@ -288,6 +288,40 @@ public sealed class ScriptHost
     }
     catch { | error is ScriptDependencyException => return CompilationResult(null, array[error.Diagnostic]); }
 
+    // Resolve local .n imports with the core compiler before choosing an artifact cache entry.
+    // Keep snapshots so the fingerprint and the emitted program use exactly the same dependency text.
+    mutable localSources : list[ISource] = [];
+    lock (gate)
+    {
+      def previous = ManagerClass.Instance;
+      try
+      {
+        def discoveryText = collected.Source.Text.ToCharArray();
+        foreach (directive in collected.UsingDirectives)
+          when (definition.ImportBindings.Exists(b => directive.Name == b.Owner || directive.Name.StartsWith(b.Owner + ".", StringComparison.Ordinal)))
+            for (mutable i = directive.Start; i < directive.Start + directive.Length; i++)
+              unless (discoveryText[i] == '\n' || discoveryText[i] == '\r') discoveryText[i] = ' ';
+        def options = CompilationOptions();
+        ScriptCompilerOptions.Apply(options, definition.CompilerOptions, source.Path);
+        options.SourceRoot = Path.GetDirectoryName(Path.GetFullPath(source.Path));
+        options.TargetReferenceDirectory = definition.TargetReferenceDirectory;
+        options.ReferencedLibraries = NList.FromArray(definition.References.ToArray());
+        options.SharedAssemblies = Shared(definition);
+        options.Sources = [StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), string(discoveryText)) : ISource];
+        def discovery = ManagerClass(options);
+        def errors = List.[ScriptDiagnostic]();
+        discovery.InitOutput(StringWriter());
+        discovery.ErrorOccured += (loc, message) => errors.Add(ScriptDiagnostic(loc.File, loc.Line, loc.Column, message, true));
+        try { discovery.ResolveSourceFiles(); }
+        catch { | error => when (errors.Count == 0) throw error; }
+        when (errors.Count > 0) return CompilationResult(null, errors.ToArray());
+        localSources = options.Sources.Tail.Map(s => StringSource(s.FileIndex, s.GetText()) : ISource);
+        foreach (dependency in localSources)
+          version = version + "|local:" + Location.GetFileName(dependency.FileIndex) + ":" + ClrScriptSupport.Digest(Encoding.UTF8.GetBytes(dependency.GetText()));
+      }
+      catch { | error is IOException => return CompilationResult(null, array[ScriptDiagnostic(source.Path, 1, 1, error.Message, true)]); }
+      finally { ManagerClass.Instance = previous; }
+    }
     def key = if (settings.Cache == null || !cacheable || !definition.Cacheable) null else ScriptFingerprint.Create(source, definition, version);
     when (key != null)
     {
@@ -332,7 +366,7 @@ public sealed class ScriptHost
               definition.PreviousNames[directive.Alias + pair.Key.Substring(directive.Name.Length)] = pair.Value;
         }
       }
-    def result = CompileUncached(ScriptSource(string(sourceText), source.Path), definition, cancellation);
+    def result = CompileUncached(ScriptSource(string(sourceText), source.Path), definition, cancellation, localSources);
     _ = definition.References.RemoveAll(path => path.StartsWith(graph.Directory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
     when (result.Success) { result.Script.Source = source; result.Script.ImportedScripts.AddRange(definition.ImportBindings); result.Script.Imports.AddRange(collected.Imports); foreach (pair in collected.Aliases) result.Script.Aliases.Add(pair.Key, pair.Value); result.Script.Diagnostics.AddRange(result.Diagnostics); }
     when (result.Success && key != null)
@@ -368,7 +402,7 @@ public sealed class ScriptHost
     ScriptSource(string(text), source.Path)
   }
 
-  CompileUncached(source : ScriptSource, definition : ScriptDefinition, cancellation : CancellationToken) : CompilationResult
+  CompileUncached(source : ScriptSource, definition : ScriptDefinition, cancellation : CancellationToken, localSources : list[ISource]) : CompilationResult
   {
     lock (gate)
     {
@@ -382,6 +416,8 @@ public sealed class ScriptHost
       {
         def options = CompilationOptions();
         options.TargetIsLibrary = true; options.TargetIsSet = true;
+        options.SourceRoot = Path.GetDirectoryName(Path.GetFullPath(source.Path));
+        options.AutoResolveSources = false;
         options.IgnoreConfusion = true; options.ProgressBar = false; options.ColorMessages = false;
         options.TargetReferenceDirectory = definition.TargetReferenceDirectory;
         ScriptCompilerOptions.Apply(options, definition.CompilerOptions, source.Path);
@@ -478,7 +514,7 @@ public sealed class ScriptHost
         foreach (assembly in options.SharedAssemblies)
           when (assembly.Location != "" && !references.Contains(assembly.Location)) references.Add(assembly.Location);
         options.ReferencedLibraries = NList.FromArray(references.ToArray());
-        options.Sources = NList.FromArray(array[StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), source.Text) : ISource]);
+        options.Sources = [StringSource(Location.GetFileIndex(Path.GetFullPath(source.Path)), source.Text) : ISource] + localSources;
         def manager = if (settings.CreateManager != null) settings.CreateManager(options) :> ManagerClass else ManagerClass(options);
         manager.InitOutput(StringWriter());
         manager.ErrorOccured += (loc, message) => diagnostics.Add(ScriptDiagnostic(loc.File, loc.Line, loc.Column, message, true));

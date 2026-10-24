@@ -91,10 +91,10 @@ public class PreParser
 
   public this (lex : LexerBase, env : GlobalEnv) {
     Env = env;
-    when (lex.Manager.Options.Script != null && lex.Manager.Options.Script.DefaultImports != null)
+    when (lex.Manager.Options.Script != null && !lex.Manager.FileModuleRegistry.IsModule(lex.Location.FileIndex) && lex.Manager.Options.Script.DefaultImports != null)
       foreach (name in lex.Manager.Options.Script.DefaultImports)
         Env = Env.AddOpenNamespace(NList.FromArray(name.Split('.')), lex.Location);
-    when (lex.Manager.Options.Script != null)
+    when (lex.Manager.Options.Script != null && !lex.Manager.FileModuleRegistry.IsModule(lex.Location.FileIndex))
       foreach (pair in lex.Manager.Options.Script.PreviousTypeNames)
         Env = Env.AddNamespaceAlias(pair.Key, NList.FromArray(pair.Value.Split('.')), lex.Location);
     lex.Keywords = Env.Keywords;
@@ -420,6 +420,7 @@ public class PreParser
     def parent_begin = parent_stream.Count;
     def current_begin = current_stream.Count;
     mutable currentNsEnv = Env; // GlobalEnv of current namespace
+    mutable registered = false;
 
     def get_qualified_identifier () : list [string] * list [Location]
     {
@@ -446,9 +447,9 @@ public class PreParser
       }
     }
 
-    def get_qualified_tokens () : list [string] * list [Location] * list[Token]
+    def get_qualified_tokens (first : Token = null) : list [string] * list [Location] * list[Token]
     {
-      def tok1 = get_token ();
+      def tok1 = first ?? get_token ();
       match (tok1)
       {
         | Token.Identifier (x) =>
@@ -577,6 +578,23 @@ public class PreParser
       match (tok)
       {
         | Token.Keyword ("using") => parse_using_directive (tok); loop ()
+
+        | Token.Identifier("register") when peek_token() is Token.Identifier =>
+          def (folder, _) = get_qualified_identifier();
+          def end = get_token();
+          unless (end is Token.Semicolon)
+          {
+            Message.Error(end.Location, "register applies to the whole file and ends with `;'; blocks are not allowed");
+            push_back(end);
+          }
+          unless (lexer.Manager.FileModuleRegistry.IsModule(tok.Location.FileIndex)
+               && lexer.Manager.FileModuleRegistry.Name(tok.Location.FileIndex)
+                  == (folder + [System.IO.Path.GetFileNameWithoutExtension(tok.Location.File)]).ToString(".")
+               && parent_stream.Count == parent_begin && current_stream.Count == current_begin)
+            Message.Error(tok.Location, "register must be the first directive of a file module; a file has exactly one logical folder");
+          when (registered) Message.Error(tok.Location, "a file can register exactly one logical folder");
+          registered = true;
+          loop()
 
         | Token.Keyword ("namespace") =>
           // The block is still read so that the rest of the file recovers.

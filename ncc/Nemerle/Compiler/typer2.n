@@ -115,6 +115,7 @@ public class Typer2
 
   public Run() : void
   {
+    PrepareFlowStorage();
     typer.RaiseBeforeStage2();
     
     foreach (parm in current_fun.Parameters)
@@ -147,6 +148,67 @@ public class Typer2
         current_fun.body = FunBody.Typed(e);
         FixupCurrentFunction();
 
+      | _ => ()
+    }
+  }
+
+  /// Typing has finished for the whole scope, including its nested functions. A logical container that receives
+  /// only one type becomes an ordinary CLR local; the others keep object storage. No typing is repeated here.
+  PrepareFlowStorage() : void
+  {
+    def types = SCG.Dictionary.[LocalValue, list[TypeVar]]();
+    def byrefs = SCG.List.[LocalValue * TExpr]();
+    def add(local : LocalValue, type : TypeVar) : void
+    {
+      when (local.Flow != null)
+      {
+        def type = type.DeepFix();
+        mutable known;
+        unless (types.TryGetValue(local, out known)) known = [];
+        unless (known.Exists(t => Nemerle.Compiler.typer_flow.FlowPoint.SameType(t, type)))
+          types[local] = type :: known
+      }
+    }
+    def localOf(e : TExpr) : LocalValue
+    {
+      match (e)
+      {
+        | TExpr.LocalRef(local) => local
+        | TExpr.DebugInfo(e, _) => localOf(e)
+        | _ => null
+      }
+    }
+    match (current_fun.body)
+    {
+      | FunBody.Typed(body) =>
+        ExprWalker().Walk(body, info =>
+          match (info.Node)
+          {
+            | TExpr.DefValIn(local, value, _) when local.Flow != null =>
+              unless (local.Flow.Valueless) add(local, value.Type)
+            | TExpr.Assign(target, value) =>
+              def local = localOf(target);
+              when (local != null) add(local, value.Type)
+            | Parm(kind, value, _, _) when kind != ParmKind.Normal =>
+              def local = localOf(value);
+              when (local != null)
+              {
+                add(local, value.Type);
+                when (local.Flow != null) byrefs.Add((local, value))
+              }
+            | _ => ()
+          });
+        foreach (entry in types)
+          match (entry.Value)
+          {
+            | [one] => entry.Key.SetType(one); entry.Key.Flow.Storage = false
+            | _ => entry.Key.SetType(InternalType.Object)
+          }
+        foreach ((local, value) in byrefs)
+          when (local.Flow.Storage)
+            Message.Error(value.Location,
+              $"`$(local.Name)' has several types in this scope, so its container cannot be passed by ref or out: "
+               "use a local with one type and assign the result back")
       | _ => ()
     }
   }
@@ -1036,6 +1098,19 @@ public class Typer2
                 | _ => Nemerle.Compiler.UtilMacros.ice()
               }
 
+            | _ when decl.Flow != null =>
+              if (ctx %&& Context.NeedLValue)
+              {
+                expr.ty = decl.Type;
+                null
+              }
+              else if (!expr.Type.Fix().Equals(decl.Type.Fix()))
+              {
+                def kind = if (decl.Type.TryRequire(expr.Type)) ConversionKind.UpCast() else ConversionKind.DownCast(false);
+                TExpr.TypeConversion(expr.Location, expr.Type,
+                  TExpr.LocalRef(expr.Location, decl.Type, decl), expr.Type, kind)
+              }
+              else null
             | _ => null
           }
 
@@ -1547,6 +1622,7 @@ public class Typer2
           name.Register();
           // goto is allowed inside value definition, because
           // we do the store at the end anyway
+          def val = if (name.Flow != null && name.Flow.Valueless) TExpr.DefaultValue(name.Type) else val;
           def val = Walk(ctx & Context.AllowGotoAndAllThrows, val);
           def body = Walk(ctx, VoidIfNull(body));
           TExpr.DefValIn(name, val, body)

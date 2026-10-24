@@ -450,7 +450,7 @@ using Nemerle.Compiler.Utility;
         //file = topstream.Location.File;
       }
 
-      when (lex.Manager.Options.Script != null)
+      when (lex.Manager.FileModuleRegistry.IsScriptSource(lex.Location.FileIndex))
         return ParseScript(lex, topstream);
 
       when (lex.Manager.FileModuleRegistry.IsModule(lex.Location.FileIndex))
@@ -656,7 +656,7 @@ using Nemerle.Compiler.Utility;
           match (topstream.Child)
           {
             | Token.Using(newEnv, _, _) =>
-              match (UsingTarget(fileParser.env, newEnv)) { | null => () | name => usings.Add(name) }
+              usings.AddRange(UsingTargets(fileParser.env, newEnv));
               fileParser.env = newEnv;
             | Token.Namespace => () // already diagnosed by the preparser
             | null => ()
@@ -1047,11 +1047,16 @@ using Nemerle.Compiler.Utility;
     }
     
     /// The module a `using a.b;` (or `using X = a.b;`) imports: what it adds to the environment.
-    static UsingTarget(before : GlobalEnv, after : GlobalEnv) : string
+    static UsingTargets(before : GlobalEnv, after : GlobalEnv) : list[string]
     {
-      if (after.OpenNamespaces.Length > before.OpenNamespaces.Length) after.OpenNamespaces.Head.GetDisplayName()
-      else if (after.NamespaceAliases.Length > before.NamespaceAliases.Length) after.NamespaceAliases.Head[1]
-      else null
+      def count = after.NamespaceAliases.Length - before.NamespaceAliases.Length;
+      def added(aliases : list[string * string], remaining : int) : list[string]
+      {
+        if (remaining == 0) [] else aliases.Head[1] :: added(aliases.Tail, remaining - 1)
+      }
+      if (count > 0) added(after.NamespaceAliases, count).Rev()
+      else if (after.OpenNamespaces.Length > before.OpenNamespaces.Length) [after.OpenNamespaces.Head.GetDisplayName()]
+      else []
     }
 
     /// True when a top-level group starts a member declaration rather than a statement. In a script `mutable x = 1`
@@ -1484,7 +1489,7 @@ using Nemerle.Compiler.Utility;
           match (groups.Child)
           {
             | Token.Using(newEnv, _, _) =>
-              match (UsingTarget(parser.env, newEnv)) { | null => () | name => scriptUsings.Add(name); manager.FileModuleRegistry.ScriptUsings.Add(name) }
+              foreach (name in UsingTargets(parser.env, newEnv)) { scriptUsings.Add(name); manager.FileModuleRegistry.ScriptUsings.Add(name) }
               parser.env = GlobalEnv(newEnv, ["mask"]);
             | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
@@ -2295,8 +2300,8 @@ using Nemerle.Compiler.Utility;
               TopDeclaration.Class (locAll, name, mods, typarms, t_extends, members2)
 
             | "module" | "mask" =>
-              when (key == "mask" && Manager.Options.Script == null) FileModuleRegistry.ApplyDefaults(members2);
-              when (key == "mask" && Manager.Options.Script != null)
+              when (key == "mask" && !Manager.FileModuleRegistry.IsScriptSource(startLocation.FileIndex)) FileModuleRegistry.ApplyDefaults(members2);
+              when (key == "mask" && Manager.FileModuleRegistry.IsScriptSource(startLocation.FileIndex))
                 foreach (member in members2)
                   when ((member.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
                     member.modifiers.mods |= NemerleModifiers.Public;
@@ -2318,7 +2323,7 @@ using Nemerle.Compiler.Utility;
             | _ => Nemerle.Compiler.UtilMacros.ice ()
           };
 
-        when (key == "mask" && Manager.Options.Script != null)
+        when (key == "mask" && Manager.FileModuleRegistry.IsScriptSource(startLocation.FileIndex))
           _ = Manager.Options.Script.Masks.Add(td);
 
         InitBodyLocations(td, bodyBracesGroup);
@@ -2790,6 +2795,13 @@ using Nemerle.Compiler.Utility;
             match (get_token ())
             {
               | Token.Identifier (i) as nametok =>
+                // An accessor name is an identifier, like a named-block label.
+                // In a property its trailing indentation colon opens the body.
+                when (i == "get" || i == "set")
+                  match (peek_token()) {
+                    | Token.Operator(":") when peek_second_token() is Token.BracesGroup => shift();
+                    | _ => ()
+                  }
                 def genLoc = nametok.Location.AsGenerated();
 
                 Nemerle.Compiler.UtilMacros.locate (loc2,
@@ -3160,6 +3172,10 @@ using Nemerle.Compiler.Utility;
                 match (i)
                 {
                   | "remove" | "add" =>
+                    match (peek_token()) {
+                      | Token.Operator(":") when peek_second_token() is Token.BracesGroup => shift();
+                      | _ => ()
+                    }
                     if (i == "remove")
                       unless (remove == null)
                         Message.Error (nametok.Location, "event cannot have multiple remove methods");

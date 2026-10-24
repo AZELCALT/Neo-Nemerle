@@ -45,6 +45,10 @@ public class PreParserIndent : PreParser {
   mutable last_token_was_semicolon : bool;
   
   mutable force_brace_after_newline : bool;
+  mutable raw_token : Token;
+  mutable colon_block_pending : bool;
+  mutable colon_block_location : Location;
+  mutable line_tokens : list[Token] = [];
   indent_strings : Stack [string] = Stack (20);
   tokens_pending : Queue [Token] = Queue ();
 
@@ -70,12 +74,46 @@ public class PreParserIndent : PreParser {
 
   handle_real_token (lexer_tok : Token) : void
   {
+    def before = line_tokens;
+    unless (lexer_tok is Token.Comment)
+      line_tokens = lexer_tok :: line_tokens;
     unless (lexer_tok is Token.EndOfFile)
       had_some_real_input = true;
 
     last_token_was_semicolon = lexer_tok is Operator (";");
 
     match (lexer_tok) {
+      | Token.Operator (":") when indentation_syntax_active =>
+        // A trailing colon owns the next indented block. A colon followed
+        // by a token on this line remains an ordinary type annotation.
+        def next_token () {
+          match (lexer.GetToken ()) {
+            | Token.Comment => next_token ()
+            | t => t
+          }
+        }
+        def next = next_token ();
+        match (next) {
+          | Token.Indent =>
+            // `name: body` is Nemerle's existing named-block expression.
+            // It needs its colon as well as the generated body braces.
+            match (before) {
+              | [Token.Identifier]
+              | Token.Identifier :: Token.Operator("=") :: _ =>
+                tokens_pending.Push (lexer_tok);
+              | _ => ()
+            }
+            colon_block_pending = true;
+            colon_block_location = lexer_tok.Location;
+            raw_token = next;
+          | Token.EndOfFile =>
+            throw PreParserException (lexer_tok.Location,
+              "expected an indented block after ':'");
+          | _ =>
+            tokens_pending.Push (lexer_tok);
+            handle_real_token (next);
+        }
+
       | Token.EndOfFile =>
         insertLocation = lexer_tok.Location;
 
@@ -168,7 +206,12 @@ public class PreParserIndent : PreParser {
     }
     else {
       try {
-        match (lexer.GetToken ()) {
+        def next = if (raw_token != null) {
+          def t = raw_token;
+          raw_token = null;
+          t
+        } else lexer.GetToken ();
+        match (next) {
           | Token.Indent as t =>
             if (indentation_syntax_active) {
               //Message.Debug (insertLocation, "Calling get_token_after_indent ()");
@@ -208,12 +251,26 @@ public class PreParserIndent : PreParser {
       | Token.Comment =>
         get_token_after_indent (lexer.GetToken (), new_indent)
 
+      | _ when colon_block_pending =>
+        colon_block_pending = false;
+        when (tok is Token.EndOfFile || new_indent.Length <= CurrentIndent.Length)
+          throw PreParserException (colon_block_location,
+            "expected an indented block after ':'");
+        unless (new_indent.StartsWith (CurrentIndent))
+          throw PreParserException (tok.Location, "inconsistent indentation");
+        indent_strings.Push (new_indent);
+        tokens_pending.Push (Token.BeginBrace (colon_block_location, true));
+        line_tokens = [];
+        handle_real_token (tok);
+        get_token ()
+
       | _ when force_brace_after_newline =>
         force_brace_after_newline = false;
         tokens_pending.Push (Token.BeginBrace (insertLocation, true));
         get_token_after_indent (tok, new_indent)
 
       | _ =>
+        line_tokens = [];
         // If we have not unindented
         if (new_indent.Length >= CurrentIndent.Length) {
           //Message.Debug ($ "ni=$(display_space(new_indent)) ci=$(display_space(CurrentIndent))");

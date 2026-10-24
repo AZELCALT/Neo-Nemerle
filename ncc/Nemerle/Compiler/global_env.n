@@ -736,9 +736,22 @@ public class GlobalEnv
 
   public AddOpenNamespace (ns : list [string], loc : Location) : GlobalEnv
   {
-    when (Manager.Options.FileModules && Manager.FileModuleRegistry.IsDirectory(ns)
-          && !Manager.FileModuleRegistry.HasClrNamespace(ns))
-      Message.Error(loc, "import a file module, not its containing directory: " + ns.ToString("."));
+    def resolved = Manager.FileModuleRegistry.ResolveUsing(ns, loc);
+    when (Manager.FileModuleRegistry.IsDirectory(resolved))
+    {
+      mutable opened = AddOpenNamespace([nameTree.ExactPath(resolved)], loc);
+      foreach (name in Manager.FileModuleRegistry.FolderModules(resolved, loc))
+      {
+        def parts = NString.Split(name, '.');
+        opened = opened.AddNamespaceAlias(parts.Last, parts, loc);
+      }
+      return opened;
+    }
+    when (resolved != ns)
+    {
+      def opened = AddOpenNamespace([nameTree.ExactPath(resolved)], loc);
+      return if (ns.Length == 1) opened.AddNamespaceAlias(ns.Head, resolved, loc) else opened;
+    }
     match (ns) {
       | head :: tail =>
         mutable possible_expansions = [nameTree.ExactPath (ns)];
@@ -775,9 +788,10 @@ public class GlobalEnv
     CreateExtended (new_opened, current_namespace, namespace_aliases, exts)
   }
 
-  public AddNamespaceAlias (short_name : string, long_name : list [string],
+  public AddNamespaceAlias (short_name : string, mutable long_name : list [string],
                               loc : Location) : GlobalEnv
   {
+    long_name = Manager.FileModuleRegistry.ResolveUsing(long_name, loc);
     when (Manager.Options.FileModules && Manager.FileModuleRegistry.IsDirectory(long_name)
           && !Manager.FileModuleRegistry.HasClrNamespace(long_name))
       Message.Error(loc, "alias a file module, not its containing directory: " + long_name.ToString("."));

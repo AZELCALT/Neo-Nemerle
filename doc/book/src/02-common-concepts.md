@@ -5,6 +5,10 @@
 The examples open `System.Console` with `using System.Console;`, so `WriteLine` is short for
 `System.Console.WriteLine`. Without that line, write the full name.
 
+These examples use braces for blocks. You can also opt into
+[`#pragma indent` and colon-led blocks](appendix-syntax.md#indented-blocks),
+where indentation determines the body of each block.
+
 `def` binds a name to a value. The binding can't change:
 
 ```nemerle
@@ -124,8 +128,16 @@ System.Console.WriteLine(doubled(3))
 ```
 
 ```text
-`value' can be string or int here, and this does not fit it as string
+this does not fit `value' when it is string: `value' is int or string here (int from line 3, string from line 4)
 ```
+
+The error names the types the value can be at that point and the lines that give it each, and it goes on with the
+check to write: `match (value) { | v is int => ... | v is string => ... }`.
+
+The value is stored as its one type where its type never changes. Where it does, it is kept as an object, so a value
+type assigned to it (an `int`, a `double`) is boxed. In a loop or a lambda, which may run many times, the compiler
+warns (`N10014`, which `-nowarn:10014` turns off): give the value one type, or write `mutable total : object` to say
+it is meant to be kept as an object.
 
 A `mutable` with a type written down (`mutable count : int = 0`) keeps that type. One written without a value
 (`mutable total;`) is *NotYet* until the code gives it one: reading it where some way to the read has not assigned

@@ -571,7 +571,7 @@ public module Checker
           lexer.Keywords = env(fileIndex).Keywords;
           mutable chain = [];
           mutable dotted = false;
-          mutable token = lexer.GetToken();
+          mutable token : Token = lexer.GetToken();
           while (!(token is Token.EndOfFile))
           {
             match (token)
@@ -661,7 +661,7 @@ public module Checker
                 def fileIndex = Location.GetFileIndex(path);
                 def lexer = LexerString(manager, text, Location(fileIndex, 1, 1));
                 lexer.Keywords = if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex).Keywords else manager.CoreEnv.Keywords;
-                mutable token = lexer.GetToken();
+                mutable token : Token = lexer.GetToken();
                 while (!(token is Token.EndOfFile))
                 {
                   match (token)

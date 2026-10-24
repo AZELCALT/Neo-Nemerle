@@ -121,7 +121,7 @@ public sealed class DefaultParser : IParser
     // Grammar and space blocks are part of the language: a file containing one switches the compilation to the
     // Nitra source path (all sources are indexed once); files without them are parsed as before.
     // Scopes and dials count too, so a source using only those (a plugin script of a host's spaces) takes the path.
-    when(manager.Options.NitraSources!=null || NitraSourceScan.FindConstruct(source,manager.ContinuesScopes).FileIndex!=0)
+    when(manager.Options.NitraSources!=null || NitraSourceScan.FindConstruct(source,manager.ContinuesScopes,manager.Options.IndentationSyntax).FileIndex!=0)
     {
       try
       {

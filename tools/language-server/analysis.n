@@ -215,7 +215,7 @@ public sealed class Analyzer
     {
       def lexer = LexerFile(manager, fileIndex, text, true);
       lexer.Keywords = if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex).Keywords else manager.CoreEnv.Keywords;
-      mutable token = lexer.GetToken();
+      mutable token : Token = lexer.GetToken();
       mutable guard = 0;
       while (!(token is Token.EndOfFile) && guard < 1000000)
       {
@@ -320,7 +320,7 @@ public sealed class Analyzer
   ProvideHost(m : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost
   {
     def key = String.Join("\u0000", definitions.Select(d => d.Source));
-    mutable host;
+    mutable host : INitraNativeSourceHost;
     unless (hosts.TryGetValue(key, out host))
     {
       host = NitraEditorIndex.CreateNativeHost(m, definitions);

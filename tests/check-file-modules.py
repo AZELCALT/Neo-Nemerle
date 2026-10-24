@@ -118,10 +118,10 @@ selected = source('bad.n', 'Make() : alpha.ForeignOnly { null }')
 compile_files([alpha, beta, selected], 'fallback.dll', False, 'ForeignOnly',
               extra=['-r:' + str(work / 'Foreign.dll')])
 
-# Directory imports must not expose sibling source modules.
+# Directory imports expose file names for qualified use, alongside CLR namespace members.
 directory = source('folder/member.n', 'Value() : int { 5 }')
 leak = source('bad.n', 'using folder; Run() : int { member.Value() }')
-compile_files([directory, leak], 'directory-leak.dll', False, 'file module')
+compile_files([directory, leak], 'directory-open.dll')
 consumer = source('reader.n', 'using folder.member; Run() : int { Value() }')
 compile_files([directory, consumer], 'directory-ok.dll')
 # A module's own directory is not opened either: a sibling file is reached by its path.
@@ -136,7 +136,7 @@ sibling_type_ok = source('folder/other.n', 'using folder.boxes; public class Use
 compile_files([boxes, sibling_type_ok], 'sibling-type-ok.dll')
 clr_directory = source('reader.n', 'using folder; Run() : int { ClrApi.Value() }')
 compile_files([directory, clr_directory], 'clr-directory.dll', extra=['-r:' + str(work / 'Foreign.dll')])
-compile_files([directory, leak], 'clr-directory-leak.dll', False, 'member',
+compile_files([directory, leak], 'clr-directory-files.dll',
               extra=['-r:' + str(work / 'Foreign.dll')])
 alias_leak = source('bad.n', 'using Dir = folder; Run() : int { Dir.member.Value() }')
 compile_files([directory, alias_leak], 'directory-alias-leak.dll', False, 'member',
@@ -1117,7 +1117,7 @@ for name, text, expected in cases + [(n + '-debug', t, e) for (n, t, e) in cases
     if got != expected: raise RuntimeError('top-level state ' + name + ': ' + ' '.join(got))
 source('init/main.n', 'def y = 5;\ndef y = y.ToString();\nBad() : int { y + 1 }\nSystem.Console.WriteLine(Bad());')
 run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-bad.exe'), '-no-color', *modern_references],
-    False, "`y' is a top-level value of several types (int, string)")
+    False, "`y' is int or string (declared at lines 1, 2): it is a top-level value, and this code can run at any time")
 # a user's macro in the top-level code expands once (the inference pass that types a quiet copy of the code leaves
 # it for the real code): a macro that counts its expansions sees one
 counter = work / 'counter'; counter.mkdir()

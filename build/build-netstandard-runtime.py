@@ -10,6 +10,7 @@ nuget.org (NETStandard.Library 2.0.3), downloaded once into the same cache `ncc 
 without the cache, the step is skipped: the toolchain then builds for its own .NET only, and says so.
 """
 import argparse, io, os, pathlib, re, shutil, subprocess, sys, urllib.request, zipfile
+from tooling import net10_runtime
 
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
@@ -42,9 +43,7 @@ version = subprocess.run(['dotnet', str(tc / 'ncc.exe'), '-version'],
                          capture_output=True, text=True).stderr
 match = re.search(r'version (\d+\.\d+\.\d+\.\d+)', version)
 if not match: sys.exit('cannot read the toolchain version: ' + version)
-rows = [line.split() for line in subprocess.check_output(['dotnet', '--list-runtimes'], text=True).splitlines() if line.startswith('Microsoft.NETCore.App ')]
-row = max(rows, key=lambda r: tuple(int(v) for v in r[1].split('.')))
-runtime = pathlib.Path(row[2].strip('[]')) / row[1]
+runtime = net10_runtime()
 out = tc / 'netstandard2.0'
 out.mkdir(exist_ok=True)
 command = ['dotnet', str(tc / 'ncc.exe'), *map(str, sorted((repo / 'lib/Nemerle').rglob('*.n'))),

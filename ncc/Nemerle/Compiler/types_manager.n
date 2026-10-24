@@ -821,6 +821,14 @@ using Nemerle.Compiler.Utility;
             | Some(content) =>
               field.SetStateType(FixedType.Class(content, []));
               Manager.StateStorage[key] = "content";
+              // (the types its content can be, said on the field: other languages see a Content)
+              when (Manager.CoreEnv.LookupType(["Nemerle", "Scopes", "ContentTypesAttribute"]) is Some(_))
+              {
+                def distinct = System.Collections.Generic.List.[FixedType]();
+                foreach (t in types) unless (distinct.Exists(d => d.Equals(t))) distinct.Add(t);
+                def typeofs = distinct.ConvertAll(t => <[ typeof($(t : typed)) ]>).ToArray().NToList();
+                field.GetModifiers().AddCustomAttribute(<[ Nemerle.Scopes.ContentTypes(..$typeofs) ]>)
+              }
               _ = Manager.ModuleBindings.Remove(key);
             | None => ()
           }

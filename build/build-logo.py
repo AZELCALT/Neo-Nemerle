@@ -14,11 +14,13 @@ logo = repo / 'doc/assets/logo'
 images = repo / 'tools/language-server/vscode/images'
 svg = (logo / 'nemerle.svg').read_text()
 script = (logo / 'nemerle-script.svg').read_text()
+project = (logo / 'nemerle-project.svg').read_text()
 
 # the extension's file icons are the SVGs themselves
 images.mkdir(parents=True, exist_ok=True)
 (images / 'nemerle.svg').write_text(svg)
 (images / 'nemerle-script.svg').write_text(script)
+(images / 'nemerle-project.svg').write_text(project)
 
 def render(source, path, width, height=None):
     with tempfile.NamedTemporaryFile('w', suffix='.svg', delete=False) as f: f.write(source)

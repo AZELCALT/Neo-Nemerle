@@ -46,7 +46,9 @@ using Nemerle.Compiler.Utility;
     public mutable RootNamespace : string;
     /// A source file is its namespace (root-relative path); `namespace` blocks are rejected. Script compilation
     /// has its own scope.
-    public FileModules : bool { get { Script == null } }
+    public FileModules : bool { get { Script == null || Sources.Length > 1 } }
+    /// Resolve named .n imports beside each importing source before parsing.
+    public mutable AutoResolveSources : bool = true;
     /// Write the continuation section (.nemir, doc/CONTINUATION.md) into outputs that define grammars or macros;
     /// -no-continuation-section turns it off.
     public mutable ContinuationSection : bool = true;
@@ -954,7 +956,7 @@ using Nemerle.Compiler.Utility;
         // level 0
         array [],
         // level 1
-        array [183, 184, 458, 602, 626, 1633, 1696, 5000, 10010, 10011, 10012, 10013],
+        array [183, 184, 458, 602, 626, 1633, 1696, 5000, 10010, 10011, 10012, 10013, 10014],
         // level 2
         array [108, 114, 162, 251, 252, 253, 618],
         // level 3
@@ -988,6 +990,7 @@ using Nemerle.Compiler.Utility;
           (10009, "using a constant object reference directly (as first class value)"),
           (10010, "compilation options `-debug+' and `-optimize' has poor compatibility: `-debug+' suppresses runtime optimizations"),
           (10011, "comparing a value with reference equality"),
+          (10014, "a value whose type changes boxes a value type in a loop or a lambda, each time it runs"),
         ];
 
         def sb = StringBuilder ();

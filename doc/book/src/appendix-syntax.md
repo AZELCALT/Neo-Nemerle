@@ -23,7 +23,54 @@
 | `space G { ... }` | top-level code in a grammar's language (a logical file) |
 | `scope A;` | a scope shared by the program and its spaces (`scope.A.x` reads a binding) |
 | `[Attr] ...` | attribute or attribute macro |
-| `using a.b;` / `using X = a.b;` | open a module or namespace / alias it |
+| `register symbol;` | first directive: give the whole file a logical folder; `file.n` becomes `symbol.file` |
+| `using symbol.file;` | open a file module's members; local `.n` dependencies are discovered automatically |
+| `using path.to.folder;` | make immediate file names available for qualified use, such as `file.Member(...)` |
+| `using System;` / `using X = a.b;` | open a CLR namespace / give a module or namespace an alias |
+
+## Indented blocks
+
+Put `#pragma indent` at the start of a file (or pass `-i` to `ncc`) to use
+indentation syntax. A colon at the end of a logical line opens a block; indent
+its body further, and return to an enclosing indentation level to close it.
+There is no fixed number of spaces, but each level must use a consistent prefix.
+Prefer spaces throughout a file rather than mixing spaces and tabs.
+
+```nemerle
+#pragma indent
+Twice(n : int) : int:
+    n * 2
+
+when (true):
+    System.Console.WriteLine(Twice(21))
+System.Console.WriteLine("done")
+```
+
+```text
+42
+done
+```
+
+The trailing colon replaces the opening brace, and dedentation replaces the
+closing brace. Newlines separate statements, so semicolons are optional.
+Blank lines and comment-only lines do not count as a block body. An empty block
+is an error; write `()` on an indented line when a block should do nothing.
+Type annotations such as `n : int` and return types such as `: int` keep their
+usual meaning: only the final colon introduces the block.
+
+`space G:`, plain `space:`, and `space (A, B):` use the same rule. Every
+nonblank content line of the foreign-language body must stay within the body's
+indentation; dedenting ends the space and resumes ordinary Nemerle code. The
+body is passed to its selected grammar with its whitespace intact. A grammar
+declaration and its syntax rules still use the grammar language's own syntax.
+
+Nemerle's named-block expression also keeps its meaning: `finish:` followed
+by an indented body binds the exit function `finish` inside that body.
+
+Explicit `{ ... }`, `( ... )`, `[ ... ]`, and quotation groups keep their usual
+syntax; indentation is ignored inside them. In particular, use braces for nested
+blocks within an explicit brace group. The older form that opens a block on an
+increase in indentation without a colon remains supported for existing code.
 
 ## Expressions
 

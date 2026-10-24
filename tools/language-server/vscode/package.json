@@ -41,9 +41,12 @@
     "languages": [{ "id": "nemerle", "aliases": ["Nemerle", "nemerle"], "extensions": [".n"], "configuration": "./language-configuration.json",
                    "icon": { "light": "./images/nemerle.svg", "dark": "./images/nemerle.svg" } },
                  { "id": "nemerle-script", "aliases": ["Nemerle script"], "extensions": [".ns"], "configuration": "./language-configuration.json",
-                   "icon": { "light": "./images/nemerle-script.svg", "dark": "./images/nemerle-script.svg" } }],
+                   "icon": { "light": "./images/nemerle-script.svg", "dark": "./images/nemerle-script.svg" } },
+                 { "id": "nemerle-project", "aliases": ["Nemerle project"], "extensions": [".nproj"],
+                   "icon": { "light": "./images/nemerle-project.svg", "dark": "./images/nemerle-project.svg" } }],
     "grammars": [{ "language": "nemerle", "scopeName": "source.nemerle", "path": "./syntaxes/nemerle.tmLanguage.json" },
-                 { "language": "nemerle-script", "scopeName": "source.nemerle.script", "path": "./syntaxes/nemerle-script.tmLanguage.json" }],
+                 { "language": "nemerle-script", "scopeName": "source.nemerle.script", "path": "./syntaxes/nemerle-script.tmLanguage.json" },
+                 { "language": "nemerle-project", "scopeName": "source.nemerle.project", "path": "./syntaxes/nemerle-project.tmLanguage.json" }],
     "configuration": {
       "title": "Nemerle",
       "properties": {

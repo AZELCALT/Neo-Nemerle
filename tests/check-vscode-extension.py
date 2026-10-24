@@ -10,6 +10,7 @@ line is found, the .vsix is also installed into a scratch profile."""
 import argparse, json, pathlib, shutil, subprocess, tempfile, zipfile
 p = argparse.ArgumentParser()
 p.add_argument('--vsix', type=pathlib.Path, required=True)
+p.add_argument('--no-editor-install', action='store_true', help='validate the package/server without invoking an installed editor CLI')
 a = p.parse_args()
 w = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-vscode-'))
 print('VS Code extension checks:', w, flush=True)
@@ -18,8 +19,8 @@ with zipfile.ZipFile(a.vsix) as z:
     for required in ('extension.vsixmanifest', '[Content_Types].xml', 'extension/package.json', 'extension/extension.js',
                      'extension/syntaxes/nemerle.tmLanguage.json', 'extension/server/nemerle-lsp.exe',
                      'extension/node_modules/vscode-languageclient/package.json', 'extension/images/icon.png',
-                     'extension/images/nemerle.svg', 'extension/images/nemerle-script.svg',
-                     'extension/syntaxes/nemerle-script.tmLanguage.json'):
+                     'extension/images/nemerle.svg', 'extension/images/nemerle-script.svg', 'extension/images/nemerle-project.svg',
+                     'extension/syntaxes/nemerle-script.tmLanguage.json', 'extension/syntaxes/nemerle-project.tmLanguage.json'):
         if required not in names:
             raise SystemExit('FAILED: the .vsix has no ' + required)
     if not any(n.startswith('extension/server/references/') for n in names):
@@ -40,6 +41,11 @@ assert script['id'] == 'nemerle-script' and script['extensions'] == ['.ns'] and 
 logo = pathlib.Path(__file__).resolve().parents[1] / 'doc/assets/logo'
 assert (ext / 'images/nemerle.svg').read_text() == (logo / 'nemerle.svg').read_text()
 assert (ext / 'images/nemerle-script.svg').read_text() == (logo / 'nemerle-script.svg').read_text()
+project = next(l for l in manifest['contributes']['languages'] if l['id'] == 'nemerle-project')
+assert project['extensions'] == ['.nproj'] and project['icon']['dark'] == './images/nemerle-project.svg'
+assert (ext / 'images/nemerle-project.svg').read_text() == (logo / 'nemerle-project.svg').read_text()
+assert any(g['language'] == 'nemerle-project' and g['scopeName'] == 'source.nemerle.project' for g in manifest['contributes']['grammars'])
+json.loads((ext / 'syntaxes/nemerle-project.tmLanguage.json').read_text())
 assert any(g['language'] == 'nemerle-script' and g['scopeName'] == 'source.nemerle.script' for g in manifest['contributes']['grammars'])
 assert '<Icon>extension/images/icon.png</Icon>' in (w / 'unpacked/extension.vsixmanifest').read_text()
 print('PASS: the .vsix holds the extension, its grammar, its icons, the client library, the server and reference assemblies', flush=True)
@@ -85,7 +91,7 @@ if r.returncode != 0 or '"semanticTokens":true' not in r.stdout:
     raise SystemExit('FAILED: the extension does not start its server\n' + r.stdout + r.stderr)
 print('PASS: the extension starts the server it carries, which answers initialize with ' + r.stdout.strip(), flush=True)
 
-for cli in (pathlib.Path.home() / '.local/opt/bin/codium', shutil.which('codium'), shutil.which('code')):
+for cli in (() if a.no_editor_install else (pathlib.Path.home() / '.local/opt/bin/codium', shutil.which('codium'), shutil.which('code'))):
     if cli and pathlib.Path(cli).exists() and pathlib.Path(cli).read_bytes()[:2] == b'#!':
         profile = w / 'profile'
         r = subprocess.run([str(cli), '--user-data-dir', str(profile / 'data'), '--extensions-dir', str(profile / 'extensions'),

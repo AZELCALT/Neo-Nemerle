@@ -1,19 +1,23 @@
 # Scripts
 
-A script is a Nemerle file run directly, without a build step: `nscript run file.ns`. The design follows Kotlin's
-scripting, and so does the name: as Kotlin scripts are `.kts` files next to `.kt` ones, Nemerle scripts are `.ns` files
-next to `.n` ones. Scripts are ordinary Nemerle, they can declare what they depend on, and libraries can define kinds
-of script with their own base class and imports.
+A script is ordinary Nemerle run with `nscript`, using the same CLR compiler as `ncc`. You do not need a `.nproj`
+or a separate build command. This chapter starts with running files, sharing helpers and saving compiled scripts;
+the later sections cover application-defined script kinds and embedding.
 
-The extension keeps the two apart: a project compiles its `.n` files and leaves `.ns` files alone, and the editor
-shows a script with the yellow logo and checks it as `nscript` compiles it (its kind, its `DependsOn`): its errors show
-while it is edited, with hover, go-to-definition and typed completion as in any other file. `nscript` runs a plain `.n` file too, the same way: that is for running ordinary
-Nemerle directly, wherever that is needed. A `.ns` file is the same job in its own format, a file that is a script and
-nothing else.
+Use `.ns` for files you intend to run as scripts. A project includes its `.n` sources and leaves `.ns` files alone.
+`nscript` can run a plain `.n` file too. In the editor, scripts have a yellow icon and receive diagnostics, hover and
+completion for their dependencies and script kind.
+
+Install the toolchain as described in [Getting started](01-getting-started.md). The commands below assume `nscript`
+is on PATH. From a clone, you can also use `boot/coreclr/nscript` on Linux/macOS, or
+`dotnet boot\coreclr\nscript.exe` on Windows. Running scripts needs .NET 10, not the .NET SDK.
 
 ## Running scripts
 
+Save this as `hello.ns`:
+
 ```nemerle,script
+// file: hello.ns
 def names = ["ada", "alan", "grace"];
 foreach (name in names)
   System.Console.WriteLine($"hello, $name")
@@ -25,6 +29,9 @@ hello, alan
 hello, grace
 ```
 
+Run it from a terminal with `nscript run hello.ns`. The work goes at the top level, in source order; a `Main` method
+is not required. Functions, classes, masks, macros and grammars remain available as in other Nemerle files.
+
 | Command | What it does |
 |---|---|
 | `nscript run file.ns` | compile (cached) and run |
@@ -32,13 +39,79 @@ hello, grace
 | `nscript run-compiled out.dll` | run an artifact without the compiler |
 | `nscript repl` | an interactive session |
 
-Arguments after `--` reach the script as `args`.
+### Arguments and results
 
-A script is a file like any other: it can declare functions, classes, `grammar`s and `space`s. Its top-level code,
-spaces included, is what runs. `nscript` compiles it with the compiler itself (it is the same compiler, in the
-process), so a script is Nemerle as a compiled file is, `await` in its top-level code included: the script's code
-then runs as an async function, and the script ends when it does. Its values follow a file's rules (chapter 7): a
-`mutable` may change type, and the script's functions check a value of several types before they use it.
+Arguments after `--` reach the script as `args : array[string]`. Always use that separator for script arguments,
+particularly ones beginning with `-`. Quote an argument containing spaces in your shell:
+
+```nemerle,script
+// file: greet.ns
+def name = if (args.Length == 0) "world" else args[0];
+System.Console.WriteLine($"Hello, $name!")
+```
+
+```text
+Hello, world!
+```
+
+```sh
+nscript run greet.ns -- "Grace Hopper"
+```
+
+```text
+Hello, Grace Hopper!
+```
+
+`nscript` also prints the script's final expression when it produces a non-null value. This script prints `42`
+without an explicit `WriteLine`:
+
+```nemerle,script
+// file: answer.ns
+def total = 6 * 7;
+(total : int)
+```
+
+```text
+42
+```
+
+A final `WriteLine` returns `void`, so it adds no second result. Use `_ = expression` when you want to discard a
+value. An integer result is printed as a value; it does not become the process exit code. Successful execution
+returns exit code zero. Compilation errors and uncaught exceptions return a nonzero code and diagnostics on stderr.
+In PowerShell inspect `$LASTEXITCODE`; in a POSIX shell inspect `$?`.
+
+The parentheses in `(total : int)` matter: at the top level, bare `total : int` declares a field rather than annotating
+an expression. When returning an already typed value, plain `total` is enough.
+
+### Functions, masks and state
+
+Declare reusable functions as members and call them from the top-level code. A typed `mutable` field is useful for
+state those functions update. A mask groups functions; when qualifying a masked function, include the file owner:
+
+```nemerle,script
+// file: tally.ns
+mutable calls : int = 0;
+mask math
+{
+  public Twice(n : int) : int { calls++; n * 2 }
+}
+System.Console.WriteLine(tally.math.Twice(21));
+System.Console.WriteLine(calls)
+```
+
+```text
+42
+1
+```
+
+The call and the top-level code share `calls`. A second `nscript run tally.ns` starts it at zero again. The usual
+binding, type and visibility rules apply; [Files are modules](07-files-and-modules.md) explains values that change
+type. Persistent interactive state is covered in the [REPL section](#interactive-use-the-repl).
+
+### Async work
+
+Top-level `await` works without adding an async entry point. Await the operation whose result you want before the
+script finishes:
 
 ```nemerle,script
 using System.Threading.Tasks;
@@ -51,9 +124,154 @@ System.Console.WriteLine(answer + 1)
 42
 ```
 
+## Local source files
+
+An ordinary `using` can discover a neighboring `.n` file. No `.nproj` or project warning is involved:
+
+```nemerle,script
+// file: hello.ns
+using helpers;
+System.Console.WriteLine(Greeting("Ada"))
+
+// file: helpers.n
+public Greeting(name : string) : string { $"Hello, $name!" }
+```
+
+```text
+Hello, Ada!
+```
+
+Resolution starts beside each importing file and also checks the source root, so dependencies can import their own
+neighbors. `using util;` makes the immediate files under `util/` available by file name, such as `text.Shout(...)`.
+A registered file uses its logical path: `register library.words;` in `text.n` is opened with
+`using library.words.text;`, or reached as `text` after `using library.words;`.
+
+These `.n` helpers compile into the script's artifact. Their contents participate in its cache key, so editing a
+helper, including one imported through another helper, rebuilds the script. An imported helper may also have async
+top-level code; it finishes before the script uses it. `using` resolves CLR namespaces and referenced libraries too;
+it does not download DLLs or packages. `[assembly: Import("other.ns")]` below remains the way to compose another
+script as a typed child, with its own script context.
+
+### Importing another script
+
+Use `[assembly: Import("file.ns")]` when the dependency is itself a script, with initialization and state of its own.
+Importing it makes its public declarations available through its filename; `using` alone does not load a `.ns` file:
+
+```nemerle,script
+// file: use_counter.ns
+[assembly: Import("counter.ns")]
+System.Console.WriteLine(counter.Next());
+System.Console.WriteLine(counter.Next())
+
+// file: counter.ns
+mutable count : int = 0;
+System.Console.WriteLine("counter ready");
+public Next() : int { count++; count }
+```
+
+```text
+counter ready
+1
+2
+```
+
+Run `nscript run use_counter.ns`. The child initializes before its importer and keeps the same state for both calls.
+Running the root script again starts fresh state. Add `using counter;` if you want to call `Next()` without the owner,
+or use `using C = counter;` and call `C.Next()`. Private declarations stay private. Cyclic imports, duplicate direct
+imports and two children with the same file owner are errors.
+
+| You want to use | Write |
+|---|---|
+| A neighboring ordinary source file | `using helpers;` for `helpers.n` |
+| File names under a physical or logical folder | `using util;`, then `text.Member(...)` |
+| A registered file module | `using library.words.text;` |
+| Another script and its state | `[assembly: Import("helpers.ns")]`, then `helpers.Member(...)` |
+| A CLR namespace or type already referenced | `using System;` or `using System.Console;` |
+| An external assembly | `[assembly: DependsOn("tools.dll")]`, then its normal `using` |
+
+### Which directory a path uses
+
+| Path | Relative to |
+|---|---|
+| `using helpers;` for a local source | the importing file's directory, then the source root |
+| `DependsOn("tools.dll")`, `Import("child.ns")` | the file containing that attribute |
+| A relative feed in `Repository(...)` or `--repository` | the process's current working directory |
+| `File.ReadAllText("input.txt")` and other ordinary .NET file operations | the process's current working directory |
+| Command-line source/output paths, `--cache-dir`, `--history` | the terminal's current directory |
+
+Running `nscript run scripts/report.ns` does not change the current working directory to `scripts/`. Pass data paths
+through `args` or use explicit paths when invoking the same script from different directories. Keep ordinary script
+filenames valid identifiers, such as `daily_report.ns`; a compound suffix such as `deploy.build.ns` needs the script
+kind described [below](#script-kinds).
+
 ## Declaring dependencies
 
-A script lists what it needs at its top, as Kotlin's `@file:` annotations do:
+A script declares external dependencies and configuration with assembly attributes at its top. A local DLL is the
+smallest example. Save `arithmetic.n` and build it with
+`ncc arithmetic.n -target:library -out:arithmetic.dll`:
+
+```nemerle,lib=arithmetic
+// file: arithmetic.n
+public Double(n : int) : int { n * 2 }
+```
+
+Put this script beside `arithmetic.dll` and run `nscript run use_arithmetic.ns`:
+
+```nemerle,script
+// file: use_arithmetic.ns
+[assembly: DependsOn("arithmetic.dll")]
+using arithmetic;
+System.Console.WriteLine(Double(21))
+```
+
+```text
+42
+```
+
+The attribute adds the reference; `using` opens names from it. More than one dependency attribute is allowed.
+
+### NuGet packages
+
+Package requests use an ID and an exact version. For example, save this as `json.ns`:
+
+```nemerle,ignore
+[assembly: DependsOn("Newtonsoft.Json", "13.0.3")]
+using Newtonsoft.Json;
+System.Console.WriteLine(JsonConvert.SerializeObject(array[1, 2, 3]))
+```
+
+```text
+[1,2,3]
+```
+
+Run `nscript run json.ns`. The first run needs the package in the cache, a local feed, or access to the configured
+feed. This network-dependent example is not part of the offline book checks. Package support requires
+`Nemerle.Scripting.NuGet.dll` beside `nscript.exe`; the supplied toolchain includes it. A custom minimal toolchain
+without that adapter can still use local DLL references, but reports that no package resolver is configured.
+
+The default package feed is nuget.org. Add another with `[assembly: Repository("https://my.feed/v3/index.json")]`
+or a local feed with `[assembly: Repository("packages")]`. Versions such as `"13.*"` are not exact requests.
+
+These command-line options are also available before the `--` separator:
+
+| Option | Use |
+|---|---|
+| `--package ID VERSION` | add a package without putting `DependsOn` in the script |
+| `--repository FEED` | add a package feed URL or local folder |
+| `--offline` | resolve packages using available cache/local-feed contents |
+| `--update-lock` | explicitly resolve and record the dependency graph again |
+| `--target-framework TFM` | select package assets for a framework, default `net10.0` |
+| `--runtime RID` | select package/native assets for a runtime, such as `win-x64` |
+
+The resolver records dependency versions and content hashes under the selected cache directory. After an online
+run succeeds, try `nscript run json.ns --offline` to check that the dependencies you need are available locally.
+`--offline` does not install missing packages or restrict network operations performed by your own code. The package
+asset selectors do not change the script engine's requirement for .NET 10. Package build targets are not run, so a
+package that depends on MSBuild steps may need to be used through a normally built .NET library instead.
+
+### Other dependency attributes
+
+For reference, these forms can appear together at the start of a script:
 
 ```nemerle,ignore
 [assembly: DependsOn("tools.dll")]                 // a local library, relative to the script
@@ -63,8 +281,10 @@ A script lists what it needs at its top, as Kotlin's `@file:` annotations do:
 [assembly: CompilerOptions("-define:FAST")]
 ```
 
-A library a script depends on brings everything stored in its continuation section: its grammars, its macros, and the
-helpers those macros use:
+`CompilerOptions` accepts the supported define, warning, optimization and checked-arithmetic switches; it is not an
+unrestricted `ncc` command line. Use dependency attributes for references and the CLI's `compile` command for output.
+
+A referenced Nemerle library can also supply grammars, macros and the helpers they use:
 
 ```nemerle,lib=tools
 // ncc: -r:{toolchain}/Nemerle.Compiler.dll
@@ -99,13 +319,255 @@ space Words { answer }
 42
 ```
 
-## Scripts as plugins
+## Cache and repeated runs
 
-An application that runs scripts can give them its own languages. Its grammars, its scopes and its spaces are stored in
-its section, so a script it runs gets them with no grammar or `scope` declaration of its own. Scope storage belongs
-to the process, so the application and its scripts share the values: the script reads what the application wrote,
-and the application sees what the script writes. A script can also dial into the application's spaces. A file that
-uses only scopes or dials, with no space at all, is looked up the same way.
+`nscript run` normally caches compiled code. A cache hit still executes the script; it does not reuse the previous
+result or its live instance. Code changes, local `.n` helpers, imported scripts and resolved dependency changes
+participate in cache identity. Data read by ordinary runtime code is read again on each execution.
+
+```sh
+nscript run hello.ns --no-cache
+nscript run hello.ns --cache-dir .script-cache
+```
+
+`--no-cache` recompiles and runs instead of using the compiled-code cache. It is useful when diagnosing compile-time
+macro behavior that depends on external state. It does not disable the package cache. `--cache-dir` chooses the base
+directory used for compiled artifacts, packages and the default REPL history. Without it, the CLI uses
+`Nemerle/scripting` under the OS's local application-data directory; on Windows that is normally
+`%LOCALAPPDATA%\Nemerle\scripting`.
+
+## Compiling once and running the artifact
+
+Use `compile` when you want to distribute a script without compiling source on the destination machine:
+
+```sh
+nscript compile greet.ns greet.dll
+nscript run-compiled greet.dll -- Ada
+```
+
+The compile command saves the program without running its top-level code. `run-compiled` runs the saved code; editing
+`greet.ns` afterward does not change that artifact until you compile it again.
+
+Keep these outputs together when copying an artifact:
+
+| Output | Keep it for |
+|---|---|
+| `greet.dll` | the compiled script |
+| `greet.dll.script` | the metadata `run-compiled` needs to load it |
+| `greet.dll.dependencies/`, when produced | bundled libraries and imported scripts |
+| `greet.pdb`, when produced | original source locations in exception stacks |
+
+Keep the base name unchanged when moving the set; the companion paths are recorded relative to it. The destination
+needs .NET 10 and the `nscript` runtime files (`Nemerle.dll`, `Nemerle.Platform.dll`, `Nemerle.Scripting.dll` and the
+runner/configuration files). An installed `nscript` supplies those. Running an artifact does not need the compiler,
+macros, reference assemblies, original sources or the .NET SDK. It does not turn the DLL into a standalone native
+executable. For an artifact of a custom script kind, keep that kind's library discoverable as described below.
+
+## Interactive use: the REPL
+
+Start `nscript repl`. Each successful submission can use previous declarations and results:
+
+```text
+>>> 40 : int
+40
+>>> res0 + 2
+42
+>>> :begin
+... Twice(n : int) : int
+... {
+...   n * 2
+... }
+... :end
+>>> Twice(21)
+42
+>>> :quit
+```
+
+`resN` refers to the value from successful submission `N`, starting at zero. Submission numbers include declarations;
+not every submission produces a result. Unfinished expressions and brackets normally continue automatically. Use
+`:begin` and `:end` when you want to collect a whole submission explicitly.
+
+| Command | Meaning |
+|---|---|
+| `:begin`, `:end` | collect and submit a multiline block |
+| `:history` | list the remembered source entries and their numbers |
+| `:recall N` | display entry `N` without executing it |
+| `:replay` | reset the live session and explicitly execute saved history |
+| `:reset` | clear live declarations and results |
+| `:quit` | leave the REPL |
+
+Choose a history file with `nscript repl --history experiments.history`. Opening it reads the saved source, but does
+not replay it or recreate its values. Use `:history` or `:recall` to inspect it, and `:replay` before adding new
+submissions if you want to continue that saved session. Successful submissions save the current session's source
+chain. History is not a snapshot of CLR objects; replay executes code again, including file writes and other effects.
+
+Earlier statements do not rerun on every submission. New declarations can shadow old ones, while existing functions
+and closures keep their earlier bindings. A compile error adds no declarations. A runtime failure also adds no
+successful history entry, but effects that already happened are not undone. If an imported script changes during a
+session, reset before replacing it; use a new REPL session when changing dependency versions.
+
+## Script kinds
+
+A library can declare a **kind of script**. A class marked `[ScriptDefinition(ext)]`
+becomes the base class of every script whose file name ends in `ext`. The extension is written in its `.n` form and
+covers both: `.build.n` is the kind of `deploy.build.ns` and of `deploy.build.n`. Those scripts need no
+setup lines at all. This is useful for a family of build, migration or application scripts that should receive the
+same helper methods and imports. Save this as `buildkind.n`:
+
+```nemerle,lib=buildkind
+// ncc: -r:{toolchain}/Nemerle.Scripting.dll
+// file: buildkind.n
+using Nemerle.Scripting.kinds;
+
+[ScriptDefinition(".build.n", DisplayName = "Build script", Imports = array["System.Console"])]
+public class BuildScript
+{
+  public Target : string { get { "release" } }
+  public Log(message : string) : void { System.Console.WriteLine("[build] " + message) }
+}
+```
+
+Compile it to `buildkind.dll`, referencing `Nemerle.Scripting.dll` from your toolchain:
+
+```sh
+ncc buildkind.n -target:library -r:"path/to/toolchain/Nemerle.Scripting.dll" -out:buildkind.dll
+```
+
+Replace `path/to/toolchain` with your installed toolchain directory. Put `buildkind.dll` beside the following file,
+save it as `deploy.build.ns`, and run `nscript run deploy.build.ns`:
+
+```nemerle,script
+// file: deploy.build.ns
+Log("building " + Target);
+WriteLine("done")
+```
+
+```text
+[build] building release
+done
+```
+
+- **Base class:** the script's code runs as a member of the class, so `Log` and `Target` are its own members.
+- **Imports:** the listed modules and namespaces are opened.
+- **Reference:** the library is referenced, so its grammars and macros come with it.
+- **Configure:** a `public static Configure(definition : ScriptDefinition) : void` on the class can set anything else:
+  receivers, properties, packages, compiler options.
+
+`nscript` looks for kinds in the dlls next to itself, in the directories of `NEMERLE_SCRIPT_PATH`, and next to the
+script. To share a kind between directories, set that environment variable to the directories containing its
+libraries: separate entries with `;` on Windows and `:` on Linux/macOS. For example, in PowerShell:
+
+```powershell
+$env:NEMERLE_SCRIPT_PATH = 'C:\MyTools\script-kinds'
+nscript run deploy.build.ns
+```
+
+The longest matching suffix wins. A plain `deploy.ns` uses the ordinary script definition; `deploy.build.ns` requires
+a discoverable `.build.n` kind. If the CLI reports that no kind declares a compound suffix, check the filename,
+the kind library and the directories it lists. Merely putting the attribute in an uncompiled `.n` file is not enough.
+
+## Embedding scripts in an application
+
+Use the scripting API when an application needs to supply inputs, inspect diagnostics, read a result or call a
+script's functions. Reference `Nemerle.Scripting.dll` and deploy the compiler/host toolchain files and `references/`
+beside your application. Save this example as `embedding.n`; it looks for that reference folder beside its executable:
+
+```nemerle,app
+// ncc: -r:{toolchain}/Nemerle.Scripting.dll
+// file: embedding.n
+using System;
+using System.IO;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.host;
+
+def definition = ScriptDefinition();
+definition.TargetReferenceDirectory = Path.Combine(AppContext.BaseDirectory, "references");
+definition.Properties.Add("name", typeof(string));
+
+def source = ScriptSource(
+  "public Greet(who : string) : string { \"Hello, \" + who + \"!\" }\n"
+  + "Greet(name)\n", "greeting.ns");
+def host = ScriptHost();
+def compilation = host.Compile(source, definition);
+unless (compilation.Success)
+{
+  foreach (d in compilation.Diagnostics)
+    Console.Error.WriteLine($"$(d.File):$(d.Line):$(d.Column): $(d.Message)");
+  throw InvalidOperationException("Script did not compile")
+}
+
+def inputs = ScriptInputs();
+inputs.Properties.Add("name", "Ada");
+def result = host.Evaluate(compilation.Script, inputs);
+when (result.Kind == ScriptResultKind.Error) throw result.Error;
+when (result.Kind == ScriptResultKind.Value) Console.WriteLine(result.Value);
+
+def greet = result.GetFunction("greeting.Greet", typeof(Func[string, string])) :> Func[string, string];
+Console.WriteLine(greet("Grace"))
+```
+
+```text
+Hello, Ada!
+Hello, Grace!
+```
+
+For a first experiment, put the executable in your toolchain directory so its runtime dependencies and `references/`
+are beside it. Replace `path/to/toolchain` in these commands:
+
+```sh
+ncc embedding.n -r:"path/to/toolchain/Nemerle.Scripting.dll" -out:"path/to/toolchain/embedding.dll" -launcher-
+dotnet "path/to/toolchain/embedding.dll"
+```
+
+There are three separate jobs:
+
+1. `ScriptDefinition` declares the names and types the script may use. The example supplies a `name : string` input.
+2. `Compile` checks the script and returns diagnostics. A failed compilation has no usable script to evaluate.
+3. `ScriptInputs` supplies actual values to `Evaluate`. Check `Kind` for `Value`, `Void` or `Error`; a successful value
+   may be null. `GetFunction` binds a public function on that evaluation's script instance to a typed delegate.
+
+Diagnostics can contain warnings even when compilation succeeds; an application can surface those as well.
+
+The source filename supplies the owner in `greeting.Greet`. Missing, extra or wrongly typed inputs are host
+configuration errors. Unlike the CLI, an embedded host does not automatically supply `args`; add an
+`array[string]` property with that name and a matching input if your script uses it.
+
+You can compile once and evaluate several times with different inputs. Each evaluation gets fresh script state;
+objects supplied as inputs remain the host's actual objects, so mutations to them remain visible. A bound function
+keeps the state of the evaluation it came from. For state carried between submissions, use `ScriptSession`, the same
+API behind the REPL. Code runs with the application's ordinary process access.
+
+`host.Save(compilation.Script, "greeting.dll")` saves a compiled artifact. `host.Load("greeting.dll", definition)`
+loads it with a compatible definition, after which you supply inputs and evaluate it in the same way. Keep the
+companion files described [above](#compiling-once-and-running-the-artifact).
+
+For base classes, receiver objects, typed result contracts and host-controlled configuration, see the
+scripting API guide in `scripting/README.md`.
+
+## Common problems
+
+| Symptom | Check |
+|---|---|
+| `nscript` is not found | run the installer, reopen your terminal, or invoke `dotnet path/to/nscript.exe` directly |
+| The runner cannot find .NET 10 | use the installer to repair prerequisites; a different major runtime alone is not enough |
+| A helper name is unknown | distinguish a `.n` module (`using`) from a `.ns` child (`Import`), and check its registered path and visibility |
+| A dependency DLL cannot be opened | check the `DependsOn` path relative to the script and keep the library's runtime dependencies available |
+| No package resolver is configured | use a toolchain containing `Nemerle.Scripting.NuGet.dll` |
+| An offline package is unavailable | populate the selected cache/feed first; use the same `--cache-dir` for both runs |
+| A compound filename has no matching kind | put its compiled kind library beside it or on `NEMERLE_SCRIPT_PATH` |
+| A compiled script will not load | keep its `.dll.script` and `.dll.dependencies/` together with the DLL; recompile to rename the artifact |
+| A REPL import changed or a dependency version conflicts | start a fresh session, or reset before replacing an imported script |
+
+Diagnostics include the source file and location. Fix compile errors before looking for runtime failures; a failed
+compile does not execute the script. For failures during execution, the original exception is reported, and keeping
+the PDB with a saved artifact preserves useful source locations.
+
+## Advanced: application languages in scripts
+
+An application can expose its own languages to scripts by referencing the application's assembly. The script can use
+the application's grammars and scopes without declaring copies of them. The application and its scripts share scope
+values: the script reads what the application wrote, and the application sees what the script writes. A script can
+also dial into the application's spaces.
 
 The dial's resolver is a library of its own, as in [Grammars and spaces](10-grammars.md):
 
@@ -192,65 +654,6 @@ the application sees 50
 The plugin is `plugin.ns` to the compiler, so its space is `dial:.plugin.G`. `using main;` imports the application's
 file, which is what makes its scope `A` (`main.A`) the plugin's `scope.A`.
 
-A slot can hold a value of the application's own types too, and it is one value: every reader gets the same object,
-and a write through it is seen by all. To .NET a type is a copy of an assembly and a name, so a type compiled twice is
-two types, and an object is of one of them. A plugin compiled against the application (a script always is) makes no
-copy of the types the application's slots reach:
-
-- the same file module (the plugin compiles the same `shapes.n`) is the application's module, so `shapes.Point` there
-  is the application's type;
-- a type with the same code under another name (the same fields and members, its behaviour) is an alias of the
-  application's type;
-- a file module the application has with other code is an error: a module is one in the program.
-
-The application records those types, with their code, in its continuation section, and only those: a type no slot
-reaches records nothing. A copy compiled apart, without the application, is another .NET type, and reading or writing
-the slot with it is an error that says it is the same code compiled apart, or what differs. A slot of no fixed type
-holds a `Content` instead, any value with its type, which the reader asks for as the type it expects.
-
-## Script kinds
-
-A library can declare a **kind of script**, as Kotlin's `@KotlinScript` does. A class marked `[ScriptDefinition(ext)]`
-becomes the base class of every script whose file name ends in `ext`. The extension is written in its `.n` form and
-covers both: `.build.n` is the kind of `deploy.build.ns` and of `deploy.build.n`. Those scripts need no
-setup lines at all:
-
-```nemerle,lib=buildkind
-// ncc: -r:{toolchain}/Nemerle.Scripting.dll
-// file: buildkind.n
-using Nemerle.Scripting.kinds;
-
-[ScriptDefinition(".build.n", DisplayName = "Build script", Imports = array["System.Console"])]
-public class BuildScript
-{
-  public Target : string { get { "release" } }
-  public Log(message : string) : void { System.Console.WriteLine("[build] " + message) }
-}
-```
-
-```nemerle,script
-// file: deploy.build.ns
-Log("building " + Target);
-WriteLine("done")
-```
-
-```text
-[build] building release
-done
-```
-
-- **Base class:** the script's code runs as a member of the class, so `Log` and `Target` are its own members.
-- **Imports:** the listed modules and namespaces are opened.
-- **Reference:** the library is referenced, so its grammars and macros come with it.
-- **Configure:** a `public static Configure(definition : ScriptDefinition) : void` on the class can set anything else:
-  receivers, properties, packages, compiler options.
-
-`nscript` looks for kinds in the dlls next to itself, in the directories of `NEMERLE_SCRIPT_PATH`, and next to the
-script. It reads only their metadata, until a script of the kind runs.
-
-## Embedding scripts in an application
-
-`Nemerle.Scripting.dll` is the host API used by `nscript` itself. An application creates a `ScriptHost`, a
-`ScriptDefinition` (base class, receivers, provided properties, imports, dependencies), and compiles and evaluates
-`ScriptSource`s. Sessions keep state across submissions, as a REPL does. `scripting/README.md` documents the API, and
-`scripting/KOTLIN-FACILITIES.md` maps it to Kotlin's.
+Plugins can share the application's objects and scopes: writes made by the plugin are visible to the application.
+Reference the application's actual assembly when compiling its plugins, rather than recompiling a separate copy of
+its types. For the grammar, scope and dial APIs used here, see [Grammars and spaces](10-grammars.md).

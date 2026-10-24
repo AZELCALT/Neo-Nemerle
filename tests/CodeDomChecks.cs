@@ -3,7 +3,8 @@ using static Nemerle.Compiler.nemerle_code_compiler;
 class CodeDomChecks {
   static void Check(bool c, string m) { if (!c) throw new Exception(m); }
   static CompilerParameters P(string refs) {
-    var p = new CompilerParameters { GenerateInMemory = false, GenerateExecutable = false, CompilerOptions = "-target-references:" + refs };
+    var p = new CompilerParameters { GenerateInMemory = false, GenerateExecutable = false,
+      CompilerOptions = "  -target-references:\"" + refs + "\"\t-define:CODEDOM_CHECK  " };
     p.TempFiles = new TempFileCollection(System.IO.Path.GetTempPath(), false);
     return p;
   }
@@ -25,13 +26,16 @@ class CodeDomChecks {
     var t = asm.GetType("Demo.Inner+Greeter"); Check(t != null, "Demo.Inner+Greeter missing: " + string.Join(",", Array.ConvertAll(asm.GetTypes(), x => x.FullName)));
     Check((int)t.GetMethod("Answer").Invoke(null, null) == 42, "dom result");
     var p2 = P(a[0]); p2.OutputAssembly = System.IO.Path.Combine(a[1], "src.dll");
-    var r2 = c.CompileAssemblyFromSource(p2, "public Answer() : int { 6 * 7 }");
+    var r2 = c.CompileAssemblyFromSource(p2, "#if CODEDOM_CHECK\npublic Answer() : int { 6 * 7 }\n#else\ninvalid source\n#endif\n");
     foreach (CompilerError e in r2.Errors) Console.WriteLine(e);
     Check(r2.NativeCompilerReturnValue == 0, "source compile failed");
     var s = Assembly.LoadFrom(p2.OutputAssembly).GetType("Source0");
     Check(s != null && (int)s.GetMethod("Answer").Invoke(null, null) == 42, "source result");
     var r3 = c.CompileAssemblyFromSource(P(a[0]), "namespace X { public class Y {} }");
     Check(r3.NativeCompilerReturnValue != 0, "namespace must be rejected");
+    var malformed = P(a[0]); malformed.CompilerOptions = "-define:\"unfinished";
+    try { c.CompileAssemblyFromSource(malformed, "public Value() : int { 1 }"); throw new Exception("unclosed option quote accepted"); }
+    catch (ArgumentException e) { Check(e.ParamName == "CompilerOptions", "option error must identify CompilerOptions"); }
     Console.WriteLine("PASS: CodeDOM writes file modules (Demo.Inner+Greeter, Source0) and rejects namespace text");
   }
 }

@@ -171,16 +171,25 @@ public module Message
       if (loc == Location.Default) LocationStack.Top()
       else loc;
 
-    Manager.RunErrorOccured (loc, m);
-
     Message.Manager.Message_ErrorCount++;
-    if (Manager.Options.ColorMessages)
-      Message.report (loc, "\e[01;31merror\e[0m: " + m)
-    else
-      Message.report (loc, "error: " + m);
+    Held (2, fun ()
+    {
+      Manager.RunErrorOccured (loc, m);
+      if (Manager.Options.ColorMessages)
+        Message.report (loc, "\e[01;31merror\e[0m: " + m)
+      else
+        Message.report (loc, "error: " + m);
+    });
 
     when (Manager.Options.ThrowOnError)
       throw BailOutException ();
+  }
+
+  /// A message reported now, or held by the typing attempt that reports it (see ManagerClass.HeldMessages).
+  Held (kind : int, report : void -> void) : void
+  {
+    def held = Manager.HeldMessages;
+    if (held.Count > 0 && !Manager.Options.ThrowOnError) held.Peek ().Add ((report, kind)) else report ()
   }
 
   public Error (m : string) : void
@@ -200,19 +209,22 @@ public module Message
     when (Manager.QuietMessages > 0) return;
     def loc = findLoc (loc);
     when (code == -1 || Manager.Options.Warnings.IsEnabledAt (loc, code)) {
-      Manager.RunWarningOccured (loc, m);
-
-      Message.Manager.Message_WarningCount++;
-
-      def m = if (code == -1) m else $"N$code: $m";
+      def m' = if (code == -1) m else $"N$code: $m";
       
       if (Manager.Options.Warnings.TreatWarningsAsErrors) {
-        Message.Error(loc, "warning: " + m)
+        Manager.RunWarningOccured (loc, m);
+        Message.Manager.Message_WarningCount++;
+        Message.Error(loc, "warning: " + m')
       } else {
-        if (Manager.Options.ColorMessages)
-          Message.report (loc, "\e[01;33mwarning\e[0m: " + m)
-        else
-          Message.report (loc, "warning: " + m);
+        Message.Manager.Message_WarningCount++;
+        Held (1, fun ()
+        {
+          Manager.RunWarningOccured (loc, m);
+          if (Manager.Options.ColorMessages)
+            Message.report (loc, "\e[01;33mwarning\e[0m: " + m')
+          else
+            Message.report (loc, "warning: " + m');
+        })
       }
     }
   }
@@ -231,10 +243,14 @@ public module Message
   public Hint (loc : Location, m : string) : void
   {
     when (Manager.QuietMessages > 0) return;
-    if (Manager.Options.ColorMessages)
-      Message.report (loc, "\e[01;32mhint\e[0m: " + m)
-    else
-      Message.report (loc, "hint: " + m);
+    def loc = findLoc (loc);
+    Held (0, fun ()
+    {
+      if (Manager.Options.ColorMessages)
+        Message.report (loc, "\e[01;32mhint\e[0m: " + m)
+      else
+        Message.report (loc, "hint: " + m);
+    })
   }
 
   public Hint (m : string) : void

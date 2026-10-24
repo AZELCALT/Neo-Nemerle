@@ -93,6 +93,13 @@ public static class ScriptMetadata
     def characters = source.Text.ToCharArray();
     def lexer = LexerString(manager, source.Text, Location(Location.GetFileIndex(Path.GetFullPath(source.Path)), 1, 1));
     lexer.Keywords = LexerBase.BaseKeywords;
+    def read() : Token
+    {
+      // The metadata pass does not parse blocks, but must let the compiler
+      // lexer enter indentation mode before the shared parser sees the source.
+      try { lexer.GetToken() }
+      catch { | _ is LexerBase.PragmaIndent => read() }
+    }
     def offset(location : Location) : int
     {
       mutable index = 0;
@@ -108,7 +115,7 @@ public static class ScriptMetadata
     mutable done = false;
     while (!done)
     {
-      def token = lexer.GetToken();
+      def token = read();
       match (token)
       {
         | Token.EndOfFile => done = true;
@@ -122,7 +129,7 @@ public static class ScriptMetadata
           mutable last = token;
           while (depth > 0)
           {
-            last = lexer.GetToken();
+            last = read();
             match (last)
             {
               | Token.BeginSquare => depth++;
@@ -180,14 +187,15 @@ public static class ScriptMetadata
           mutable ordinary = true;
           mutable alias : string = null;
           mutable ended = false;
-          mutable lastUsing = token;
+          mutable usingEnd = offset(token.Location) + 5;
           while (!ended)
           {
-            def next = lexer.GetToken();
-            lastUsing = next;
+            def next = read();
+            unless(next is Token.Indent || next is Token.EndOfFile)
+              usingEnd = offset(next.Location) + next.Location.EndColumn - next.Location.Column;
             match (next)
             {
-              | Token.Semicolon | Token.EndOfFile => ended = true;
+              | Token.Semicolon | Token.EndOfFile | Token.Indent => ended = true;
               | Token.Identifier(part) => parts.Add(part);
               | Token.Operator("=") when parts.Count == 1 && alias == null => alias = parts[0]; parts.Clear();
               | Token.Operator(".") | Token.WhiteSpace | Token.NewLine | Token.Comment => ();
@@ -196,7 +204,7 @@ public static class ScriptMetadata
           }
           when (ordinary && parts.Count > 0)
           {
-            data.UsingDirectives.Add(ScriptUsingDirective(String.Join(".", parts.ToArray()), alias, offset(token.Location), offset(lastUsing.Location) - offset(token.Location) + 1));
+            data.UsingDirectives.Add(ScriptUsingDirective(String.Join(".", parts.ToArray()), alias, offset(token.Location), usingEnd - offset(token.Location)));
             if (alias == null) data.Imports.Add(String.Join(".", parts.ToArray()));
             else data.Aliases[alias] = String.Join(".", parts.ToArray());
           }

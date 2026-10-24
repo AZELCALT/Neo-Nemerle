@@ -10,6 +10,8 @@ import os, pathlib, shutil, subprocess, sys, tempfile, zipfile
 
 repo = pathlib.Path(__file__).resolve().parents[1]
 work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-installers-'))
+# Desktop MIME registration belongs to the same scratch install as the toolchain.
+os.environ['XDG_DATA_HOME'] = str(work / 'desktop-data')
 vsix = repo / 'install/nemerle-0.2.0.vsix'
 checks = 0
 

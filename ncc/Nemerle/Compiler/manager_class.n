@@ -295,6 +295,12 @@ using Nemerle.Compiler.XmlDump;
     }
     /// Per top-level value: "typed" (one type) or "content" (its type changes; the storage is a Content).
     public StateStorage : System.Collections.Generic.Dictionary[string, string] = System.Collections.Generic.Dictionary();
+    /// For an editor (asked for by the language server's check, null otherwise): the types of a value whose type follows
+    /// the flow where it is read or declared, by "file:line:column", with the typing attempt that saw them and whether
+    /// a check saw them (see Typer.FlowSeen).
+    public mutable FlowTypesSeen : System.Collections.Generic.Dictionary[string, int * bool * list[Nemerle.Compiler.type_var.TypeVar]];
+    /// The typing attempt of a method (each start, and each start again of its flow): what a later one saw replaces.
+    public mutable FlowAttempt : int;
     /// Reads of a top-level value whose storage may be a Content: the type each one needs, checked after typing.
     public StateReads : System.Collections.Generic.List[string * Nemerle.Compiler.type_var.TypeVar * Location] = System.Collections.Generic.List();
     /// Where each top-level value is bound.
@@ -412,6 +418,40 @@ using Nemerle.Compiler.XmlDump;
 
     internal mutable Message_ErrorCount : int;
     internal mutable Message_WarningCount : int;
+
+    /// The messages typing attempts hold until each is known to be the last (one level per attempt): the flow of values
+    /// can start an attempt again (see typer_flow), and what the one it forgets reported is reported by the next. Each
+    /// is its report, and its kind (2 an error, 1 a warning, 0 a hint), counted when it is held.
+    internal HeldMessages : System.Collections.Generic.Stack[System.Collections.Generic.List[(void -> void) * int]] = System.Collections.Generic.Stack();
+
+    /// Holds the messages from here, for a typing attempt.
+    internal HoldMessages () : System.Collections.Generic.List[(void -> void) * int]
+    {
+      def held = System.Collections.Generic.List();
+      HeldMessages.Push (held);
+      held
+    }
+
+    /// The attempt is forgotten: its messages are not reported (nor counted).
+    internal ForgetMessages (held : System.Collections.Generic.List[(void -> void) * int]) : void
+    {
+      when (HeldMessages.Count > 0 && HeldMessages.Peek () : object == held)
+      {
+        _ = HeldMessages.Pop ();
+        foreach ((_, kind) in held)
+          match (kind) { | 2 => Message_ErrorCount -= 1 | 1 => Message_WarningCount -= 1 | _ => () }
+      }
+    }
+
+    /// The attempt stands: its messages are reported, in order (when it was not forgotten).
+    internal ReleaseMessages (held : System.Collections.Generic.List[(void -> void) * int]) : void
+    {
+      when (HeldMessages.Count > 0 && HeldMessages.Peek () : object == held)
+      {
+        _ = HeldMessages.Pop ();
+        foreach ((report, _) in held) report ()
+      }
+    }
     internal Message_emitted_hints : Hashtable [string, int]               { get; private set; }
     internal Typer_BetterTypeCache : Hashtable [TypeInfo * TypeInfo, bool] { get; private set; }
 
@@ -744,6 +784,7 @@ using Nemerle.Compiler.XmlDump;
       Macros_in_pattern     = false;
       Message_ErrorCount    = 0;
       Message_WarningCount  = 0;
+      HeldMessages.Clear ();
       MacroColors           = MacroColorizator ();
       if (shouldCreate (NameTree))
         NameTree = NamespaceTree (this);
@@ -932,6 +973,15 @@ using Nemerle.Compiler.XmlDump;
       finally { Instance = previous; }
     }
 
+    /// Resolve local dependencies against the same reference universe as compilation, without parsing or emitting.
+    public ResolveSourceFiles() : void
+    {
+      Instance = this;
+      InitCompiler();
+      LoadExternalLibraries();
+      FileModuleRegistry.DiscoverSources();
+    }
+
     public Run () : void
     {
       Instance = this;
@@ -1008,6 +1058,7 @@ using Nemerle.Compiler.XmlDump;
           when (Options.AssemblyVersion != null)
             Hierarchy.AddAssemblyAttribute(CoreEnv, <[ System.Reflection.AssemblyVersion($(Options.AssemblyVersion : string)) ]>);
 
+          when (Options.AutoResolveSources) FileModuleRegistry.DiscoverSources();
           when (Options.FileModules) FileModuleRegistry.IndexSources();
           Message.MaybeBailout();
 #if OLD_GRAMMAR_DESIGN

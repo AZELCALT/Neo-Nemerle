@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-nemerle">
+    <comment>Nemerle source</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.n" weight="60"/>
+    <icon name="text-x-nemerle"/>
+  </mime-type>
+  <mime-type type="text/x-nemerle-script">
+    <comment>Nemerle script</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.ns" weight="60"/>
+    <icon name="text-x-nemerle-script"/>
+  </mime-type>
+  <mime-type type="application/x-nemerle-project">
+    <comment>Nemerle project</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.nproj" weight="60"/>
+    <icon name="application-x-nemerle-project"/>
+  </mime-type>
+</mime-info>

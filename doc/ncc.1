@@ -43,6 +43,32 @@ targeted to .NET platform.
 Warning: this documentation is outdated. Please use ncc --help for an up to date
 list of options.
 
+.SH FILE MODULES
+Each source file owns one module. By default its name is its path relative to
+the source root, with directory separators replaced by dots and without .n.
+.PP
+As the first directive, write
+.B register library.words;
+to give the entire file a logical containing folder. A file named text.n then
+has the module name library.words.text, even after moving it under the source root.
+Only one registration is allowed per file; registration does not take a block.
+.PP
+.B using library.words.text;
+opens that file's members.
+.B using library.words;
+makes its immediate file names available, so calls remain qualified as
+text.Shout(...). It does not open bare member names or recurse into subfolders.
+The immediate modules initialize in ordinal name order. Both forms use local
+sources and referenced libraries. Named .n sources are discovered beside the importing
+file and under the source root, including transitive imports. External references
+still need to be configured explicitly.
+.PP
+Use ncc init to create a project with an explained .nproj build configuration.
+Then ncc build builds it and ncc run builds and starts it. These project commands
+require a .nproj file; ncc file.n can still compile a standalone source without one. The compiler warns
+that there is no build project and continues with local source resolution. Scripts
+use the same lookup without the project warning.
+
 .SH OPTIONS
 .TP
 .B \-boot, \-self

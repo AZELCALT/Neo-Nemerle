@@ -151,6 +151,58 @@ internal sealed class GReader
     def result=GLexeme(); result.Start=open.Start; result.End=end;
     result.Text=Text.Substring(open.Start,end-open.Start); result
   }
+
+  // The envelope is owned by the host's indentation, not by braces occurring
+  // in a foreign language. Keep original offsets and pass the untouched body
+  // to its grammar.
+  public IndentedBlock(headerStart : int) : GLexeme
+  {
+    def open=Take(); unless(open.Text==":") Fail("expected ':' before indented space body");
+    mutable lineStart=headerStart;
+    while(lineStart>0 && Text[lineStart-1]!='\n') --lineStart;
+    mutable headerEnd=lineStart;
+    while(headerEnd<headerStart && (Text[headerEnd]==' ' || Text[headerEnd]=='\t')) ++headerEnd;
+    def headerIndent=Text.Substring(lineStart,headerEnd-lineStart);
+    // Nothing except a comment may follow the colon on its line.
+    mutable first=open.End;
+    while(first<Limit && (Text[first]==' ' || Text[first]=='\t' || Text[first]=='\r')) ++first;
+    when(first+1<Limit && Text[first]=='/' && Text[first+1]=='/')
+      while(first<Limit && Text[first]!='\n') ++first;
+    when(first<Limit && Text[first]!='\n') Fail("indented space body must start on the next line");
+    when(first<Limit) ++first;
+    mutable bodyIndent : string = null;
+    mutable cursor=first;
+    mutable end=Limit;
+    mutable done=false;
+    while(cursor<Limit && !done)
+    {
+      mutable content=cursor;
+      while(content<Limit && (Text[content]==' ' || Text[content]=='\t')) ++content;
+      mutable next=content;
+      while(next<Limit && Text[next]!='\n') ++next;
+      when(next<Limit) ++next;
+      def blank=content>=Limit || Text[content]=='\r' || Text[content]=='\n';
+      def comment=content+1<Limit &&
+        ((Text[content]=='/' && Text[content+1]=='/') || (Text[content]=='-' && Text[content+1]=='-'));
+      unless(blank || comment)
+      {
+        def indent=Text.Substring(cursor,content-cursor);
+        if(indent.Length<=headerIndent.Length)
+        { end=cursor; done=true; }
+        else
+        {
+          unless(indent.StartsWith(headerIndent)) Fail("inconsistent indentation in space body");
+          if(bodyIndent==null) bodyIndent=indent;
+          else unless(indent.StartsWith(bodyIndent)) Fail("inconsistent indentation in space body");
+        }
+      }
+      cursor=next;
+    }
+    when(bodyIndent==null) Fail("expected an indented block after ':'");
+    Pos=end; Reset();
+    def result=GLexeme(); result.Start=open.Start; result.End=end;
+    result.Text=Text.Substring(open.Start,end-open.Start); result
+  }
 }
 internal module GrammarJson
 {
@@ -206,13 +258,29 @@ internal module GrammarJson
 /// Finds the first grammar/space block, scope declaration or dial of a source file (envelope pre-scan only).
 public module NitraSourceScan
 {
+  internal HasIndentPragma(text : string) : bool
+  {
+    def reader=GReader(text,"",0,text.Length);
+    try {
+      while(!reader.Is("<eof>")) {
+        def token=reader.Take();
+        when(!token.Quoted && token.Text=="#" && reader.Eat("pragma") && reader.Eat("indent")) return true;
+      }
+    } catch {
+      | _ is ArgumentException => ()
+      | _ is FormatException => ()
+      | _ is OverflowException => ()
+    }
+    false
+  }
   internal FindConstruct(source : ISource) : Location { FindConstruct(source,false) }
   /// `scopeUses`: also count `scope.A.x`. `scope` is an ordinary name in files without spaces, so that use counts
   /// only when a referenced binary stores scopes; `scope A;` and a dial `dial:.` are never ordinary Nemerle.
-  internal FindConstruct(source : ISource, scopeUses : bool) : Location
+  internal FindConstruct(source : ISource, scopeUses : bool, indentation : bool = false) : Location
   {
     def text=source.GetText();
     unless(text.Contains("grammar") || text.Contains("space") || text.Contains("scope") || text.Contains(":.")) return Location.Default;
+    def indented=indentation || HasIndentPragma(text);
     def at(start : int) : Location
     {
       mutable line=1; mutable column=1;
@@ -238,21 +306,22 @@ public module NitraSourceScan
         { _=reader.Take(); when(reader.Is(".")) return at(token.Start); }
         when(!token.Quoted && (token.Text=="grammar" || token.Text=="space"))
         {
-          mutable found=reader.Is("{");
+          def bodyStart() { reader.Is("{") || (token.Text=="space" && indented && reader.Is(":")) }
+          mutable found=bodyStart();
           when(reader.Is("("))
           {
             _=reader.Take();
             while(!reader.Is(")") && !reader.Is("<eof>")) _=reader.Take();
-            _=reader.Eat(")"); found=reader.Is("{");
+            _=reader.Eat(")"); found=bodyStart();
           }
           when(reader.Peek().Text.Length>0 && char.IsLetter(reader.Peek().Text[0]) && !(token.Text=="space" && reader.Is("as")))
-          { _=reader.Name(); found=reader.Is("{"); }
+          { _=reader.Name(); found=bodyStart(); }
           // `space G as Name [A] { ... }`: an alias and attached scopes may stand before the body
-          when(token.Text=="space" && reader.Eat("as")) { _=reader.Name(); found=reader.Is("{"); }
+          when(token.Text=="space" && reader.Eat("as")) { _=reader.Name(); found=bodyStart(); }
           when(token.Text=="space" && reader.Is("["))
           {
             while(!reader.Is("]") && !reader.Is("<eof>")) _=reader.Take();
-            _=reader.Eat("]"); found=reader.Is("{");
+            _=reader.Eat("]"); found=bodyStart();
           }
           when(found) return at(token.Start);
         }

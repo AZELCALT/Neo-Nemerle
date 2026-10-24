@@ -3,7 +3,8 @@
 // flow: after each assignment the compiler knows its one type, and where it cannot know which one (a branch that
 // assigns another type on some ways only, a loop, a lambda that runs later) the value has a set of types. A use must
 // fit each of them, or check first (`match (x) { | n is int => ... }`, `if (x is int)`), which picks those it handles.
-// Its storage is an object only when its type changes; otherwise it is of its one type, as ever. A `mutable x;`
+// Untyped mutables are logical containers during typing. Lowering discards the container when the complete scope
+// gives it only one type, and otherwise uses object storage. A `mutable x;`
 // without a value is NotYet until each way to a read has assigned it.
 using Nemerle.Collections;
 using Nemerle.Compiler.Typedtree;
@@ -12,11 +13,11 @@ using Nemerle.Compiler.fixed_type;
 using SCG = System.Collections.Generic;
 
 /// What a method's typing learned about its values, kept across its typing attempts: the typing starts again when it
-/// learns more (a value whose type changes, a type a nested function assigns), and learns only more, so it ends.
+/// learns types that nested or delayed code may see or assign. Storage selection itself never restarts typing.
 public sealed class FlowFacts
 {
-  /// The untyped mutables whose type changes, by their key (Key): their storage is an object.
-  public Storage : SCG.HashSet[string] = SCG.HashSet();
+  /// Assignments from this typing attempt, resolved only after delayed typing has completed.
+  public Pending : SCG.Dictionary[string, SCG.List[TypeVar * bool]] = SCG.Dictionary();
   /// The types each is given inside nested functions and delayed code (lambdas, loops), which run later or again: the
   /// code around them may see these after them.
   public Assigned : SCG.Dictionary[string, SCG.List[FixedType]] = SCG.Dictionary();
@@ -33,7 +34,18 @@ public sealed class FlowFacts
     name + "@" + location.FileIndex.ToString() + ":" + location.Line.ToString() + ":" + location.Column.ToString()
   }
 
-  public MakeStorage(key : string) : void { when (Storage.Add(key)) Grew = true }
+  public Record(key : string, type : TypeVar, nested : bool) : void
+  {
+    mutable values;
+    unless (Pending.TryGetValue(key, out values)) { values = SCG.List(); Pending[key] = values }
+    values.Add((type, nested))
+  }
+
+  public Publish() : void
+  {
+    foreach (entry in Pending)
+      foreach ((type, nested) in entry.Value) Assign(entry.Key, type.DeepFix(), nested)
+  }
 
   /// A type given to a value: inside nested code (`nested'), or anywhere.
   public Assign(key : string, type : FixedType, nested : bool) : void
@@ -65,8 +77,13 @@ public sealed class FlowFacts
 public sealed class LocalFlow
 {
   public Key : string;
-  /// Its storage is an object (its type changes); else its storage is its one type.
-  public Storage : bool;
+  /// A logical container during typing. After lowering this remains true only for object storage; a container
+  /// with one type is discarded and this becomes false.
+  public mutable Storage : bool;
+  /// The initializer's inference variable, shared by assignments that fit its inferred type. This is typing
+  /// information only: lowering chooses CLR storage after the whole scope has been typed.
+  public mutable Initial : TypeVar;
+  public mutable Changes : bool;
   /// Declared without a value (`mutable x;`): NotYet until assigned.
   public Valueless : bool;
   /// The typer of the function that declares it: an assignment in another (a nested function) runs later or again.
@@ -101,7 +118,11 @@ public sealed class FlowPoint
 
   public static SameType(a : TypeVar, b : TypeVar) : bool
   {
-    a : object == b || a.IsFixed && b.IsFixed && a.FixedValue.Equals(b.FixedValue)
+    a.Equals(b) || match ((a.Hint, b.Hint))
+    {
+      | (Some(at), Some(bt)) => at.Equals(bt)
+      | _ => false
+    }
   }
 
   /// The two flows joined: the types of both, unassigned when either is.
