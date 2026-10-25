@@ -321,7 +321,8 @@ space Words { answer }
 
 ## Cache and repeated runs
 
-`nscript run` normally caches compiled code. A cache hit still executes the script; it does not reuse the previous
+`nscript run` normally caches compiled code automatically; no extra command or flag is needed.
+A cache hit still executes the script; it does not reuse the previous
 result or its live instance. Code changes, local `.n` helpers, imported scripts and resolved dependency changes
 participate in cache identity. Data read by ordinary runtime code is read again on each execution.
 

@@ -78,6 +78,20 @@ public static class ScriptFingerprint
 {
   public Create(source : ScriptSource, definition : ScriptDefinition, version : string) : string
   {
+    // One fingerprint may mention the same framework assembly through several
+    // input types and reference lists. Read it once, but revalidate contents on
+    // every new fingerprint (even when size and timestamps have not changed).
+    def digests = Dictionary.[string, string](StringComparer.Ordinal);
+    def digest(path : string) : string
+    {
+      def full = Path.GetFullPath(path);
+      mutable value : string = null;
+      unless (digests.TryGetValue(full, out value)) {
+        value = ClrScriptSupport.Digest(File.ReadAllBytes(full));
+        digests.Add(full, value);
+      }
+      value
+    }
     using (stream = MemoryStream())
     {
       using (writer = BinaryWriter(stream, System.Text.Encoding.UTF8, true))
@@ -88,7 +102,7 @@ public static class ScriptFingerprint
         {
           writer.Write(type.AssemblyQualifiedName);
           writer.Write(type.Assembly.ManifestModule.ModuleVersionId.ToString());
-          when (type.Assembly.Location != "") writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(type.Assembly.Location)));
+          when (type.Assembly.Location != "") writer.Write(digest(type.Assembly.Location));
         }
         foreach (pair in definition.Properties) { writer.Write(pair.Key); assembly(pair.Value); }
         writer.Write(definition.DisplayName ?? ""); writer.Write(definition.FilePathPattern ?? ""); writer.Write(definition.FileLocationProperty ?? "");
@@ -106,15 +120,15 @@ public static class ScriptFingerprint
         foreach (name in definition.Imports) writer.Write(name);
         foreach (pair in definition.PreviousTypeNames) { writer.Write(pair.Key); writer.Write(pair.Value); }
         foreach (pair in definition.PreviousNames) { writer.Write(pair.Key); writer.Write(pair.Value); }
-        foreach (reference in definition.References) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
-        foreach (reference in definition.RuntimeReferences) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
-        foreach (reference in definition.NativeReferences) writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(reference)));
+        foreach (reference in definition.References) writer.Write(digest(reference));
+        foreach (reference in definition.RuntimeReferences) writer.Write(digest(reference));
+        foreach (reference in definition.NativeReferences) writer.Write(digest(reference));
         foreach (shared in definition.SharedAssemblies) writer.Write(shared.ManifestModule.ModuleVersionId.ToString());
         foreach (type in array[typeof(Nemerle.Compiler.manager_class.ManagerClass), typeof(ClrScriptSupport), typeof(ScriptHost), typeof(object)]) assembly(type);
         when (definition.TargetReferenceDirectory != null)
         {
           def paths = Directory.GetFiles(definition.TargetReferenceDirectory, "*.dll"); Array.Sort(paths);
-          foreach (path in paths) { writer.Write(Path.GetFileName(path)); writer.Write(ClrScriptSupport.Digest(File.ReadAllBytes(path))); }
+          foreach (path in paths) { writer.Write(Path.GetFileName(path)); writer.Write(digest(path)); }
         }
       }
       ClrScriptSupport.Digest(stream.ToArray())

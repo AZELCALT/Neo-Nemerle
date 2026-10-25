@@ -291,6 +291,10 @@ public sealed class ScriptHost
     // Resolve local .n imports with the core compiler before choosing an artifact cache entry.
     // Keep snapshots so the fingerprint and the emitted program use exactly the same dependency text.
     mutable localSources : list[ISource] = [];
+    // Discovery only follows literal `using` directives. Without even that
+    // spelling, no local import can exist; avoid loading the compiler's entire
+    // reference universe just to discover an empty source dependency set.
+    when (collected.Source.Text.Contains("using"))
     lock (gate)
     {
       def previous = ManagerClass.Instance;
@@ -322,7 +326,12 @@ public sealed class ScriptHost
       catch { | error is IOException => return CompilationResult(null, array[ScriptDiagnostic(source.Path, 1, 1, error.Message, true)]); }
       finally { ManagerClass.Instance = previous; }
     }
-    def key = if (settings.Cache == null || !cacheable || !definition.Cacheable) null else ScriptFingerprint.Create(source, definition, version);
+    mutable key : string = null;
+    try {
+      when (settings.Cache != null && cacheable && definition.Cacheable)
+        key = ScriptFingerprint.Create(source, definition, version);
+    }
+    catch { | error is IOException => return CompilationResult(null, array[ScriptDiagnostic(source.Path, 1, 1, error.Message, true)]); }
     when (key != null)
     {
       def path = settings.Cache.GetPath(key);
