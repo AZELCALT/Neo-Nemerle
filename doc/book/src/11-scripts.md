@@ -206,6 +206,36 @@ kind described [below](#script-kinds).
 
 ## Declaring dependencies
 
+### What resolves a dependency
+
+Nemerle's scripting library provides compilation, evaluation, script imports, typed host inputs and compiled-code
+caching. Package management is supplied by a separate resolver configured by the host. The compiler consumes the
+resolved assembly references; it does not choose package versions, contact package feeds or install packages.
+
+| Dependency | How it becomes available |
+|---|---|
+| A local `.n` helper | ordinary `using` source discovery |
+| Another `.ns` script | `[assembly: Import("other.ns")]`, handled by the script host |
+| A local DLL | `[assembly: DependsOn("tools.dll")]`, resolved relative to the script |
+| A package ID and version | a configured package resolver, such as the optional NuGet adapter |
+
+An embedded `ScriptHost` starts without a package resolver. The application supplies one through
+`ScriptHostOptions.Resolver`; scripts that do not request packages can run without one. Requesting a package without
+a resolver produces `No script dependency resolver configured`.
+
+The supplied `nscript` CLI automatically configures the NuGet adapter when `Nemerle.Scripting.NuGet.dll` and its
+supporting libraries are installed beside the runner. The bundled `boot/coreclr` toolchain includes that adapter.
+This is a CLI distribution choice, not a built-in package manager in the scripting library. A minimal/custom build
+may omit it while retaining the scripting features above.
+
+An application can implement `IScriptDependencyResolver` to use another package source or resolution policy. It
+returns compatible CLR compilation/runtime references, any native library paths, and a dependency fingerprint for
+caching. The current CLI specifically discovers the NuGet adapter; it does not automatically discover arbitrary
+resolver plugins. A different CLI resolver needs explicit runner wiring, while an embedded host can assign one
+directly. Neither the scripting library nor the NuGet adapter requires the .NET SDK or MSBuild at runtime.
+
+### Local assemblies
+
 A script declares external dependencies and configuration with assembly attributes at its top. A local DLL is the
 smallest example. Save `arithmetic.n` and build it with
 `ncc arithmetic.n -target:library -out:arithmetic.dll`:
@@ -245,11 +275,11 @@ System.Console.WriteLine(JsonConvert.SerializeObject(array[1, 2, 3]))
 ```
 
 Run `nscript run json.ns`. The first run needs the package in the cache, a local feed, or access to the configured
-feed. This network-dependent example is not part of the offline book checks. Package support requires
-`Nemerle.Scripting.NuGet.dll` beside `nscript.exe`; the supplied toolchain includes it. A custom minimal toolchain
-without that adapter can still use local DLL references, but reports that no package resolver is configured.
+feed. This network-dependent example is not part of the offline book checks. This example uses the optional NuGet
+adapter described above, including its supporting libraries. If that adapter is absent, the CLI reports that no
+package resolver is configured; ordinary script execution and local DLL references remain available.
 
-The default package feed is nuget.org. Add another with `[assembly: Repository("https://my.feed/v3/index.json")]`
+The NuGet adapter's default package feed is nuget.org. Add another with `[assembly: Repository("https://my.feed/v3/index.json")]`
 or a local feed with `[assembly: Repository("packages")]`. Versions such as `"13.*"` are not exact requests.
 
 These command-line options are also available before the `--` separator:
@@ -553,7 +583,7 @@ scripting API guide in `scripting/README.md`.
 | The runner cannot find .NET 10 | use the installer to repair prerequisites; a different major runtime alone is not enough |
 | A helper name is unknown | distinguish a `.n` module (`using`) from a `.ns` child (`Import`), and check its registered path and visibility |
 | A dependency DLL cannot be opened | check the `DependsOn` path relative to the script and keep the library's runtime dependencies available |
-| No package resolver is configured | use a toolchain containing `Nemerle.Scripting.NuGet.dll` |
+| No package resolver is configured | for `nscript`, install the NuGet adapter and its supporting libraries; for embedding, set `ScriptHostOptions.Resolver` |
 | An offline package is unavailable | populate the selected cache/feed first; use the same `--cache-dir` for both runs |
 | A compound filename has no matching kind | put its compiled kind library beside it or on `NEMERLE_SCRIPT_PATH` |
 | A compiled script will not load | keep its `.dll.script` and `.dll.dependencies/` together with the DLL; recompile to rename the artifact |

@@ -200,6 +200,12 @@ under the platform's local application data directory.
 
 ## Dependencies and host configuration
 
+Package resolution belongs to the hosting layer. `Nemerle.Scripting.dll` has no built-in NuGet client and
+`new ScriptHost()` has no package resolver. Compilation, evaluation, supplied inputs, script imports, sessions and
+artifact caching are available without a package manager. Local DLL dependencies use the filesystem resolver.
+Package requests require an implementation of `IScriptDependencyResolver` on `ScriptHostOptions.Resolver`; otherwise
+compilation reports `No script dependency resolver configured`.
+
 Literal assembly attributes are script metadata, collected with Nemerle's lexer
 before full parsing. Ordinary attributes continue through the ordinary compiler.
 No new keyword or interpreter is introduced.
@@ -228,9 +234,22 @@ extracted assets are checked against the pinned package archive. Configure
 re-resolves a graph. No SDK or MSBuild process is invoked at runtime. Package build
 scripts, analyzers and MSBuild targets are not executed.
 
-The CLI loads this adapter when present. It accepts `--package ID VERSION`,
+The CLI loads this adapter and configures its resolver when present with its supporting libraries. The bundled
+`boot/coreclr` distribution includes it; `build/build-scripting.py` builds only the scripting library and runner.
+Building the adapter separately is described in [Optional NuGet adapter build](#optional-nuget-adapter-build).
+The CLI accepts `--package ID VERSION`,
 `--repository FEED`, `--offline`, `--update-lock`, `--target-framework TFM`, and
 `--runtime RID`. The standard adapter's default feed is NuGet's public v3 feed.
+
+Other hosts can assign a different `IScriptDependencyResolver` to use another package source or resolution policy.
+Its `Resolve` method returns `ScriptResolution`: compilation assembly paths, runtime assembly paths, native library
+paths and a `LockFingerprint` describing the resolved dependency graph. The script host passes these references to
+the shared compiler and includes the dependency fingerprint in cache identity. A replacement resolver must supply
+assets compatible with the target CLR; resolving packages and compiling Nemerle remain separate responsibilities.
+The current CLI's adapter discovery explicitly names the NuGet adapter, so arbitrary resolver assemblies are not
+automatically selected. Supporting another resolver in the CLI requires explicit runner configuration; embedding
+already exposes the resolver interface. This hosting API does not require the .NET SDK at runtime.
+
 Saved version-three artifacts include source identity, result metadata, hashes,
 binding/member metadata, diagnostics and the complete imported script graph.
 A `.dll.dependencies/` directory bundles imported assemblies/descriptors and
