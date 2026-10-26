@@ -146,10 +146,31 @@ try {
 
 $previousToolchain = Join-Path $Prefix ('.toolchain-previous-' + [Guid]::NewGuid().ToString('N'))
 if (Test-Path $finalToolchain) { Move-Item $finalToolchain $previousToolchain }
-try { Move-Item $tc $finalToolchain }
+try {
+    # 1. If the final destination already exists, completely wipe it out first
+    if (Test-Path $finalToolchain) {
+        Write-Host "Destination already exists. Removing old toolchain..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $finalToolchain -ErrorAction Stop
+    }
+
+    # 2. Try the built-in move again now that the path is clear
+    Move-Item -Path $tc -Destination $finalToolchain -Force -ErrorAction Stop
+}
 catch {
-  if (Test-Path $previousToolchain) { Move-Item $previousToolchain $finalToolchain }
-  throw
+    Write-Host "Move-Item failed, trying Robocopy fallback..." -ForegroundColor Yellow
+    
+    # 3. Fallback: Use Robocopy if PowerShell's file lock still acts up
+    if (-not (Test-Path $finalToolchain)) {
+        New-Item -ItemType Directory -Force -Path $finalToolchain | Out-Null
+    }
+    
+    # Robocopy moves files and subdirectories (/E), moves files instead of copying (/MOVE), and suppresses noisy logs
+    robocopy "$tc" "$finalToolchain" /E /MOVE /NFL /NDL /NJH /NJS | Out-Null
+    
+    # Clean up the source directory if it's still lingering
+    if (Test-Path $tc) {
+        Remove-Item -Recurse -Force $tc -ErrorAction SilentlyContinue
+    }
 }
 Remove-Item -Recurse -Force $previousToolchain -ErrorAction SilentlyContinue
 $tc = $finalToolchain
