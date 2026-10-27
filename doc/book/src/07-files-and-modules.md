@@ -347,8 +347,60 @@ System.Console.WriteLine(1)
 is exported by lib.shapes as a global type, so no other type can have that name
 ```
 
-This is why `partial` is not needed: a type has one definition in one file, and `export` is how it is shared.
-Only types are exported; functions and top-level values are reached through their file.
+A type is declared once, in the file that exports it, and `export` is how it is shared. Only types are exported;
+functions and top-level values are reached through their file.
+
+## Adding to a type: `extend`
+
+Other files add to an exported type with `extend`: fields, properties, methods, and interfaces it implements. The
+compiler gathers what each file adds into the type, then builds and checks it whole, as if it had been written in one
+place:
+
+```nemerle
+// file: lib/shapes.n
+export interface IDrawable { Draw() : string; }
+export class Pen
+{
+  public mutable Width : int = 3;
+}
+
+// file: styles.n
+extend Pen : IDrawable
+{
+  public mutable Color : string = "red";
+  public Draw() : string { $"$Color pen, $Width wide" }
+}
+
+// file: main.n
+def pen = Pen();
+pen.Color = "blue";
+def shown : IDrawable = pen;
+System.Console.WriteLine(shown.Draw())
+```
+
+```text
+blue pen, 3 wide
+```
+
+The type is still one type: a member written twice is an error, wherever each is written, and what it derives from
+is said where it is exported (an `extend` adds interfaces, not a base class). `extend` adds to an exported type only:
+
+```nemerle,fail
+// file: main.n
+extend Brush { public Size : int = 1; }
+System.Console.WriteLine(1)
+```
+
+```text
+no type `Brush' is exported
+```
+
+A type can also be extended after it is compiled: a program, or a script a host loads, extends a type of a library
+it uses. Every exported class carries an extension slot for that (a field the compiler adds, hidden from other .NET
+languages), and what an `extend` compiled later adds lives there, made the first time it is used on an object:
+objects made before the script was loaded have it too, with its fields at their initial values. Inside such an
+`extend`, `this` is the object and the type's own public members are named as in the type. It adds fields, properties
+and methods; the type's interfaces, and its static members, are where it is compiled.
 
 ## The rules
 
@@ -364,7 +416,7 @@ The rules keep names unambiguous for Nemerle and for C# code that uses Nemerle a
   namespace declarations are not allowed
   ```
 
-- **No `partial`.** A type lives in exactly one file.
+- **No `partial`.** A type is declared in exactly one file; other files add to it with `extend`.
 - **A module may not have the same name as a containing folder** (`a.n` next to `a/b.n`, unless registration separates
   their identities). The file would be a type and the
   directory a namespace with the same name, which .NET languages reject.

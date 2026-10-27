@@ -19,7 +19,9 @@ mask helpers { public Two() : int { 2 } }   // a named group inside the file
 - **Imports are per file.** A file sees another file only through `using path.to.file;` or a qualified
   name (`util.text.Shout`). Opening a directory exposes nothing, and a file's own directory is not in scope
   either: `util/other.n` reaches its sibling as `util.text`, never as `text`.
-- **No `namespace` blocks and no `partial`.** A type lives in exactly one file.
+- **No `namespace` blocks and no `partial`.** A type is declared in exactly one file; `extend T { ... }` in another
+  file adds members and interfaces to the exported type `T` (its parts are gathered, then it is built and checked
+  whole), and to a type compiled already through its extension slot (`lib/Nemerle/Extend.n`).
 - **Groups inside a file use `mask`.**
 - **Top-level statements are the file's `Main`.** Statements written at file level, in source order, become
   `public Main() : void` of the module, as in classic Nemerle and C#. Members may sit between them; a statement's

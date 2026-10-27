@@ -586,6 +586,52 @@ companion files described [above](#compiling-once-and-running-the-artifact).
 For base classes, receiver objects, typed result contracts and host-controlled configuration, see the
 scripting API guide in `scripting/README.md`.
 
+### A script that extends the application's types
+
+A script can add to an exported type of the application with `extend` (chapter 7): its fields, properties and
+methods live in the object's extension slot, so the application's own objects have them, made before the script was
+compiled as well as after:
+
+```nemerle,app
+// ncc: -r:{toolchain}/Nemerle.Scripting.dll
+// file: extending.n
+using System;
+using System.IO;
+using Nemerle.Scripting.contracts;
+using Nemerle.Scripting.host;
+
+export class Pen
+{
+  public mutable Width : int = 3;
+}
+
+def pen = Pen();
+def definition = ScriptDefinition();
+definition.TargetReferenceDirectory = Path.Combine(AppContext.BaseDirectory, "references");
+definition.Properties.Add("pen", typeof(Pen));
+
+def source = ScriptSource(
+  "extend Pen { public mutable Style : string = \"plain\"; public Describe() : string { $\"$Style, $Width wide\" } }\n"
+  + "pen.Style = \"bold\";\n"
+  + "pen.Describe()\n", "styles.ns");
+def host = ScriptHost();
+def compilation = host.Compile(source, definition);
+unless (compilation.Success)
+{
+  foreach (d in compilation.Diagnostics) Console.Error.WriteLine($"$(d.Line):$(d.Column): $(d.Message)");
+  throw InvalidOperationException("Script did not compile")
+}
+def inputs = ScriptInputs();
+inputs.Properties.Add("pen", pen);
+def result = host.Evaluate(compilation.Script, inputs);
+when (result.Kind == ScriptResultKind.Error) throw result.Error;
+Console.WriteLine(result.Value)
+```
+
+```text
+bold, 3 wide
+```
+
 ## Common problems
 
 | Symptom | Check |

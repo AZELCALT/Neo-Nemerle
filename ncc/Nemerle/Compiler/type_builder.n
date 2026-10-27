@@ -1285,6 +1285,12 @@ public class TypeBuilder : TypeInfo
             def added_ifaces =
               if (hd2.tycon.IsInterface)
                 [hd2]
+              else if (Manager.FileModuleRegistry.IsExtension(part))
+              {
+                // (an `extend' adds members and interfaces: where the type is exported, it says what it derives from)
+                Message.Error(part.Location, $"`extend $(Name)' names the class `$(hd2)': an extension adds interfaces, the base class of `$(Name)' is the one its export gives it");
+                []
+              }
               else
               {
                 // if base class exists in both parts, it must be the same

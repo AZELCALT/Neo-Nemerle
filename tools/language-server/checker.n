@@ -722,7 +722,7 @@ public sealed class CompletionManager : ManagerClass
     "async", "await", "yield",
     "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
     "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "mask",
-    "export", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void"];
+    "export", "extend", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void"];
 
   protected override Complete(expression : PExpr, _ : TypeVar, typer : Typer, env : GlobalEnv) : TExpr
   {

@@ -1088,9 +1088,13 @@ using Nemerle.Compiler.XmlDump;
           // create N.C.TypeBuilders for all parsed types and add them to namespace hierarchy
           Hierarchy.Scanning = true;
           try
+          {
             foreach (result in parseResults)
               foreach (topDecl in result.TopDeclarations)
                 ScanningPipeline(topDecl);
+            // what `extend' adds to a type, after every file's own declarations
+            FileModuleRegistry.AddExtensions(ScanningPipeline);
+          }
           finally Hierarchy.Scanning = false;
           when (Options.FileModules) FileModuleRegistry.MakeAsyncFiles();
 

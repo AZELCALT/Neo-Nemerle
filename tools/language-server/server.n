@@ -872,6 +872,7 @@ public sealed class Server
     ("async", "async ${1:Name}(${2:x} : ${3:int}) : System.Threading.Tasks.Task[${4:int}]\n{\n  $0\n}", "an async function (await waits in it)"),
     ("class", "class ${1:Name}\n{\n  public this() { }\n  $0\n}", "a class"),
     ("export", "export class ${1:Name}\n{\n  $0\n}", "a type for the whole program"),
+    ("extend", "extend ${1:Name}\n{\n  $0\n}", "add to an exported type"),
     ("variant", "variant ${1:Name}\n{\n  | ${2:First}\n  | ${3:Second} { ${4:value} : ${5:int} }\n}", "a variant (closed set of cases)"),
     ("using", "using ${1:System};", "open a namespace or file"),
     ("macro", "macro ${1:Name}(${2:expr})\n{\n  <[ \\$${2:expr} ]>\n}", "a macro"),
@@ -880,7 +881,7 @@ public sealed class Server
     "async", "await", "yield",
     "using", "fun", "true", "false", "null", "this", "base", "try", "catch", "finally", "throw", "is", "as", "in", "with",
     "public", "private", "protected", "internal", "static", "class", "struct", "variant", "interface", "module", "mask",
-    "export", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void",
+    "export", "extend", "macro", "syntax", "grammar", "space", "scope", "dial", "lock", "typeof", "array", "list", "option", "void",
     "abstract", "override", "virtual", "sealed", "ref", "out", "params", "implements", "where"];
 
   /// The keywords and forms that start with the word before the cursor (none after a dot).

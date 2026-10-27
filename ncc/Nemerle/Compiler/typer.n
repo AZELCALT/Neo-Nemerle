@@ -4530,12 +4530,39 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     }
 
 
+    /// `obj.name' where `name' is what an `extend' of this compilation adds to `obj's compiled type (or a type it
+    /// derives from): the member of the extension block in its slot (FileModuleRegistry.LateMembers); null otherwise.
+    internal LateExtension (obj : TExpr, name : PT.Name) : PExpr
+    {
+      def registry = Manager.FileModuleRegistry;
+      def find (ti : TypeInfo) : string
+      {
+        if (ti == null) null
+        else match (registry.LateBlock (ti.FullName, name.Id)) { | null => find (ti.BaseType) | block => block }
+      }
+      match (if (registry.LateMembers.Count == 0) None () else obj.Type.Hint)
+      {
+        | Some (FixedType.Class (ti, _)) =>
+          match (find (ti))
+          {
+            | null => null
+            | block =>
+              def of = PExpr.GenericSpecifier (<[ Nemerle.Extend.Of ]>, [PExpr.FromQualifiedIdentifier (Manager, block)]);
+              <[ $of ($(obj : typed)).$(name : name) ]>
+          }
+        | _ => null
+      }
+    }
+
     TypeMemberExpr(expr : PExpr, obj : TExpr, name : PT.Splicable.Name, expected : TypeVar) : TExpr
     {
       def mem_name = name.body;
 
       match (TypeMember (obj, mem_name, expected))
       {
+        // (what an `extend' of this compilation adds to a compiled type)
+        | Some ([]) when LateExtension (obj, mem_name) != null => TypeExpr (LateExtension (obj, mem_name), expected)
+
         | Some ([]) =>
           if (Manager.IsIntelliSenseMode)
             TExpr.Error()
@@ -7550,6 +7577,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             // in the end of delayed overload resolution process.
             // see [End of overload resoluton process] in this file.
             match (typer.TypeMember (e, name, typer.FreshTypeVar())) {
+              | Some ([]) when typer.LateExtension (e, name) != null =>
+                SetKind (Kind.Resolved (typer.TypeExpr (typer.LateExtension (e, name), expected), []))
+
               | Some ([]) =>
                 ReportError (messenger, $"there is no member named `$(name)' in $(typer.TypeOf (e)) with type $expected");
                 SetKind (Kind.Error ())

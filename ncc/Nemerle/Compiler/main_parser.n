@@ -669,6 +669,10 @@ using Nemerle.Compiler.Utility;
           when (exported) topstream.Child = topstream.Child.Next;
           match (topstream.Child)
           {
+            | token when !publicState && !exported && ExtensionStart(token) =>
+              def next = topstream.Next;
+              topstream.Next = null;
+              try ParseExtension(fileParser, topstream, moduleName) finally { topstream.Next = next }
             | Token.Using(newEnv, _, _) =>
               usings.AddRange(UsingTargets(fileParser.env, newEnv));
               fileParser.env = newEnv;
@@ -693,6 +697,8 @@ using Nemerle.Compiler.Utility;
                           Message.Error(td.Location, $"`$(td.Name)' is already exported by $(registry.ExportedBy[td.Name]); an exported name is global, so one file exports it");
                         registry.ExportedBy[td.Name] = moduleName;
                         exports.Add(td);
+                        // (with its extension slot, for what an `extend' compiled after it adds)
+                        match (registry.SlotPart(td)) { | null => () | slot => registry.Slots.Add(slot) }
                       | _ => Message.Error(member.Location, "only types are exported; a function or value is reached through its file")
                     }
                 else members.AddRange(parsed)
@@ -708,7 +714,7 @@ using Nemerle.Compiler.Utility;
                 {
                   | null | Token.Using | Token.Namespace => false
                   | Token.Keyword("public") as pub when pub.Next is Token.Keyword("def") => false
-                  | token => !IsMemberStart(token, false)
+                  | token => !IsMemberStart(token, false) && !ExtensionStart(token)
                 }
               }
               while (!publicState && last.Next is Token.LooseGroup && continues(last.Next :> Token.LooseGroup))
@@ -1071,6 +1077,41 @@ using Nemerle.Compiler.Utility;
       if (count > 0) added(after.NamespaceAliases, count).Rev()
       else if (after.OpenNamespaces.Length > before.OpenNamespaces.Length) [after.OpenNamespaces.Head.GetDisplayName()]
       else []
+    }
+
+    /// Whether a top-level group is `extend T { ... }' (`extend T : IShape { ... }'): what it adds to the global type
+    /// `T'. A type's parts are gathered, then it is built and checked whole (FileModuleRegistry.AddExtensions).
+    static ExtensionStart(token : Token) : bool
+    {
+      match (token)
+      {
+        | Token.Identifier("extend") as ex when ex.Next is Token.Identifier =>
+          mutable last = ex.Next;
+          while (last.Next != null) last = last.Next;
+          last is Token.BracesGroup
+        | _ => false
+      }
+    }
+
+    /// `extend T { ... }' (ExtensionStart) as a part of the global type `T', for `owner' (the module or script it is in).
+    static ParseExtension(parser : MainParser, group : Token.LooseGroup, owner : string) : void
+    {
+      def ex = group.Child;
+      // (read as the class part it is: `partial class T ...')
+      def cls = Token.Keyword("class"); cls.Location = ex.Location; cls.Next = ex.Next;
+      def part = Token.Keyword("partial"); part.Location = ex.Location; part.Next = cls;
+      group.Child = part;
+      parser.extending = true;
+      try
+        foreach (member in parser.ParseClassMembers(group, "module"))
+          match (member)
+          {
+            | ClassMember.TypeDeclaration(td) =>
+              td.name = Splicable.Name(Name.NameInCurrentColor(td.Name, td.Location, parser.Manager.CoreEnv));
+              parser.Manager.FileModuleRegistry.Extensions.Add((td, owner))
+            | _ => ()
+          }
+      finally { parser.extending = false }
     }
 
     /// True when a top-level group starts a member declaration rather than a statement. In a script `mutable x = 1`
@@ -1507,6 +1548,7 @@ using Nemerle.Compiler.Utility;
               parser.env = GlobalEnv(newEnv, ["mask"]);
             | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
+            | token when ExtensionStart(token) => ParseExtension(parser, groups, data.TypeName)
             | token when IsMemberStart(token, true) =>
               def declared = parser.ParseClassMembers(groups, "class").NToList();
               parsedMembers.AddRange(declared);
@@ -3456,7 +3498,7 @@ using Nemerle.Compiler.Utility;
               | "virtual"   => add_and_loop(NemerleModifiers.Virtual)
               | "volatile"  => add_and_loop(NemerleModifiers.Volatile)
               | "partial"   =>
-                when (Manager.Options.FileModules && quotation_depth == 0)
+                when (Manager.Options.FileModules && quotation_depth == 0 && !extending)
                   Message.Error(tok.Location, "partial declarations are not allowed in file-module mode");
                 add_and_loop(NemerleModifiers.Partial)
               | "extern"    => add_and_loop(NemerleModifiers.Extern)
@@ -4901,6 +4943,8 @@ using Nemerle.Compiler.Utility;
 
     // quoted code is generated code: it may declare `partial` parts (they complete a source type)
     mutable quotation_depth : int;
+    // an `extend T { ... }' is parsed as a part of `T' (see the file modules' top level)
+    internal mutable extending : bool;
 
     parse_quotation () : PExpr
     {

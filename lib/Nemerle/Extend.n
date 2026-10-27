@@ -1,0 +1,65 @@
+// What `extend` adds to a type compiled already (a host's type, extended by a script loaded into it): every exported
+// class has an extension slot, and an extension's fields and members live in a block the slot holds, made the first
+// time it is asked for, so objects made before the extension was loaded have it too. A type extended where it is
+// compiled has the members itself (the compiler gathers them into it), and needs no slot.
+using System;
+
+/// A class with an extension slot (every exported class): what an `extend` compiled after it adds lives there.
+public interface IExtensible
+{
+  ExtensionSlot : object { get; set; }
+}
+
+/// What one `extend` of a compiled type adds to an object of it: its fields, and its members, whose `this` is the
+/// object it is attached to.
+public interface IExtension
+{
+  Attach(owner : object) : void;
+}
+
+/// The extension `T` of `owner`, made the first time it is asked for (its fields at their initial values): the slot
+/// holds one extension, or an array of them when several `extend`s add to the type.
+public Of[T](owner : IExtensible) : T where T : class, IExtension, new()
+{
+  def find(slot : object) : T
+  {
+    match (slot)
+    {
+      | one is T => one
+      | many is array[object] =>
+        mutable found = null;
+        foreach (e in many) when (found == null && e is T) found = e :> T;
+        found
+      | _ => null
+    }
+  }
+  match (find(owner.ExtensionSlot))
+  {
+    | null =>
+      // (made rarely, once per object and extension: one lock for all)
+      lock (typeof(IExtension))
+      {
+        def slot = owner.ExtensionSlot;
+        match (find(slot))
+        {
+          | null =>
+            def made = T();
+            made.Attach(owner);
+            owner.ExtensionSlot =
+              match (slot)
+              {
+                | null => made : object
+                | many is array[object] =>
+                  def grown : array[object] = array(many.Length + 1);
+                  Array.Copy(many, grown, many.Length);
+                  grown[many.Length] = made;
+                  grown
+                | one => array[one, made : object]
+              };
+            made
+          | found => found
+        }
+      }
+    | found => found
+  }
+}

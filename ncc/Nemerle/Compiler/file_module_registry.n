@@ -343,6 +343,156 @@ public sealed class FileModuleRegistry
   }
   /// Per exported name: the module that exports it.
   public ExportedBy : Hashtable[string, string] = Hashtable();
+  /// The `extend T { ... }' blocks of the files, with the module of each: parts of the global type `T', added to it
+  /// once every file is parsed (AddExtensions).
+  public Extensions : System.Collections.Generic.List[TopDeclaration * string] = System.Collections.Generic.List();
+  /// The extension slots of the exported classes (SlotPart), added with the extensions.
+  public Slots : System.Collections.Generic.List[TopDeclaration] = System.Collections.Generic.List();
+
+  /// An exported class's extension slot, as a part of it (Nemerle.Extend.IExtensible): what an `extend' compiled after
+  /// the type adds to an object lives there. Null for a type that has none: a struct (a copy would not keep it), a
+  /// module, an interface, or a compilation without the runtime that defines the slot.
+  public SlotPart(td : TopDeclaration) : TopDeclaration
+  {
+    def slotted = match (td)
+      {
+        | TopDeclaration.Class as c => !(c.modifiers.mods %&& (NemerleModifiers.Struct | NemerleModifiers.Static))
+        | TopDeclaration.Variant => true
+        | _ => false
+      };
+    if (!slotted || manager.CoreEnv.LookupType(["Nemerle", "Extend", "IExtensible"]).IsNone) null
+    else
+    {
+      def part = match (<[ decl:
+        partial class Slot : Nemerle.Extend.IExtensible
+        {
+          private mutable _N_extensions : object;
+          private _N_ExtensionSlot : object implements Nemerle.Extend.IExtensible.ExtensionSlot
+          {
+            get { _N_extensions }
+            set { _N_extensions = value }
+          }
+        } ]>) { | ClassMember.TypeDeclaration(td = d) => d | _ => null };
+      part.name = td.name;
+      part.typarms = td.typarms;
+      part
+    }
+  }
+
+  /// Whether `part' is one an `extend' adds.
+  public IsExtension(part : TopDeclaration) : bool { Extensions.Exists((d, _) => d : object == part) }
+
+  /// The parts `extend' adds, joined to their types (`add', the type tree's scan of a declaration) after every file's
+  /// own: a type is built from its export first, then what each extension adds, and checked whole.
+  public AddExtensions(add : TopDeclaration -> void) : void
+  {
+    foreach (slot in Slots) add(slot);
+    foreach ((part, owner) in Extensions)
+      if (ExportedBy.Contains(part.Name)) add(part)
+      else
+        match (manager.CoreEnv.LookupType([part.Name]))
+        {
+          // a type compiled already (a host's, which a script extends): its extension slot holds what this adds
+          | Some(ti) when !(ti is TypeBuilder) =>
+            match (manager.CoreEnv.LookupType(["Nemerle", "Extend", "IExtensible"]))
+            {
+              | Some(slot) when ti.IsDerivedFrom(slot) => match (LateExtension(part, ti, owner)) { | null => () | block => add(block) }
+              | _ =>
+                Message.Error(part.Location, $"`extend $(part.Name)': `$(ti.FullName)' is compiled without an extension slot (an exported class has one, compiled with this version)")
+            }
+          | _ =>
+            Message.Error(part.Location, $"`extend $(part.Name)': no type `$(part.Name)' is exported; `extend' adds to a global type (`export class $(part.Name)' in its file)")
+        }
+  }
+
+  /// What `extend' adds to a type compiled already, by the type's full name and the member's name: the extension
+  /// block that holds it (the typer reads `x.member' as the block's, see Typer.LateExtension).
+  public LateMembers : Hashtable[string, Hashtable[string, string]] = Hashtable();
+
+  /// The extension block of an `extend' of the compiled `target': a class with the fields, properties and methods it
+  /// adds, whose `this' is the object it is attached to (`_N_self'), and, so they can be named as in the type, the
+  /// type's own public instance members forwarded to it. Null after an error.
+  LateExtension(part : TopDeclaration, target : TypeInfo, owner : string) : TopDeclaration
+  {
+    def self = <[ $("_N_self" : dyn) ]>;
+    def targetType = PExpr.TypedType(FixedType.Class(target, []));
+    def members = match (part) { | TopDeclaration.Class(decls = decls) => decls | _ => [] };
+    mutable ok = true;
+    def error(loc : Location, message : string) : void { Message.Error(loc, message); ok = false }
+    when (target.TyparmsCount > 0) error(part.Location, $"`extend $(part.Name)': a generic type compiled already is extended where it is compiled");
+    match (part) { | TopDeclaration.Class(t_extends = _ :: _) => error(part.Location, $"`extend $(part.Name)': an interface is added where `$(part.Name)' is compiled; an extension of a compiled type adds members") | _ => () }
+    def own = Hashtable();
+    foreach (member in members)
+    {
+      when (member is ClassMember.TypeDeclaration || member.modifiers.mods %&& NemerleModifiers.Static || member.Name == ".ctor" || member.Name == "this")
+        error(member.Location, $"`extend $(part.Name)': an extension of a compiled type adds instance fields, properties and methods");
+      unless (target.LookupMember(member.Name).IsEmpty)
+        error(member.Location, $"`$(part.Name)' has `$(member.Name)' already");
+      own[member.Name] = member;
+    }
+    if (!ok) null
+    else
+    {
+      // (`this' in what it adds is the object)
+      def rebind(f : ClassMember.Function) : void
+      {
+        match (f.body)
+        {
+          | FunBody.Parsed(body) =>
+            f.body = FunBody.Parsed(Nemerle.Compiler.macros.Macros.TraverseExpr(None(), body, false, (_, after, e) => if (after && e is PExpr.This) self else e))
+          | _ => ()
+        }
+      }
+      foreach (member in members)
+        match (member)
+        {
+          | ClassMember.Function as f => rebind(f)
+          | ClassMember.Property(getter = getter, setter = setter) =>
+            when (getter is Some(g)) rebind(g);
+            when (setter is Some(s)) rebind(s)
+          | _ => ()
+        }
+      // (the type's own members, by their names as in it)
+      def forwarded = System.Collections.Generic.List();
+      foreach (m in target.GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        // (what every object has, `ToString', `Equals', is the block's own as well: not forwarded)
+        when (!own.Contains(m.Name) && m.DeclaringType != null && !m.Name.StartsWith("_N_")
+              && !["ToString", "Equals", "GetHashCode", "GetType", "Finalize", "MemberwiseClone"].Contains(m.Name))
+          match (m)
+          {
+            | f is IField =>
+              def ty = PExpr.TypedType(f.GetMemType());
+              forwarded.Add(if (f.IsMutable) <[ decl: public $(m.Name : dyn) : $ty { get { $self.$(m.Name : dyn) } set { $self.$(m.Name : dyn) = value } } ]>
+                            else <[ decl: public $(m.Name : dyn) : $ty { get { $self.$(m.Name : dyn) } } ]>)
+            | p is IProperty when !p.IsIndexer && p.GetGetter() != null =>
+              def ty = PExpr.TypedType(p.GetMemType());
+              forwarded.Add(if (p.GetSetter() != null) <[ decl: public $(m.Name : dyn) : $ty { get { $self.$(m.Name : dyn) } set { $self.$(m.Name : dyn) = value } } ]>
+                            else <[ decl: public $(m.Name : dyn) : $ty { get { $self.$(m.Name : dyn) } } ]>)
+            | meth is IMethod when !meth.IsConstructor && meth.Header.TypeParameters.IsEmpty && !["get_", "set_", "add_", "remove_", "op_"].Exists(meth.Name.StartsWith)
+                                   && meth.GetParameters().ForAll(x => x.Kind == ParmKind.Normal) =>
+              def parameters = meth.GetParameters().Map(x => <[ parameter: $(x.Name : dyn) : $(PExpr.TypedType(x.Type)) ]>);
+              def arguments = meth.GetParameters().Map(x => <[ $(x.Name : dyn) ]>);
+              forwarded.Add(<[ decl: public $(m.Name : dyn) (..$parameters) : $(PExpr.TypedType(meth.ReturnType)) { $self.$(m.Name : dyn) (..$arguments) } ]>)
+            | _ => ()
+          }
+      def blockName = "_N_" + part.Name + "_extension_" + owner.Replace('.', '_');
+      def all = <[ decl: private mutable $("_N_self" : dyn) : $targetType; ]>
+                :: <[ decl: public Attach(owner : object) : void { $self = owner :> $targetType } ]>
+                :: members + forwarded.NToList();
+      def block = match (<[ decl: public sealed class Block : Nemerle.Extend.IExtension { ..$all } ]>) { | ClassMember.TypeDeclaration(td = d) => d | _ => null };
+      block.name = Splicable.Name(Name.NameInCurrentColor(blockName, part.Location, manager.CoreEnv));
+      unless (LateMembers.Contains(target.FullName)) LateMembers[target.FullName] = Hashtable();
+      foreach (member in members) LateMembers[target.FullName][member.Name] = blockName;
+      block
+    }
+  }
+
+  /// The extension block holding what an `extend' of this compilation adds to the compiled type `type' by `name'
+  /// (null when none does).
+  public LateBlock(type : string, name : string) : string
+  {
+    if (LateMembers.Contains(type) && LateMembers[type].Contains(name)) LateMembers[type][name] else null
+  }
   public ScriptUsings : System.Collections.Generic.List[string] = System.Collections.Generic.List();
 
   /// Whether `member` may be reached from code in `parent`: a module's top-level state is reached bare only in its
