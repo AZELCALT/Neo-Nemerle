@@ -158,7 +158,7 @@ public module Checker
       def text = Text(path, overlay);
       // a script is nscript's, not a module of the workspace: a .ns file, or a .n file run as a script (one that
       // declares its dependencies)
-      when (text != null && path.EndsWith(".n", StringComparison.Ordinal) && !text.Contains("DependsOn(") && seen.Add(path)) { files.Add(path); queue.Enqueue(path) }
+      when (text != null && path.EndsWith(".n", StringComparison.Ordinal) && !Scripts.IsScript(path, text) && seen.Add(path)) { files.Add(path); queue.Enqueue(path) }
     }
     foreach (path in overlay.Keys) when (path.StartsWith(root, StringComparison.Ordinal)) add(path);
     // the workspace's global types are reached without a `using`

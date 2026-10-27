@@ -116,6 +116,8 @@ step('vscode-build', [py, build / 'build-vscode-extension.py', '--server', out /
 T, R = toolchain, refs
 suites = [
     ('file-modules', ['check-file-modules.py', T / 'ncc.exe', '--runtime', 'dotnet', '--target-references', R]),
+    ('source-resolution', ['check-source-resolution.py', '--toolchain', T, '--references', R]),
+    ('logical-modules', ['check-logical-modules.py', '--toolchain', T, '--references', R]),
     ('projects', ['check-projects.py', '--toolchain', T]),
     ('targets', ['check-targets.py', '--toolchain', T]),
     ('debugger', ['check-debugger.py', '--toolchain', T]),
@@ -127,6 +129,7 @@ suites = [
     ('grammar-regressions', ['check-grammar-regressions.py', '--toolchain', T, '--references', R]),
     ('indentation', ['check-indentation.py', '--toolchain', T, '--references', R]),
     ('scripting', ['check-scripting.py', '--toolchain', T, '--references', T / 'references']),
+    ('script-imports', ['check-script-imports.py', '--toolchain', T, '--server', out / 'lsp/nemerle-lsp']),
     ('type-flow', ['check-type-flow.py', '--toolchain', T]),
     ('runtime-compilation', ['check-runtime-compilation.py', '--toolchain', T, '--references', T / 'references']),
     ('codedom', ['check-codedom.py', '--toolchain', T, '--references', R]),

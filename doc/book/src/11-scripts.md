@@ -149,18 +149,20 @@ A registered file uses its logical path: `register library.words;` in `text.n` i
 These `.n` helpers compile into the script's artifact. Their contents participate in its cache key, so editing a
 helper, including one imported through another helper, rebuilds the script. An imported helper may also have async
 top-level code; it finishes before the script uses it. `using` resolves CLR namespaces and referenced libraries too;
-it does not download DLLs or packages. `[assembly: Import("other.ns")]` below remains the way to compose another
+it does not download DLLs or packages. `import other;` below composes another
 script as a typed child, with its own script context.
 
 ### Importing another script
 
-Use `[assembly: Import("file.ns")]` when the dependency is itself a script, with initialization and state of its own.
-Importing it makes its public declarations available through its filename; `using` alone does not load a `.ns` file:
+Use `import file;` when the dependency is `file.ns`, a script with initialization and state of its own.
+Put imports at the start of the script, alongside `using` and dependency attributes. An import loads the child and
+opens its public declarations, so both `Next()` and `counter.Next()` work. `using` continues to discover `.n` helpers
+and CLR names; it does not load a `.ns` file:
 
 ```nemerle,script
 // file: use_counter.ns
-[assembly: Import("counter.ns")]
-System.Console.WriteLine(counter.Next());
+import counter;
+System.Console.WriteLine(Next());
 System.Console.WriteLine(counter.Next())
 
 // file: counter.ns
@@ -176,16 +178,25 @@ counter ready
 ```
 
 Run `nscript run use_counter.ns`. The child initializes before its importer and keeps the same state for both calls.
-Running the root script again starts fresh state. Add `using counter;` if you want to call `Next()` without the owner,
-or use `using C = counter;` and call `C.Next()`. Private declarations stay private. Cyclic imports, duplicate direct
+Running the root script again starts fresh state. Qualify names with the child's filename when needed.
+Private declarations stay private. Cyclic imports, duplicate direct
 imports and two children with the same file owner are errors.
+
+`import util.counter;` resolves `util/counter.ns` relative to the importing script. For an explicit path, use
+`import "../shared/counter.ns";`. Quoted paths must name `.ns` files. In `#pragma indent` mode, an import can end at
+the newline; otherwise finish it with `;`. Imported scripts can import their own neighbors the same way. These are
+script-host directives, available when running `.ns` or `.n` through `nscript`, not namespace imports for `ncc`.
+
+`[assembly: Import("counter.ns")]` remains supported for compatibility and for metadata-driven hosts. That older
+form acquires the child without automatically opening its names. DLL and package dependencies keep using
+`DependsOn`; script imports do not load assemblies or restore packages.
 
 | You want to use | Write |
 |---|---|
 | A neighboring ordinary source file | `using helpers;` for `helpers.n` |
 | File names under a physical or logical folder | `using util;`, then `text.Member(...)` |
 | A registered file module | `using library.words.text;` |
-| Another script and its state | `[assembly: Import("helpers.ns")]`, then `helpers.Member(...)` |
+| Another script and its state | `import helpers;`, then `Member(...)` or `helpers.Member(...)` |
 | A CLR namespace or type already referenced | `using System;` or `using System.Console;` |
 | An external assembly | `[assembly: DependsOn("tools.dll")]`, then its normal `using` |
 
@@ -194,7 +205,7 @@ imports and two children with the same file owner are errors.
 | Path | Relative to |
 |---|---|
 | `using helpers;` for a local source | the importing file's directory, then the source root |
-| `DependsOn("tools.dll")`, `Import("child.ns")` | the file containing that attribute |
+| `DependsOn("tools.dll")`, `import child;`, `import "child.ns";` | the declaring script's directory |
 | A relative feed in `Repository(...)` or `--repository` | the process's current working directory |
 | `File.ReadAllText("input.txt")` and other ordinary .NET file operations | the process's current working directory |
 | Command-line source/output paths, `--cache-dir`, `--history` | the terminal's current directory |
@@ -215,7 +226,7 @@ resolved assembly references; it does not choose package versions, contact packa
 | Dependency | How it becomes available |
 |---|---|
 | A local `.n` helper | ordinary `using` source discovery |
-| Another `.ns` script | `[assembly: Import("other.ns")]`, handled by the script host |
+| Another `.ns` script | `import other;`, handled by the script host |
 | A local DLL | `[assembly: DependsOn("tools.dll")]`, resolved relative to the script |
 | A package ID and version | a configured package resolver, such as the optional NuGet adapter |
 
@@ -307,7 +318,7 @@ For reference, these forms can appear together at the start of a script:
 [assembly: DependsOn("tools.dll")]                 // a local library, relative to the script
 [assembly: DependsOn("Example.Package", "1.2.3")]  // a NuGet package at an exact version
 [assembly: Repository("https://api.nuget.org/v3/index.json")]
-[assembly: Import("helpers.ns")]                   // another script, as a typed child
+[assembly: Import("helpers.ns")]                   // legacy script-import metadata
 [assembly: CompilerOptions("-define:FAST")]
 ```
 
@@ -581,7 +592,7 @@ scripting API guide in `scripting/README.md`.
 |---|---|
 | `nscript` is not found | run the installer, reopen your terminal, or invoke `dotnet path/to/nscript.exe` directly |
 | The runner cannot find .NET 10 | use the installer to repair prerequisites; a different major runtime alone is not enough |
-| A helper name is unknown | distinguish a `.n` module (`using`) from a `.ns` child (`Import`), and check its registered path and visibility |
+| A helper name is unknown | distinguish a `.n` module (`using`) from a `.ns` child (`import`), and check its registered path and visibility |
 | A dependency DLL cannot be opened | check the `DependsOn` path relative to the script and keep the library's runtime dependencies available |
 | No package resolver is configured | for `nscript`, install the NuGet adapter and its supporting libraries; for embedding, set `ScriptHostOptions.Resolver` |
 | An offline package is unavailable | populate the selected cache/feed first; use the same `--cache-dir` for both runs |

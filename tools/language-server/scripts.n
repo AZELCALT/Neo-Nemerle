@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using SCG = System.Collections.Generic;
 using Nemerle.Scripting.contracts;
@@ -23,7 +24,9 @@ public module Scripts
   /// Whether `path` (with its text) is a script.
   public IsScript(path : string, text : string) : bool
   {
-    path.EndsWith(".ns", StringComparison.Ordinal) || path.EndsWith(".n", StringComparison.Ordinal) && text != null && text.Contains("DependsOn(")
+    path.EndsWith(".ns", StringComparison.Ordinal) || path.EndsWith(".n", StringComparison.Ordinal) && text != null
+      && (text.Contains("DependsOn(") || text.Contains("Import(")
+          || Regex.IsMatch(text, @"^\s*import\s+(?:[A-Za-z_]|\x22)", RegexOptions.Multiline))
   }
 
   /// The check of the script at `path` (its unsaved text in `overlay`), as the checker writes it: its diagnostics, the

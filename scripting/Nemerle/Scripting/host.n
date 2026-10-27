@@ -256,6 +256,7 @@ public sealed class ScriptHost
             imported = result.Script; graph.Compiled.Add(childKey, imported);
           }
           def owner = imported.Definition.StemOf(child.Path);
+          when (request.OpenMembers && !collected.Imports.Contains(owner)) collected.Imports.Add(owner);
           when (definition.ImportBindings.Exists(b => b.Owner == owner)) throw ScriptDependencyException(ScriptDiagnostic(source.Path, request.Location.Line, request.Location.Column, "Imported file owner is ambiguous: " + owner, true));
           def property = "__import_" + childKey.Substring(0, 24);
           definition.ImportBindings.Add(ScriptImportBinding(owner, property, imported));

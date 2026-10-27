@@ -309,18 +309,23 @@ declares is reported, together with the directories that were searched. Embedded
 
 ## Source-script composition
 
-Acquiring a script and opening its names are separate operations:
+Ordinary `.n` helpers use `using helper;`. To compose `.ns` scripts, put `import` directives in the script header:
 
 ```nemerle
-[assembly: Import("math.n")]
+import math;
 math.nested.Double(21)
 ```
 
-`ScriptDefinition.ImportScripts` provides the same facility from the host.
-`math.nested.Double` is qualified through the imported file owner and mask.
-Use `using math;` to omit the file owner, or `using math.nested;` to open that
-mask explicitly. `using M = math.nested;` permits `M.Double(21)`. Importing a
-source alone does not open its functions. Private declarations stay private;
+`import math;` resolves the neighboring `math.ns`, acquires it and opens its public declarations. A public function
+at its root can be called directly; `math.nested.Double` is qualified through the imported file owner and mask.
+`import tools.math;` resolves `tools/math.ns`, while `import "../shared/math.ns";` uses an explicit path. A quoted
+path must end in `.ns`; use `DependsOn` for DLLs and packages. Semicolons terminate imports, with newline termination
+also supported under `#pragma indent`. The directive is handled by the script host before compilation and does not
+reserve `import` as a keyword throughout ordinary Nemerle code.
+
+`[assembly: Import("math.ns")]` and `ScriptDefinition.ImportScripts` remain compatible host/metadata facilities.
+They acquire children without opening names automatically; existing `using` and alias behavior for those children
+remains supported. The short directive opens names as well as acquiring the child. Private declarations stay private;
 ambiguous opened names are errors and local declarations retain precedence.
 Importing types uses the same file qualification and normal Nemerle type syntax.
 Known source types resolve before competing CLR types and their overloads;

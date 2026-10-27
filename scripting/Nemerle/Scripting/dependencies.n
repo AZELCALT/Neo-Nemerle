@@ -20,6 +20,7 @@ public sealed class AssemblyRequest
 {
   public Path : string;
   public Location : ScriptDiagnostic;
+  public mutable OpenMembers : bool;
   public this(path : string, location : ScriptDiagnostic) { Path = path; Location = location; }
 }
 public sealed class FileSystemScriptResolver
@@ -93,18 +94,29 @@ public static class ScriptMetadata
     def characters = source.Text.ToCharArray();
     def lexer = LexerString(manager, source.Text, Location(Location.GetFileIndex(Path.GetFullPath(source.Path)), 1, 1));
     lexer.Keywords = LexerBase.BaseKeywords;
+    mutable pending : Token = null;
     def read() : Token
     {
-      // The metadata pass does not parse blocks, but must let the compiler
-      // lexer enter indentation mode before the shared parser sees the source.
-      try { lexer.GetToken() }
-      catch { | _ is LexerBase.PragmaIndent => read() }
+      if (pending != null) { def token = pending; pending = null; token }
+      else {
+        // The metadata pass does not parse blocks, but must let the compiler
+        // lexer enter indentation mode before the shared parser sees the source.
+        try { lexer.GetToken() }
+        catch { | _ is LexerBase.PragmaIndent => read() }
+      }
     }
     def offset(location : Location) : int
     {
       mutable index = 0;
       for (mutable line = 1; line < location.Line; line++) index = source.Text.IndexOf('\n', index) + 1;
       index + location.Column - 1
+    }
+    def import_token() : Token
+    {
+      match (read()) {
+        | Token.WhiteSpace | Token.NewLine | Token.Comment => import_token()
+        | token => token
+      }
     }
     def fail(token : Token, message : string) : void
     {
@@ -113,16 +125,58 @@ public static class ScriptMetadata
     mutable braces = 0;
     mutable rounds = 0;
     mutable done = false;
+    mutable directives = true;
     while (!done)
     {
       def token = read();
       match (token)
       {
         | Token.EndOfFile => done = true;
-        | Token.BeginBrace => braces++;
+        | Token.BeginBrace => braces++; directives = false;
         | Token.EndBrace => braces--;
-        | Token.BeginRound => rounds++;
+        | Token.BeginRound => rounds++; directives = false;
         | Token.EndRound => rounds--;
+        | Token.Identifier("import") when directives && braces == 0 && rounds == 0 =>
+          mutable next : Token = import_token();
+          if (next is Token.StringLiteral || next is Token.Identifier)
+          {
+            mutable path : string = null;
+            mutable end = 0;
+            match (next) {
+              | Token.StringLiteral(value, _) =>
+                path = value; end = offset(next.Location) + next.Location.EndColumn - next.Location.Column;
+                next = import_token();
+              | Token.Identifier(name) =>
+                def parts = List.[string](); parts.Add(name);
+                end = offset(next.Location) + next.Location.EndColumn - next.Location.Column;
+                next = import_token();
+                while (next is Token.Operator(".")) {
+                  def part = import_token();
+                  match (part) {
+                    | Token.Identifier(value) => parts.Add(value);
+                    | _ => fail(part, "Expected a script name after '.' in import");
+                  }
+                  end = offset(part.Location) + part.Location.EndColumn - part.Location.Column;
+                  next = import_token();
+                }
+                path = Path.Combine(parts.ToArray()) + ".ns";
+              | _ => ()
+            }
+            unless (Path.GetExtension(path).Equals(".ns", StringComparison.OrdinalIgnoreCase))
+              fail(token, "Script import requires a .ns file; use using for .n sources and DependsOn for assemblies");
+            match (next) {
+              | Token.Semicolon => end = offset(next.Location) + 1;
+              | Token.Indent | Token.EndOfFile => ()
+              | _ => fail(next, "Expected ';' after script import");
+            }
+            def location = ScriptDiagnostic(source.Path, token.Location.Line, token.Location.Column, "", false);
+            def request = AssemblyRequest(path, location); request.OpenMembers = true;
+            data.ScriptImports.Add(request);
+            data.Annotations.Add(ScriptAnnotation("Import", array[path], location));
+            for (mutable i = offset(token.Location); i < end; i++)
+              unless (characters[i] == '\n' || characters[i] == '\r') characters[i] = ' ';
+          }
+          else { pending = next; directives = false; }
         | Token.BeginSquare when braces == 0 && rounds == 0 =>
           def group : List[Token] = List();
           mutable depth = 1;
@@ -208,7 +262,9 @@ public static class ScriptMetadata
             if (alias == null) data.Imports.Add(String.Join(".", parts.ToArray()));
             else data.Aliases[alias] = String.Join(".", parts.ToArray());
           }
-        | _ => ();
+          unless (ordinary) directives = false;
+        | Token.Semicolon | Token.Indent | Token.WhiteSpace | Token.NewLine | Token.Comment => ();
+        | _ => directives = false;
       }
     }
     ScriptCollectedDataWithSource(data, ScriptSource(string(characters), source.Path))

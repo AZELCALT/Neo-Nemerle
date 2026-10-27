@@ -358,6 +358,13 @@ public static class ScriptingChecks {
     var replay=session.ReplayHistory(importedHistory);
     Check(replay.Length==1 && !replay[0].Success && replay[0].Compilation.Diagnostics[0].Message.Contains("dependencies changed") && counter.Value==5,"imported history rejects changed graph before execution");
   }
+  File.WriteAllText(Path.Combine(root,"shortchild.ns"),"mutable n : int = 0; public Next() : int { n++; n }\n");
+  using(var shortSession=new ScriptSession(host,new ScriptDefinition(),new ScriptInputs())) {
+    var first=shortSession.Submit(new ScriptSource("import shortchild;\nNext()\n",Path.Combine(root,"shortfirst.ns")));
+    var second=shortSession.Submit(new ScriptSource("Next()\n",Path.Combine(root,"shortsecond.ns")));
+    Check(first.Success && second.Success && (int)first.Evaluation.Value==1 && (int)second.Evaluation.Value==2,
+          "short script imports retain open names and child state across submissions");
+  }
   using(var aliasSession=new ScriptSession(host,new ScriptDefinition(),new ScriptInputs())) {
     var first=aliasSession.Submit(new ScriptSource("[assembly: Import(\"math.n\")]\nusing M = math.functions; M.Answer()\n",Path.Combine(root,"aliasfirst.n")));
     var second=aliasSession.Submit(new ScriptSource("M.Answer()\n",Path.Combine(root,"aliassecond.n")));

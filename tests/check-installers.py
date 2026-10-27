@@ -21,9 +21,19 @@ def check(ok, message):
     checks += 1
 
 def installed(prefix, launcher):
-    hello = work / 'hello.n'; hello.write_text('System.Console.WriteLine("hello from the installed nscript")\n')
-    r = subprocess.run([str(prefix / 'bin' / launcher), 'run', str(hello), '--no-cache'], capture_output=True, text=True)
-    return 'hello from the installed nscript' in r.stdout
+    samples = work / (prefix.name + ' script files'); samples.mkdir(exist_ok=True)
+    (samples / 'nearby.n').write_text('public Message() : string { "hello from the installed nscript" }\n')
+    (samples / 'scripted.ns').write_text('public ScriptValue() : int { 42 }\n')
+    for extension in ('.ns', '.n'):
+        hello = samples / ('hello' + extension)
+        hello.write_text('using nearby;\nimport scripted;\nSystem.Console.WriteLine(Message());\nSystem.Console.WriteLine(ScriptValue())\n')
+        for _ in range(2):
+            r = subprocess.run([str(prefix / 'bin' / launcher), 'run', str(hello), '--cache-dir', str(samples / 'cache')],
+                               cwd=work, capture_output=True, text=True, timeout=120)
+            if r.returncode != 0 or r.stdout.strip() != 'hello from the installed nscript\n42':
+                print(r.stdout + r.stderr, flush=True)
+                return False
+    return True
 
 def extension_check():
     r = subprocess.run([sys.executable, str(repo / 'tests/check-vscode-extension.py'), '--vsix', str(vsix)], capture_output=True, text=True)

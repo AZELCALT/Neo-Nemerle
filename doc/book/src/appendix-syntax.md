@@ -27,6 +27,8 @@
 | `using symbol.file;` | open a file module's members; local `.n` dependencies are discovered automatically |
 | `using path.to.folder;` | make immediate file names available for qualified use, such as `file.Member(...)` |
 | `using System;` / `using X = a.b;` | open a CLR namespace / give a module or namespace an alias |
+| `import helper;` | in a script header: load neighboring `helper.ns` and open its public names |
+| `import "path/helper.ns";` | in a script header: load a child script relative to the importing script |
 
 ## Indented blocks
 

@@ -2,5 +2,11 @@
   "$comment": "A Nemerle script (.ns, run by nscript) is highlighted as Nemerle.",
   "name": "Nemerle script",
   "scopeName": "source.nemerle.script",
-  "patterns": [{ "include": "source.nemerle" }]
+  "patterns": [
+    {
+      "match": "^\\s*(import)\\b(?=\\s+(?:[A-Za-z_]|\"))",
+      "captures": { "1": { "name": "keyword.control.import.nemerle" } }
+    },
+    { "include": "source.nemerle" }
+  ]
 }
