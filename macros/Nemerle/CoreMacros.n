@@ -1539,6 +1539,37 @@ macro @%^^ (e1, e2)
     (e1, e2) => <[ ($e1 ^ $e2) != 0 ]>)
 }
 
+/// `(T)(x)', as the parser reads it when it cannot tell whether `T' is a type: C#'s cast of `x' to `T' when `T' names
+/// a type (no local of that name hides it), else a call of the value `T', as `(f)(x)' always was.
+macro __cast_or_call (target, operand)
+{
+  def ctx = Macros.ImplicitCTX ();
+  def path (e : PT.PExpr) : list[string]
+  {
+    match (e)
+    {
+      | <[ $(n : name) ]> => [n.Id]
+      | <[ $o . $(n : name) ]> => match (path (o)) { | null => null | p => p + [n.Id] }
+      | <[ $o [.. $_] ]> => path (o)
+      | _ => null
+    }
+  }
+  // (the first name as written: a local of that name is the value)
+  def first (e : PT.PExpr) : PT.Name
+  {
+    match (e)
+    {
+      | <[ $(n : name) ]> => n
+      | <[ $o . $_ ]> | <[ $o [.. $_] ]> => first (o)
+      | _ => null
+    }
+  }
+  def local = match (first (target)) { | null => true | n => ctx.CurrentLocalContext.FindLocal (n).IsSome };
+  def type = !local && path (target) != null && ctx.Env.LookupType (path (target)).IsSome;
+  if (type) PT.PExpr.TypeConversion (target.Location + operand.Location, operand, target)
+  else <[ $target ($operand) ]>
+}
+
 macro @++ (e)
 {
   def (cached, safe) = Operators.CacheAssignExpr(e);

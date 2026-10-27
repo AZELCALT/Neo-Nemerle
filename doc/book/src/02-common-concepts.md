@@ -198,6 +198,30 @@ WriteLine($"$i $s")
 3 text
 ```
 
+C#'s way of writing it, `(T)x`, is the same conversion. It applies to the operand as a prefix operator does, so
+`(double)a / b` divides a `double`, and `(int)(a * b)` converts the product:
+
+```nemerle
+using System.Console;
+
+def a = 7;
+def b = 2;
+def ratio = (double)a / b;
+def product = (int)(a * b);
+def o : object = "text";
+def s = (string)o;
+WriteLine($"$ratio $product $s")
+```
+
+```text
+3.5 14 text
+```
+
+Parentheses are a conversion when they hold a type and an operand follows: a name, a literal, `(`, `!`, `~` or `$`,
+and `+` or `-` after a built-in type's name (`(int)-x`; `(a) - b` subtracts). `(f)(x)` stays a call when `f` is a
+value, and converts when `f` names a type. Like `:>`, the conversion checks at run time: `(byte)300` throws an
+`OverflowException` (inside `unchecked (...)` it gives 44, as in C#).
+
 ## Functions
 
 A function lists its parameters with their types, then its return type after a colon. The body is a block, and the

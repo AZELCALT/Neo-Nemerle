@@ -87,6 +87,7 @@ increase in indentation without a colon remains supported for existing code.
 | `throw e` | raise an exception |
 | `x => e`, `fun (x) { e }`, `_ + 1` | function values |
 | `e :> T` / `e : T` | checked conversion / type statement |
+| `(T)e` | the conversion `e :> T`, written as in C# |
 | `x :: xs`, `[a, b]`, `$[e \| x in xs]`, `$[a .. b]` | lists |
 | `(a, b)` | tuple |
 | `array[a, b]`, `array(n)` | arrays |

@@ -106,6 +106,20 @@ using Nemerle.Compiler.Utility;
       }
     }
 
+    /// `(T)x', C#'s cast: `x :> T' (the operand is what a prefix operator's is: `(int)a.B + c' is `(a.B :> int) + c').
+    /// Before a parenthesized operand, `(T)(x)', whose type the parser cannot always tell from a value (`(f)(x)' calls
+    /// `f'), it is `__cast_or_call(T, (x))', which the typer decides; a built-in type's name is a type.
+    internal class CastOperatorInfo : UnaryOperatorInfo
+    {
+      public Type : PExpr;
+      public Decided : bool;
+      public this (type : PExpr, decided : bool)
+      {
+        base ("(cast)", 281, 280);
+        Type = type; Decided = decided;
+      }
+    }
+
     internal class BinaryOperatorInfo : OperatorInfo
     {
       public this (name : string, left : int, right : int)
@@ -3868,6 +3882,13 @@ using Nemerle.Compiler.Utility;
                     def parms = roll_exprs (ref exprs, nary.ExprsBegin);
                     make_operator_call (x.Name, parms, nary.Location)
 
+                  | cast is CastOperatorInfo =>
+                    def e = NList.Head (exprs);
+                    exprs = NList.Tail (exprs);
+                    def location = op_loc + e.Location;
+                    if (cast.Decided) PExpr.TypeConversion (location, e, cast.Type)
+                    else PExpr.Call (location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.CoreMacros.__cast_or_call"), [cast.Type, e])
+
                   | _ is BinaryOperatorInfo =>
                     match (exprs)
                     {
@@ -3989,6 +4010,59 @@ using Nemerle.Compiler.Utility;
       (text, rawText, before.Rev ())
     }
 
+    /// The names of the built-in types: in `(T)...' they are types, as in C# (`(int)-x', `(int)(a * b)').
+    static BuiltInTypes : list[string] = ["bool", "byte", "sbyte", "char", "decimal", "double", "float", "int", "uint",
+                                          "long", "ulong", "short", "ushort", "object", "string"];
+
+    /// `(T)' before an operand, C#'s cast: the group holds a type (`int', `System.Int32', `list[int]') and what
+    /// follows begins an operand by C#'s rule: a name, a literal, `(', `!', `~', `$' or a keyword that begins an
+    /// expression; `+' and `-' only after a built-in type (`(a) - b' subtracts). Some (decided) when it is one: whether
+    /// the parser can tell (a following `(' after a name that may be a value is decided by the typer).
+    static cast_ahead (group : Token.RoundGroup) : option[bool]
+    {
+      // (a chain of tokens that is a type: `a.b.c', with type arguments last, `list[int]')
+      def type_shaped (tok : Token) : bool
+      {
+        def rest (t : Token) : bool
+        {
+          match (t)
+          {
+            | null => true
+            | Token.Operator (".") => t.Next is Token.Identifier && rest (t.Next.Next)
+            | Token.SquareGroup (child, _, _) => t.Next == null && child != null && arguments (child)
+            | _ => false
+          }
+        }
+        tok is Token.Identifier && rest (tok.Next)
+      }
+      and arguments (child : Token) : bool
+      {
+        match (child)
+        {
+          | null => true
+          | Token.LooseGroup (inner) => type_shaped (inner) && arguments (child.Next)
+          | _ => type_shaped (child)
+        }
+      }
+      def inner = match (group.Child) { | Token.LooseGroup (inner) when group.Child.Next == null => inner | _ => null };
+      if (inner == null || !type_shaped (inner)) None ()
+      else
+      {
+        def built_in = inner.Next == null && BuiltInTypes.Contains ((inner :> Token.Identifier).name);
+        match (group.Next)
+        {
+          | Token.Identifier | Token.StringLiteral | Token.CharLiteral | Token.IntegerLiteral | Token.FloatLiteral
+          | Token.DoubleLiteral | Token.DecimalLiteral => Some (true)
+          | Token.Operator (op) when op == "!" || op == "~" || op == "$" => Some (true)
+          | Token.Operator (op) when (op == "-" || op == "+") && built_in => Some (true)
+          | Token.Keyword (k) when ["this", "base", "true", "false", "null", "typeof", "fun", "match", "checked", "unchecked", "default"].Contains (k) => Some (true)
+          // (`(f)(a, b)' is a call: only one value in parentheses can be cast)
+          | Token.RoundGroup as next when built_in || next.Child is Token.LooseGroup && next.Child.Next == null => Some (built_in)
+          | _ => None ()
+        }
+      }
+    }
+
     /// Whether `token' can begin the operand of a prefix operator (as after `await').
     static starts_operand (token : Token) : bool
     {
@@ -4038,6 +4112,15 @@ using Nemerle.Compiler.Utility;
               def construct = parse_expr (stop);
               _expr_stack = PExpr.Call (loc + construct.Location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.AsyncMacros.__await_each"), [construct]) :: _expr_stack;
               _op_context = OpContext.Postfix;
+              loop ()
+
+            // `(T)x', C#'s cast (see cast_ahead)
+            | Token.RoundGroup as group when cast_ahead (group).IsSome =>
+              def decided = cast_ahead (group).Value;
+              shift ();
+              push_stream ((group.Child :> Token.LooseGroup).Child);
+              def type = try parse_expr () finally pop_stream ("cast type");
+              rpn_op_stack = (CastOperatorInfo (type, decided), loc) :: rpn_op_stack;
               loop ()
 
             | Token.Identifier ("await") when in_async && starts_operand (tok.Next) =>
