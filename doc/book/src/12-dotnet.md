@@ -33,6 +33,28 @@ must give them, are written `.[T]`: `Enumerable.Empty.[int]()`.
 
 `ncc -r:library.dll` references a library. The .NET framework itself is available by default.
 
+### `dynamic` values
+
+A C# member typed `dynamic` (a JSON reader's value, a COM object, a scripting bridge) gives a value whose type nobody
+knows, not even as a set of types. C# then looks its members up at run time; Nemerle checks it before anything uses
+it instead. Binding it to a name, matching on it and converting it are the checks; every other use is an error,
+wherever it is (a member, an argument, an operator, an assignment, a result, a lambda):
+
+```nemerle,ignore
+def data = Reader.Value(json);       // a C# `dynamic`: bound, not used yet
+def size = match (data)
+{
+  | s is string => s.Length          // here it is a string
+  | n is int    => n
+  | _           => 0                 // and anything else it may be
+};
+def ratio = Reader.Ratio :> double;  // a conversion is a check too (it throws when it is not one)
+WriteLine(data.ToString())           // error: `data' is dynamic: check what it is before using it
+```
+
+Matching with a plain name (`| o => ...`) takes it as an `object`. Only a value whose type is `dynamic` as a whole is
+checked; a `List<dynamic>` is a list (its elements are objects).
+
 ## Delegates and events
 
 A Nemerle function value converts to a .NET delegate wherever one is expected:

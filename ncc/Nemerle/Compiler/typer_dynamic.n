@@ -1,0 +1,150 @@
+// `dynamic` values (what a C# member typed `dynamic` gives: .NET's `object` marked [Dynamic]). Their type is not known
+// at all, not even as a set, so every use of one is checked first: binding it to a name, matching on it (`match`,
+// `is`) and converting it (`:>`) are the checks; anything else touching it (a member, an operator, an argument, an
+// assignment, a result) is an error. The opposite of a value of several types (typer_flow): there the compiler knows
+// the set and checks each use against it; here it knows nothing, so it is checked before anything uses it.
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Compiler.type_var;
+using Nemerle.Compiler.fixed_type;
+using SCG = System.Collections.Generic;
+using SR = System.Reflection;
+using Nemerle.Compiler.expr_walker;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.Utility;
+
+/// Whether `member' (a compiled one: a C# library's) gives a `dynamic' value: its type, or its result's, is marked
+/// [Dynamic] as a whole (not a part of it, as `List<dynamic>').
+public IsDynamic(member : IMember) : bool
+{
+  def marked(attributes : SCG.IList[SR.CustomAttributeData]) : bool
+  {
+    mutable found = false;
+    foreach (a in attributes)
+      when (a.AttributeType.FullName == "System.Runtime.CompilerServices.DynamicAttribute")
+        found = a.ConstructorArguments.Count == 0
+                || match (a.ConstructorArguments[0].Value)
+                   {
+                     // (`bool[]': which parts of the type are dynamic, the type itself first)
+                     | flags is SCG.IList[SR.CustomAttributeTypedArgument] => flags.Count > 0 && flags[0].Value is bool && flags[0].Value :> bool
+                     | _ => false
+                   };
+    found
+  }
+  if (member == null || member.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) false
+  else
+    try
+    {
+      match (member.GetHandle())
+      {
+        | m is SR.MethodInfo => marked(SR.CustomAttributeData.GetCustomAttributes(m.ReturnParameter))
+        | f is SR.FieldInfo => marked(SR.CustomAttributeData.GetCustomAttributes(f))
+        | p is SR.PropertyInfo => marked(SR.CustomAttributeData.GetCustomAttributes(p))
+        | _ => false
+      }
+    }
+    catch { | _ => false }
+}
+
+/// Reports each use of a `dynamic' value in a method's typed body (of the type `owner') that is not a check.
+public Check(body : TExpr, owner : string, manager : Nemerle.Compiler.manager_class.ManagerClass) : void
+{
+  def locals = SCG.HashSet.[Nemerle.Compiler.local_value.LocalValue]();
+  // the top-level values (`module.name') bound to a `dynamic' value, this compilation's: their reads are dynamic, in
+  // any code
+  def DynamicState =
+    match (manager.UserData["Nemerle.Compiler.dynamic.state"])
+    {
+      | known is SCG.HashSet[string] => known
+      | _ => def made = SCG.HashSet(); manager.UserData["Nemerle.Compiler.dynamic.state"] = made; made
+    };
+  // (a top-level value: its field, a state value of its module)
+  def state(f : IMember) : string
+  {
+    def owner = if (f.DeclaringType == null) null else f.DeclaringType.FullName;
+    def script = manager.Options.Script;
+    if (owner != null && (manager.FileModuleRegistry.TopLevel.Contains(owner) || script != null && owner == script.TypeName))
+      owner + "." + f.Name
+    else null
+  }
+  // (what the value is: a name, a member, a call's)
+  def source(e : TExpr) : string
+  {
+    match (e)
+    {
+      | TExpr.LocalRef(local) when locals.Contains(local) => local.Name
+      | TExpr.StaticRef(_, f is IField, _) when state(f) != null && DynamicState.Contains(state(f)) => f.Name
+      | TExpr.FieldMember(_, f) when state(f) != null && DynamicState.Contains(state(f)) => f.Name
+      | TExpr.Call(TExpr.MethodRef(_, m, _, _), _, _) when IsDynamic(m) => m.Name + "(...)"
+      | TExpr.Call(TExpr.StaticRef(_, m, _), _, _) when IsDynamic(m) => m.Name + "(...)"
+      | TExpr.FieldMember(_, m) when IsDynamic(m) => m.Name
+      | TExpr.PropertyMember(_, m) when IsDynamic(m) => m.Name
+      | TExpr.StaticRef(_, m, _) when !(m is IMethod) && IsDynamic(m) => m.Name
+      | TExpr.StaticPropertyRef(_, m) when IsDynamic(m) => m.Name
+      | _ => null
+    }
+  }
+  // (a conversion to object is no check: the value is as unknown)
+  def unwrap(e : TExpr) : TExpr
+  {
+    def toObject(t : TypeVar) : bool { match (t.Hint) { | Some(FixedType.Class(ti, [])) => ti.FullName == "System.Object" | _ => false } }
+    match (e)
+    {
+      | TExpr.TypeConversion(expr = inner, target_type = t) when toObject(t) => unwrap(inner)
+      | TExpr.DebugInfo(inner, _) => unwrap(inner)
+      // (a macro's expansion, as a script binding's initializer)
+      | TExpr.MacroEnvelope(expanded = inner) => unwrap(inner)
+      | _ => e
+    }
+  }
+  // the checks: a binding (its name is dynamic from there), a match, a conversion to a type
+  def checks = SCG.HashSet.[TExpr]();
+  ExprWalker().Walk(body, info =>
+    match (info.Node)
+    {
+      | TExpr.DefValIn(local, value, _) =>
+        def value = unwrap(value);
+        _ = checks.Add(value);
+        when (source(value) != null)
+        {
+          _ = locals.Add(local);
+          // (in a file's inference copy of its top-level code, a value's binding is its local `_N_state_<name>_<k>')
+          when (local.Name.StartsWith("_N_state_") && local.Name.LastIndexOf('_') > 9)
+            _ = DynamicState.Add(owner + "." + local.Name.Substring(9, local.Name.LastIndexOf('_') - 9))
+        }
+      // a top-level value's binding: its field is written
+      | TExpr.Assign(TExpr.StaticRef(_, f is IField, _) as target, value) when state(f) != null =>
+        def value = unwrap(value);
+        // (the field written is not read)
+        _ = checks.Add(target);
+        _ = checks.Add(value);
+        when (source(value) != null) _ = DynamicState.Add(state(f))
+      // (a script's: a field of its instance)
+      | TExpr.Assign(TExpr.FieldMember(_, f) as target, value) when state(f) != null =>
+        def value = unwrap(value);
+        _ = checks.Add(target);
+        _ = checks.Add(value);
+        when (source(value) != null) _ = DynamicState.Add(state(f))
+      | TExpr.Assign(TExpr.LocalRef(local), value) when local.Name.StartsWith("_N_state_") && local.Name.LastIndexOf('_') > 9 =>
+        def value = unwrap(value);
+        _ = checks.Add(value);
+        when (source(value) != null) _ = DynamicState.Add(owner + "." + local.Name.Substring(9, local.Name.LastIndexOf('_') - 9))
+      | TExpr.Match(subject, _) => _ = checks.Add(unwrap(subject))
+      | TExpr.TypeConversion(expr = inner) as conversion when unwrap(conversion) : object == conversion => _ = checks.Add(unwrap(inner))
+      | _ => ()
+    });
+  ExprWalker().Walk(body, info =>
+    match (info.Node)
+    {
+      | e is TExpr when !checks.Contains(e) =>
+        match (source(e))
+        {
+          | null => ()
+          | what =>
+            Message.Error(e.Location,
+              $"`$what' is dynamic: its type is not known here, so check what it is before using it: "
+               $"match ($what) { | v is T => ... | _ => ... }, or convert it ($what :> T)")
+        }
+      | _ => ()
+    });
+}

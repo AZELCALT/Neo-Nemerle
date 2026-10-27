@@ -713,6 +713,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         field_inits_typed = true;
         RunDelayedTypings();
       }
+      // (a `dynamic' value is checked before anything uses it, see typer_dynamic; a file's inference copy of its
+      // top-level code, typed first, says which of its values are dynamic)
+      match (current_fun.body) { | FunBody.Typed (body) => Nemerle.Compiler.typer_dynamic.Check (body, current_type.FullName, Manager) | _ => () }
       
       when (StopAfterPhase > 0 && StopAfterPhase == 1)
         return;
