@@ -149,6 +149,9 @@ using Nemerle.Compiler.Utility;
     mutable in_variant    : bool;
     // the last get_modifiers() read the contextual modifier `async'
     mutable async_modifier : bool;
+    // the last get_modifiers() read the contextual modifier `hidden': private to the module and the modules of its
+    // folder (FileModuleRegistry.Hidden)
+    mutable hidden_modifier : bool;
     // parsing the body of an async function: `await' is an operator there
     mutable in_async      : bool;
     mutable stream        : Token;
@@ -1034,9 +1037,10 @@ using Nemerle.Compiler.Utility;
         // only later, as in a `$"..."` splice, resolves there too); the class itself keeps the folder's namespace
         foreach (member when member._env == null && !(member is ClassMember.TypeDeclaration) in members) member._env = fileParser.env;
         registry.MemberEnvironments[fileIndex] = fileParser.env;
+        // (null for a module of a folder that is itself a module's name: it is added nested in that module's class)
         def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
         registry.Exports[moduleName] = exports.NToList().Map(td => td.Name);
-        return declaration :: exports.NToList();
+        return (if (declaration == null) [] else [declaration]) + exports.NToList();
       }
 
       def parser = MainParser (lex.Manager.CoreEnv);
@@ -1164,6 +1168,7 @@ using Nemerle.Compiler.Utility;
         | Token.SquareGroup => true;
         | Token.Identifier("type") => true;
         | Token.Identifier("async") when token.Next is Token.Identifier || token.Next is Token.Keyword => IsMemberStart(token.Next, script);
+        | Token.Identifier("hidden") when token.Next is Token.Identifier || token.Next is Token.Keyword => IsMemberStart(token.Next, script) || token.Next is Token.Keyword;
         | Token.Identifier =>
           match (token.Next)
           {
@@ -2266,6 +2271,7 @@ using Nemerle.Compiler.Utility;
       push_stream (toks);
       mutable customs_token = get_customs ();
       def mods = AttributesAndModifiers(get_modifiers (), []);
+      when (hidden_modifier) _ = Manager.FileModuleRegistry.Hidden.Add(mods);
 
       def result = ParseTypeDeclaration (mods, toks.Location);
       match(result)
@@ -2513,6 +2519,7 @@ using Nemerle.Compiler.Utility;
 
           mutable customs = get_customs ();
           def mods = AttributesAndModifiers(get_modifiers (), []);
+          when (hidden_modifier) _ = Manager.FileModuleRegistry.Hidden.Add(mods);
           def isAsync = async_modifier;
           when (isAsync)
             mods.AddCustomAttribute(PExpr.FromQualifiedIdentifier(Manager, "Nemerle.AsyncMacros.AsyncFunction"));
@@ -3504,6 +3511,7 @@ using Nemerle.Compiler.Utility;
     get_modifiers () : NemerleModifiers
     {
       async_modifier = false;
+      hidden_modifier = false;
       def loop (acc)
       {
         def tok = peek_token ();
@@ -3515,6 +3523,12 @@ using Nemerle.Compiler.Utility;
             when (async_modifier) Error (tok, "attribute 'async' specified more than once");
             async_modifier = true;
             loop (acc)
+          // `hidden': a modifier only before a name or another modifier, as `async' (a mask may be named `hidden')
+          | Token.Identifier ("hidden") when tok.Next is Token.Identifier || tok.Next is Token.Keyword =>
+            shift ();
+            when (hidden_modifier || acc %&& NemerleModifiers.AccessModifiers) Error (tok, "`hidden' is an access modifier: one per member");
+            hidden_modifier = true;
+            loop (acc %| NemerleModifiers.Private)
           | Token.Keyword (key) =>
             def add_and_loop (attr : NemerleModifiers)
             {

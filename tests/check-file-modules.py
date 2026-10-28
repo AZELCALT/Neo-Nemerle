@@ -86,7 +86,8 @@ compile_files([alpha, alpha], 'duplicate.dll', False, 'duplicate file module ide
 invalid = source('not-valid.n', 'class Thing {}')
 compile_files([invalid], 'invalid.dll', False, 'path components must be identifiers')
 conflict = source('alpha/child.n', 'class Thing {}')
-compile_files([alpha, conflict], 'conflict.dll', False, 'conflicts with a directory')
+# (a module beside a folder of its name: the folder's modules are nested in its class, see check-folder-modules.py)
+compile_files([alpha, beta, conflict], 'nested.dll', True)
 outside = source('outside.n', 'class Thing {}')
 compile_files([outside], 'outside.dll', False, 'outside the source root',
               extra=['-source-root:' + str(work / 'subroot')])

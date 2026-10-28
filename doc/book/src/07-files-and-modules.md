@@ -128,12 +128,59 @@ WriteLine(geometry.square.Area(3.0))
 9
 ```
 
+## A module and its folder
+
+A file beside a folder of its name is that folder's module, as a Python package's `__init__.py` is: `a.n` is the
+module `a`, and `a/b.n` is `a.b`. `using a` opens `a.n` and reaches the folder's modules by their short names:
+
+```nemerle
+// file: a.n
+public Hello() : string { "module a" }
+hidden Shared() : string { "shared with its folder" }
+
+// file: a/b.n
+public Hello() : string { "module a.b, " + a.Shared() }
+
+// file: main.n
+using a;
+System.Console.WriteLine(Hello());
+System.Console.WriteLine(b.Hello());
+System.Console.WriteLine(a.b.Hello())
+```
+
+```text
+module a
+module a.b, shared with its folder
+module a.b, shared with its folder
+```
+
+The folder's modules reach what `a.n` declares `hidden`, and nothing it declares `private`:
+
+```nemerle,fail
+// file: a.n
+private Secret() : string { "its own" }
+
+// file: a/b.n
+public Hello() : string { a.Secret() }
+
+// file: main.n
+System.Console.WriteLine(a.b.Hello())
+```
+
+```text
+cannot access `a.Secret'
+```
+
+For C# and other .NET languages, the folder's modules are classes nested in `a`'s: `a.Hello()` and `a.b.Hello()` both
+work there (a class `a` beside a namespace `a` would be error CS0434 in C#).
+
 ## Visibility
 
 | Modifier | Visible to |
 |---|---|
 | *(none)* or `public` | everyone, including other assemblies |
 | `internal` | other files of the same assembly |
+| `hidden` | the same file, and the modules of the folder of its name (below) |
 | `private` | the same file (inside a mask: the mask) |
 
 ```nemerle,fail
@@ -417,9 +464,6 @@ The rules keep names unambiguous for Nemerle and for C# code that uses Nemerle a
   ```
 
 - **No `partial`.** A type is declared in exactly one file; other files add to it with `extend`.
-- **A module may not have the same name as a containing folder** (`a.n` next to `a/b.n`, unless registration separates
-  their identities). The file would be a type and the
-  directory a namespace with the same name, which .NET languages reject.
 - **No member may have its file's name** (`text.n` cannot declare `class text`), because a class can't contain a member
   named like itself.
 - **The same module path may not come from two assemblies.**

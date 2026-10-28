@@ -28,8 +28,10 @@ mask helpers { public Two() : int { 2 } }   // a named group inside the file
   `def`/`mutable` locals are locals of `Main`. `mutable x : T ...` is a field; `mutable x = ...` without a type is a local.
 - **No member has its file's name.** The file is a class, and as in C# (CS0542) a member cannot have the name
   of its enclosing type: `typer.n` may hold `class Typer`, but `Typer.n` may not.
-- **A file may not sit beside a directory of the same name** (`a.n` with `a/b.n`). The file would be a type and
-  the directory a namespace with the same name, which C# and other .NET languages reject (CS0434).
+- **A file beside a directory of its name** (`a.n` with `a/b.n`) is that directory's module, as a Python package's
+  `__init__`: `using a` opens `a.n` and reaches the directory's modules by their short names. In the binary the
+  directory's modules are nested in `a`'s class (a type and a namespace of one name would be CS0434 in C#). Its
+  `private` members stay its own; the directory's modules reach those declared `hidden`.
 - **The source root** is `-source-root:DIR`, else the project path (or its directory when it names a
   project file), else the current directory. Path components must be identifiers.
 - **Other languages' files are not modules.** Only `.n` sources are; `.nitra` files, for example, keep

@@ -220,8 +220,15 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
     || IsInternal && source is TypeBuilder
     || ({
       mutable result = false;
+      // (a module's private members are its own: the modules of its folder, nested in its class, reach only those it
+      // declares `hidden', though .NET lets a nested class reach them all)
+      def hidden = Manager.Options.FileModules && Manager.FileModuleRegistry.Hidden.Contains(modifiers);
+      mutable crossed = false;
       for (mutable tc = source; tc != null && !result; tc = tc.DeclaringType)
-        result = tc.Equals (declaring_type) || IsProtected && tc.IsDerivedFrom(declaring_type);
+      {
+        result = (!crossed || hidden) && (tc.Equals (declaring_type) || IsProtected && tc.IsDerivedFrom(declaring_type));
+        when (Manager.Options.FileModules && Manager.FileModuleRegistry.IsModuleType(tc)) crossed = true;
+      }
       result
     }))
   }

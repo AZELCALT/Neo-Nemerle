@@ -267,13 +267,8 @@ public sealed class FileModuleRegistry
           + (if (files.Contains(name)) " (" + files[name] + " and " + file + ")" else ""));
         continue;
       }
-      // A module path may not also be a directory of other modules: the file would be a type and the directory a
-      // namespace of the same name, which C# and other .NET languages reject (CS0434).
-      foreach (existing in owners.Keys)
-        when (name.StartsWith(existing + ".", StringComparison.Ordinal)
-           || existing.StartsWith(name + ".", StringComparison.Ordinal))
-          Message.Error(loc, "file module conflicts with a directory module path: " + name + " and " + existing
-            + " (a file may not sit beside a directory of the same name)");
+      // (a module beside a folder of its name, `a.n' and `a/b.n': the folder's modules are nested in its class, see
+      // Declaration, so .NET has no namespace and type of one name, which C# rejects, CS0434)
       owners.Add(name, source.FileIndex);
       files.Add(name, file);
       paths.Add(source.FileIndex, parts);
@@ -288,6 +283,9 @@ public sealed class FileModuleRegistry
           break;
         }
   }
+
+  /// Whether `t' is a file module's class.
+  public IsModuleType(t : TypeInfo) : bool { t is TypeBuilder && owners.Contains(t.FullName) }
 
   /// True when the source was indexed as a file module (generated or synthetic sources are not).
   public IsModule(fileIndex : int) : bool { manager.Options.FileModules && paths.Contains(fileIndex) }
@@ -358,6 +356,10 @@ public sealed class FileModuleRegistry
   public UndecidedStates : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
   /// Those locals, once the function is typed: the types its result can be (the value's types, recorded for it).
   public LocalSets : System.Collections.Generic.Dictionary[string, list[Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
+  /// The modules nested in another's class (a folder named as a module: Declaration), added before the extensions.
+  public Nested : System.Collections.Generic.List[TopDeclaration] = System.Collections.Generic.List();
+  /// The members declared `hidden': private to their module and the modules of its folder (the modules nested in it).
+  public Hidden : System.Collections.Generic.HashSet[AttributesAndModifiers] = System.Collections.Generic.HashSet();
   /// The extension slots of the exported classes (SlotPart), added with the extensions.
   public Slots : System.Collections.Generic.List[TopDeclaration] = System.Collections.Generic.List();
 
@@ -398,6 +400,7 @@ public sealed class FileModuleRegistry
   /// own: a type is built from its export first, then what each extension adds, and checked whole.
   public AddExtensions(add : TopDeclaration -> void) : void
   {
+    foreach (part in Nested) add(part);
     foreach (slot in Slots) add(slot);
     foreach ((part, owner) in Extensions)
       if (ExportedBy.Contains(part.Name)) add(part)
@@ -796,7 +799,31 @@ public sealed class FileModuleRegistry
   public Declaration(fileIndex : int, members : list[ClassMember]) : TopDeclaration
   {
     def (directory, filename) = NList.DivideLast(paths[fileIndex]);
-    def env = if (directory.IsEmpty) manager.CoreEnv else manager.CoreEnv.EnterIntoNamespace(directory);
+    // (the module of a folder named as a module, `a/b.n' beside `a.n': its class is nested in `a's, added with
+    // what `extend' adds once every file is read (Nested); its members' privacy stays its own, see Typer access)
+    def nestedIn = { mutable outer = directory; while (!outer.IsEmpty && !owners.Contains(outer.ToString("."))) outer = NList.DivideLast(outer)[0]; outer };
+    when (!nestedIn.IsEmpty)
+    {
+      def inner = DeclarationIn(fileIndex, filename, manager.CoreEnv.EnterIntoNamespace(directory), members);
+      // (each folder between the module and the file is a class of its own, nested: `a.x.c' beside `a.n')
+      mutable part = inner;
+      for (mutable length = directory.Length; length >= nestedIn.Length; length--)
+      {
+        def (outerDir, outerName) = NList.DivideLast(directory.FirstN(length));
+        def env = if (outerDir.IsEmpty) manager.CoreEnv else manager.CoreEnv.EnterIntoNamespace(outerDir);
+        part = TopDeclaration.Class(Location(fileIndex, 1, 1), Splicable.Name(Name.NameInCurrentColor(outerName, Location(fileIndex, 1, 1), env)),
+          AttributesAndModifiers(NemerleModifiers.Public | NemerleModifiers.Static | NemerleModifiers.Partial, []),
+          Typarms.Empty, [], [ClassMember.TypeDeclaration(part)]);
+      }
+      Nested.Add(part);
+      return null
+    }
+    DeclarationIn(fileIndex, filename, if (directory.IsEmpty) manager.CoreEnv else manager.CoreEnv.EnterIntoNamespace(directory), members)
+  }
+
+  /// The module class of the file `fileIndex', named `filename', with its members.
+  DeclarationIn(fileIndex : int, filename : string, env : GlobalEnv, members : list[ClassMember]) : TopDeclaration
+  {
     def name = Name.NameInCurrentColor(filename, Location(fileIndex, 1, 1), env);
     // The file is a class: as in C# (CS0542), none of its members may have its name.
     foreach (member when member.Name == filename in members)
