@@ -98,6 +98,8 @@ using Nemerle.UtilityMacros;
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "|>",    false, 227, 228)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "<<",    false, 230, 231)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">>",    false, 230, 231)]
+// (C#'s unsigned/logical right shift: fills with zero, never the sign bit)
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">>>",   false, 230, 231)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "..",    false, 230, 231)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "+",     false, 240, 241)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "-",     false, 240, 241)]
@@ -1612,6 +1614,13 @@ macro @<<= (e, val)
   <[ $cached; $safe = $safe << $val ]>
 }
 
+// C#'s `>>>' (unsigned/logical right shift): shifts in zeros regardless of sign. Dispatches by operand type to the
+// unsigned-shift helpers, so `int'/`long' shift as `uint'/`ulong' and come back.
+macro @>>> (a, b)
+{
+  <[ Nemerle.Builtins.NativeOps.ushr ($a, $b) ]>
+}
+
 macro @>>= (e, val)
 {
   def (cached, safe) = Operators.CacheAssignExpr(e);
@@ -1862,6 +1871,21 @@ macro @?. (expr1, expr2)
 macro sizeof(type : PExpr)
 {
   sizeofImpl.DoTransform(Nemerle.Macros.ImplicitCTX(), type)
+}
+
+// C#'s `nameof': the simple name of a value, type or member, as a string, taken from the written name (not evaluated).
+macro nameof(expr : PExpr)
+{
+  def simpleName(e : PExpr) : string
+  {
+    | PExpr.Ref(n)                              => n.Id
+    | PExpr.Member(_, Splicable.Name(n))        => n.Id
+    | PExpr.Member(_, Splicable.HalfId(n))      => n.Id
+    | PExpr.TypeEnforcement(inner, _)           => simpleName(inner)
+    | PExpr.TypeConversion(inner, _)            => simpleName(inner)
+    | _ => Nemerle.Compiler.MessageMacros.FatalError(expr.Location, "`nameof' expects a name or a member access")
+  }
+  <[ $(simpleName(expr) : string) ]>
 }
 
 internal module sizeofImpl

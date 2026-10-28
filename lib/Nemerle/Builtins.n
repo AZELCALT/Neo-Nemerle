@@ -1381,3 +1381,13 @@ public abstract class Array9 [T] : System.Array { }
 
 [Nemerle.ExtensionsMacros.DisableImplicitConstructor]
 public abstract class Array10 [T] : System.Array { }
+
+// C#'s `>>>' (unsigned/logical right shift) per operand type: a signed value shifts as its unsigned counterpart and
+// comes back, so zeros fill from the top regardless of sign. `@>>>` in CoreMacros dispatches here.
+public module NativeOps
+{
+  public ushr (x : int,   n : int) : int   { unchecked (((x :> uint)  >> n) :> int) }
+  public ushr (x : uint,  n : int) : uint  { x >> n }
+  public ushr (x : long,  n : int) : long  { unchecked (((x :> ulong) >> n) :> long) }
+  public ushr (x : ulong, n : int) : ulong { x >> n }
+}

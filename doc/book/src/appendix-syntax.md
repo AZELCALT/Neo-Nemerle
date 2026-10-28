@@ -115,8 +115,22 @@ increase in indentation without a colon remains supported for existing code.
 
 ## Operators
 
-Arithmetic `+ - * / %`, comparison `== != < <= > >=`, logical `&& || !`, bitwise `& | ^ ~ << >>`, assignment `=` and
-compound `+= -= *= /=`, increment `++ --`, `::` for list cons. `@+` declares the operator `+` as a static method.
+Arithmetic `+ - * / %`, comparison `== != < <= > >=`, logical `&& || !`, bitwise `& | ^ ~ << >> >>>`, assignment `=`
+and compound `+= -= *= /=`, increment `++ --`, `::` for list cons. `@+` declares the operator `+` as a static method.
+`>>>` is C#'s unsigned (logical) right shift — it fills with zeros, never the sign bit. `nameof(x)` is the written
+name of a value, type or member as a string.
+
+```nemerle
+using System.Console;
+WriteLine(-8 >>> 1);        // zero-filled, not -4
+def port = 8080;
+WriteLine(nameof(port))
+```
+
+```text
+2147483644
+port
+```
 
 ## Common compiler options
 
