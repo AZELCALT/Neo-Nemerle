@@ -242,7 +242,7 @@ using Nemerle.ProjectCommands;
     {
       Manager.KillProgressBar();
       Message.MaybeBailout(true);
-      Message.Error($<#internal compiler error: $msg. $(e.StackTrace.Replace("\r\n", "¦").Replace("\n", "¦"))#>);
+      Message.Error($<#internal compiler error: $msg. $((e.StackTrace ?? "").Replace("\r\n", "¦").Replace("\n", "¦"))#>);
       Environment.Exit(exitValue);
     }
 

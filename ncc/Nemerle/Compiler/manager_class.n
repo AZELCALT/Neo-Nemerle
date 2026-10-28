@@ -886,7 +886,7 @@ using Nemerle.Compiler.XmlDump;
         {
           def isNemerleDll(path : string) : bool
           {
-            def name = IO.Path.GetFileNameWithoutExtension(path);
+            def name = IO.Path.GetFileNameWithoutExtension(path) :> string;
             def ext  = IO.Path.GetExtension(path);
             (string.IsNullOrEmpty(ext) || ext.Equals(".dll", StringComparison.OrdinalIgnoreCase))
             && name.Equals("Nemerle", StringComparison.OrdinalIgnoreCase)
@@ -913,7 +913,7 @@ using Nemerle.Compiler.XmlDump;
 
     protected virtual LoadNemerleMacros() : void
     {
-      def version = typeof(ManagerClass).Assembly.GetName().Version.ToString ();
+      def version = (typeof(ManagerClass).Assembly.GetName().Version :> System.Version).ToString ();
       LibrariesManager.LoadPluginsFrom(
         "Nemerle.Macros",
         $", Version=$version, Culture=neutral, PublicKeyToken=5291d186334f6101",

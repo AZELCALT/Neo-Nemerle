@@ -448,7 +448,7 @@ public sealed class ScriptHost
           foreach (type in root.GetNestedTypes(BindingFlags.Public))
           {
             def logical = owner + "." + type.Name.Split('`')[0];
-            def physical = System.Text.RegularExpressions.Regex.Replace(type.FullName.Replace('+', '.'), "`[0-9]+", "");
+            def physical = System.Text.RegularExpressions.Regex.Replace((type.FullName :> string).Replace('+', '.'), "`[0-9]+", "");
             data.ImportedTypeNames[logical] = physical; importedTypes(type, logical);
           }
         }
@@ -637,7 +637,7 @@ public sealed class ScriptHost
     try
     {
       instance = Activator.CreateInstance(script.ScriptType, args);
-      def result = script.ScriptType.GetMethod(script.EvaluationMethod).Invoke(instance, null) :> array[object];
+      def result = (script.ScriptType.GetMethod(script.EvaluationMethod) :> MethodInfo).Invoke(instance, null) :> array[object];
       EvaluationResult(if (result[0] :> bool) ScriptResultKind.Void else ScriptResultKind.Value,
                        result[1], result[2] :> Type, null, instance, script.Exports)
     }
@@ -848,7 +848,7 @@ public sealed class ScriptHost
       }
       unless (reader.BaseStream.Position == reader.BaseStream.Length) throw InvalidDataException("Unexpected script descriptor data");
       def assembly = ClrScriptSupport.Load(image, symbols, Shared(definition), RuntimeReferences(definition, definition.References.ToArray()), definition.NativeReferences.ToArray());
-      def scriptType = assembly.GetType(typeName, true);
+      def scriptType = assembly.GetType(typeName, true) :> Type;
       def evaluate = scriptType.GetMethod(evaluationMethod, BindingFlags.Public | BindingFlags.Instance);
       unless (evaluate != null && evaluate.GetParameters().Length == 0 && evaluate.ReturnType == typeof(array[object]))
         throw InvalidDataException("Invalid script evaluation entry point");

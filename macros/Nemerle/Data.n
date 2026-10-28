@@ -117,7 +117,7 @@ macro ExecuteScalar (query : string, conn, con_name : string = "")
 
     // try to execute query chcecking its syntax and aquiring names of columns
     def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly);
-    def table = myreader.GetSchemaTable ();
+    def table = myreader.GetSchemaTable () :> DataTable;
     if (table.Rows.Count < 1)
       Nemerle.Compiler.MessageMacros.FatalError ("this query doesn't return any value")
     else 
@@ -192,7 +192,7 @@ macro ExecuteReaderLoop (query : string, conn, body, con_name : string = "")
     // try to execute query chcecking its syntax and aquiring names of columns
     def myreader = mycmd.ExecuteReader(CommandBehavior.SchemaOnly %|
                                        CommandBehavior.SingleRow);
-    def table = myreader.GetSchemaTable ();
+    def table = myreader.GetSchemaTable () :> DataTable;
     mutable col_num = 0;
     foreach (myRow :> DataRow in table.Rows)
     {

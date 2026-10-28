@@ -727,6 +727,12 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       // (a `dynamic' value is checked before anything uses it, see typer_dynamic; a file's inference copy of its
       // top-level code, typed first, says which of its values are dynamic)
       match (current_fun.body) { | FunBody.Typed (body) => Nemerle.Compiler.typer_dynamic.Check (body, current_type.FullName, Manager) | _ => () }
+      // (what C# says of its members beside their types: `init', `required', a nullable result, see typer_csharp)
+      match (current_fun.body)
+      {
+        | FunBody.Typed (body) => Nemerle.Compiler.typer_csharp.Check (body, current_type.FullName, is_instance_ctor, Manager)
+        | _ => ()
+      }
       
       when (StopAfterPhase > 0 && StopAfterPhase == 1)
         return;
@@ -1288,6 +1294,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
         | TExpr.PropertyMember (_, p) when !need_ref => p.IsMutable
         | TExpr.Call (TExpr.PropertyMember (_, p), _, _) when !need_ref => p.IsMutable
+        // a call returning a reference (`ref T', not `ref readonly'): the place it refers to is written
+        | TExpr.Call (TExpr.MethodRef (_, m, _, _), _, _) when !need_ref && Nemerle.Compiler.typer_csharp.ReturnsWritableReference (m) => true
+        | TExpr.Call (TExpr.StaticRef (_, m, _), _, _) when !need_ref && Nemerle.Compiler.typer_csharp.ReturnsWritableReference (m) => true
         | TExpr.Call (TExpr.Delayed (dt), _, _) when !need_ref => dt.IsMutableIndexer
         | TExpr.This when current_type.IsValueType && current_type.Equals (e.FixedType().TypeInfo)
         | TExpr.ArrayIndexer | PointerIndexer => true
@@ -2812,6 +2821,52 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               res
             } else
               TExpr.Error ()
+
+        // `x with { A = 1; B = 2 }': a copy of x with A and B set, as an initializer sets them (C#'s `with': a
+        // record's copy, its `<Clone>$', or a struct's)
+        | PExpr.Call(Ref(name = (idl = "with")) as op, [value, changes]) =>
+          def changes = match (changes) { | PExpr.Sequence(items) => items | one => [one] };
+          def typed = TypeExpr(value);
+          match (typed.Type.Hint)
+          {
+            | Some(FixedType.Class(ti, _) as t) =>
+              def copy = PExpr.Ref(op.Location, Name(Util.tmpname("with_copy")));
+              def made =
+                if (ti.IsValueType) Some(<[ mutable $copy = $(typed : typed) ]>)
+                else
+                  match (ti.LookupMember("<Clone>$").Find(m => m is IMethod && (m :> IMethod).GetParameters().IsEmpty))
+                  {
+                    | Some(clone) =>
+                      def cloned = <[ $(PExpr.Member(op.Location, PExpr.Typed(typed), Splicable.Name(Name("<Clone>$"))))() ]>;
+                      // (a derived record's copy is its base's type)
+                      match ((clone :> IMethod).ReturnType.Fix())
+                      {
+                        | FixedType.Class(returned, _) when returned.Equals(ti) => Some(<[ def $copy = $cloned ]>)
+                        | _ => Some(<[ def $copy = ($cloned :> $(PExpr.TypedType(t))) ]>)
+                      }
+                    | None => None()
+                  };
+              match (made)
+              {
+                | Some(made) =>
+                  def sets = changes.Map(change =>
+                    match (change)
+                    {
+                      | PExpr.Assign(PExpr.Ref(member), set) => <[ _N_skip_write_check($copy.$(member : name)) = $set ]>
+                      | other =>
+                        Nemerle.Compiler.UtilMacros.locate(other.Location,
+                          ReportError(messenger, $"`with' sets members of the copy, `Name = value': `$other' is not one"));
+                        <[ () ]>
+                    });
+                  TypeExpr(<[ { $made; { ..$sets } $copy } ]>, expected)
+                | None =>
+                  ReportError(messenger, $"`with' copies a record (C#'s, which has a `<Clone>$') or a struct: `$ti' is neither");
+                  TExpr.Error()
+              }
+            | _ =>
+              ReportError(messenger, $"`with' copies a record or a struct: the type of `$value' is not known here");
+              TExpr.Error()
+          }
 
         | PExpr.Call(Ref(name = (idl = "_N_skip_write_check")), [parm]) =>
           def e = TypeExpr(parm, expected);
@@ -6831,7 +6886,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             log (TYPING, $"loop with header: $ftype $(aparm.expr.Type)");
             Nemerle.Compiler.UtilMacros.locate (aparm.expr?.Location,//)
             {
-              if (fparm.kind == aparm.kind) 
+              // (a value for C#'s `in' parameter: passed through a temporary, typer4)
+              if (fparm.kind == aparm.kind
+                  || fparm.kind == ParmKind.Ref && aparm.kind == ParmKind.Normal && Nemerle.Compiler.typer_csharp.IsInParameter (imethod, fparm.name)) 
               {
                 def ftypeNoRef = StripRefOut(ftype);
 
@@ -9127,18 +9184,54 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             def flags = BindingFlags.DeclaredOnly %| BindingFlags.Public %| BindingFlags.Instance;
             def mems  = ti.GetFields(flags).Filter(withoutIgnoreFieldAttribute);
             def names = mems.Map(_.Name);
+            // a library type's `Deconstruct(out a, out b)' (C#'s positional pattern: a record's): the values are its
+            // members named as its parameters
+            def deconstructed(n : int) : option[list[string]]
+            {
+              if (ti is TypeBuilder) None()
+              else
+              {
+                def member(parameter : string) : string
+                {
+                  def readable(m : IMember)
+                  {
+                    | f is IField => !f.IsStatic
+                    | p is IProperty => !p.IsStatic && !p.IsIndexer && p.GetGetter() != null
+                    | _ => false
+                  }
+                  def named = [parameter, if (parameter.Length > 0) char.ToUpperInvariant(parameter[0]).ToString() + parameter.Substring(1) else parameter];
+                  match (named.Find(name => ti.LookupMember(name).Exists(readable))) { | Some(name) => name | None => null }
+                }
+                def methods = ti.LookupMember("Deconstruct").Filter(m => m is IMethod && !m.IsStatic);
+                match (methods.Find(m => { def ps = (m :> IMethod).GetParameters(); ps.Length == n && ps.ForAll(p => p.kind == ParmKind.Out) }))
+                {
+                  | Some(m) =>
+                    def members = (m :> IMethod).GetParameters().Map(p => member(p.name));
+                    if (members.Contains(null)) None() else Some(members)
+                  | None => None()
+                }
+              }
+            }
             match(pats.Length)
             {
               | 0 =>
                 ReportError(messenger, "pattern can't match 0 values");
                 Pattern.Error()
 
+              | n when deconstructed(n).IsSome =>
+                def assigns = NList.Map2(deconstructed(n).Value, pats, (n, p) => PT.PExpr.Assign (PT.PExpr.Ref(PT.Name(n)), p));
+                TypeTuplePattern(matched_value_type, assigns)
+
               | n when n == names.Length =>
                 def assigns = NList.Map2(names, pats, (n, p) => PT.PExpr.Assign (PT.PExpr.Ref(PT.Name(n)), p));
                 TypeTuplePattern(matched_value_type, assigns)
 
               | n =>
-                ReportError(messenger, $"pattern matches $n values, while the type `$ti' has $(names.Length) fields");
+                if (!(ti is TypeBuilder) && ti.LookupMember("Deconstruct").Exists(m => m is IMethod && (m :> IMethod).GetParameters().Length == n))
+                  ReportError(messenger, $"pattern matches $n values: `$ti' has a Deconstruct giving $n, but not all of them are members it has "
+                                          "of their names, which a pattern matches; call it: x.Deconstruct(out a, out b)")
+                else
+                  ReportError(messenger, $"pattern matches $n values, while the type `$ti' has $(names.Length) fields");
                 Pattern.Error()
             }
 

@@ -90,7 +90,7 @@ public module Scripts
       def registry = ScriptDefinitionRegistry(definition);
       ScriptKinds.Register(registry, definition, ScriptKinds.SearchPath(path));
       def selected = registry.Select(source);
-      def name = Path.GetFileName(path);
+      def name = Path.GetFileName(path) :> string;
       def length = selected.ExtensionLength(name);
       def stem = if (length >= 0) name.Substring(0, name.Length - length) else name;
       if (stem.Contains("."))

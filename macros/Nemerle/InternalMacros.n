@@ -99,9 +99,9 @@ macro StaticInitializer (t : TypeBuilder, f : FieldBuilder, val)
   when (!is_static && option != null)
   {
     def script = option.GetValue(t.Manager.Options);
-    when (script != null && (script.GetType().GetField("TypeName").GetValue(script) :> string) == t.FullName)
+    when (script != null && ((script.GetType().GetField("TypeName") :> System.Reflection.FieldInfo).GetValue(script) :> string) == t.FullName)
     {
-      def fields = script.GetType().GetField("RelocatedInitializers").GetValue(script) :> System.Collections.Generic.HashSet[string];
+      def fields = (script.GetType().GetField("RelocatedInitializers") :> System.Reflection.FieldInfo).GetValue(script) :> System.Collections.Generic.HashSet[string];
       relocated = fields.Contains(f.Name);
     }
   }

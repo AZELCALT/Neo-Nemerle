@@ -855,6 +855,8 @@ using Nemerle.Compiler.Utility;
             {
               | _ is PExpr.Lambda | _ is PExpr.DefFunctions => if (after) { depth-- } else { depth++ }
               | PExpr.Assign(PExpr.Ref(target), _) when depth == 0 && target.Id == name => found = true
+              // (an `out' argument assigns it)
+              | PExpr.ParmOut(PExpr.Ref(target)) when depth == 0 && target.Id == name => found = true
               | _ => ()
             }
             node
@@ -1228,10 +1230,18 @@ using Nemerle.Compiler.Utility;
         {
           <[ { $node; Nemerle.Compiler.__state_store($(owner + "." + n.Id : string), $(fieldRef(n)), $(PExpr.Ref(node.Location, n))) } ]>
         }
+        // (the values a call assigns through `out' and `ref' arguments)
+        def through(parms : list[PExpr]) : list[Name]
+        {
+          parms.FoldLeft([], (p, found) => match (p) { | PExpr.ParmOut(PExpr.Ref(n)) | PExpr.ParmByRef(PExpr.Ref(n)) when flowing.Contains(n.Id) => n :: found | _ => found })
+        }
         match (node)
         {
           | PExpr.Assign(PExpr.Ref(n), _) when after && !inPattern && flowing.Contains(n.Id) => store(n)
           | PExpr.Call(PExpr.Ref(op), PExpr.Ref(n) :: _) when after && StateAssignOperators.Contains(op.Id) && flowing.Contains(n.Id) => store(n)
+          | PExpr.Call(_, parms) when after && !inPattern && !through(parms).IsEmpty =>
+            def stores = through(parms).Map(n => <[ Nemerle.Compiler.__state_store($(owner + "." + n.Id : string), $(fieldRef(n)), $(PExpr.Ref(node.Location, n))) ]>);
+            <[ { def result = $node; { ..$stores } result } ]>
           | _ => node
         }
       })
@@ -3989,6 +3999,11 @@ using Nemerle.Compiler.Utility;
                   | _ is BinaryOperatorInfo =>
                     match (exprs)
                     {
+                      // (`with' binds looser than `=', as a match case's `| p when c with x = 1' needs: `q = p with
+                      // { ... }' assigns the copy)
+                      | e1 :: (PExpr.Assign(target, value) as e2) :: rest when x.Name == "with" =>
+                        exprs = rest;
+                        PExpr.Assign (e2.Location + e1.Location, target, make_operator_call (x.Name, op_loc, value, e1))
                       | e1 :: e2 :: rest =>
                         exprs = rest;
                         make_operator_call (x.Name, op_loc, e2, e1)

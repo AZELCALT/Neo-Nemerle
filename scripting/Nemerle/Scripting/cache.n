@@ -56,7 +56,7 @@ public sealed class FileScriptArtifactCache : IScriptArtifactCache
         mutable bytes : long = 0;
         def entries : List[DirectoryInfo] = List();
         foreach (entry in Directory.GetDirectories(directory))
-          unless (Path.GetFileName(entry).StartsWith("."))
+          unless ((Path.GetFileName(entry) :> string).StartsWith("."))
           {
             def info = DirectoryInfo(entry); entries.Add(info);
             foreach (file in info.GetFiles("*", SearchOption.AllDirectories)) bytes = bytes + file.Length;

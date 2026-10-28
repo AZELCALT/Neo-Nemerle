@@ -117,6 +117,11 @@ public class SystemTypeClass
     get { InternalType.NullMatchException_tc.SystemType }
   }
 
+  public NullReferenceException : System.Type
+  {
+    get { InternalType.NullReferenceException_tc.SystemType }
+  }
+
   public ContainsMacroAttribute : System.Type
   {
     get { InternalType.ContainsMacroAttribute_tc.SystemType }
@@ -416,6 +421,7 @@ public class InternalTypeClass
   public mutable Double_tc                            : TypeInfo;
   public mutable Enum_tc                              : TypeInfo;
   public mutable Exception_tc                         : TypeInfo;
+  public mutable NullReferenceException_tc            : TypeInfo;
   public mutable Int16_tc                             : TypeInfo;
   public mutable Int32_tc                             : TypeInfo;
   public mutable Int64_tc                             : TypeInfo;
@@ -625,6 +631,7 @@ public class InternalTypeClass
     Double_tc = lookup ("System.Double"); Double = FixedType.Class (Double_tc, []);
     Enum_tc = lookup ("System.Enum"); Enum = FixedType.Class (Enum_tc, []);
     Exception_tc = lookup ("System.Exception"); Exception = FixedType.Class (Exception_tc, []);
+    NullReferenceException_tc = lookup ("System.NullReferenceException");
     Int16_tc = lookup ("System.Int16"); Int16 = FixedType.Class (Int16_tc, []);
     Int64_tc = lookup ("System.Int64"); Int64 = FixedType.Class (Int64_tc, []);
     SByte_tc = lookup ("System.SByte"); SByte = FixedType.Class (SByte_tc, []);

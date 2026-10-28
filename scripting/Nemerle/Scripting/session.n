@@ -81,7 +81,7 @@ public sealed class ScriptSession : IDisposable
         foreach (type in previous.ScriptType.GetNestedTypes(System.Reflection.BindingFlags.Public))
         {
           def name = type.Name.Split('`')[0];
-          config.PreviousTypeNames[name] = type.FullName.Replace('+', '.').Split('`')[0];
+          config.PreviousTypeNames[name] = (type.FullName :> string).Replace('+', '.').Split('`')[0];
         }
         def owner = previous.Definition.StemOf(history[i].Path);
         config.PreviousTypeNames[owner] = previous.ScriptType.FullName;

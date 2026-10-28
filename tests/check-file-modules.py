@@ -780,7 +780,7 @@ await Done(async () => { await Task.Delay(1); Console.WriteLine("done") });
 def frames(t : Task[int]) : string
 {
   try { _ = t.Result; "" }
-  catch { | e is AggregateException => string.Join(" ", $[l.Trim().Split(' ')[1] | l in e.InnerException.StackTrace.Split('\\n')]) }
+  catch { | e is AggregateException => string.Join(" ", $[l.Trim().Split(' ')[1] | l in ((e.InnerException :> Exception).StackTrace :> string).Split('\\n')]) }
 }
 Console.WriteLine(frames(Rethrow()));
 Console.WriteLine(frames(Plain()))
@@ -892,7 +892,7 @@ public Get() : int { 1 }
     source('early/main.n', '''using System;
 // its public state is a property that waits too (a field's read could not), as C# and reflection see it
 Console.WriteLine(config.settings);
-def property = typeof(config).GetProperty("settings");
+def property = typeof(config).GetProperty("settings") :> System.Reflection.PropertyInfo;
 def noField = object.ReferenceEquals(typeof(config).GetField("settings"), null);
 Console.WriteLine($"$(property != null) $(property.GetValue(null)) $noField");
 Console.WriteLine(config.Get());
@@ -921,11 +921,11 @@ broken failed broken failed
     source('dollar/main.n', '''using System;
 using System.Reflection;
 mutable m = null;
-def property = typeof(string).GetProperty("Length");
+def property = typeof(string).GetProperty("Length") :> PropertyInfo;
 def noField = typeof(string).GetField("x") == null;
 Console.WriteLine($"$m $(property.Name) $noField");
 m = "set";
-def field = typeof(main).GetField("m", BindingFlags.NonPublic | BindingFlags.Static);
+def field = typeof(main).GetField("m", BindingFlags.NonPublic | BindingFlags.Static) :> FieldInfo;
 Console.WriteLine(field.FieldType.Name)
 ''')
     source('dollar/other.n', '''public One() : int { 1 }

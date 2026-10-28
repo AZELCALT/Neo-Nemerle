@@ -838,6 +838,18 @@ using Nemerle.Compiler.Utility;
 
         // when expr throws we shouldn't emit anything
         | TypeConversion (expr, _, _, _) when expr.Throws => emit (expr)
+        // (a cast that is the null check of a value C# declares `?')
+        | TypeConversion (expr, cast_to_type, ConversionKind.NotNull, _) =>
+          emit (expr);
+          def label_not_null = _ilg.DefineLabel ();
+          _ilg.Emit (OpCodes.Dup);
+          // (a long branch: a short one over the throw lost the `newobj' byte in a persisted assembly's body)
+          _ilg.Emit (OpCodes.Brtrue, label_not_null);
+          _ilg.Emit (OpCodes.Newobj, SystemTypeCache.NullReferenceException.GetConstructor (System.Type.EmptyTypes));
+          _ilg.Emit (OpCodes.Throw);
+          _ilg.MarkLabel (label_not_null);
+          unless (no_cast_needed (expr.GetSystemType (), cast_to_type.GetSystemType ()) || cast_to_type.Fix ().IsSystemObject)
+            _ilg.Emit (OpCodes.Castclass, cast_to_type.GetSystemType ())
         | TypeConversion(expr, target_type, _, _) when target_type.IsPointer => emit_value_to_ptr_conversion(expr, target_type);
         | TypeConversion (expr, cast_to_type, _, _) /* do not perform casts between same types */
           when no_cast_needed (expr.GetSystemType (), cast_to_type.GetSystemType ()) => emit (expr)
@@ -892,7 +904,7 @@ using Nemerle.Compiler.Utility;
             def cast_to_type = cast_to_type.GetSystemType();
 
             when (expr.GetSystemType().IsArray && cast_to_type.IsArray 
-              && expr.GetSystemType().GetElementType().IsValueType != cast_to_type.GetElementType().IsValueType)
+              && (expr.GetSystemType().GetElementType() :> Type).IsValueType != (cast_to_type.GetElementType() :> Type).IsValueType)
             {
               Message.Error(expr.Location, $"attempting to cast a value type array $(expr.GetSystemType ()) to non-value type array $(cast_to_type) which cannot succeed");
             }
@@ -1121,6 +1133,8 @@ using Nemerle.Compiler.Utility;
           def call = Unwrapped(target);
           _address_of = call;
           emit (call);
+          // (the value may read the same call, `At(i) += 1': that read is through the reference)
+          _address_of = null;
           emit (val);
           _ilg.Emit (OpCodes.Stobj, call.GetSystemType ());
 
@@ -2631,7 +2645,7 @@ using Nemerle.Compiler.Utility;
       {
         Emited(opcode);
         try { _ilg.Emit(opcode, con) }
-        catch { | e is ArgumentException => throw InvalidOperationException($"Cannot emit constructor $con on $(con.DeclaringType.AssemblyQualifiedName)", e); }
+        catch { | e is ArgumentException => throw InvalidOperationException($"Cannot emit constructor $con on $((con.DeclaringType :> Type).AssemblyQualifiedName)", e); }
       }
       public Emit (opcode : OpCode, arg       : double )         : void { Emited(opcode); _ilg.Emit(opcode, arg)       }
       public Emit (opcode : OpCode, field     : FieldInfo )      : void { Emited(opcode); _ilg.Emit(opcode, field)     }

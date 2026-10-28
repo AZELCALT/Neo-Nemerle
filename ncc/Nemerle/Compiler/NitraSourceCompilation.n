@@ -315,7 +315,7 @@ internal sealed class NitraSourceSession
             }
           }
         // a grammar image is bound to the compiler and Nitra build that made it: another build's images are not used
-        def version=typeof(ManagerClass).Assembly.GetName().Version.ToString();
+        def version=(typeof(ManagerClass).Assembly.GetName().Version :> System.Version).ToString();
         when(store!=null && store.GrammarImage!=null && store.CompilerVersion!=version)
         {
           when(Environment.GetEnvironmentVariable("NEMERLE_CONTINUATION_DIFF")=="1")
@@ -671,7 +671,7 @@ internal sealed class NitraSourceSession
       def prefix=root.TrimEnd(array[Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar])+Path.DirectorySeparatorChar;
       unless(path.StartsWith(prefix,StringComparison.Ordinal)) throw ArgumentException("dialect source is outside the source root: "+path);
       def relative=path.Substring(prefix.Length);
-      Path.ChangeExtension(relative,null).Replace(Path.DirectorySeparatorChar,'.').Replace(Path.AltDirectorySeparatorChar,'.')
+      (Path.ChangeExtension(relative,null) :> string).Replace(Path.DirectorySeparatorChar,'.').Replace(Path.AltDirectorySeparatorChar,'.')
     }
     else Path.GetFileNameWithoutExtension(path)
   }

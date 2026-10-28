@@ -162,7 +162,7 @@ public static class ScriptMetadata
                 path = Path.Combine(parts.ToArray()) + ".ns";
               | _ => ()
             }
-            unless (Path.GetExtension(path).Equals(".ns", StringComparison.OrdinalIgnoreCase))
+            unless ((Path.GetExtension(path) :> string).Equals(".ns", StringComparison.OrdinalIgnoreCase))
               fail(token, "Script import requires a .ns file; use using for .n sources and DependsOn for assemblies");
             match (next) {
               | Token.Semicolon => end = offset(next.Location) + 1;

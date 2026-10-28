@@ -630,7 +630,7 @@ public module DotUtils
       //si.RedirectStandardOutput = true;
       si.UseShellExecute = false;
 
-      using (process = Process.Start(si))
+      using (process = Process.Start(si) :> Process)
       {
         def errors = process.StandardError.ReadToEnd();
         //def output = process.StandardOutput.ReadToEnd();

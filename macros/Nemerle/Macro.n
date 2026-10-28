@@ -126,7 +126,7 @@ internal module ResourceImpl
 
           foreach(d :> DictionaryEntry in reader)
           {
-            def typeName = if (d.Value == null) "System.Object" else d.Value.GetType().FullName;
+            def typeName = match (d.Value) { | null => "System.Object" | value => value.GetType().FullName };
             def key = d.Key.ToString();
             def typedDype = <[ $(getType(typeName) : typed) ]>;
 
@@ -211,7 +211,7 @@ internal module SettingsHelper
         {
           mutable propertyAttributes = [<[ System.Diagnostics.DebuggerNonUserCodeAttribute ]>];
           def propertyType =
-            match (el.Attribute(XName.Get("Type")).Value)
+            match ((el.Attribute(XName.Get("Type")) :> XAttribute).Value)
             {
               | "(Web Service URL)" =>
                 propertyAttributes ::= <[ System.Configuration.SpecialSettingAttribute(System.Configuration.SpecialSetting.WebServiceUrl) ]>;
@@ -219,7 +219,7 @@ internal module SettingsHelper
               | "(Connection string)" =>
                 propertyAttributes ::= <[ System.Configuration.SpecialSettingAttribute(System.Configuration.SpecialSetting.ConnectionString) ]>;
                 "System.String";
-              | _ => el.Attribute(XName.Get("Type")).Value;
+              | _ => (el.Attribute(XName.Get("Type")) :> XAttribute).Value;
             }
 
           match(el.Attribute(XName.Get("Scope")))
@@ -242,7 +242,7 @@ internal module SettingsHelper
                 propertyAttributes ::= <[ System.Configuration.DefaultSettingValueAttribute($(e.Value : string)) ]>;
           }
 
-          def propertyName = el.Attribute(XName.Get("Name")).Value;
+          def propertyName = (el.Attribute(XName.Get("Name")) :> XAttribute).Value;
 
           builder.Define(
           <[ decl:
@@ -296,7 +296,7 @@ internal module SettingsHelper
 
         try
         {
-          def root = XDocument.Parse(resource.GetText(), LoadOptions.SetLineInfo).Root;
+          def root = XDocument.Parse(resource.GetText(), LoadOptions.SetLineInfo).Root :> XElement;
 
           if(root.Name.NamespaceName == _xmlNamespace)
             defineClass(root);

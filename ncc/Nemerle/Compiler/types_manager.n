@@ -1057,7 +1057,7 @@ using Nemerle.Compiler.Utility;
         // the continuation section is added last, because the metadata rewrite above would drop a custom section
         when (Manager.Options.ContinuationSection && Manager.Continuation != null && !Manager.Continuation.IsEmpty)
         {
-          Manager.Continuation.CompilerVersion = typeof(ManagerClass).Assembly.GetName().Version.ToString();
+          Manager.Continuation.CompilerVersion = (typeof(ManagerClass).Assembly.GetName().Version :> System.Version).ToString();
           // members of the relevant modules that a referencing compilation cannot see (macros may expand to them)
           foreach (owner in continuation_modules)
           {

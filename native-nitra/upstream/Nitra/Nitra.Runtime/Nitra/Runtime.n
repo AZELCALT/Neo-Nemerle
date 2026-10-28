@@ -1122,7 +1122,7 @@ public abstract class GrammarDescriptor : IComparable[GrammarDescriptor]
   {
     def descriptors = List();
     def assemblyAttributes = CustomAttributeData.GetCustomAttributes(assembly);
-    foreach (attr when attr.Constructor.DeclaringType.Equals(typeof(GrammarsAttribute)) in assemblyAttributes)
+    foreach (attr when (attr.Constructor.DeclaringType :> System.Type).Equals(typeof(GrammarsAttribute)) in assemblyAttributes)
     {
       def grammarTypes = attr.ConstructorArguments[0].Value :> Seq[CustomAttributeTypedArgument];
       foreach (grammarTypeArgument in grammarTypes)
@@ -1580,7 +1580,7 @@ public class Language : object, ISerializable
   {
     def languages = List();
     def assemblyAttributes = CustomAttributeData.GetCustomAttributes(assembly);
-    foreach (attr when attr.Constructor.DeclaringType.Equals(typeof(LanguagesAttribute)) in assemblyAttributes)
+    foreach (attr when (attr.Constructor.DeclaringType :> System.Type).Equals(typeof(LanguagesAttribute)) in assemblyAttributes)
     {
       def languageTypes = attr.ConstructorArguments[0].Value :> Seq[CustomAttributeTypedArgument];
       foreach (languageTypeArgument in languageTypes)

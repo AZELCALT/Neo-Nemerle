@@ -719,7 +719,7 @@ scope.A.value = 21;
 def host = Nemerle.Scripting.host.ScriptHost();
 def definition = Nemerle.Scripting.contracts.ScriptDefinition();
 definition.TargetReferenceDirectory = System.IO.Path.Combine(System.AppContext.BaseDirectory, "references");
-definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);
+definition.References.Add((System.Reflection.Assembly.GetEntryAssembly() :> System.Reflection.Assembly).Location);
 definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "appres.dll"));
 def plugin = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText("plugin.txt"), "plugin.ns"), definition);
 if (plugin.Success) _ = host.Evaluate(plugin.Script, Nemerle.Scripting.contracts.ScriptInputs());

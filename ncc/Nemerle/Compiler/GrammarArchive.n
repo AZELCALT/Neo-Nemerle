@@ -62,7 +62,7 @@ public module GrammarArchives
           {
             def b=ExperimentalGrammarBlock(); b.Kind=token.Text; b.File=file;
             def path=Path.GetFullPath(file); def prefix=root.TrimEnd(array[Path.DirectorySeparatorChar])+Path.DirectorySeparatorChar;
-            b.Owner=Path.ChangeExtension(if(path.StartsWith(prefix,StringComparison.Ordinal)) path.Substring(prefix.Length) else Path.GetFileName(path),null).Replace(Path.DirectorySeparatorChar,'.');
+            b.Owner=(Path.ChangeExtension(if(path.StartsWith(prefix,StringComparison.Ordinal)) path.Substring(prefix.Length) else Path.GetFileName(path),null) :> string).Replace(Path.DirectorySeparatorChar,'.');
             b.Start=token.Start; b.EnclosingStart=if(context.Count>0) context.Peek() else -1;
             if(r.Eat("("))
             {

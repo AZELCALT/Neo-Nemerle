@@ -49,9 +49,9 @@ public class XmlDoc {
     
     document = XmlDocument ();
     _ = document.AppendChild (document.CreateXmlDeclaration ("1.0", null, null));
-    def d = document.AppendChild (document.CreateElement ("doc"));
-    def name = d.AppendChild (document.CreateElement ("assembly")).
-      AppendChild (document.CreateElement ("name"));
+    def d = document.AppendChild (document.CreateElement ("doc")) :> XmlNode;
+    def name = (d.AppendChild (document.CreateElement ("assembly")) :> XmlNode).
+      AppendChild (document.CreateElement ("name")) :> XmlNode;
     _ = name.AppendChild (document.CreateTextNode (this.OutputFileName));
     docNode = d.AppendChild (d.AppendChild (document.CreateElement ("members")));
   }

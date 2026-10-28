@@ -621,6 +621,8 @@ using Nemerle.Compiler.Utility;
     | MethodCall { sr : TExpr.StaticRef; }
     | IL { is_checked : bool; }
     | UpCast
+    // a cast of a value C# declares `?': the null check, it throws (typer_csharp)
+    | NotNull
     | DownCast { InCheckedContext : bool; }
     | Implicit
     | IgnoreValue // generates a warning in Typer2
@@ -724,6 +726,20 @@ using Nemerle.Compiler.Utility;
         }
       }
 
+      // (an argument: its value, in a plain local; a cache of a value type holds the address of the object it is)
+      def cache_value (value : TExpr) : TExpr
+      {
+        match (unfold (value))
+        {
+          | LocalRef | Literal => value
+          | _ =>
+            def val = LocalValue (fun_header, Util.tmpname ("cached_argument"), value.Type, LocalValue.Kind.Plain (), false);
+            val.UseFrom (fun_header);
+            body = TExpr.DefValIn (body.Location, body.Type, val, value, body);
+            TExpr.LocalRef (value.Location, value.Type, val)
+        }
+      }
+
       def get_ref (expr : TExpr)
       {
         | LocalRef
@@ -744,6 +760,14 @@ using Nemerle.Compiler.Utility;
             | PropertyMember (obj, fld) as expr =>
               def inner = TExpr.PropertyMember(expr.Location, expr.Type, cache_obj (obj), fld);
               TExpr.Call(inner, parms, tail)
+
+            // a call returning a reference (`At(i) += 1'): its object and arguments are evaluated once, and it is
+            // called for the read and for the write, which reach the same place
+            | MethodRef (obj, meth, type_parms, notvirtual) as expr =>
+              def inner = TExpr.MethodRef(expr.Location, expr.Type, cache_obj (obj), meth, type_parms, notvirtual);
+              TExpr.Call(inner, parms.Map(p => Parm(p.kind, cache_value(p.expr), p.name, p.required_type)), tail)
+            | StaticRef as expr =>
+              TExpr.Call(expr, parms.Map(p => Parm(p.kind, cache_value(p.expr), p.name, p.required_type)), tail)
 
             | _ => Nemerle.Compiler.UtilMacros.ice ()
           }
@@ -798,7 +822,7 @@ using Nemerle.Compiler.Utility;
     | Literal               { val : Nemerle.Compiler.AST.Literal; }
     | This
     | Base                  { base_ctor : IMethod; }
-    | TypeConversion        { mutable expr : TExpr; target_type : TypeVar; kind : ConversionKind;
+    | TypeConversion        { mutable expr : TExpr; target_type : TypeVar; mutable kind : ConversionKind;
                               mutable target_type_location : Location;
 
                               this (loc : Location, tv : TypeVar, expr : TExpr, target_type : TypeVar, kind : ConversionKind)

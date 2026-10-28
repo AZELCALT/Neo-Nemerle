@@ -147,9 +147,9 @@ public class ScriptRunner
       def adapter = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Nemerle.Scripting.NuGet.dll");
       when (File.Exists(adapter))
       {
-        def type = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true);
+        def type = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true) :> Type;
         def resolver = Activator.CreateInstance(type, array[Path.Combine(cacheDirectory, "packages") : object, definition.Repositories.ToArray() : object]);
-        type.GetProperty("Offline").SetValue(resolver, offline); type.GetProperty("UpdateLock").SetValue(resolver, updateLock);
+        (type.GetProperty("Offline") :> PropertyInfo).SetValue(resolver, offline); (type.GetProperty("UpdateLock") :> PropertyInfo).SetValue(resolver, updateLock);
         settings.Resolver = resolver :> IScriptDependencyResolver;
       }
       def host = ScriptHost(settings);
@@ -188,7 +188,7 @@ public class ScriptRunner
         def searched = ScriptKinds.SearchPath(source.Path);
         ScriptKinds.Register(registry, definition, searched);
         def selected = registry.Select(source);
-        def name = Path.GetFileName(source.Path);
+        def name = Path.GetFileName(source.Path) :> string;
         def length = selected.ExtensionLength(name);
         def stem = if (length >= 0) name.Substring(0, name.Length - length) else name;
         when (stem.Contains("."))

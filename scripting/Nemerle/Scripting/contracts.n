@@ -89,7 +89,7 @@ public sealed class ScriptDefinition
   /// A script file's name without its extension: the script's name (`deploy` for `deploy.build.ns`).
   public StemOf(file : string) : string
   {
-    def name = System.IO.Path.GetFileName(file);
+    def name = System.IO.Path.GetFileName(file) :> string;
     def length = ExtensionLength(name);
     if (length >= 0) name.Substring(0, name.Length - length) else System.IO.Path.GetFileNameWithoutExtension(name)
   }
@@ -142,7 +142,7 @@ public sealed class EvaluationResult
     unless (typeof(Delegate).IsAssignableFrom(delegateType)) throw ArgumentException("Expected a delegate type");
     // CLR delegate binding performs signature checks and binds this instance.
     unless (Instance != null) throw InvalidOperationException("Script construction did not produce an instance");
-    def parameters = delegateType.GetMethod("Invoke").GetParameters();
+    def parameters = (delegateType.GetMethod("Invoke") :> System.Reflection.MethodInfo).GetParameters();
     def types = Array.ConvertAll(parameters, p => p.ParameterType);
     mutable method : MethodInfo = null;
     foreach (candidate in Instance.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))

@@ -104,7 +104,7 @@ public module ScriptKinds
   public Definition(kind : ScriptKind, fallback : ScriptDefinition) : ScriptDefinition
   {
     def assembly = Assembly.LoadFrom(kind.Library);
-    def type = assembly.GetType(kind.TypeName, true);
+    def type = assembly.GetType(kind.TypeName, true) :> Type;
     def definition = fallback.Snapshot();
     definition.FileExtension = kind.Extension;
     definition.Id = kind.TypeName;

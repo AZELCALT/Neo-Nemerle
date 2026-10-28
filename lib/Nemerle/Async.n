@@ -114,7 +114,7 @@ public module AsyncVoid
       {
         when (t.IsFaulted)
         {
-          def error = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(t.Exception.InnerException);
+          def error = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture((t.Exception :> System.AggregateException).InnerException);
           System.Threading.ThreadPool.QueueUserWorkItem(_ => error.Throw())
         }
       }, TaskContinuationOptions.ExecuteSynchronously)

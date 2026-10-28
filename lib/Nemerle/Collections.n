@@ -3587,7 +3587,7 @@ public class LinkedList ['a] : System.Collections.Generic.LinkedList['a],
   public Reverse () : void
   {
     unless (IsEmpty) {
-      mutable current = Last.Previous;
+      mutable current = (Last :> System.Collections.Generic.LinkedListNode['a]).Previous;
       while (current != null) {
         _ = AddLast (current.Value);
         def prev = current.Previous;

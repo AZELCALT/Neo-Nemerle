@@ -830,7 +830,7 @@ public module NStringBuilderExtensions
         _ = builder.Replace("\n", indent, pos, seperator.Length);
       }
       
-      def str = elem.ToString().Replace("\n", indent);
+      def str = (elem.ToString() :> string).Replace("\n", indent);
       _ = builder.Append(str);
     }
   }

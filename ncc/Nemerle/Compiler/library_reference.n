@@ -84,7 +84,7 @@ using Nemerle.Compiler.Utility;
     public ContinuationAllows(member : SR.MemberInfo) : bool
     {
       ContinuationMembers.Count > 0 && member.DeclaringType != null
-        && ContinuationMembers.Contains(member.DeclaringType.FullName + "::" + member.Name)
+        && ContinuationMembers.Contains((member.DeclaringType :> System.Type).FullName + "::" + member.Name)
     }
 
     /// If set to true, the current assembly declares itself
@@ -670,6 +670,9 @@ using Nemerle.Compiler.Utility;
       {
         handle = h;
         base(lib);
+        // (C# marks a constructor that leaves its type's `required' members to the initializer obsolete, for a
+        // compiler that does not know them; this one checks them, typer_csharp)
+        when (is_obsolete && h.IsConstructor && Nemerle.Compiler.typer_csharp.LeavesRequired(h)) is_obsolete = false;
 
         def (tyvars, tenv) = TyCodec.ReflectTyparms (lib, tenv, h);
         
@@ -1036,9 +1039,9 @@ using Nemerle.Compiler.Utility;
 
         when (attrs.Length > 0)
         {
-          def get_ids  = t.GetMethod ("get_Identifiers");
-          def get_pat  = t.GetMethod ("get_Pattern");
-          def get_name = t.GetMethod ("get_Name");
+          def get_ids  = t.GetMethod ("get_Identifiers") :> SR.MethodInfo;
+          def get_pat  = t.GetMethod ("get_Pattern") :> SR.MethodInfo;
+          def get_name = t.GetMethod ("get_Name") :> SR.MethodInfo;
 
           foreach (attr_obj in attrs)
           {
@@ -1889,7 +1892,7 @@ using Nemerle.Compiler.Utility;
         get
         {
           assert(system_type.IsEnum);
-          library.TypeInfoOfType (system_type.GetField ("value__").FieldType)
+          library.TypeInfoOfType ((system_type.GetField ("value__") :> SR.FieldInfo).FieldType)
         }
       }
 

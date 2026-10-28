@@ -75,7 +75,7 @@ public sealed class FileModuleRegistry
     for (mutable i = 0; i < sources.Count; i++)
     {
       def source = sources[i];
-      def extension = Path.GetExtension(Location.GetFileName(source.FileIndex));
+      def extension = Path.GetExtension(Location.GetFileName(source.FileIndex)) :> string;
       unless (extension.Equals(".n", StringComparison.OrdinalIgnoreCase) || extension.Equals(".ns", StringComparison.OrdinalIgnoreCase)) continue;
       def here = Path.GetDirectoryName(Path.GetFullPath(Location.GetFileName(source.FileIndex)));
       foreach (name in SourceUsings(source))
@@ -157,7 +157,7 @@ public sealed class FileModuleRegistry
       def physical = Path.GetFullPath(Location.GetFileName(pair.Key));
       def modulePath = pair.Value;
       // A registration replaces the physical identity; local lookup must not create a second name for it.
-      def defaultName = Path.ChangeExtension(Path.GetRelativePath(Root, physical), null).Replace(Path.DirectorySeparatorChar, '.');
+      def defaultName = (Path.ChangeExtension(Path.GetRelativePath(Root, physical), null) :> string).Replace(Path.DirectorySeparatorChar, '.');
       when (modulePath.ToString(".") == defaultName && physical == target + ".n") return modulePath;
     }
     def relative = Path.GetRelativePath(Root, target);
@@ -276,7 +276,7 @@ public sealed class FileModuleRegistry
     // Project `main` settings and -main:file identify a physical source; emission needs its registered CLR name.
     when (manager.Options.MainClass != null)
       foreach (fileIndex in paths.Keys)
-        when (Path.ChangeExtension(Path.GetRelativePath(root, Location.GetFileName(fileIndex)), null)
+        when ((Path.ChangeExtension(Path.GetRelativePath(root, Location.GetFileName(fileIndex)), null) :> string)
                 .Replace(Path.DirectorySeparatorChar, '.') == manager.Options.MainClass)
         {
           manager.Options.MainClass = Name(fileIndex);
@@ -300,7 +300,7 @@ public sealed class FileModuleRegistry
     def options = manager.Options;
     if (options.TargetIsLibrary || options.Script != null) false
     else if (options.MainClass != null) Name(fileIndex) == options.MainClass
-      || Path.ChangeExtension(Path.GetRelativePath(Root, Location.GetFileName(fileIndex)), null).Replace(Path.DirectorySeparatorChar, '.') == options.MainClass
+      || (Path.ChangeExtension(Path.GetRelativePath(Root, Location.GetFileName(fileIndex)), null) :> string).Replace(Path.DirectorySeparatorChar, '.') == options.MainClass
     else if (standaloneStart != 0) fileIndex == standaloneStart
     else if (paths.Keys.NToList().Exists(i => Path.GetFullPath(Location.GetFileName(i)) == Path.Combine(Root, "main.n")))
       Path.GetFullPath(Location.GetFileName(fileIndex)) == Path.Combine(Root, "main.n")

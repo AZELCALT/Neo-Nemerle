@@ -1,0 +1,548 @@
+// What a C# library's metadata says about its members beyond their types, kept as C# keeps it:
+//   - an `init' property (its setter's return carries the IsExternalInit modifier) is set where the object is made, in
+//     its initializer (`Init() <- { A = 1 }') or in a constructor of a derived type, and nowhere else;
+//   - a type's `required' members ([RequiredMember]) are set by the initializer of every object made with a
+//     constructor that does not set them itself ([SetsRequiredMembers]); C# marks those constructors obsolete for a
+//     compiler that does not know the rule, which this one does;
+//   - a member whose type is a nullable reference (`string?': [Nullable]/[NullableContext] 2) gives a value that can
+//     be null: one of the set {T, null}. It is passed, compared, bound and returned as any value; a member of it is
+//     reached only where it is checked (`match', `is', `!= null', `?.', a method's [NotNullWhen] parameter, a cast
+//     `x :> T' to the type it has, which throws if it is null), as a value of several types is (typer_flow). `ToString()' is never null:
+//     .NET declares object's `string?' for the rare override that returns null.
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using SCG = System.Collections.Generic;
+using SR = System.Reflection;
+using Nemerle.Compiler.expr_walker;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.Utility;
+
+// (an attribute's constructor argument: a byte, or the first of an array of them)
+FirstByte(a : SR.CustomAttributeData) : int
+{
+  if (a.ConstructorArguments.Count == 0) -1
+  else
+    match (a.ConstructorArguments[0].Value)
+    {
+      | b is byte => b :> int
+      | flags is SCG.IList[SR.CustomAttributeTypedArgument] when flags.Count > 0 && flags[0].Value is byte => (flags[0].Value :> byte) :> int
+      | _ => -1
+    }
+}
+
+Named(attributes : SCG.IList[SR.CustomAttributeData], name : string) : SR.CustomAttributeData
+{
+  mutable found = null;
+  foreach (a in attributes) when (found == null && a.AttributeType.FullName == name) found = a;
+  found
+}
+
+/// Whether a C# member's value can be null: its type (its result's) is a reference annotated nullable, by its own
+/// [Nullable] or the [NullableContext] around it. A type parameter's `T?' is left out (T may be a value type).
+public IsNullable(member : IMember) : bool
+{
+  def nullable = "System.Runtime.CompilerServices.NullableAttribute";
+  def context = "System.Runtime.CompilerServices.NullableContextAttribute";
+  def annotated(t : System.Type, own : SCG.IList[SR.CustomAttributeData], owner : SR.MemberInfo) : bool
+  {
+    if (t == null || t.IsValueType || t.IsGenericParameter || t.IsByRef && ((t.GetElementType() :> System.Type).IsValueType || (t.GetElementType() :> System.Type).IsGenericParameter)) false
+    else
+      match (Named(own, nullable))
+      {
+        | null =>
+          // (the context: the member's, then its types' outwards)
+          mutable flag = -1;
+          mutable at = owner;
+          while (flag < 0 && at != null)
+          {
+            match (Named(SR.CustomAttributeData.GetCustomAttributes(at), context)) { | null => () | c => flag = FirstByte(c) }
+            at = at.DeclaringType
+          }
+          flag == 2
+        | a => FirstByte(a) == 2
+      }
+  }
+  if (member == null || member.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) false
+  else
+    try
+    {
+      match (member.GetHandle())
+      {
+        | m is SR.MethodInfo when m.Name == "ToString" && m.GetParameters().Length == 0 => false
+        | m is SR.MethodInfo => annotated(m.ReturnType, SR.CustomAttributeData.GetCustomAttributes(m.ReturnParameter), m)
+        | f is SR.FieldInfo => annotated(f.FieldType, SR.CustomAttributeData.GetCustomAttributes(f), f)
+        | p is SR.PropertyInfo => annotated(p.PropertyType, SR.CustomAttributeData.GetCustomAttributes(p), p)
+        | _ => false
+      }
+    }
+    catch { | _ => false }
+}
+
+/// Whether a C# property is `init': set only where its object is made.
+public IsInitOnly(p : IProperty) : bool
+{
+  if (p == null || p.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) false
+  else
+    try
+    {
+      match (p.GetHandle())
+      {
+        | h is SR.PropertyInfo =>
+          match (h.GetSetMethod(true))
+          {
+            | null => false
+            | set =>
+              mutable init = false;
+              foreach (m in set.ReturnParameter.GetRequiredCustomModifiers()) when (m.FullName == "System.Runtime.CompilerServices.IsExternalInit") init = true;
+              init
+          }
+        | _ => false
+      }
+    }
+    catch { | _ => false }
+}
+
+/// Whether a library method's parameter `name' is C#'s `in': read-only, passed by reference; its argument may be a
+/// value, which is passed through a temporary (typer4).
+public IsInParameter(m : IMethod, name : string) : bool
+{
+  if (m == null || m.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) false
+  else
+    try
+    {
+      match (m.GetHandle())
+      {
+        | h is SR.MethodBase =>
+          mutable found = false;
+          foreach (p in h.GetParameters()) when (p.Name == name && p.ParameterType.IsByRef && p.IsIn && !p.IsOut) found = true;
+          found
+        | _ => false
+      }
+    }
+    catch { | _ => false }
+}
+
+/// Whether a library method returns a reference its caller may write through (`ref T', not `ref readonly T').
+public ReturnsWritableReference(m : IMember) : bool
+{
+  if (m == null || m.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) false
+  else
+    try
+    {
+      match (m.GetHandle())
+      {
+        | h is SR.MethodInfo when h.ReturnType.IsByRef =>
+          def readOnly = Named(SR.CustomAttributeData.GetCustomAttributes(h.ReturnParameter), "System.Runtime.CompilerServices.IsReadOnlyAttribute") != null;
+          mutable inModifier = false;
+          foreach (t in h.ReturnParameter.GetRequiredCustomModifiers()) when (t.FullName == "System.Runtime.InteropServices.InAttribute") inModifier = true;
+          !readOnly && !inModifier
+        | _ => false
+      }
+    }
+    catch { | _ => false }
+}
+
+/// Whether a C# constructor leaves its type's `required' members to the object's initializer (C# marks it obsolete
+/// for compilers that do not know them, with [CompilerFeatureRequired("RequiredMembers")]).
+public LeavesRequired(ctor : SR.MethodBase) : bool
+{
+  try
+  {
+    def attributes = SR.CustomAttributeData.GetCustomAttributes(ctor);
+    match (Named(attributes, "System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute"))
+    {
+      | null => false
+      | a =>
+        a.ConstructorArguments.Count > 0 && a.ConstructorArguments[0].Value is string && a.ConstructorArguments[0].Value :> string == "RequiredMembers"
+        && Named(attributes, "System.Diagnostics.CodeAnalysis.SetsRequiredMembersAttribute") == null
+    }
+  }
+  catch { | _ => false }
+}
+
+/// The `required' members of a C# type, its bases' too.
+public RequiredMembers(t : System.Type) : list[string]
+{
+  mutable found = [];
+  for (mutable at = t; at != null; at = at.BaseType)
+    foreach (m in at.GetMembers(SR.BindingFlags.Public | SR.BindingFlags.NonPublic | SR.BindingFlags.Instance | SR.BindingFlags.DeclaredOnly))
+      when ((m is SR.PropertyInfo || m is SR.FieldInfo) && !found.Contains(m.Name)
+            && Named(SR.CustomAttributeData.GetCustomAttributes(m), "System.Runtime.CompilerServices.RequiredMemberAttribute") != null)
+        found = m.Name :: found;
+  found.Rev()
+}
+
+/// Reports, in a method's typed body (of the type `owner'), a C# `init' property set outside an initializer, an object
+/// made without its `required' members, and a member reached on a value that can be null where it is not checked.
+/// `inConstructor': the body is an instance constructor's (it sets its base type's `init' properties).
+public Check(body : TExpr, owner : string, inConstructor : bool, manager : Nemerle.Compiler.manager_class.ManagerClass) : void
+{
+  def unwrap(e : TExpr) : TExpr
+  {
+    match (e)
+    {
+      | TExpr.DebugInfo(inner, _) => unwrap(inner)
+      | TExpr.MacroEnvelope(expanded = inner) => unwrap(inner)
+      | TExpr.Delayed(dt) when dt.IsResolved => unwrap(dt.ResolutionResult)
+      | _ => e
+    }
+  }
+  // (an initializer's write: `<-' marks its targets, _N_skip_write_check)
+  def marked(e : TExpr) : bool
+  {
+    match (e)
+    {
+      | _ when e.SkipWriteCheck => true
+      | TExpr.DebugInfo(inner, _) => marked(inner)
+      | TExpr.MacroEnvelope(expanded = inner) => marked(inner)
+      | TExpr.Delayed(dt) when dt.IsResolved => marked(dt.ResolutionResult)
+      | _ => false
+    }
+  }
+  // the values that can be null, by what names them: a local bound to one (`def s = Api.Find()'), or a top-level
+  // value (`module.name', this compilation's, its reads in any code: a file's inference copy of its top-level code,
+  // typed first, says which)
+  def nullableLocals = SCG.HashSet.[Nemerle.Compiler.local_value.LocalValue]();
+  def NullableState =
+    match (manager.UserData["Nemerle.Compiler.nullable.state"])
+    {
+      | known is SCG.HashSet[string] => known
+      | _ => def made = SCG.HashSet(); manager.UserData["Nemerle.Compiler.nullable.state"] = made; made
+    };
+  def state(f : IMember) : string
+  {
+    def type = if (f.DeclaringType == null) null else f.DeclaringType.FullName;
+    def script = manager.Options.Script;
+    if (type != null && (manager.FileModuleRegistry.TopLevel.Contains(type) || script != null && type == script.TypeName)) type + "." + f.Name
+    else null
+  }
+  // (the name a read is of: a local, or a top-level value's)
+  def key(e : TExpr) : object
+  {
+    match (unwrap(e))
+    {
+      | TExpr.LocalRef(local) when nullableLocals.Contains(local) => local
+      | TExpr.StaticRef(_, f is IField, _) when state(f) != null && NullableState.Contains(state(f)) => state(f)
+      | TExpr.FieldMember(_, f) when state(f) != null && NullableState.Contains(state(f)) => state(f)
+      // (a member of a local or of `this', `if (e.InnerException != null) e.InnerException.Message')
+      | TExpr.PropertyMember(obj, m) | TExpr.FieldMember(obj, m) when IsNullable(m) =>
+        match (unwrap(obj))
+        {
+          | TExpr.LocalRef(local) => (local : object, m.Name)
+          | TExpr.This => ("this" : object, m.Name)
+          | _ => null
+        }
+      // (an indexer's with constant arguments, `if (n["key"] != null) n["key"].AsArray()')
+      | TExpr.Call(func, args, _) when args.ForAll(a => unwrap(a.expr) is TExpr.Literal) =>
+        match (unwrap(func))
+        {
+          | TExpr.PropertyMember(obj, p) when IsNullable(p) =>
+            def at = p.Name + "[" + args.Map(a => (unwrap(a.expr) :> TExpr.Literal).val.ToString()).ToString(", ") + "]";
+            match (unwrap(obj))
+            {
+              | TExpr.LocalRef(local) => (local : object, at)
+              | TExpr.This => ("this" : object, at)
+              | _ => null
+            }
+          | _ => null
+        }
+      | _ => null
+    }
+  }
+  def nullable(e : TExpr) : string
+  {
+    match (unwrap(e))
+    {
+      | TExpr.LocalRef(local) when nullableLocals.Contains(local) => local.Name
+      | TExpr.StaticRef(_, f is IField, _) as read when key(read) != null => f.Name
+      | TExpr.FieldMember(_, f) as read when key(read) != null => f.Name
+      | TExpr.Call(func, _, _) =>
+        match (unwrap(func))
+        {
+          | TExpr.MethodRef(_, m, _, _) when IsNullable(m) => m.Name + "(...)"
+          | TExpr.StaticRef(_, m is IMethod, _) when IsNullable(m) => m.Name + "(...)"
+          | TExpr.PropertyMember(_, p) when IsNullable(p) => p.Name
+          | _ => null
+        }
+      | TExpr.FieldMember(_, m) when IsNullable(m) => m.Name
+      | TExpr.PropertyMember(_, m) when !m.IsIndexer && IsNullable(m) => m.Name
+      | TExpr.StaticRef(_, m, _) when !(m is IMethod) && IsNullable(m) => m.Name
+      | TExpr.StaticPropertyRef(_, m) when IsNullable(m) => m.Name
+      | _ => null
+    }
+  }
+  // the bindings: a local's, and a top-level value's (its field written; in the inference copy, its local
+  // `_N_state_<name>_<k>')
+  def bindState(target : string, value : TExpr) : void { when (target != null && nullable(value) != null) _ = NullableState.Add(target) }
+  def stateLocal(local : Nemerle.Compiler.local_value.LocalValue) : string
+  {
+    if (local.Name.StartsWith("_N_state_") && local.Name.LastIndexOf('_') > 9)
+      owner + "." + local.Name.Substring(9, local.Name.LastIndexOf('_') - 9)
+    else null
+  }
+  // the objects made with a constructor that leaves `required' members to its initializer: the local the
+  // initializer sets, and the members it sets
+  def initialized = SCG.Dictionary.[Nemerle.Compiler.local_value.LocalValue, SCG.List[string]]();
+  ExprWalker().Walk(body, info =>
+    match (info.Node)
+    {
+      | TExpr.DefValIn(local, value, _) =>
+        when (nullable(value) != null) _ = nullableLocals.Add(local);
+        bindState(stateLocal(local), value)
+      | TExpr.Assign(TExpr.LocalRef(local), value) => bindState(stateLocal(local), value)
+      | TExpr.Assign(target, value) when marked(target) =>
+        match (unwrap(target))
+        {
+          | TExpr.StaticRef(_, f is IField, _) | TExpr.FieldMember(TExpr.This, f) => bindState(state(f), value)
+          | TExpr.PropertyMember(obj, m) | TExpr.FieldMember(obj, m) =>
+            match (unwrap(obj))
+            {
+              | TExpr.LocalRef(local) =>
+                unless (initialized.ContainsKey(local)) initialized[local] = SCG.List();
+                initialized[local].Add(m.Name)
+              | _ => ()
+            }
+          | _ => ()
+        }
+      | _ => ()
+    });
+  // what a check covers: the reads of a value in the branch where it is known not to be null
+  def checkedReads = SCG.HashSet.[TExpr]();
+  def cover(name : object, branch : TExpr) : void
+  {
+    when (branch != null)
+      ExprWalker().Walk(branch, info =>
+        match (info.Node) { | read is TExpr when key(read) != null && key(read).Equals(name) => _ = checkedReads.Add(unwrap(read)) | _ => () })
+  }
+  // (`x != null' / `x == null', either way round: what is tested, and whether the test is `!=')
+  def nullTest(cond : TExpr) : option[object * bool]
+  {
+    def isNull(e : TExpr) { unwrap(e) is TExpr.Literal(Nemerle.Compiler.AST.Literal.Null) }
+    def op(f : TExpr) : string
+    {
+      match (unwrap(f))
+      {
+        | TExpr.OpCode(name) => name
+        | TExpr.StaticRef(_, m, _) => match (m.Name) { | "op_Equality" => "==" | "op_Inequality" => "!=" | _ => null }
+        | _ => null
+      }
+    }
+    match (unwrap(cond))
+    {
+      // (`if' tests its condition as a bool)
+      | TExpr.TypeConversion(expr = inner) => nullTest(inner)
+      | TExpr.Call(f, [a, b], _) when op(f) != null && (op(f).Contains("==") || op(f).Contains("!=")) =>
+        def tested = if (isNull(b.expr)) key(a.expr) else if (isNull(a.expr)) key(b.expr) else null;
+        if (tested == null) None() else Some((tested, op(f).Contains("!=")))
+      // (`!(x == null)')
+      | TExpr.Call(f, [a], _) when op(f) == "bool.!" =>
+        match (nullTest(a.expr)) { | Some((tested, notNull)) => Some((tested, !notNull)) | None => None() }
+      // (`x == null || ...' is false where `x' is not null, `x != null && ...' true)
+      | TExpr.Match(c, [first, rest]) when first.patterns is [(Pattern.Literal(Nemerle.Compiler.AST.Literal.Bool(true)), _, _)] =>
+        def literal(e) { match (unwrap(e)) { | TExpr.Literal(Nemerle.Compiler.AST.Literal.Bool(b)) => Some(b) | _ => None() } }
+        def either(a, b, notNull)
+        {
+          match (nullTest(a)) { | Some((_, n)) as known when n == notNull => known | _ => match (nullTest(b)) { | Some((_, n)) as known when n == notNull => known | _ => None() } }
+        }
+        match (literal(first.body), literal(rest.body))
+        {
+          | (Some(true), None) => either(c, rest.body, false)
+          | (None, Some(false)) => either(c, first.body, true)
+          | _ => None()
+        }
+      // (a method's parameter C# marks [NotNullWhen(b)]: `string.IsNullOrEmpty(x)' is false where `x' is not null)
+      | TExpr.Call(f, args, _) =>
+        def method = match (unwrap(f)) { | TExpr.StaticRef(_, m is IMethod, _) | TExpr.MethodRef(_, m, _, _) => m | _ => null };
+        def parameters =
+          try
+          {
+            match (if (method == null || method.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) null else method.GetHandle())
+            {
+              | m is SR.MethodBase => m.GetParameters()
+              | _ => null
+            }
+          }
+          catch { | _ => null };
+        mutable found = None();
+        when (parameters != null && parameters.Length == args.Length)
+          foreach (arg in args with i)
+            when (found.IsNone && key(arg.expr) != null)
+              match (Named(SR.CustomAttributeData.GetCustomAttributes(parameters[i]), "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute"))
+              {
+                | a when a != null && a.ConstructorArguments.Count == 1 && a.ConstructorArguments[0].Value is bool =>
+                  found = Some((key(arg.expr), a.ConstructorArguments[0].Value :> bool))
+                | _ => ()
+              };
+        found
+      | _ => None()
+    }
+  }
+  // (whether an expression never goes on: a throw, last)
+  def exits(e : TExpr) : bool
+  {
+    match (unwrap(e))
+    {
+      | TExpr.Throw => true
+      | TExpr.Sequence(_, last) | TExpr.DefValIn(_, _, last) => exits(last)
+      | TExpr.TypeConversion(expr = inner) => exits(inner)
+      | _ => false
+    }
+  }
+  // (what a statement leaves not null where it goes on)
+  def guarded(statement : TExpr) : option[object]
+  {
+    match (unwrap(statement))
+    {
+      | TExpr.TypeConversion(expr = inner) => guarded(inner)
+      | TExpr.Match(cond, cases) =>
+        match (nullTest(cond))
+        {
+          | Some((tested, notNull)) =>
+            // (the case taken where the value is null: the condition is `!notNull')
+            def taken = cases.Find(c => c.patterns.Exists((p, _, _) =>
+              match (p) { | Pattern.Literal(Nemerle.Compiler.AST.Literal.Bool(b)) => b != notNull | Pattern.Literal => false | _ => true }));
+            match (taken) { | Some(c) when exits(c.body) => Some(tested) | _ => None() }
+          | None => None()
+        }
+      | TExpr.If(cond, e_then, e_else, _, _) =>
+        match (nullTest(cond))
+        {
+          | Some((tested, true)) when exits(e_else) => Some(tested)
+          | Some((tested, false)) when exits(e_then) => Some(tested)
+          | _ => None()
+        }
+      | TExpr.Call(f, args, _) =>
+        def method = match (unwrap(f)) { | TExpr.StaticRef(_, m is IMethod, _) | TExpr.MethodRef(_, m, _, _) => m | _ => null };
+        def parameters =
+          try
+          {
+            match (if (method == null || method.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) null else method.GetHandle())
+            {
+              | m is SR.MethodBase => m.GetParameters()
+              | _ => null
+            }
+          }
+          catch { | _ => null };
+        mutable found = None();
+        when (parameters != null && parameters.Length == args.Length)
+          foreach (arg in args with i)
+            match (Named(SR.CustomAttributeData.GetCustomAttributes(parameters[i]), "System.Diagnostics.CodeAnalysis.DoesNotReturnIfAttribute"))
+            {
+              | a when found.IsNone && a != null && a.ConstructorArguments.Count == 1 && a.ConstructorArguments[0].Value is bool =>
+                // (it goes on where the argument is `!b')
+                def goesOn = !(a.ConstructorArguments[0].Value :> bool);
+                match (nullTest(arg.expr)) { | Some((tested, notNull)) when notNull == goesOn => found = Some(tested) | _ => () }
+              | _ => ()
+            };
+        found
+      | _ => None()
+    }
+  }
+  def madeBy = SCG.Dictionary.[TExpr, Nemerle.Compiler.local_value.LocalValue]();
+  ExprWalker().Walk(body, info =>
+    match (info.Node)
+    {
+      | TExpr.DefValIn(local, value, _) when initialized.ContainsKey(local) => madeBy[unwrap(value)] = local
+      // (a check: an `if', `when', `&&' on `x != null'; a match on the value, its type tests and the cases after its
+      // `null' one)
+      | TExpr.Match(subject, cases) =>
+        match (nullTest(subject))
+        {
+          | Some((tested, notNull)) =>
+            foreach (c in cases)
+              when (c.patterns.Exists((p, _, _) => match (p) { | Pattern.Literal(Nemerle.Compiler.AST.Literal.Bool(b)) => b == notNull | _ => false })
+                    || !notNull && !c.patterns.Exists((p, _, _) => p is Pattern.Literal))
+                cover(tested, c.body)
+          | None =>
+            match (key(subject))
+            {
+              | null => ()
+              | tested =>
+                def typeTest(p : Pattern) : bool { match (p) { | Pattern.HasType => true | Pattern.As(inner, _) => typeTest(inner) | _ => false } }
+                mutable afterNull = false;
+                foreach (c in cases)
+                {
+                  def known = afterNull || c.patterns.Exists((p, _, _) => typeTest(p));
+                  if (known) cover(tested, c.body)
+                  // (a name the case binds a local's or a top-level value's to, `| v => ...', can be null as it can; a
+                  // member's, as `foreach' matches `Current', is only checked)
+                  else when (tested is string || tested is Nemerle.Compiler.local_value.LocalValue)
+                    foreach ((Pattern.As(inner, decl), _, _) in c.patterns)
+                      unless (typeTest(inner) || decl.Type.Fix().IsValueType) _ = nullableLocals.Add(decl);
+                  when (c.patterns.Exists((p, _, _) => p is Pattern.Literal(Nemerle.Compiler.AST.Literal.Null))) afterNull = true
+                }
+            }
+        }
+      | TExpr.If(cond, e_then, e_else, _, _) =>
+        match (nullTest(cond)) { | Some((tested, true)) => cover(tested, e_then) | Some((tested, false)) => cover(tested, e_else) | None => () }
+      // (what follows a statement that goes on only where the value is not null: `when (x == null) throw ...',
+      // `assert (x != null)', a method C# marks [DoesNotReturnIf], `Debug.Assert(x != null)')
+      | TExpr.Sequence(first, rest) =>
+        match (guarded(first)) { | Some(tested) => cover(tested, rest) | None => () }
+      | _ => ()
+    });
+  ExprWalker().Walk(body, info =>
+    match (info.Node)
+    {
+      | TExpr.Assign(target, _) when !marked(target) =>
+        match (unwrap(target))
+        {
+          | TExpr.PropertyMember(obj, p) when IsInitOnly(p) && !(inConstructor && unwrap(obj) is TExpr.This) =>
+            Message.Error(target.Location,
+              $"`$(p.Name)' is init-only (C#'s `init'): it is set where the object is made, in its initializer: "
+               $"$(p.DeclaringType.Name)() <- { $(p.Name) = ... }")
+          | _ => ()
+        }
+      | TExpr.Call(func, _, _) as call =>
+        match (unwrap(func))
+        {
+          | TExpr.StaticRef(_, m is IMethod, _) when m.MemberKind == MemberKinds.Constructor && !(m.DeclaringType is Nemerle.Compiler.type_builder.TypeBuilder) =>
+            match (m.GetHandle())
+            {
+              | ctor is SR.ConstructorInfo when LeavesRequired(ctor) =>
+                def set = if (madeBy.ContainsKey(call)) initialized[madeBy[call]].NToList() else [];
+                def missing = RequiredMembers(ctor.DeclaringType).Filter(r => !set.Contains(r));
+                unless (missing.IsEmpty)
+                {
+                  def type = (ctor.DeclaringType :> System.Type).Name;
+                  def names = missing.ToString(", ");
+                  def more = if (missing.Length > 1) "; ..." else "";
+                  Message.Error(call.Location,
+                    $"$type has required members ($names): set them where the object is made: $type() <- { $(missing.Head) = value$more }")
+                }
+              | _ => ()
+            }
+          | _ => ()
+        }
+      | _ => ()
+    });
+  // a member reached on a value that can be null, unchecked
+  def report(obj : TExpr, member : string) : void
+  {
+    match (nullable(obj))
+    {
+      | null => ()
+      | what when !checkedReads.Contains(unwrap(obj)) =>
+        Message.Error(obj.Location,
+          $"`$what' can be null here (C# declares it `?'): check it before reaching `$member': "
+           $"match ($what) { | null => ... | v => v.$member }, if ($what != null) ..., $what?.$member, or ($what :> T)")
+      | _ => ()
+    }
+  }
+  ExprWalker().Walk(body, info =>
+    match (info.Node)
+    {
+      | TExpr.MethodRef(obj, m, _, _) => report(obj, m.Name)
+      | TExpr.FieldMember(obj, m) => report(obj, m.Name)
+      | TExpr.PropertyMember(obj, m) => report(obj, m.Name)
+      | TExpr.EventMember(obj, m) => report(obj, m.Name)
+      | TExpr.ArrayIndexer(obj, _) => report(obj, "[...]")
+      // a cast (`x :> T', `(T)x') of a value that can be null to the type it has: its check, it throws if the value is
+      // null (a cast to another type is .NET's: null stays null, `ty.UserData[key] :> Dictionary[...]')
+      | TExpr.TypeConversion(expr = inner, target_type = target) as conversion
+          when conversion.kind is ConversionKind.DownCast && !target.Fix().IsValueType && !target.Fix().IsSystemObject
+               && nullable(inner) != null && !checkedReads.Contains(unwrap(inner)) && inner.Type.Fix().Equals(target.Fix()) =>
+        conversion.kind = ConversionKind.NotNull()
+      | _ => ()
+    });
+}

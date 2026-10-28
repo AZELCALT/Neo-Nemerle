@@ -176,7 +176,7 @@ public sealed class Project
       foreach (file in Directory.GetFiles(dir, "*.n")) when (file.EndsWith(".n", StringComparison.Ordinal)) result.Add(file);
       foreach (sub in Directory.GetDirectories(dir))
       {
-        def name = Path.GetFileName(sub);
+        def name = Path.GetFileName(sub) :> string;
         unless (name.StartsWith(".", StringComparison.Ordinal) || name == "bin" || name == "obj"
                 || string.Equals(Path.GetFullPath(sub), output, StringComparison.Ordinal)
                 || Directory.GetFiles(sub, "*" + Extension).Length > 0)

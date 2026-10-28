@@ -11,7 +11,7 @@ public module NDebug
   {
     try
     {
-      str.ToString()
+      (str.ToString() :> string)
         .Replace("System.Linq.Expressions.", "")
         .Replace("System.Linq.", "")
         .Replace("System.Collections.Generic.", "")
@@ -35,7 +35,7 @@ public module NDebug
 
     foreach (frame when i < StackTraceDepth && i != 0 in frames with i)
     {
-      def m     = frame.GetMethod();
+      def m     = frame.GetMethod() :> System.Reflection.MethodBase;
       def name  = m.Name;
       def count = m.GetParameters().Length;
       def file  = frame.GetFileName();

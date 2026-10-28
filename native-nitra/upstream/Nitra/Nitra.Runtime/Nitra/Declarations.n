@@ -56,7 +56,7 @@ public abstract class AstBase : IAst
   {
     def type    = GetType();
     def color   = if (this.IsAmbiguous) "red" else "gray";
-    def str     = AstUtils.XmlEscape(if (type.IsNested) type.DeclaringType.Name + "." + type.Name else type.Name);
+    def str     = AstUtils.XmlEscape(if (type.IsNested) (type.DeclaringType :> System.Type).Name + "." + type.Name else type.Name);
     def typeStr = $"<Span Foreground = '$color'>$str</Span>";
 
     if (this : object is Declaration as decl)

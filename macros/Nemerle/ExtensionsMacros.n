@@ -750,7 +750,8 @@ internal module WithMacroImpl
       | <[ $_op($(PExpr.ToComplete(n)), $_val) ]>
       | <[ $(PExpr.ToComplete(n)) =  $_val ]> => <[ $name.$(Splicable.HalfId(n.Location, n)) ]>
       // property initializer
-      | <[ $(prop : name) =   $val ]>        => <[ $name.$(prop : name) =  $val ]>
+      // (the write is the initializer's: C#'s `init' properties and `required' members are set here, typer_csharp)
+      | <[ $(prop : name) =   $val ]>        => <[ _N_skip_write_check($name.$(prop : name)) =  $val ]>
       | <[ $(prop : name) +=  $val ]>        => <[ $name.$(prop : name) += $val ]>
       | <[ $(prop : name) -=  $val ]>        => <[ $name.$(prop : name) -= $val ]>
       | <[ $(prop : name) =>  $val ]>        => <[ $name.$("add_" + prop.Id : usesite) ((_) => $val) ]>

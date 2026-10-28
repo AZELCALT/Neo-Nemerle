@@ -9891,7 +9891,7 @@ internal sealed class SelectedRegistry
       when(identity!=null)
       {
         def name=identity.Invoke(null,null) :> string;
-        def method=type.GetMethod("CreateSelected",BindingFlags.Public%|BindingFlags.Static%|BindingFlags.DeclaredOnly);
+        def method=type.GetMethod("CreateSelected",BindingFlags.Public%|BindingFlags.Static%|BindingFlags.DeclaredOnly) :> MethodInfo;
         def factory=method.CreateDelegate(typeof(Func[ISourceSnapshotProvider,NitraStructure,Func[string,ISourceSnapshotProvider,NitraStructure,object],object])) :> Func[ISourceSnapshotProvider,NitraStructure,Func[string,ISourceSnapshotProvider,NitraStructure,object],object];
         factories.Add(name,factory);
       }
@@ -10098,7 +10098,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
             Func(provider => registry.Create("NitraSyntax.Start",provider,selected.Root) :> NitraSyntaxParseTree.Start));
         }
       | _ =>
-        when(Path.GetFileName(manager.Options.OutputFileName).StartsWith("NativeGrammar_",StringComparison.Ordinal))
+        when((Path.GetFileName(manager.Options.OutputFileName) :> string).StartsWith("NativeGrammar_",StringComparison.Ordinal))
           throw InvalidOperationException("native source inputs were not retained by the grammar compilation");
     }
   }

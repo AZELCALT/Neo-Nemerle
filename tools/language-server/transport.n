@@ -87,3 +87,14 @@ public sealed class Transport
     Write(m)
   }
 }
+
+/// A field a message has (a protocol's required one): an error naming it if it has not (C# declares an indexer's
+/// node `JsonNode?').
+public Field(this node : JsonNode, name : string) : JsonNode
+{
+  match (node[name])
+  {
+    | null => throw InvalidDataException($"the message has no `$name'")
+    | field => field
+  }
+}

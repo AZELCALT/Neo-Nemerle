@@ -38,7 +38,7 @@ public module ClrNames
       {
         def genericArgs = t.GetGenericArguments();
         // A generic type nested in a file module's class: the class is part of the name (Nemerle.Core.ValueOption).
-        def ns = if (t.IsNested && !t.DeclaringType.IsGenericType) TypeFullName(t.DeclaringType) + "."
+        def ns = if (t.IsNested && !(t.DeclaringType :> System.Type).IsGenericType) TypeFullName(t.DeclaringType) + "."
                  else if (string.IsNullOrEmpty(t.Namespace)) "" else t.Namespace + ".";
         $"$ns$(t.Name)[..$(genericArgs.Map(_.Name))]"
       }

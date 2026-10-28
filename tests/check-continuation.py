@@ -132,7 +132,7 @@ def run(file : string) : void
   def host = Nemerle.Scripting.host.ScriptHost();
   def definition = Nemerle.Scripting.contracts.ScriptDefinition();
   definition.TargetReferenceDirectory = System.Environment.GetCommandLineArgs()[1];
-  definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);
+  definition.References.Add((System.Reflection.Assembly.GetEntryAssembly() :> System.Reflection.Assembly).Location);
   definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "res.dll"));
   def compiled = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText(file), file), definition);
   if (!compiled.Success) foreach (d in compiled.Diagnostics) System.Console.WriteLine("error " + d.Message)
@@ -612,7 +612,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         'def host = Nemerle.Scripting.host.ScriptHost();\n'
         'def definition = Nemerle.Scripting.contracts.ScriptDefinition();\n'
         'definition.TargetReferenceDirectory = System.Environment.GetCommandLineArgs()[1];\n'
-        'definition.References.Add(System.Reflection.Assembly.GetEntryAssembly().Location);\n'
+        'definition.References.Add((System.Reflection.Assembly.GetEntryAssembly() :> System.Reflection.Assembly).Location);\n'
         'definition.References.Add(System.IO.Path.Combine(System.AppContext.BaseDirectory, "box.dll"));\n'
         'def file = System.IO.Path.Combine(System.AppContext.BaseDirectory, "use.n");\n'
         'def compiled = host.Compile(Nemerle.Scripting.contracts.ScriptSource(System.IO.File.ReadAllText(file), file), definition);\n'

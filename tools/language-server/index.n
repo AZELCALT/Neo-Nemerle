@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using SCG = System.Collections.Generic;
+using transport;
 
 /// The workspace's symbol index: for each file, the hash of its text, the files it imports, and the facts of its
 /// typed code (each use of a symbol, with the symbol's id: see Checker.Instrument). Find-references and rename look
@@ -118,7 +119,7 @@ public sealed class SymbolIndex
       foreach (pair in entries)
         unless (except.Contains(pair.Key))
           foreach (f in pair.Value.Facts)
-            when (f["id"] != null && f["id"].GetValue.[string]() == id) found.Add(f);
+            when (f["id"] != null && f.Field("id").GetValue.[string]() == id) found.Add(f);
     found
   }
 
@@ -127,15 +128,15 @@ public sealed class SymbolIndex
     try
       when (IO.File.Exists(store))
       {
-        def saved = JsonNode.Parse(IO.File.ReadAllText(store)).AsObject();
-        when (saved["version"] != null && saved["version"].GetValue.[string]() == Version && saved["root"].GetValue.[string]() == root)
+        def saved = (JsonNode.Parse(IO.File.ReadAllText(store)) :> JsonNode).AsObject();
+        when (saved["version"] != null && saved.Field("version").GetValue.[string]() == Version && saved.Field("root").GetValue.[string]() == root)
           lock (entries)
-            foreach (pair in saved["files"].AsObject())
+            foreach (pair in saved.Field("files").AsObject())
             {
               def e = Entry(); def node = pair.Value.AsObject();
-              e.Hash = node["hash"].GetValue.[string]();
-              foreach (i in node["imports"].AsArray()) e.Imports.Add(i.GetValue.[string]());
-              foreach (f in node["facts"].AsArray()) e.Facts.Add(f.DeepClone().AsObject());
+              e.Hash = node.Field("hash").GetValue.[string]();
+              foreach (i in node.Field("imports").AsArray()) e.Imports.Add(i.GetValue.[string]());
+              foreach (f in node.Field("facts").AsArray()) e.Facts.Add(f.DeepClone().AsObject());
               entries[pair.Key] = e;
             }
       }

@@ -55,6 +55,37 @@ WriteLine(data.ToString())           // error: `data' is dynamic: check what it 
 Matching with a plain name (`| o => ...`) takes it as an `object`. Only a value whose type is `dynamic` as a whole is
 checked; a `List<dynamic>` is a list (its elements are objects).
 
+### Values C# declares nullable
+
+A C# member typed `string?` (any nullable reference) gives a value that is a string or null. It is passed, compared,
+bound and returned like any value, but a member of it is reached only where it is checked:
+
+```nemerle,ignore
+def name = Api.Find(id);                 // a C# `string?`
+def a = if (name != null) name.Length else 0;
+def b = match (name) { | null => 0 | n => n.Length };
+def c = name?.Length;                    // null if it is null
+def d = string.IsNullOrEmpty(name) || name.Length > 3;   // C# marks IsNullOrEmpty [NotNullWhen(false)]
+def e = (name :> string).Length;         // a cast is the check: it throws NullReferenceException if it is null
+when (name == null) throw ArgumentException(); // from here on it is not null (so after assert (name != null) too)
+WriteLine(name.Length)                   // error: `name' can be null here (C# declares it `?')
+```
+
+A cast to the type the value has, `name :> string`, is the check. A cast to another type is .NET's as always (a null
+stays null). Everything C# does not mark `?` is not null, as everywhere in .NET, and `ToString()` is never null.
+
+### init, required, in, ref, records
+
+The rest of what C#'s metadata says beyond the types is kept too:
+
+- An `init` property is set where the object is made: `Settings() <- { Port = 80 }`. Setting it later is an error.
+- A type's `required` members must all be set by that initializer, unless its constructor sets them itself.
+- An `in` parameter takes a plain value, `Api.Measure(size)`, as C# does. `ref size` works too.
+- A `ref` result can be written: `Api.At(0) = 42`, `Api.At(1) += 5`, `span[0]++`. A `ref readonly` one can't.
+- A record's (any type's) `Deconstruct` is a positional pattern: `def (x, y) = point`, `| Point(0, y) => ...`.
+  That works when its values are members of their names. Otherwise call it: `p.Deconstruct(out a, out b)`.
+- `with` copies a record or a struct with some members changed: `def moved = point with { X = 5 }`.
+
 ## Delegates and events
 
 A Nemerle function value converts to a .NET delegate wherever one is expected:

@@ -85,7 +85,7 @@ programs = {
               'def r = T().Result;\nmutable t = r;\nawait foreach (x in S(10)) t += x;\nConsole.WriteLine(t)\n', '35'),
     'mixed': ('using System;\nusing System.Threading.Tasks;\n'
               'def vt : Func[ValueTask[int]] = async () => { await Task.Yield(); 7 };\n'
-              'def p = typeof(string).GetProperty("Length");\n'
+              'def p = typeof(string).GetProperty("Length") :> System.Reflection.PropertyInfo;\n'
               'def same = typeof(string).GetField("x") == null;\n'
               'await Task.Yield();\nConsole.WriteLine($"$(await vt()) $(p.Name) $same")\n', '7 Length True'),
     # (many streams at once, some left early: a stream's machine is touched by one thread at a time)

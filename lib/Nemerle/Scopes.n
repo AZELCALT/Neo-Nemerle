@@ -157,7 +157,7 @@ public sealed class Content
     {
       | content is Content => content
       // the Content of another copy of Nemerle.dll (a plugin's own): its value, in this copy's Content
-      | other when Foreign(other) => Content(other.GetType().GetField("Value").GetValue(other))
+      | other when Foreign(other) => Content((other.GetType().GetField("Value") :> System.Reflection.FieldInfo).GetValue(other))
       | _ => Content(value)
     }
   }
@@ -189,7 +189,7 @@ public sealed class Content
   {
     def fits(form : Delegate) : bool
     {
-      def parameters = form.GetType().GetMethod("Invoke").GetParameters();
+      def parameters = (form.GetType().GetMethod("Invoke") :> System.Reflection.MethodInfo).GetParameters();
       mutable ok = parameters.Length == arguments.Length;
       for (mutable i = 0; ok && i < parameters.Length; i++)
         ok = if (arguments[i] == null) !parameters[i].ParameterType.IsValueType else parameters[i].ParameterType.IsInstanceOfType(arguments[i]);

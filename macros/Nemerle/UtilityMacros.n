@@ -269,7 +269,7 @@ internal module SVNRevisionHelper
       using (stream = FileStream (filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
       using (reader = StreamReader(stream, System.Text.Encoding.UTF8, true, 1024, false))
       {
-        def firstLine = reader.ReadLine();
+        def firstLine = reader.ReadLine() ?? "";
         match (firstLine.Trim())
         {
           | "8"

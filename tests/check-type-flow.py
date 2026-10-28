@@ -150,7 +150,7 @@ for kind, runner in (('file', compile_file), ('script', run_script)):
         failures.append('boxing as a %s: printed %r, warned %r' % (kind, output, messages[-600:]))
 # a top-level value of several types says them on its field, for other languages (which see a Content)
 output, messages = compile_file('content-types', 'using System.Reflection;\nmutable x = 1;\nx = "one";\n'
-    'def f = typeof(main).GetField("x", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);\n'
+    'def f = typeof(main).GetField("x", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic) :> FieldInfo;\n'
     'foreach (a is Nemerle.Scopes.ContentTypesAttribute in f.GetCustomAttributes(false)) System.Console.WriteLine(string.Join(" ", System.Array.ConvertAll(a.Types, t => t.Name)))\n')
 if output != 'Int32 String':
     failures.append('the types of a Content field: printed %r\n%s' % (output, messages[-600:]))
@@ -163,10 +163,10 @@ System.Console.WriteLine(Fixed());
 System.Console.WriteLine(Changing());
 foreach (name in ["Fixed", "Changing"])
 {
-  def method = typeof(main).GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+  def method = typeof(main).GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static) :> MethodInfo;
   mutable hasInt = false;
   mutable hasObject = false;
-  foreach (local in method.GetMethodBody().LocalVariables)
+  foreach (local in (method.GetMethodBody() :> MethodBody).LocalVariables)
   {
     when (local.LocalType == typeof(int)) hasInt = true;
     when (local.LocalType == typeof(object)) hasObject = true
@@ -184,7 +184,7 @@ for kind, runner in (('file', compile_file), ('script', run_script)):
 d = work / 'file' / 'result-types'
 d.mkdir(parents=True)
 (d / 'main.n').write_text('using System.Reflection;\nPick(c : bool) { if (c) "one" else 1 }\n'
-    'def m = typeof(main).GetMethod("Pick", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);\n'
+    'def m = typeof(main).GetMethod("Pick", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic) :> MethodInfo;\n'
     'foreach (a is Nemerle.Scopes.ContentTypesAttribute in m.ReturnParameter.GetCustomAttributes(false)) '
     'System.Console.WriteLine(m.ReturnType.Name + " " + string.Join(" ", System.Array.ConvertAll(a.Types, t => t.Name)))\n')
 r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'), '-launcher-', '-no-color', '-flow-log'],

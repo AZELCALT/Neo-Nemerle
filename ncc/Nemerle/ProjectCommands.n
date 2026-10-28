@@ -80,7 +80,7 @@ internal module Projects
               def info = ProcessStartInfo("dotnet"); info.UseShellExecute = false;
               info.ArgumentList.Add(binary);
               foreach (a in programArgs) info.ArgumentList.Add(a);
-              def process = Process.Start(info);
+              def process = Process.Start(info) :> Process;
               process.WaitForExit();
               process.ExitCode
           }
@@ -213,7 +213,7 @@ internal module Projects
       compileReferences.Add(path); runtimeFiles.Add(path);
     }
     // an MSBuild project's references to the toolchain's own assemblies (Nemerle.Compiler, ...)
-    def toolchainDir = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
+    def toolchainDir = Path.GetDirectoryName((Assembly.GetEntryAssembly() :> Assembly).Location);
     foreach (name in project.Toolchain)
     {
       def path = Path.Combine(toolchainDir, name + ".dll");
@@ -278,16 +278,16 @@ internal module Projects
         def main = Path.GetFullPath(Path.Combine(project.Root, project.Main));
         unless (File.Exists(main)) throw project.Error("main", null, "the main file `" + project.Main + "' does not exist");
         def relative = Path.GetRelativePath(project.Root, main);
-        arguments.Add("-main:" + Path.ChangeExtension(relative, null).Replace(Path.DirectorySeparatorChar, '.'));
+        arguments.Add("-main:" + (Path.ChangeExtension(relative, null) :> string).Replace(Path.DirectorySeparatorChar, '.'));
       }
       foreach (r in references) arguments.Add("-r:" + r);
       arguments.AddRange(project.Options);
       arguments.AddRange(sources);
       File.Delete(stampFile);
       def info = ProcessStartInfo("dotnet"); info.UseShellExecute = false;
-      info.ArgumentList.Add(Assembly.GetEntryAssembly().Location);
+      info.ArgumentList.Add((Assembly.GetEntryAssembly() :> Assembly).Location);
       foreach (a in arguments) info.ArgumentList.Add(a);
-      def process = Process.Start(info);
+      def process = Process.Start(info) :> Process;
       process.WaitForExit();
       unless (process.ExitCode == 0 && File.Exists(binary))
       {
@@ -430,7 +430,7 @@ internal module Projects
     {
       def index = Text.Json.JsonDocument.Parse(Get("https://api.nuget.org/v3/index.json"));
       def search = index.RootElement.GetProperty("resources").EnumerateArray()
-        .Find(r => r.GetProperty("@type").GetString().StartsWith("SearchQueryService", StringComparison.Ordinal));
+        .Find(r => (r.GetProperty("@type").GetString() ?? "").StartsWith("SearchQueryService", StringComparison.Ordinal));
       def result = Text.Json.JsonDocument.Parse(Get(search.Value.GetProperty("@id").GetString() + "?q=" + Uri.EscapeDataString(prefix) + "&prerelease=false&take=200"));
       result.RootElement.GetProperty("data").EnumerateArray().Map(e => e.GetProperty("id").GetString())
         .Filter(i => i.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.x64", StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.arm64", StringComparison.OrdinalIgnoreCase)).NToList()
@@ -503,8 +503,8 @@ internal module Projects
     when (project.IsProgram)
       throw ProjectException(project.File, 1, 1, project.Name + " is a program; `ncc pack' packs libraries (kind = \"library\")");
     def binary = Build(file, options, offline, []);
-    def toolchain = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
-    def runtimeVersion = AssemblyName.GetAssemblyName(Path.Combine(toolchain, "Nemerle.dll")).Version.ToString();
+    def toolchain = Path.GetDirectoryName((Assembly.GetEntryAssembly() :> Assembly).Location);
+    def runtimeVersion = (AssemblyName.GetAssemblyName(Path.Combine(toolchain, "Nemerle.dll")).Version :> Version).ToString();
     def target = TargetOf(project);
     def tfm = if (target == null) Nemerle.Platform.ClrTarget.Host.Name else target.Name;
     def escape(s : string) { Security.SecurityElement.Escape(s) }
@@ -536,7 +536,7 @@ internal module Projects
     {
       icon = Path.GetFullPath(Path.Combine(project.Root, project.Icon));
       unless (File.Exists(icon)) throw project.Error("package.icon", null, "the icon `" + project.Icon + "' does not exist");
-      unless ([".png", ".jpg", ".jpeg"].Contains(Path.GetExtension(icon).ToLowerInvariant()))
+      unless ([".png", ".jpg", ".jpeg"].Contains((Path.GetExtension(icon) :> string).ToLowerInvariant()))
         throw project.Error("package.icon", null, "a package icon is a PNG or JPEG file");
       _ = nuspec.Append("    <icon>").Append(escape(Path.GetFileName(icon))).Append("</icon>\n");
     }
@@ -631,7 +631,7 @@ internal module Projects
     def local = if (!Directory.Exists(packs)) null else
     {
       def mine = Directory.GetDirectories(packs, "Microsoft.NETCore.App.Host.*")
-        .Where(d => { def r = Path.GetFileName(d).Substring("Microsoft.NETCore.App.Host.".Length);
+        .Where(d => { def r = (Path.GetFileName(d) :> string).Substring("Microsoft.NETCore.App.Host.".Length);
                       r == rid || !rid.StartsWith("win", StringComparison.Ordinal) && !rid.StartsWith("osx", StringComparison.Ordinal)
                                   && !r.StartsWith("win", StringComparison.Ordinal) && !r.StartsWith("osx", StringComparison.Ordinal) && r.EndsWith("-" + arch, StringComparison.Ordinal) });
       mine.SelectMany(d => Directory.GetFiles(d, file, SearchOption.AllDirectories)).OrderByDescending(f => f).FirstOrDefault()
@@ -724,7 +724,7 @@ internal module Projects
       def info = FileInfo(path);
       _ = b.Append(path).Append('|').Append(if (info.Exists) info.Length.ToString() + "|" + info.LastWriteTimeUtc.Ticks.ToString() else "missing").Append('\n');
     }
-    file(Assembly.GetEntryAssembly().Location);
+    file((Assembly.GetEntryAssembly() :> Assembly).Location);
     file(typeof(Project).Assembly.Location);
     _ = b.Append(File.ReadAllText(project.File)).Append('\n');
     foreach (s in sources) file(s);
@@ -749,7 +749,7 @@ internal module Projects
 
   ResolvePackages(project : Project, offline : bool, compile : SCG.List[string], runtime : SCG.List[string], target : Nemerle.Platform.ClrTarget) : void
   {
-    def toolchain = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
+    def toolchain = Path.GetDirectoryName((Assembly.GetEntryAssembly() :> Assembly).Location);
     def adapter = Path.Combine(toolchain, "Nemerle.Scripting.NuGet.dll");
     unless (File.Exists(adapter))
       throw project.Error("references.packages", null, "packages need the NuGet adapter (Nemerle.Scripting.NuGet.dll), which this toolchain does not have");
@@ -758,27 +758,27 @@ internal module Projects
     {
       match (scripting.GetTypes().Find(t => t.Name == name)) { | Some(t) => t | None => throw InvalidOperationException("Nemerle.Scripting has no " + name) }
     }
-    def resolverType = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true);
+    def resolverType = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true) :> Type;
     def data = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
     def cache = Path.Combine(if (data == "") Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share") else data,
                              "Nemerle", "scripting", "packages");
     // a feed folder is relative to the project
     def feeds = project.Repositories.Select(r => { mutable uri; if (Uri.TryCreate(r, UriKind.Absolute, out uri) && !uri.IsFile) r else Path.GetFullPath(Path.Combine(project.Root, r)) }).ToArray();
     def resolver = Activator.CreateInstance(resolverType, array[cache : object, feeds : object]);
-    resolverType.GetProperty("Offline").SetValue(resolver, offline);
+    (resolverType.GetProperty("Offline") :> PropertyInfo).SetValue(resolver, offline);
     def source = Activator.CreateInstance(type("ScriptSource"), array["" : object, project.File]);
     def data = Activator.CreateInstance(type("ScriptCollectedData"), array[source]);
-    def requests = type("ScriptCollectedData").GetField("Packages").GetValue(data) :> Collections.IList;
+    def requests = (type("ScriptCollectedData").GetField("Packages") :> FieldInfo).GetValue(data) :> Collections.IList;
     foreach (p in project.Packages)
     {
       def at = Activator.CreateInstance(type("ScriptDiagnostic"), array[project.File : object, 1 : object, 1 : object, "" : object, false : object]);
       _ = requests.Add(Activator.CreateInstance(type("PackageRequest"), array[p.Id : object, p.Version, at]));
     }
     def definition = Activator.CreateInstance(type("ScriptDefinition"));
-    when (target != null) type("ScriptDefinition").GetField("TargetFramework").SetValue(definition, target.Name);
+    when (target != null) (type("ScriptDefinition").GetField("TargetFramework") :> FieldInfo).SetValue(definition, target.Name);
     def result = try
       {
-        resolverType.GetMethod("Resolve").Invoke(resolver, array[data, definition, Threading.CancellationToken.None : object])
+        (resolverType.GetMethod("Resolve") :> MethodInfo).Invoke(resolver, array[data, definition, Threading.CancellationToken.None : object])
       }
       catch
       {
@@ -788,7 +788,7 @@ internal module Projects
           def named = project.Packages.Find(p => message.IndexOf(p.Id + "/", StringComparison.OrdinalIgnoreCase) >= 0);
           throw project.Error("references.packages", if (named != null) named.Id else null, "packages: " + message)
       };
-    def list(field : string) : SCG.List[string] { result.GetType().GetField(field).GetValue(result) :> SCG.List[string] }
+    def list(field : string) : SCG.List[string] { (result.GetType().GetField(field) :> FieldInfo).GetValue(result) :> SCG.List[string] }
     // the runtime library is the toolchain's own (a package of a Nemerle library depends on Neo.Nemerle.Runtime)
     def own(path : string) { Path.GetFileName(path) == "Nemerle.dll" }
     compile.AddRange(list("CompilationReferences").Filter(p => !own(p)));

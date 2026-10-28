@@ -12,6 +12,22 @@ unless it says so. These edges will be closed, which can change what happens the
   Reading or writing the slot with the other copy is an error that says so; a slot of no fixed type (a `Content`)
   takes either.
 
+## C# interop
+
+What a C# library's metadata says beyond its members' types is read (a nullable `string?`, `init`, `required`), and
+`with`, Deconstruct, `in` and `ref`-returns call into C# (chapter 12). The rest is **not yet**, not refused — none of
+it violates the type system, the same way generic types were "not here yet" before they were added:
+
+- **`params Span<T>`/`ReadOnlySpan<T>`.** Calling with a prebuilt span or array works (`F(a)`, and with other
+  parameters before it); the C# 13 loose-literal sugar (`F(1, 2, 3)`) is intentionally not provided — pass an array.
+- **C# 14 extension properties and static extension members.** Extension *methods* in an `extension(T) { … }` block
+  already work (they emit as ordinary `[Extension]` statics); the block's properties are not imported yet.
+- **Nemerle's own shapes as C# sees them** (the reverse direction). A Nemerle function type surfaces as its own
+  delegate type rather than `Func`/`Action`; a value of several types surfaces as a `Content` with no C#-friendly
+  read; the output carries no nullable (`?`) annotations, so C# sees the API as null-oblivious; `[Extension]` is
+  written twice on an extension method. The planned route is a C# support library the output passes through to
+  present these shapes, rather than emitting each one natively.
+
 ## Targets
 
 - **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time
@@ -26,6 +42,18 @@ unless it says so. These edges will be closed, which can change what happens the
   .NET Standard 1.x, UWP and older dead platforms, and any .NET newer than the one the compiler runs on.
 - **Older .NET is checked by its reference assemblies, not run** in `./bootstrap` unless that runtime is installed
   (Mono runs the `net48` checks).
+
+## Hiding members
+
+- **Hiding stops at the access boundary and the name.** `private`, `hidden` and the folder-module rules are
+  compile-time boundaries (chapter 7); a hidden member is still emitted as a CLR-private metadata row, so reflection
+  in the same process can enumerate and invoke it. The CLR has no flag that hides a live, callable method from
+  reflection — every metadata row is visible, and `SuppressIldasmAttribute` is a no-op on modern .NET. Past the
+  boundary the only lever is obfuscating the name. The member itself is as stable as any other; what is **unstable
+  is reaching for an already-private member by name** — a reflection lookup of a hidden member breaks as its
+  obfuscated name changes. That is intended: depending on a private reference that way already means reverse
+  engineering. Making a member genuinely unreachable through metadata (rather than only un-named) is still open and
+  needs discussion before it is settled.
 
 ## Tooling
 
