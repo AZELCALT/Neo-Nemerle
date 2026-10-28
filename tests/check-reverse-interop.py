@@ -26,7 +26,8 @@ if csc is None:
     print('SKIP: no .NET SDK C# compiler to call Nemerle from C#')
     raise SystemExit(0)
 
-# a Nemerle library: a class with a method, a property and a BCL-typed result (exported to the root namespace for C#)
+# a Nemerle library: a class with a method, a property and a BCL-typed result (exported to the root namespace for C#),
+# plus a function value and a several-type (Content) value, which C# reaches through the Nemerle.Interop / Content helpers
 (work / 'engine.n').write_text(
     'export public class Engine {\n'
     '  public Add(a : int, b : int) : int { a + b }\n'
@@ -34,6 +35,9 @@ if csc is None:
     '  public Names() : System.Collections.Generic.List[string] {\n'
     '    def l = System.Collections.Generic.List(); l.Add("a"); l.Add("b"); l\n'
     '  }\n'
+    '  public MakeAdder(n : int) : int -> int { x => x + n }\n'
+    '  public MakeLogger() : string -> void { s => System.Console.WriteLine("log: " + s) }\n'
+    '  public Several() : object { Nemerle.Scopes.Content("forty-two") }\n'
     '}\n')
 r = subprocess.run([str(T / 'ncc'), str(work / 'engine.n'), '-source-root:' + str(work), '-target:library',
                     '-out:' + str(work / 'engine.dll'), '-no-color'], capture_output=True, text=True)
@@ -46,6 +50,12 @@ if not (work / 'engine.dll').exists():
     '  System.Console.WriteLine(e.Add(2, 3));\n'
     '  System.Console.WriteLine(e.Greeting);\n'
     '  System.Console.WriteLine(string.Join(",", e.Names()));\n'
+    '  System.Func<int,int> add = Nemerle.Interop.AsFunc(e.MakeAdder(10));\n'
+    '  System.Console.WriteLine(add(5));\n'
+    '  System.Action<string> log = Nemerle.Interop.AsAction(e.MakeLogger());\n'
+    '  log("hello");\n'
+    '  var c = (Nemerle.Scopes.Content) e.Several();\n'
+    '  System.Console.WriteLine(c.Read<string>());\n'
     '} }\n')
 r = subprocess.run(['dotnet', str(csc), '-nologo', '-out:' + str(work / 'use.exe'),
                     '-r:' + str(work / 'engine.dll'), '-r:' + str(T / 'Nemerle.dll'),
@@ -56,6 +66,7 @@ if r.returncode != 0:
 shutil.copy2(T / 'Nemerle.dll', work / 'Nemerle.dll')
 shutil.copy2(T / 'ncc.runtimeconfig.json', work / 'use.runtimeconfig.json')
 out = subprocess.run(['dotnet', str(work / 'use.exe')], capture_output=True, text=True).stdout.strip().splitlines()
-if out != ['5', 'hi from Nemerle', 'a,b']:
+if out != ['5', 'hi from Nemerle', 'a,b', '15', 'log: hello', 'forty-two']:
     raise SystemExit('FAILED: C# calling a Nemerle class printed %r' % out)
-print('PASS: C# calls a Nemerle class (method, property, a List[string] result)', flush=True)
+print('PASS: C# calls a Nemerle class (method, property, List[string]); Nemerle.Interop.AsFunc/AsAction wrap a '
+      'Nemerle function into Func/Action; a Content value is read with Read[T]()', flush=True)

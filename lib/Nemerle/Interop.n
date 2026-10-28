@@ -1,0 +1,14 @@
+using Nemerle.Builtins;
+
+// Helpers for C# calling Nemerle. A Nemerle function value crosses to C# as a Nemerle.Builtins.Function with an
+// `apply' method, not a System delegate; these turn it into a Func/Action C# invokes with `f(x)'. (A several-type
+// value crosses as a Nemerle.Content, which already carries Read[T]()/As[T]()/Is[T]() for C# to pull the value out,
+// so it needs no helper here.)
+
+public AsFunc [R]       (f : Function [R])          : System.Func [R]          { ()     => f.apply () }
+public AsFunc [A, R]    (f : Function [A, R])       : System.Func [A, R]       { a      => f.apply (a) }
+public AsFunc [A, B, R] (f : Function [A, B, R])    : System.Func [A, B, R]    { (a, b) => f.apply (a, b) }
+
+public AsAction         (f : FunctionVoid)          : System.Action            { ()     => f.apply_void () }
+public AsAction [A]     (f : FunctionVoid [A])      : System.Action [A]        { a      => f.apply_void (a) }
+public AsAction [A, B]  (f : FunctionVoid [A, B])   : System.Action [A, B]     { (a, b) => f.apply_void (a, b) }
