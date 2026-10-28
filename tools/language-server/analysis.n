@@ -215,7 +215,10 @@ public sealed class Analyzer
     {
       def lexer = LexerFile(manager, fileIndex, text, true);
       lexer.Keywords = if (manager.FileModuleRegistry.IsModule(fileIndex)) manager.FileModuleRegistry.Environment(fileIndex).Keywords else manager.CoreEnv.Keywords;
-      mutable token : Token = lexer.GetToken();
+      // `#pragma indent' makes the lexer throw PragmaIndent to switch to indentation mode (it has already switched);
+      // resume lexing, as the compiler does (file_module_registry), instead of letting it abort the token scan
+      def getToken() { try { lexer.GetToken() } catch { | _ is LexerBase.PragmaIndent => lexer.GetToken() } }
+      mutable token : Token = getToken();
       mutable guard = 0;
       while (!(token is Token.EndOfFile) && guard < 1000000)
       {
@@ -234,7 +237,7 @@ public sealed class Analyzer
           def s = offset(token.Location); def e = endOffset(token.Location);
           when (e > s && !inForeign(s)) result.Tokens.Add((s, e - s, kind));
         }
-        token = lexer.GetToken();
+        token = getToken();
       }
       foreach (c in lexer.GetComments())
         unless (inForeign(c.Position))

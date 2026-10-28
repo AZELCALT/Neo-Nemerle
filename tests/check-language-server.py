@@ -337,6 +337,21 @@ try:
     check('greeting' in items, 'a script\'s own names are completed: %s' % items[:20])
     print('PASS: a .ns script is checked by the scripting host (its errors at its lines, apart from the workspace; hover, '
           'definition and typed completion)')
+    # a `#pragma indent' script: the lexer throws PragmaIndent to switch to indentation mode, so the semantic-token
+    # scan must resume past it (as the compiler does), not abort with no tokens and a spurious error
+    indent_script = '#pragma indent\nusing System.Console\n\nWriteLine("indented")\ndef xs = array[1, 2, 3]\nWriteLine(xs[#1])\n'
+    (work / 'ind.ns').write_text(indent_script)
+    iuri = (work / 'ind.ns').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': iuri, 'languageId': 'nemerle-script', 'version': 1, 'text': indent_script}})
+    deadline = time.time() + a.timeout; itoks = []
+    while time.time() < deadline:
+        itoks = decode(c.request('textDocument/semanticTokens/full', {'textDocument': {'uri': iuri}}), legend)
+        if itoks: break
+        time.sleep(0.3)
+    ierr = [d for d in c.diagnostics.get(iuri, {}).get('diagnostics', []) if d['severity'] == 1]
+    check(len(itoks) > 0 and not ierr, 'a #pragma indent script is tokenized, not aborted by the PragmaIndent switch: %d tokens, errors %s' % (len(itoks), ierr))
+    (work / 'ind.ns').unlink()
+    print('PASS: a #pragma indent script is tokenized (the semantic-token scan resumes past the indentation switch)')
     # the symbol index: kept on disk, so a new server answers find-references without checking the workspace again;
     # a saved change checks again only the file and the files that import it, and the uses follow it
     c.request('shutdown', None); c.notify('exit', None); c.proc.wait(timeout=30)

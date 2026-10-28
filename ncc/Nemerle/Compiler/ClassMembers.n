@@ -1630,11 +1630,15 @@ public class MethodBuilder : MemberBuilder, IMethod
       def systemExtensionAttribute = Manager.CoreEnv.LookupType(["System", "Runtime", "CompilerServices", "ExtensionAttribute"]);
       def addExtensionAttributes(m)
       {
-        unless (modifiers.FindAttribute(InternalType.ExtensionAttribute_tc, par.GlobalEnv).IsSome)
-          m.AddCustomAttribute(PT.PExpr.FromQualifiedIdentifier(Manager, InternalType.ExtensionAttribute_tc.FullName));
-
-        when (systemExtensionAttribute is Some(ti))
-          m.AddCustomAttribute(PT.PExpr.FromQualifiedIdentifier(Manager, ti.FullName));
+        // one attribute, not two: the C# `[Extension]' when the target has it (Nemerle recognises it on import too,
+        // see library_reference_manager.IsExtension); only without it fall back to Nemerle's own marker (old targets).
+        match (systemExtensionAttribute)
+        {
+          | Some(ti) => m.AddCustomAttribute(PT.PExpr.FromQualifiedIdentifier(Manager, ti.FullName))
+          | None =>
+            unless (modifiers.FindAttribute(InternalType.ExtensionAttribute_tc, par.GlobalEnv).IsSome)
+              m.AddCustomAttribute(PT.PExpr.FromQualifiedIdentifier(Manager, InternalType.ExtensionAttribute_tc.FullName))
+        }
       }
       
       def flags = modifiers.mods;
