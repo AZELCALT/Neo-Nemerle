@@ -20,10 +20,10 @@ it violates the type system, the same way generic types were "not here yet" befo
 
 - **`params Span<T>`/`ReadOnlySpan<T>`.** Calling with a prebuilt span or array works (`F(a)`, and with other
   parameters before it); the C# 13 loose-literal sugar (`F(1, 2, 3)`) is intentionally not provided — pass an array.
-- **C# 14 extension setters and static extension members.** Extension *methods* and extension *property reads*
-  (`s.Twice`) work — the importer reads the grouping types and registers the `get_`/`set_` accessors, the typer
-  resolves a read to the getter. Still not wired: writing an extension property (`s.X = v` → `set_X`) and static
-  extension members (`T.Member`).
+- **C# 14 static extension members.** Extension *methods* and extension *properties* (read `s.Twice` and write
+  `s.X = v`) work — the importer reads the grouping types and registers the `get_`/`set_` accessors, the typer
+  resolves a read to the getter and a write to the setter. Still not wired: *static* extension members (`T.Member`),
+  reached on the type rather than a value.
 - **Nemerle's own shapes as C# sees them** (the reverse direction). A Nemerle function value crosses as a
   `Nemerle.Builtins.Function` (an `apply` method, not a delegate) and a several-type value as a `Nemerle.Scopes.Content`
   — both now reachable from C# through helpers rather than native shapes: `Nemerle.Interop.AsFunc`/`AsAction` wrap a
