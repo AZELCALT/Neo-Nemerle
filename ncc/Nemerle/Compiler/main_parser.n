@@ -679,6 +679,10 @@ using Nemerle.Compiler.Utility;
               def next = topstream.Next;
               topstream.Next = null;
               try ParseExtension(fileParser, topstream, moduleName) finally { topstream.Next = next }
+            | token when !publicState && !exported && ExtensionBlockStart(token) =>
+              def next = topstream.Next;
+              topstream.Next = null;
+              try members.AddRange(ParseExtensionBlock(fileParser, topstream)) finally { topstream.Next = next }
             | Token.Using(newEnv, _, _) =>
               usings.AddRange(UsingTargets(fileParser.env, newEnv));
               fileParser.env = newEnv;
@@ -1155,6 +1159,49 @@ using Nemerle.Compiler.Utility;
       finally { parser.extending = false }
     }
 
+    /// Whether a top-level group is `extension (recv : T) { ... }': a block whose functions attach to the receiver
+    /// type `T'. Unlike an extend, it adds nothing to `T'; its members become plain functions with `recv' prepended.
+    static ExtensionBlockStart(token : Token) : bool
+    {
+      match (token)
+      {
+        | Token.Identifier("extension") as ex when ex.Next is Token.RoundGroup =>
+          mutable last = ex.Next;
+          while (last.Next != null) last = last.Next;
+          last is Token.BracesGroup
+        | _ => false
+      }
+    }
+
+    /// `extension (recv : T) { F(a) {...} ... }': each function becomes a plain function with `recv' prepended
+    /// (`F(recv : T, a)'), added to the enclosing module. Called as an ordinary function `F(obj, a)', never through a
+    /// dot: an extension is not a member of `T', so it is not disguised as one (no ambient `.'-resolution).
+    static ParseExtensionBlock(parser : MainParser, group : Token.LooseGroup) : SCG.List[ClassMember]
+    {
+      def ex : Token = group.Child;
+      def receiver = match (ex.Next) { | r is Token.RoundGroup => ParseFunParms(parser.env, r) | _ => [] };
+      mutable braces : Token = ex.Next;
+      while (braces != null && !(braces is Token.BracesGroup)) braces = braces.Next;
+      def members =
+        match (braces)
+        {
+          | b is Token.BracesGroup when b.Child != null => parser.ParseClassMembers(b.Child, "module")
+          | _ => SCG.List()
+        };
+      match (receiver)
+      {
+        | [recv] =>
+          foreach (m in members)
+            match (m)
+            {
+              | ClassMember.Function as fn => fn.header.Parameters = recv :: fn.header.Parameters
+              | _ => Message.Error(m.Location, "an `extension' holds functions; put a field or property on the type itself")
+            }
+        | _ => Message.Error(group.Location, "`extension' takes one receiver: extension (name : T) { ... }")
+      }
+      members
+    }
+
     /// True when a top-level group starts a member declaration rather than a statement. In a script `mutable x = 1`
     /// is a field; in a file module it is a statement of Main unless it names a type (`mutable x : int`).
     static IsMemberStart(token : Token, script : bool) : bool
@@ -1599,6 +1646,10 @@ using Nemerle.Compiler.Utility;
             | Token.Namespace => (); // already diagnosed by the preparser
             | null => ();
             | token when ExtensionStart(token) => ParseExtension(parser, groups, data.TypeName)
+            | token when ExtensionBlockStart(token) =>
+              def declared = ParseExtensionBlock(parser, groups).NToList();
+              parsedMembers.AddRange(declared);
+              ordered.Add(() => add(declared, "", true));
             | token when IsMemberStart(token, true) =>
               def declared = parser.ParseClassMembers(groups, "class").NToList();
               parsedMembers.AddRange(declared);

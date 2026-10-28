@@ -132,6 +132,7 @@ suites = [
     ('script-imports', ['check-script-imports.py', '--toolchain', T, '--server', out / 'lsp/nemerle-lsp']),
     ('type-flow', ['check-type-flow.py', '--toolchain', T]),
     ('extend', ['check-extend.py', '--toolchain', T]),
+    ('extensions', ['check-extensions.py', '--toolchain', T]),
     ('dynamic', ['check-dynamic.py', '--toolchain', T, '--references', R]),
     ('csharp-interop', ['check-csharp-interop.py', '--toolchain', T, '--references', R]),
     ('folder-modules', ['check-folder-modules.py', '--toolchain', T, '--references', R]),

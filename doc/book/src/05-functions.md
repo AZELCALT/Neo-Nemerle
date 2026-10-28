@@ -139,6 +139,33 @@ An extension method is a function: it reads the object through its public member
 type of your program new fields, properties or interfaces, `extend` it (chapter 7). For C#, an extension method is a
 static method of its file's class, `util.text.Shout`, and C# calls it as an extension too.
 
+### Extension blocks
+
+`extension (recv : T) { … }` groups functions over a receiver type. Each becomes a plain function with the receiver
+prepended, and you call it as an ordinary function — not through a dot, because an extension is not a member of the
+type:
+
+```nemerle
+using System.Console;
+
+extension (s : string) {
+  Shout() : string { s.ToUpper() + "!" }
+  Twice() : int { s.Length * 2 }
+}
+
+WriteLine(Shout("hello"));
+WriteLine(Twice("hello"))
+```
+
+```text
+HELLO!
+10
+```
+
+`Shout(x)`, never `x.Shout()`: the call says plainly that `Shout` is a function taking `x`, so its meaning never
+depends on which files happen to be imported. (The `this`-parameter form above is the C#-compatible extension method,
+called with a dot for interop.)
+
 ## Default and named arguments
 
 ```nemerle
