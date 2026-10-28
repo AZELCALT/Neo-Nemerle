@@ -61,6 +61,26 @@ cases = [
     # the operators that assign (`+=', `++') assign a value of another type as `=' does
     ('compound', f'mutable v = 0;\nv += 1;\nv++;\nv = "s" + v.ToString();\nv += "!";\n{W}(v)\n', 's2!', None),
     ('compound-local', f'Run() : void\n{{\n  mutable v = 0;\n  v += 1;\n  v = "s";\n  v += "!";\n  {W}(v)\n}}\nRun()\n', 's!', None),
+    # a function written without its result's type: the type its body gives; return points of several types give a
+    # Content holding one of them, and its callers check what they use against that set
+    ('result-inferred', f'Twice(n : int) {{ n * 2 }}\nSay(n : int) {{ $"n=$n" }}\nCount(n : int) {{ if (n <= 0) 0 else Count(n - 1) + 1 }}\n'
+                        f'{W}(Say(Twice(4)) + Count(3))\n', 'n=83', None),
+    ('result-set', f'Pick(c : bool) {{ if (c) "one" else 1 }}\nShow(yes : bool) : void\n{{\n  def a = Pick(yes);\n  {W}(a);\n'
+                   f'  {W}(match (a) {{ | s is string => s.Length | n is int => n }});\n  {W}(match (Pick(!yes)) {{ | s is string => s | n is int => $"int $n" }})\n}}\nShow({YES})\n',
+     'one\n3\nint 1', None),
+    # (constant arguments decide the return point a call reaches: its type, not the set)
+    ('result-constant', f'Pick(c : bool) {{ if (c) "one" else 1 }}\nKind(n : int) {{ match (n) {{ | 0 => "zero" | _ => n }} }}\n'
+                        f'Show() : void {{ {W}(Pick(true).Length + Pick(false) + Kind(0).Length + Kind(7) * 2) }}\nShow()\n', '22', None),
+    ('result-set-flow', f'Flow(c : bool)\n{{\n  mutable x = 1;\n  when (c) x = "two";\n  x\n}}\n{W}(Flow(true))\n', 'two', None),
+    ('result-set-misfit', f'Pick(c : bool) {{ if (c) "one" else 1 }}\nShow(yes : bool) : void {{ def n : int = Pick(yes) * 2; {W}(n) }}\nShow({YES})\n', None,
+     "this does not fit `Pick(yes)' when it is string"),
+    # top-level code bound to such a result: the function's type, or one of its set, which functions check first
+    ('result-top-level', f'def size = 10;\nTwice() {{ size * 2 }}\nPick(c : bool) {{ if (c) "one" else 1 }}\ndef doubled = Twice();\n'
+                         f'def picked = Pick(!({YES}));\n{W}(doubled + 1);\n{W}(match (picked) {{ | s is string => s | n is int => $"int $n" }});\n'
+                         f'Plain() : int {{ doubled * 3 }}\nChecked() : int {{ match (picked) {{ | s is string => s.Length | n is int => n }} }}\n{W}(Plain() + Checked())\n',
+     '21\nint 1\n61', None),
+    ('result-top-level-unchecked', f'Pick(c : bool) {{ if (c) "one" else 1 }}\ndef picked = Pick({YES});\nBlind() : string {{ picked.ToString() }}\n{W}(Blind())\n',
+     None, 'it is a top-level value, and this code can run at any time'),
     # a type written down is the type
     ('typed', f'mutable x : int = 1;\nx = "one";\n{W}(x)\n', None, 'expected int'),
     # a name keeps its kind

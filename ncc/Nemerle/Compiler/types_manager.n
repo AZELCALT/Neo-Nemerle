@@ -764,6 +764,8 @@ using Nemerle.Compiler.Utility;
     {
       foreach (inference is MethodBuilder in ti.LookupMember("_N_state_types"))
       {
+        // (inferred again, after the functions whose results it binds: from its code as written)
+        if (inferenceBodies.ContainsKey(ti)) inference.Body = inferenceBodies[ti] else inferenceBodies[ti] = inference.Body;
         def prefix = ti.FullName + ".";
         def forget()
         {
@@ -772,6 +774,7 @@ using Nemerle.Compiler.Utility;
           foreach (key in keys) _ = Manager.StateTypes.Remove(key);
         }
         def quietErrors = Manager.QuietErrors;
+        def undecided = Manager.FileModuleRegistry.UndecidedResults;
         Manager.QuietMessages++;
         Manager.StateInference++;
         // (an `await' there waits by blocking: this copy is typed, never run)
@@ -790,13 +793,86 @@ using Nemerle.Compiler.Utility;
         }
         finally { Manager.QuietMessages--; Manager.StateInference--; Manager.UserData.Remove("Nemerle.AsyncMacros.blocking") }
         inference.SkipEmiting = true;
-        when (Manager.QuietErrors == quietErrors)
+        // (code calling a function whose result is not decided yet: what it uses of that result is typed again, once
+        // the function is; its values of known types are decided now, as the functions reading them need)
+        def waits = Manager.FileModuleRegistry.UndecidedResults != undecided;
+        when (waits) _ = pendingModules.Add(ti);
+        when (Manager.QuietErrors == quietErrors || waits)
         {
           def learned = System.Collections.Generic.List.[string]();
           foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) learned.Add(key);
-          foreach (key in learned) DecideModuleState(ti, key, key.Substring(prefix.Length));
+          // (one bound to such a result is decided once it is: the file infers again after those functions)
+          foreach (key in learned)
+            unless (waits && Manager.FileModuleRegistry.UndecidedStates.Contains(key))
+              DecideModuleState(ti, key, key.Substring(prefix.Length));
         }
       }
+    }
+
+    /// The return points of a function's body, each in `__function_result' (FunctionResultMacro): its last expression,
+    /// and in a branching one (if, match) each branch's.
+    static ResultPoints(e : PT.PExpr) : PT.PExpr
+    {
+      mutable index = 0;
+      def points(e : PT.PExpr) : PT.PExpr
+      {
+        match (e)
+        {
+          | PT.PExpr.Sequence(items) when !items.IsEmpty =>
+            def items = items.Rev();
+            PT.PExpr.Sequence(e.Location, (points(items.Head) :: items.Tail).Rev())
+          | <[ if ($cond) $whenTrue else $whenFalse ]> => <[ if ($cond) $(points(whenTrue)) else $(points(whenFalse)) ]>
+          | PT.PExpr.Match(subject, cases, location) =>
+            PT.PExpr.Match(e.Location, subject, cases.Map(c => { def r = PT.MatchCase(c.patterns, points(c.body)); r.disable_warnings = c.disable_warnings; r }), location)
+          | _ =>
+            // (each numbered: what a call with known arguments reaches, see Typer.FlowResultSet)
+            index++;
+            Nemerle.Compiler.UtilMacros.locate(e.Location, <[ Nemerle.Compiler.__function_result ($e, $(index : int)) ]>)
+        }
+      }
+      points(e)
+    }
+
+    /// The files whose top-level code binds the result of a function whose type was not decided yet, inferred again
+    /// after those functions; each file's inference copy as written.
+    pendingModules : System.Collections.Generic.HashSet[TypeBuilder] = System.Collections.Generic.HashSet();
+    inferenceBodies : System.Collections.Generic.Dictionary[TypeBuilder, PT.PExpr] = System.Collections.Generic.Dictionary();
+
+    /// The file functions written without their result's type (MethodBuilder.InferredResult), typed each after the
+    /// ones its body names.
+    TypeInferredResults() : void
+    {
+      def functions = System.Collections.Generic.List.[MethodBuilder]();
+      Iter(ti => foreach (m is MethodBuilder in ti.GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance
+                                                             | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                                                             | System.Reflection.BindingFlags.DeclaredOnly))
+                   when (m.InferredResult) functions.Add(m));
+      def named(m : MethodBuilder) : System.Collections.Generic.HashSet[string]
+      {
+        def found = System.Collections.Generic.HashSet();
+        _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), m.Body, false, (_, after, node) =>
+          {
+            match (node) { | PT.PExpr.Ref(n) when !after => _ = found.Add(n.Id) | PT.PExpr.Member(_, n) when !after => _ = found.Add(n.GetName().Id) | _ => () }
+            node
+          });
+        found
+      }
+      when (functions.Count > 0) Nemerle.Compiler.file_module_registry.FunctionResultMacro.Register(Manager);
+      def visiting = System.Collections.Generic.HashSet.[MethodBuilder]();
+      def type(m : MethodBuilder) : void
+      {
+        when (!m.ResultDecided && visiting.Add(m))
+        {
+          def names = named(m);
+          foreach (callee when callee : object != m && names.Contains(callee.Name) in functions) type(callee);
+          // (its return points, the result macro's: first typed to learn the types they give)
+          match (m.Body) { | null => () | body => m.Body = ResultPoints(body); m.ResultBody = m.Body }
+          m.CollectingResult = true;
+          m.RunBodyTyper();
+          m.ResultDecided = true
+        }
+      }
+      foreach (m in functions) type(m)
     }
 
     /// Gives a top-level value's field its type: the one type of all its bindings, else a Content.
@@ -1104,18 +1180,35 @@ using Nemerle.Compiler.Utility;
       Iter(tb => when (allow_it(tb))
                    tb.UpdateEmittedInheritance());
 
+      // (a script's functions written without their result's type: typed first, the bindings they read inferred where
+      // they read them, as the script's constructor infers its own)
+      when (!aux_phase && Manager.Options.Script != null) TypeInferredResults();
       // Script bindings infer from ordinary typed initializers. Finalize those
       // signatures before Reflection.Emit freezes field declarations.
       when (!aux_phase && Manager.Options.Script != null && Manager.Options.Script.InferredInitializers.Count > 0)
         Iter(ti => when (ti.FullName == Manager.Options.Script.TypeName)
+        {
+          // (the script's state first: what its constructor stores, a Content or a value of its type, is decided)
+          InferModuleState(ti);
           foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
-            constructor.RunBodyTyper());
+            constructor.RunBodyTyper()
+        });
       // a file module's top-level values: the inference pass types the inference copy of its top-level code
       // quietly and only to learn types (no code), then gives each value's field its type, or a Content when its
       // bindings differ in type
       // (in import order: a file's values are inferred after those of the files it imports, whose types its code may
       // use, so the outcome does not depend on the order of the files on the command line)
       when (!aux_phase) InImportOrder(InferModuleState);
+      // a file's functions written without their result's type: typed now, after the inference that decides the
+      // top-level values they read and before the code that calls them, each after the ones it calls (a call into one
+      // being typed, as a recursion, sees a result of its own, which adds nothing); a top-level value bound to the
+      // result of one is a Content (DecideModuleState): it holds one of the types the function gives
+      when (!aux_phase)
+      {
+        TypeInferredResults();
+        // (then the files whose top-level code bound such a result infer again, knowing the types it gives)
+        foreach (ti in System.Collections.Generic.List(pendingModules)) InferModuleState(ti);
+      }
       // a file module's top-level bindings infer from their initializers the same way: type its top-level code
       // (the static constructor, or the start file's Main) before the field declarations are emitted
       // (and a file whose top-level code calls macros, whose declarations there become its fields)

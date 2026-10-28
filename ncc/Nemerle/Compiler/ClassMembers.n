@@ -235,7 +235,15 @@ public abstract class MemberBuilder : MemberInfo, IMember, System.IEquatable[IMe
 
   public GetMemType () : FixedType
   {
-    ty
+    match (this)
+    {
+      // (a function whose result is inferred, before its body is typed: a result type of the caller's own, which
+      // does not decide the function's)
+      | m is MethodBuilder when m.InferredResult && !m.ResultDecided =>
+        Manager.FileModuleRegistry.UndecidedResults++;
+        FixedType.ConstructFunctionType(m.GetParameters().Map(p => p.Type), Manager.Solver.FreshTypeVar())
+      | _ => ty
+    }
   }
 
   public override GlobalEnv : GlobalEnv
@@ -1204,6 +1212,22 @@ public class MethodBuilder : MemberBuilder, IMethod
   public FlowFacts : Nemerle.Compiler.typer_flow.FlowFacts = Nemerle.Compiler.typer_flow.FlowFacts();
 
   public SkipEmiting : bool { get; set; }
+
+  /// A file's function written without its result's type: the type its body gives, or a Content when its return
+  /// points give different types (ResultTypes, the set its callers check). Typed before the code calling it.
+  public InferredResult : bool { get; internal set; }
+  /// Whether its body is typed (before, its callers see a type of their own for its result, ResultDecided false).
+  public ResultDecided : bool { get; internal set; }
+  /// The types its return points give (more than one: its result is a Content holding one of them).
+  public ResultTypes : list[FixedType] { get; internal set; }
+  /// The typing attempt of its body that only learns ResultTypes (the result macro, see Nemerle.CoreMacros).
+  public mutable CollectingResult : bool;
+  /// The types its return points give in that attempt (ResultTypes once it is typed).
+  public CollectedResults : SCG.List[TypeVar] = SCG.List();
+  /// Its body with its return points numbered, and the types each gives: a call whose arguments decide which it
+  /// reaches has that point's types (Typer.FlowResultSet).
+  public mutable ResultBody : PT.PExpr;
+  public PointTypes : SCG.Dictionary[int, list[TypeVar]] = SCG.Dictionary();
   
   public IsExtension : bool { get; internal set; }
 
@@ -1246,7 +1270,8 @@ public class MethodBuilder : MemberBuilder, IMethod
 
   public new GetMemType () : FixedType.Fun
   {
-    ty :> FixedType.Fun
+    // (an inferred result not decided yet: one of the caller's own, see MemberBuilder.GetMemType)
+    base.GetMemType () :> FixedType.Fun
   }
 
   public GetConstructorInfo () : SRE.ConstructorBuilder
@@ -1566,8 +1591,13 @@ public class MethodBuilder : MemberBuilder, IMethod
       | _ => ()
     }
 
+    // (a file's function written without its result's type: inferred from its body, see InferredResult)
+    // (and a script's function)
+    InferredResult = functionAst.header.ReturnType is <[ _ ]> && name != ".ctor" && name != ".cctor"
+                     && (Manager.Options.FileModules && IsStatic && declaring_type.DeclaringType == null && Manager.FileModuleRegistry.IsModule(declaring_type.Location.FileIndex)
+                         || Manager.Options.Script != null && declaring_type.FullName == Manager.Options.Script.TypeName);
     fun_header = TFunHeader(
-      ret_type     = bind (functionAst.header.ReturnType.Location, functionAst.header.ReturnType),
+      ret_type     = if (InferredResult) Manager.Solver.FreshTypeVar() else bind (functionAst.header.ReturnType.Location, functionAst.header.ReturnType),
       ret_type_loc = functionAst.header.ReturnType.Location,
       typarms      = typarms,
       name         = this.name,
@@ -1615,7 +1645,8 @@ public class MethodBuilder : MemberBuilder, IMethod
     unless (typarmsContainer.IsConstraintsSet)
       typarmsContainer.SetConstraints();
 
-    unless (IsVarianceValid(fun_header.ReturnType.Fix(), 1))
+    // (an inferred result is not decided yet: a non-generic file function has no variance to check)
+    unless (InferredResult || IsVarianceValid(fun_header.ReturnType.Fix(), 1))
       Message.Error($"return type of method `$name' must behave covariantly");
 
     foreach (parm in fun_header.Parameters)
@@ -1690,7 +1721,8 @@ public class MethodBuilder : MemberBuilder, IMethod
 
   public ReturnType : TypeVar
   {
-    get { fun_header.ReturnType }
+    // (an inferred result not decided yet: one of the caller's own, see GetMemType)
+    get { if (InferredResult && !ResultDecided) { Manager.FileModuleRegistry.UndecidedResults++; Manager.Solver.FreshTypeVar() } else fun_header.ReturnType }
   }
 
   public GetFreshType () : FixedType * list [TypeVar]

@@ -346,6 +346,18 @@ public sealed class FileModuleRegistry
   /// The `extend T { ... }' blocks of the files, with the module of each: parts of the global type `T', added to it
   /// once every file is parsed (AddExtensions).
   public Extensions : System.Collections.Generic.List[TopDeclaration * string] = System.Collections.Generic.List();
+  /// Whether a function of this compilation returns one of several types (MethodBuilder.ResultTypes): its calls are
+  /// then looked for in uses (Typer.FlowResultCall).
+  public mutable SeveralResults : bool;
+  /// How many times code met a function whose result is not decided yet (MethodBuilder.GetMemType): a file's
+  /// inference copy that does is inferred again once those functions are typed.
+  public mutable UndecidedResults : int;
+  /// The inference copies' locals for top-level values bound to the result of such a function (Typer.FlowUndecided),
+  /// and the values: each holds one of the types the function gives, in a Content (DecideModuleState).
+  public UndecidedLocals : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+  public UndecidedStates : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
+  /// Those locals, once the function is typed: the types its result can be (the value's types, recorded for it).
+  public LocalSets : System.Collections.Generic.Dictionary[string, list[Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
   /// The extension slots of the exported classes (SlotPart), added with the extensions.
   public Slots : System.Collections.Generic.List[TopDeclaration] = System.Collections.Generic.List();
 
@@ -919,6 +931,52 @@ internal sealed class ModuleInitMacro : IMacro
   }
 }
 
+/// `__function_result(e, point)`: a return point of a function written without its result's type
+/// (MethodBuilder.InferredResult), numbered: typed once to learn the types its return points give (CollectingResult),
+/// then as the one type they give, or a Content holding one of them when they differ.
+internal sealed class FunctionResultMacro : IMacro
+{
+  public GetName() : string { "__function_result" }
+  public GetNamespace() : string { "Nemerle.Compiler" }
+  public IsInherited : bool { get { false } }
+  public IsTailRecursionTransparent : bool { get { false } }
+  public Keywords : list[string] { get { [] } }
+  public Usage : MacroUsageAttribute { get { null } }
+  public Location : Location { get { Location.Default } }
+  public SyntaxExtension() : GrammarElement * (list[SyntaxElement] -> list[SyntaxElement]) { (null, null) }
+  public CallTransform(args : list[PExpr]) : list[SyntaxElement] { args.Map(e => SyntaxElement.Expression(e) : SyntaxElement) }
+  public Run(ctx : Typer, args : list[SyntaxElement]) : PExpr
+  {
+    match (args)
+    {
+      | [SyntaxElement.Expression(e), SyntaxElement.Expression(point)] =>
+        def m = ctx.CurrentMethodBuilder;
+        if (m.CollectingResult)
+        {
+          // (a value of several types gives each of them)
+          def types = match (ctx.FlowTypesOf(e)) { | _ :: _ :: _ as types => types | _ => [ctx.TypeExpr(e).Type] };
+          foreach (t in types) m.CollectedResults.Add(t);
+          match (point) { | PExpr.Literal(Literal.Integer(i, _, _)) => m.PointTypes[i :> int] = types | _ => () }
+          // (what it gives is not the result yet: the result's type stays to be learned)
+          <[ throw System.InvalidOperationException() ]>
+        }
+        else match (m.ResultTypes)
+        {
+          | _ :: _ :: _ => <[ Nemerle.Scopes.Content.Of($e) ]>
+          | _ => e
+        }
+      | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal function result"); null
+    }
+  }
+
+  /// Registers it once per compiler instance.
+  public static Register(manager : ManagerClass) : void
+  {
+    when (manager.NameTree.ExactPath(["Nemerle", "Compiler"]).LookupMacro(["__function_result"]).IsNone)
+      manager.MacrosRegistry.RegisterMacro(FunctionResultMacro())
+  }
+}
+
 /// `__module_binding_value("module.name")`: the top-level code's assignment of a binding. Its initializer is typed here,
 /// in the flow of the top-level code, which gives the field its type before the assignment is typed.
 internal sealed class ModuleBindingMacro : IMacro
@@ -1004,8 +1062,11 @@ internal sealed class StateMacro : IMacro
         <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]>
       | ("__state_type", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), value]) =>
         unless (manager.StateTypes.ContainsKey(key)) manager.StateTypes[key] = System.Collections.Generic.Dictionary();
-        // (a value whose type changes has all its types: each is recorded)
-        match (ctx.FlowTypesOf(value))
+        // (bound to the result of a function whose result is not decided yet: one of its types, a Content)
+        match (value) { | PExpr.Ref (n) when manager.FileModuleRegistry.UndecidedLocals.Contains (n.Id) => _ = manager.FileModuleRegistry.UndecidedStates.Add (key) | _ => () }
+        // (a value whose type changes has all its types: each is recorded; so has one bound to a result of several)
+        def bound = match (value) { | PExpr.Ref (n) when manager.FileModuleRegistry.LocalSets.ContainsKey (n.Id) => manager.FileModuleRegistry.LocalSets[n.Id] | _ => null };
+        match (if (bound != null) bound else ctx.FlowTypesOf(value))
         {
           | null => manager.StateTypes[key][k :> int] = ctx.TypeExpr(value).Type
           | types => foreach (t in types with i) manager.StateTypes[key][(k :> int) * 1000 - i - 1] = t

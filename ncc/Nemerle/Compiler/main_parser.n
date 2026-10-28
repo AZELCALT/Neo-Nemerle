@@ -492,6 +492,9 @@ using Nemerle.Compiler.Utility;
         // local, written through to the module's field; after a call of a file function that assigns it (a writer) the
         // local is read back from the field, which code anywhere may have changed
         def flowing : SCG.HashSet[string] = SCG.HashSet();
+        // the values bound to the result of a file function written without its result's type: their type is the
+        // function's, decided once it is typed, and may be one of several, so they are kept as a `def' bound again is
+        def resultBound : SCG.HashSet[string] = SCG.HashSet();
         // (all the untyped `mutable's; those a file function writes are the field's alone, read and written there)
         def untyped : SCG.HashSet[string] = SCG.HashSet();
         def written : SCG.HashSet[string] = SCG.HashSet();
@@ -532,7 +535,7 @@ using Nemerle.Compiler.Utility;
                 }
                 when (isPublic && bindings[name.Id] > 1)
                   Message.Error(expression.Location, $"public top-level value `$(name.Id)' is bound more than once");
-                if (flowing.Contains(name.Id) || bindings[name.Id] > 1 && !mutables.Contains(name.Id))
+                if (flowing.Contains(name.Id) || (bindings[name.Id] > 1 || resultBound.Contains(name.Id)) && !mutables.Contains(name.Id))
                 {
                   // a rebound `def', an untyped `mutable': the top-level code sees each binding (with its own type) as a
                   // local, the storage follows
@@ -941,6 +944,22 @@ using Nemerle.Compiler.Utility;
           foreach (pair in StateWriters(members, untyped)) written.UnionWith(pair.Value);
         flowing.UnionWith(untyped);
         flowing.ExceptWith(written);
+        def inferred = SCG.HashSet.[string]();
+        foreach (f is ClassMember.Function in members) when (f.header.ReturnType is <[ _ ]>) _ = inferred.Add(f.Name);
+        when (inferred.Count > 0)
+          foreach ((expression, _) in collected)
+            match (expression)
+            {
+              | PExpr.Define(PExpr.Ref(name), value) =>
+                mutable calls = false;
+                _ = Macros.TraverseExpr(None(), value, false, (_, after, node) =>
+                  {
+                    match (node) { | PExpr.Call(PExpr.Ref(f), _) when !after && inferred.Contains(f.Id) => calls = true | _ => () }
+                    node
+                  });
+                when (calls) _ = resultBound.Add(name.Id)
+              | _ => ()
+            }
         foreach ((expression, isPublic) in collected) state(expression, isPublic);
         // the top-level code writes a flowing value through to its field where it assigns it
         when (flowing.Count > 0)
@@ -950,6 +969,7 @@ using Nemerle.Compiler.Utility;
         // the lambdas of its top-level code read it through a checked read whose type is what the read needs
         def retypable = SCG.HashSet.[string]();
         foreach (pair in bindings) when (pair.Value > 1 && !mutables.Contains(pair.Key)) _ = retypable.Add(pair.Key);
+        retypable.UnionWith(resultBound);
         // (the file's functions also read the flowing values from their fields: checked, as any value of several types)
         def readByFunctions = SCG.HashSet(retypable);
         readByFunctions.UnionWith(untyped);
@@ -1077,6 +1097,21 @@ using Nemerle.Compiler.Utility;
       if (count > 0) added(after.NamespaceAliases, count).Rev()
       else if (after.OpenNamespaces.Length > before.OpenNamespaces.Length) [after.OpenNamespaces.Head.GetDisplayName()]
       else []
+    }
+
+    /// Whether `value' calls one of `members' written without its result's type (MethodBuilder.InferredResult).
+    static CallsInferred(value : PExpr, members : SCG.IEnumerable[ClassMember]) : bool
+    {
+      def inferred = SCG.HashSet.[string]();
+      foreach (f is ClassMember.Function in members) when (f.header.ReturnType is <[ _ ]>) _ = inferred.Add(f.Name);
+      mutable calls = false;
+      when (inferred.Count > 0)
+        _ = Macros.TraverseExpr(None(), value, false, (_, after, node) =>
+          {
+            match (node) { | PExpr.Call(PExpr.Ref(f), _) when !after && inferred.Contains(f.Id) => calls = true | _ => () }
+            node
+          });
+      calls
     }
 
     /// Whether a top-level group is `extend T { ... }' (`extend T : IShape { ... }'): what it adds to the global type
@@ -1574,6 +1609,9 @@ using Nemerle.Compiler.Utility;
         {
           | PExpr.DefMutable(PExpr.Ref(n), _) => _ = stateMutables.Add(n.Id)
           | PExpr.Define(PExpr.Ref(n), _) when counts[n.Id] > 1 => _ = stateRebound.Add(n.Id)
+          // (bound to the result of a script function written without its result's type: the function's type, which
+          // may be one of several, so it is kept as a binding bound again is)
+          | PExpr.Define(PExpr.Ref(n), value) when CallsInferred(value, parsedMembers) => _ = stateRebound.Add(n.Id)
           | _ => ()
         }
       // (a binding whose value reads the state is typed where it is, in the statements: state too)
@@ -1645,6 +1683,9 @@ using Nemerle.Compiler.Utility;
               <[ Nemerle.Compiler.__state_type($key, $(index : int), $value) ]>
             // (what a function may have assigned is not this code's: its types are its own, see StateWriters)
             | PExpr.Assign(_, PExpr.Call(PExpr.Member(_, Splicable.Name(called)), _)) when after && called.Id == "__state_reload" => <[ () ]>
+            // (a binding of a value that is not state, as the constructor assigns it: only its value is typed here, in a
+            // method that cannot assign the field)
+            | PExpr.Assign(PExpr.Call(PExpr.Ref(skip), [_]), value) when after && skip.Id == "_N_skip_write_check" => <[ _ = $value ]>
             | _ => node
           }));
         add([<[ decl: private _N_state_types() : void { ..$inferred } ]>], "", false)

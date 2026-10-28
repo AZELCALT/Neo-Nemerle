@@ -252,6 +252,50 @@ Hello, world
 `void` means "no value". Functions declared at the top of a file belong to the file's module. Their order doesn't
 matter, and top-level statements can call functions defined further down.
 
+A function's return type may be left out: its result is the type its body gives. When its return points give
+different types, the result is one of them, as a value whose type follows the flow is (above): a caller has those
+types, and checks it as it would such a value. A use that fits each type is fine, a `match` picks them, and a use
+that does not fit one of them is an error:
+
+```nemerle
+using System.Console;
+
+Twice(n : int) { n * 2 }
+Pick(first : bool) { if (first) "one" else 1 }
+
+def size = Twice(4);
+def picked = Pick(System.Environment.GetCommandLineArgs().Length > 99);
+WriteLine(size + 1);
+WriteLine(picked);
+WriteLine(match (picked) { | s is string => s.Length | n is int => n });
+WriteLine(Pick(true).Length)
+```
+
+```text
+9
+1
+1
+3
+```
+
+`picked` is `string` or `int`: its argument is known only when the program runs. `Pick(true)` is a `string`: a
+call whose constant arguments decide which return point it reaches has that point's type (here its `if` is decided),
+so its `Length` needs no check.
+
+```nemerle,fail
+Pick(first : bool) { if (first) "one" else 1 }
+Show(first : bool) : void { def n : int = Pick(first) * 2; System.Console.WriteLine(n) }
+Show(true)
+```
+
+```text
+this does not fit `Pick(first)' when it is string
+```
+
+A recursive call gives the function's own result, so it adds no type of its own. A top-level value bound to such a
+result has the function's types too, and the file's functions check it before they use it when it has several.
+Other .NET languages see the result as a `Nemerle.Scopes.Content` when it has several types.
+
 Inside a block, `def` declares a *local* function. Its parameter and return types may be left out; they are inferred:
 
 ```nemerle

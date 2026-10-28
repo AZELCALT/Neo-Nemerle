@@ -199,6 +199,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     mutable flow_out : bool;
     // (the use FlowDispatch made a check of: the value, its types, the use)
     mutable flow_dispatched : LocalValue * list[TypeVar] * PExpr;
+    // (the values bound where a call's result is used, by their names: the calls, which errors name them by)
+    internal flow_names : SCG.Dictionary[string, string] = SCG.Dictionary();
     // (where each followed value is given each type, by its key, for the errors that say so: the method's typer's)
     mutable flow_origins : SCG.Dictionary[string, SCG.List[string * Location]] = SCG.Dictionary();
     // (the followed values whose storage boxes a value in code that may run many times, a loop or a lambda, by key:
@@ -402,6 +404,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         def yield_type = current_fun.yield_type;
         def facts = current_method_builder.FlowFacts;
         facts.Grew = false;
+        // (the attempt learning an inferred result's types learns them from here, see FlowDecideResult)
+        when (current_method_builder.CollectingResult) current_method_builder.CollectedResults.Clear ();
         facts.Pending.Clear ();
         Manager.FlowAttempt++;
         flow = SCG.Dictionary ();
@@ -449,6 +453,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               // (nested code assigned a value types the code around it did not know: again, knowing them; the facts
               // only grow and the types are finitely many, and types that never compare equal stop after a few)
               when (facts.Grew && facts.Attempts < 16 && errorCount == Message.ErrorCount) restart_flow ();
+              // (a function's inferred result: what its return points give is known, it is typed again as that)
+              when (FlowDecideResult ()) restart_flow ();
               MaybeDumpTypedTree ("after delayed typings");
               // an imported file's top-level code (its static constructor) holds the type's lock: threads started there
               when (Manager.Options.FileModules && current_fun.decl == null && current_method_builder.Name == ".cctor"
@@ -478,6 +484,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 def errorCount = Message.ErrorCount;
                 put_in_error_mode (typer_done);
                 RunTyper ();
+                // (an error while learning an inferred result: the typing that follows says it, as the result's)
+                when (FlowDecideResult ()) restart_flow ();
 
                 when (errorCount == Message.ErrorCount)
                 {
@@ -514,6 +522,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               // (as above: what nested code assigns, the code around it types again knowing; an attempt that reported
               // errors stands, its errors said once)
               when (facts.Grew && facts.Attempts < 16 && errorCount == Message.ErrorCount) restart_flow ();
+              // (a function's inferred result: what its return points give is known, it is typed again as that)
+              when (FlowDecideResult ()) restart_flow ();
               when (errorCount == Message.ErrorCount)
               {
                 RunSecondPass (current_method_builder);
@@ -2215,6 +2225,19 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       expression.ResetTypedObject();  //expression.TypedObject = null;
 
+      // (a call of a function whose return points give several types, used where it is: as a value bound to it, which
+      // the use is checked against: `f(g())' is `{ def r = g(); f(r) }')
+      when (Manager.FileModuleRegistry.SeveralResults)
+        match (FlowResultCall (expression))
+        {
+          | null => ()
+          | call =>
+            def bound = Macros.NewSymbol ("result");
+            // (what errors call it: the call)
+            GetTopTyper ().flow_names [bound.Id] = call.ToString ();
+            def used = FlowReplace (expression, call, <[ $(bound : name) ]>);
+            return TypeExpr (Nemerle.Compiler.UtilMacros.locate (expression.Location, <[ { def $(bound : name) = $call; $used } ]>), expected)
+        }
       // a use of a value of several types (typer_flow): typed for each of them, the value checked first
       when (flow.Count > 0)
         match (FlowDispatch (expression))
@@ -2242,8 +2265,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               {
                 def types = FlowOrdered (local, types);
                 FlowError (use.Location,
-                  $"this does not fit `$(local.Name)' when it is $t: $(FlowIs (local, types, true)); check which it is first: "
-                   + FlowCheck (local.Name, types));
+                  $"this does not fit `$(FlowName (local))' when it is $t: $(FlowIs (local, types, true)); check which it is first: "
+                   + FlowCheck (FlowName (local), types));
                 return TExpr.Error ()
               }
               results ::= (t, result)
@@ -2253,9 +2276,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               | [_] | [] => ()
               | _ =>
                 FlowError (use.Location,
-                  $"this gives another type for each type of `$(local.Name)' ("
+                  $"this gives another type for each type of `$(FlowName (local))' ("
                    + string.Join (", ", results.Rev ().Map (r => $"$(r[1]) when it is $(r[0])").ToArray ())
-                   + $"): $(FlowIs (local, FlowOrdered (local, types), true)); check which it is first: " + FlowCheck (local.Name, FlowOrdered (local, types)));
+                   + $"): $(FlowIs (local, FlowOrdered (local, types), true)); check which it is first: " + FlowCheck (FlowName (local), FlowOrdered (local, types)));
                 return TExpr.Error ()
             }
             return TypeExpr (dispatched, expected)
@@ -2851,6 +2874,18 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           {
             def local = FlowLocal(name);
             def et2 = TypeExpr(e2);
+            FlowUndecided (name.Id, et2);
+            match (FlowResultSet (et2))
+            {
+              // (the result of a function whose return points give several types: the value holds what its Content
+              // holds, one of them)
+              | _ :: _ :: _ as types =>
+                def held = TypeExpr (<[ ($(et2 : typed).Value : object) ]>);
+                local.Flow.Changes = true;
+                foreach (t in types) FlowAssign (local, t, e2.Location);
+                flow [local] = Nemerle.Compiler.typer_flow.FlowPoint (types, false);
+                TExpr.Assign (TExpr.LocalRef (target.Location, InternalType.Object, local), held)
+              | _ =>
             def et2 =
               if (local.Flow.Initial != null && (!solver.IsTopLevel && !local.Flow.Changes || FlowFits(et2, local.Flow.Initial)))
                 ImplicitCast(AddCastTo(et2, local.Flow.Initial, "assigned value"), local.Flow.Initial)
@@ -2866,6 +2901,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             // A logical container's write keeps the value's type. Lowering chooses its CLR storage once,
             // after the complete scope is typed; discovering another type does not restart this method.
             TExpr.Assign(TExpr.LocalRef(target.Location, et2.Type, local), et2)
+            }
           }
           else
             TExpr.Error();
@@ -2876,6 +2912,18 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             def et1 = TypeExpr(e1);
             Nemerle.Compiler.UtilMacros.locate(e1.Location, CheckLValue(et1, need_ref = false, desc = "assignment target"));
             def et2 = TypeExpr(e2);
+            def et2 =
+              match (e1)
+              {
+                | PExpr.Ref (n) =>
+                  FlowUndecided (n.Id, et2);
+                  // (an inference copy's local for a top-level value bound to a result of several types: what its
+                  // Content holds, which the copy's own code matches on)
+                  if (n.Id.StartsWith ("_N_state_", StringComparison.Ordinal) && FlowResultSet (et2) is _ :: _ :: _)
+                    TypeExpr (<[ ($(et2 : typed).Value : object) ]>)
+                  else et2
+                | _ => et2
+              };
             TExpr.Assign(et1, Nemerle.Compiler.UtilMacros.locate(e2.Location, AddCastTo(et2, et1.Type, "assigned value")))
           }
           else
@@ -3478,6 +3526,26 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       {
         def tv = FreshTypeVar ();
         def val = TypeExpr (val, tv);
+        FlowUndecided (name.Id, val);
+        match (FlowResultSet (val))
+        {
+          // (the result of a function whose return points give several types: the name has them, holding what its
+          // Content holds)
+          // (a call its arguments decide the return point of, which gives one type: that type)
+          | [one] =>
+            def value = TypeExpr (<[ ($(val : typed).Value :> $(PExpr.TypedType (one))) ]>);
+            def decl = DefineLocal (name, one, LocalValue.Kind.Plain (), is_mutable);
+            AddLocal (name, decl);
+            TExpr.DefValIn (name.Location.Combine (val.Location), null, decl, value, null)
+          | _ :: _ :: _ as types =>
+            def decl = DefineLocal (name, InternalType.Object, LocalValue.Kind.Plain (), is_mutable);
+            decl.Flow = Nemerle.Compiler.typer_flow.LocalFlow (Nemerle.Compiler.typer_flow.FlowFacts.Key (name.Id, name.Location), true, false, this, flow_nested);
+            decl.Flow.TopLevel = FlowTopLevel (name);
+            AddLocal (name, decl);
+            flow [decl] = Nemerle.Compiler.typer_flow.FlowPoint (types, false);
+            FlowSeen (name.Location, types, true);
+            TExpr.DefValIn (name.Location.Combine (val.Location), null, decl, TypeExpr (<[ $(val : typed).Value ]>), null)
+          | _ =>
         def (val, decl_ty) =
           if (is_mutable && !(val is TExpr.TypeConversion)) {
             def tv' = FreshTypeVar ();
@@ -3489,6 +3557,202 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                                 is_mutable);
         AddLocal (name, decl);
         TExpr.DefValIn (name.Location.Combine(val.Location), null, decl, val, null)
+        }
+      }
+    }
+
+    /// A call among the children of the use `e' of a function of this file, or of a module named (`util.f()'), whose
+    /// return points give several types (null when none): what FlowDispatch binds before the use.
+    FlowResultCall (e : PExpr) : PExpr
+    {
+      def functions (f : PExpr) : list[IMember]
+      {
+        match (f)
+        {
+          | PExpr.Ref (n) when current_type != null => current_type.LookupMember (n.Id)
+          | PExpr.Member (PExpr.Ref (m), n) =>
+            match (env.LookupType ([m.Id])) { | Some (ti) => ti.LookupMember (n.GetName ().Id) | None => [] }
+          | _ => []
+        }
+      }
+      def several (child : PExpr) : bool
+      {
+        match (child)
+        {
+          | PExpr.Call (f, _) =>
+            match (functions (f))
+            {
+              | [] => false
+              | found => found.ForAll (m => m is MethodBuilder && (m :> MethodBuilder).ResultTypes is _ :: _ :: _)
+            }
+          | _ => false
+        }
+      }
+      // (the compiler's own macros, `__state_bind(...)', take their arguments as they are)
+      // (nor the inference copy's binding of a top-level value, `_N_state_<name>_<k> = ...': it records the result's types)
+      def internal_macro = match (e)
+        {
+          | PExpr.Call (PExpr.Ref (n), _) | PExpr.Call (PExpr.Member (_, PT.Splicable.Name (n)), _) => n.Id.StartsWith ("__", StringComparison.Ordinal)
+          | PExpr.Assign (PExpr.Ref (n), _) => n.Id.StartsWith ("_N_state_", StringComparison.Ordinal)
+          | _ => false
+        };
+      // (only where such functions are: what a use's children are is not looked up otherwise)
+      if (internal_macro || !Manager.FileModuleRegistry.SeveralResults) null
+      else
+      {
+        def children = match (e)
+          {
+            | PExpr.Call (PExpr.Member (obj, _), args) => obj :: args
+            | PExpr.Call (_, args) => args
+            | PExpr.Member (obj, _) => [obj]
+            | PExpr.Indexer (obj, args) => obj :: args
+            | PExpr.TypeEnforcement (v, _) | PExpr.Throw (v) => [v]
+            | PExpr.Tuple (args) | PExpr.ListLiteral (args) => args
+            | PExpr.Assign (_, v) => [v]
+            | _ => []
+          };
+        match (children.Find (several)) { | Some (call) => call | None => null }
+      }
+    }
+
+    /// In a file's inference copy of its top-level code: the value `assigned' to its local `name' for a top-level value
+    /// (`_N_state_<value>_<k>') is the result of a function whose result is not decided yet, so the value holds one of
+    /// the types it gives (a Content, DecideModuleState).
+    FlowUndecided (name : string, assigned : TExpr) : void
+    {
+      def undecided (e : TExpr) : bool
+      {
+        match (e)
+        {
+          | TExpr.Call (TExpr.StaticRef (_, m is MethodBuilder, _), _, _) => m.InferredResult && !m.ResultDecided
+          | TExpr.Call (TExpr.MethodRef (_, m is MethodBuilder, _, _), _, _) => m.InferredResult && !m.ResultDecided
+          | TExpr.DebugInfo (inner, _) | TExpr.TypeConversion (expr = inner) => undecided (inner)
+          | _ => false
+        }
+      }
+      when (name.StartsWith ("_N_state_", StringComparison.Ordinal))
+      {
+        when (undecided (assigned)) _ = Manager.FileModuleRegistry.UndecidedLocals.Add (name);
+        // (once it is decided: the types it gives, which the value holds one of)
+        match (FlowResultSet (assigned)) { | null => () | types => Manager.FileModuleRegistry.LocalSets[name] = types }
+      }
+    }
+
+    /// The types a call of `m' with `parms' gives: those of the return point its constant arguments decide it reaches
+    /// (`Pick(true)' is a string), else all its return points' (MethodBuilder.ResultTypes).
+    static FlowReached (m : MethodBuilder, parms : list[Parm]) : list[TypeVar]
+    {
+      def all = m.ResultTypes.Map (t => t : TypeVar);
+      // (the arguments that are constants, by their parameters' names)
+      def known = SCG.Dictionary.[string, object] ();
+      foreach ((parameter, parm) in NList.Combine (m.GetParameters (), parms))
+        match (parm.expr)
+        {
+          | TExpr.Literal (Literal.Bool (b)) => known[parameter.Name] = b
+          | TExpr.Literal (Literal.Integer (v, negative, _)) => known[parameter.Name] = if (negative) -(v :> decimal) else v :> decimal
+          | TExpr.Literal (Literal.String (v)) => known[parameter.Name] = v
+          | TExpr.Literal (Literal.Char (v)) => known[parameter.Name] = v
+          | _ => ()
+        }
+      // (a value: a constant argument, or a literal; null when it is neither)
+      def value (e : PExpr) : object
+      {
+        match (e)
+        {
+          | PExpr.Ref (n) when known.ContainsKey (n.Id) => known[n.Id]
+          | PExpr.Literal (Literal.Bool (b)) => b
+          | PExpr.Literal (Literal.Integer (v, negative, _)) => if (negative) -(v :> decimal) else v :> decimal
+          | PExpr.Literal (Literal.String (v)) => v
+          | PExpr.Literal (Literal.Char (v)) => v
+          | PExpr.Call (PExpr.Ref (op), [x]) when op.Id == "!" => match (value (x)) { | b is bool => !b | _ => null }
+          | PExpr.Call (PExpr.Ref (op), [x, y]) =>
+            def (a, b) = (value (x), value (y));
+            if (a == null || b == null) null
+            else match (op.Id)
+            {
+              | "==" => a.Equals (b) : object
+              | "!=" => !a.Equals (b)
+              | "&&" => match ((a, b)) { | (p is bool, q is bool) => p && q | _ => null }
+              | "||" => match ((a, b)) { | (p is bool, q is bool) => p || q | _ => null }
+              | "<" | ">" | "<=" | ">=" =>
+                match ((a, b))
+                {
+                  | (p is decimal, q is decimal) =>
+                    match (op.Id) { | "<" => p < q | ">" => p > q | "<=" => p <= q | _ => p >= q }
+                  | _ => null
+                }
+              | _ => null
+            }
+          | _ => null
+        }
+      }
+      // (the return point the body reaches with them: 0 when it cannot be told)
+      def reached (e : PExpr) : int
+      {
+        match (e)
+        {
+          | PExpr.Sequence (items) when !items.IsEmpty => reached (items.Last)
+          | <[ if ($cond) $whenTrue else $whenFalse ]> =>
+            match (value (cond)) { | b is bool => if (b) reached (whenTrue) else reached (whenFalse) | _ => 0 }
+          | PExpr.Match (subject, cases, _) =>
+            match (value (subject))
+            {
+              | null => 0
+              | v =>
+                def pick (cases : list[MatchCase]) : int
+                {
+                  | [] => 0
+                  | c :: rest =>
+                    if (c.patterns.Exists (p => p is PExpr.Wildcard || value (p) != null && value (p).Equals (v))) reached (c.body)
+                    else if (c.patterns.ForAll (p => value (p) != null)) pick (rest)
+                    else 0
+                }
+                pick (cases)
+            }
+          | PExpr.Call (_, [_, PExpr.Literal (Literal.Integer (point, _, _))]) => point :> int
+          | _ => 0
+        }
+      }
+      if (known.Count == 0 || m.ResultBody == null) all
+      else
+      {
+        mutable types;
+        def point = reached (m.ResultBody);
+        if (point > 0 && m.PointTypes.TryGetValue (point, out types)) types else all
+      }
+    }
+
+    /// The use `e' with its child `child' (one FlowResultCall finds) replaced by `by'.
+    static FlowReplace (e : PExpr, child : PExpr, by : PExpr) : PExpr
+    {
+      def r (x : PExpr) : PExpr { if (x : object == child) by else x }
+      def loc = e.Location;
+      match (e)
+      {
+        | PExpr.Call (PExpr.Member (obj, n) as m, args) => PExpr.Call (loc, PExpr.Member (m.Location, r (obj), n), args.Map (r))
+        | PExpr.Call (f, args) => PExpr.Call (loc, f, args.Map (r))
+        | PExpr.Member (obj, n) => PExpr.Member (loc, r (obj), n)
+        | PExpr.Indexer (obj, args) => PExpr.Indexer (loc, r (obj), args.Map (r))
+        | PExpr.TypeEnforcement (v, t) => PExpr.TypeEnforcement (loc, r (v), t)
+        | PExpr.Throw (v) => PExpr.Throw (loc, r (v))
+        | PExpr.Tuple (args) => PExpr.Tuple (loc, args.Map (r))
+        | PExpr.ListLiteral (args) => PExpr.ListLiteral (loc, args.Map (r))
+        | PExpr.Assign (t, v) => PExpr.Assign (loc, t, r (v))
+        | _ => e
+      }
+    }
+
+    /// The types the result of the call `e' can be, when it calls a function whose return points give several (its
+    /// result is a Content holding one of them, see MethodBuilder.ResultTypes); null otherwise.
+    FlowResultSet (e : TExpr) : list[TypeVar]
+    {
+      match (e)
+      {
+        | TExpr.Call (TExpr.StaticRef (_, m is MethodBuilder, _), parms, _) when m.ResultTypes is _ :: _ :: _ => FlowReached (m, parms)
+        // (a script's function: a method of its instance)
+        | TExpr.Call (TExpr.MethodRef (_, m is MethodBuilder, _, _), parms, _) when m.ResultTypes is _ :: _ :: _ => FlowReached (m, parms)
+        | TExpr.DebugInfo (inner, _) => FlowResultSet (inner)
+        | _ => null
       }
     }
 
@@ -3646,11 +3910,11 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           def many = FlowOrdered (local, many);
           FlowError (location,
             $"$(FlowIs (local, many, false)): it is a top-level value, and this code can run at any time, so check which it is "
-             $"first: $(FlowCheck (local.Name, many))");
+             $"first: $(FlowCheck (FlowName (local), many))");
           TExpr.Error ()
         | many =>
           def many = FlowOrdered (local, many);
-          FlowError (location, $"$(FlowIs (local, many, true)), and this needs one type: check which it is first: $(FlowCheck (local.Name, many))");
+          FlowError (location, $"$(FlowIs (local, many, true)), and this needs one type: check which it is first: $(FlowCheck (FlowName (local), many))");
           TExpr.Error ()
       }
     }
@@ -3666,6 +3930,29 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         mutable known;
         unless (seen.TryGetValue (key, out known) && known[0] == Manager.FlowAttempt && known[1] && !check)
           seen [key] = (Manager.FlowAttempt, check, types)
+      }
+    }
+
+    /// After the typing that learns what the return points of a function written without its result's type give
+    /// (MethodBuilder.CollectingResult): their distinct types are its result's, and it is typed again (true). A type
+    /// not known yet (a recursion's, whose result is the function's own) adds nothing.
+    FlowDecideResult () : bool
+    {
+      def m = current_method_builder;
+      if (m == null || !m.CollectingResult || current_fun.decl != null) false
+      else
+      {
+        mutable distinct = [];
+        foreach (t in m.CollectedResults)
+          when (t.Hint.IsSome)
+          {
+            def fixed = t.DeepFix ();
+            unless (distinct.Exists (d => d.Equals (fixed))) distinct ::= fixed
+          }
+        m.ResultTypes = distinct.Rev ();
+        m.CollectingResult = false;
+        when (distinct is _ :: _ :: _) Manager.FileModuleRegistry.SeveralResults = true;
+        true
       }
     }
 
@@ -3727,8 +4014,15 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                      seen.FindAll (o => o[0] == name).ConvertAll (o => o[1].Line.ToString ()) else SCG.List ();
           match (at.Count) { | 0 => null | 1 => $"$name from line $(at[0])" | _ => $"$name from lines " + string.Join (", ", at.ToArray ()) }
         }).Filter (x => x != null);
-      $"`$(local.Name)' is $(FlowTypes (types))" + (if (here) " here" else "")
+      $"`$(FlowName (local))' is $(FlowTypes (types))" + (if (here) " here" else "")
         + (if (lines.IsEmpty) "" else " (" + string.Join (", ", lines.ToArray ()) + ")")
+    }
+
+    /// How errors name the followed `local': its name, or the call whose result it holds (FlowResultCall).
+    FlowName (local : LocalValue) : string
+    {
+      mutable call;
+      if (GetTopTyper ().flow_names.TryGetValue (local.Name, out call)) call else local.Name
     }
 
     /// The check to write, for an error: `match (x) { | v is int => ... | v is string => ... }'.
@@ -5747,6 +6041,15 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           }
         }
         else TypeExpr(mtch.expr, matched_value_type);
+      // (the result of a function whose return points give several types: matched as a value bound to it, which has
+      // them; see FlowResultSet)
+      when (subject == null && FlowResultSet(matched_value) != null)
+      {
+        def bound = Macros.NewSymbol("subject");
+        GetTopTyper ().flow_names [bound.Id] = mtch.expr.ToString ();
+        return TypeExpr(Nemerle.Compiler.UtilMacros.locate(mtch.Location,
+          <[ { def $(bound : name) = $(matched_value : typed); $(PExpr.Match(mtch.Location, <[ $(bound : name) ]>, mtch.cases)) } ]>), expected)
+      }
       mutable disable_warnings = false;
       def cases = SCG.List();
       // (each case starts from the flow before the match, and the flow after it is all of theirs; a condition's
@@ -5757,6 +6060,18 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       def ends = SCG.List();
       mutable seen_false = false;
       mutable remaining = if (subject != null && FlowOf(subject) != null) FlowOf(subject).Distinct else [];
+      // (a top-level value of several types, checked by a function: `__state_subject(key, field)'; its types are the
+      // ones its bindings give)
+      mutable state_remaining =
+        match (mtch.expr)
+        {
+          | PExpr.Call (PExpr.Member (_, PT.Splicable.Name (n)), [PExpr.Literal (Literal.String (key)), _]) when n.Id == "__state_subject" && Manager.StateTypes.ContainsKey (key) =>
+            mutable found = [];
+            foreach (t in Manager.StateTypes[key].Values) when (t.Hint.IsSome && !found.Exists (d => Nemerle.Compiler.typer_flow.FlowPoint.SameType (d, t))) found ::= t;
+            found
+          | _ => []
+        };
+      def state_checked = !state_remaining.IsEmpty;
 
       foreach (case in mtch.cases)
       {
@@ -5818,6 +6133,17 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         joined = FlowJoin(joined, flow);
         ends.Add((flow, caseBody));
 
+        // (the cases checked every type the value can be: the match is whole, though no case matches anything)
+        when (subject != null && checks_type && remaining.IsEmpty && FlowOf(subject) != null && !FlowOf(subject).Types.IsEmpty)
+          disable_warnings = true;
+        when (state_checked)
+        {
+          foreach ((Pattern.HasType(t), guard, _) when guard == null || guard is TExpr.Literal(Literal.Bool(true)) in patterns)
+            state_remaining = state_remaining.Filter(r => !Nemerle.Compiler.typer_flow.FlowPoint.SameType(r, t));
+          foreach ((Pattern.As(Pattern.HasType(t), _), guard, _) when guard == null || guard is TExpr.Literal(Literal.Bool(true)) in patterns)
+            state_remaining = state_remaining.Filter(r => !Nemerle.Compiler.typer_flow.FlowPoint.SameType(r, t));
+          when (state_remaining.IsEmpty) disable_warnings = true
+        }
         cases.Add(Match_case(patterns, caseBody, disable_warnings));
       }
       flow = if (joined == null) before else joined;
