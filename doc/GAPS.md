@@ -27,8 +27,11 @@ it violates the type system, the same way generic types were "not here yet" befo
 - **Nemerle's own shapes as C# sees them** (the reverse direction). A Nemerle function value crosses as a
   `Nemerle.Builtins.Function` (an `apply` method, not a delegate) and a several-type value as a `Nemerle.Scopes.Content`
   — both now reachable from C# through helpers rather than native shapes: `Nemerle.Interop.AsFunc`/`AsAction` wrap a
-  function into a `Func`/`Action`, and `Content` carries `Read[T]()`/`As[T]()`. What remains: the output carries no
-  nullable (`?`) annotations, so C#'s nullable analysis sees the API as null-oblivious (cosmetic; no warnings).
+  function into a `Func`/`Action`, and `Content` carries `Read[T]()`/`As[T]()`. The output carries no nullable (`?`)
+  annotations, so C#'s nullable analysis treats the API as null-oblivious — **by choice, not pending**: C# interop
+  works without them (oblivious is never an error, only no warnings), and Nemerle keeps no per-member nullability to
+  annotate precisely, so marking the stdlib nullable would be churn with no real gain. (A non-null marker on `[NotNull]`
+  members could be emitted if C# ever needs to know the guaranteed-non-null ones.)
 
 ## Targets
 
