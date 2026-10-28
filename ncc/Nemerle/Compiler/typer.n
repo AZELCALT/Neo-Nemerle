@@ -404,8 +404,12 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         def yield_type = current_fun.yield_type;
         def facts = current_method_builder.FlowFacts;
         facts.Grew = false;
-        // (the attempt learning an inferred result's types learns them from here, see FlowDecideResult)
-        when (current_method_builder.CollectingResult) current_method_builder.CollectedResults.Clear ();
+        // (a function written without its result's type learns its return points' types from here, FunctionResultMacro)
+        when (current_method_builder.InferredResult && current_fun.decl == null)
+        {
+          current_method_builder.CollectedResults.Clear ();
+          current_method_builder.ResultBodyTyped = false
+        }
         facts.Pending.Clear ();
         Manager.FlowAttempt++;
         flow = SCG.Dictionary ();
@@ -453,8 +457,6 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               // (nested code assigned a value types the code around it did not know: again, knowing them; the facts
               // only grow and the types are finitely many, and types that never compare equal stop after a few)
               when (facts.Grew && facts.Attempts < 16 && errorCount == Message.ErrorCount) restart_flow ();
-              // (a function's inferred result: what its return points give is known, it is typed again as that)
-              when (FlowDecideResult ()) restart_flow ();
               MaybeDumpTypedTree ("after delayed typings");
               // an imported file's top-level code (its static constructor) holds the type's lock: threads started there
               when (Manager.Options.FileModules && current_fun.decl == null && current_method_builder.Name == ".cctor"
@@ -484,8 +486,6 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 def errorCount = Message.ErrorCount;
                 put_in_error_mode (typer_done);
                 RunTyper ();
-                // (an error while learning an inferred result: the typing that follows says it, as the result's)
-                when (FlowDecideResult ()) restart_flow ();
 
                 when (errorCount == Message.ErrorCount)
                 {
@@ -522,8 +522,6 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               // (as above: what nested code assigns, the code around it types again knowing; an attempt that reported
               // errors stands, its errors said once)
               when (facts.Grew && facts.Attempts < 16 && errorCount == Message.ErrorCount) restart_flow ();
-              // (a function's inferred result: what its return points give is known, it is typed again as that)
-              when (FlowDecideResult ()) restart_flow ();
               when (errorCount == Message.ErrorCount)
               {
                 RunSecondPass (current_method_builder);
@@ -697,6 +695,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                    else TExpr.Block (current_fun.ReturnType, local, e3);
 
           current_fun.body = FunBody.Typed(e4); // TODO: VladD2: В режиме интеграции здесь нужно обновлять своства TypedObject
+          // (a function written without its result's type: its return points are typed, they decide it, see
+          // FunctionResultMacro)
+          when (CurrentFunction.decl == null && CurrentMethodBuilder.InferredResult) CurrentMethodBuilder.ResultBodyTyped = true;
 
         | FunBody.Abstract => ()
 
@@ -3930,29 +3931,6 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         mutable known;
         unless (seen.TryGetValue (key, out known) && known[0] == Manager.FlowAttempt && known[1] && !check)
           seen [key] = (Manager.FlowAttempt, check, types)
-      }
-    }
-
-    /// After the typing that learns what the return points of a function written without its result's type give
-    /// (MethodBuilder.CollectingResult): their distinct types are its result's, and it is typed again (true). A type
-    /// not known yet (a recursion's, whose result is the function's own) adds nothing.
-    FlowDecideResult () : bool
-    {
-      def m = current_method_builder;
-      if (m == null || !m.CollectingResult || current_fun.decl != null) false
-      else
-      {
-        mutable distinct = [];
-        foreach (t in m.CollectedResults)
-          when (t.Hint.IsSome)
-          {
-            def fixed = t.DeepFix ();
-            unless (distinct.Exists (d => d.Equals (fixed))) distinct ::= fixed
-          }
-        m.ResultTypes = distinct.Rev ();
-        m.CollectingResult = false;
-        when (distinct is _ :: _ :: _) Manager.FileModuleRegistry.SeveralResults = true;
-        true
       }
     }
 

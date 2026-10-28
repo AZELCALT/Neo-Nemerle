@@ -82,6 +82,38 @@ catch { | e is InsufficientFunds => WriteLine($"$(e.Message) ($(e.Missing))") }
 missing 25 (25)
 ```
 
+A `catch` case can have a `when` guard, as a `match` case can; the first case that fits handles the exception. A
+`finally` runs whether the `try` ended or threw:
+
+```nemerle
+using System.Console;
+
+def parse(text : string) : int
+{
+  try int.Parse(text)
+  catch
+  {
+    | _ is System.FormatException when text.Length == 0 => WriteLine("empty"); 0
+    | _ is System.FormatException => WriteLine($"not a number: $text"); -1
+  }
+  finally WriteLine($"parsed '$text'")
+}
+WriteLine(parse("12"));
+WriteLine(parse(""));
+WriteLine(parse("x"))
+```
+
+```text
+parsed '12'
+12
+empty
+parsed ''
+0
+not a number: x
+parsed 'x'
+-1
+```
+
 ## `option` instead of `null`
 
 When "no result" is an ordinary outcome rather than an error, return an `option` (Chapter 4). The caller then has to

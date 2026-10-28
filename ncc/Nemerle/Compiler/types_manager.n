@@ -867,7 +867,6 @@ using Nemerle.Compiler.Utility;
           foreach (callee when callee : object != m && names.Contains(callee.Name) in functions) type(callee);
           // (its return points, the result macro's: first typed to learn the types they give)
           match (m.Body) { | null => () | body => m.Body = ResultPoints(body); m.ResultBody = m.Body }
-          m.CollectingResult = true;
           m.RunBodyTyper();
           m.ResultDecided = true
         }

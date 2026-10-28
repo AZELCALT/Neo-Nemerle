@@ -1220,14 +1220,17 @@ public class MethodBuilder : MemberBuilder, IMethod
   public ResultDecided : bool { get; internal set; }
   /// The types its return points give (more than one: its result is a Content holding one of them).
   public ResultTypes : list[FixedType] { get; internal set; }
-  /// The typing attempt of its body that only learns ResultTypes (the result macro, see Nemerle.CoreMacros).
-  public mutable CollectingResult : bool;
+  /// Whether its body is typed: its return points' types are then all known (or NotYet), and decide its result.
+  public mutable ResultBodyTyped : bool;
+  /// A return point's types, said on the result for other languages (which see a Content): [return: ContentTypes].
+  internal AddResultAttribute(attribute : PT.PExpr) : void { return_value_modifiers.AddCustomAttribute(attribute) }
   /// The types its return points give in that attempt (ResultTypes once it is typed).
   public CollectedResults : SCG.List[TypeVar] = SCG.List();
   /// Its body with its return points numbered, and the types each gives: a call whose arguments decide which it
   /// reaches has that point's types (Typer.FlowResultSet).
   public mutable ResultBody : PT.PExpr;
   public PointTypes : SCG.Dictionary[int, list[TypeVar]] = SCG.Dictionary();
+  public PointLocations : SCG.Dictionary[int, Location] = SCG.Dictionary();
   
   public IsExtension : bool { get; internal set; }
 

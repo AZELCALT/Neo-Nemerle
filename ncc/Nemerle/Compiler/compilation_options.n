@@ -69,6 +69,8 @@ using Nemerle.Compiler.Utility;
     public mutable TargetFramework : string;
     public mutable XmlDocOutputFileName : string;
     public mutable DumpTypedTree : bool;
+    /// `-flow-log': hints saying where each type of a function's result set comes from (its return points).
+    public mutable FlowLog : bool;
     public mutable PrintExpressionsType : bool;
     public mutable DumpNamedMethod : string;
     public mutable DumpDecisionTree : bool;
@@ -674,6 +676,9 @@ using Nemerle.Compiler.Utility;
                      handler = fun () {
                        this.EarlyExit = true;
                      }),
+        Getopt.CliOption.Flag (name = "-flow-log",
+                       help = "Say where each type of an inferred function result's set comes from",
+                       handler = fun () { this.FlowLog = true }),
         Getopt.CliOption.Flag (name = "-dump-typed-tree",
                      aliases = ["-dt"],
                      help = "Pretty prints the typed tree on stdout",

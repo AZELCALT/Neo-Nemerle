@@ -276,3 +276,35 @@ WriteLine(c :> int)
 Green
 1
 ```
+
+A constant can have its value written, and `[System.Flags]` makes an enum of bits, combined with `|`. A `match`
+picks constants as it picks variant options, and .NET's `Enum` methods work on them:
+
+```nemerle
+using System.Console;
+
+[System.Flags]
+enum Access { | None = 0 | Read = 1 | Write = 2 | Run = 4 }
+enum Level { | Low = 10 | High = 20 }
+
+def rights = Access.Read | Access.Write;
+WriteLine(rights);
+WriteLine(rights.HasFlag(Access.Write));
+WriteLine(Level.High :> int);
+def describe(level : Level) : string
+{
+  match (level) { | Level.Low => "low" | Level.High => "high" | _ => "other" }
+}
+WriteLine(describe(Level.Low));
+WriteLine(System.Enum.Parse(typeof(Level), "High"))
+```
+
+```text
+Read, Write
+True
+20
+low
+High
+```
+
+The `_` case is there because an enum can hold any number of its type, not only its constants.

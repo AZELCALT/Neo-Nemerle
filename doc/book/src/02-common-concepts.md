@@ -294,7 +294,9 @@ this does not fit `Pick(first)' when it is string
 
 A recursive call gives the function's own result, so it adds no type of its own. A top-level value bound to such a
 result has the function's types too, and the file's functions check it before they use it when it has several.
-Other .NET languages see the result as a `Nemerle.Scopes.Content` when it has several types.
+Other .NET languages see the result as a `Nemerle.Scopes.Content` when it has several types, and its result says
+which: `[return: Nemerle.Scopes.ContentTypes(typeof(string), typeof(int))]`. Compiling with `-flow-log` adds a hint at
+each return point saying the type it gives, for when a set's types are not the ones expected.
 
 Inside a block, `def` declares a *local* function. Its parameter and return types may be left out; they are inferred:
 

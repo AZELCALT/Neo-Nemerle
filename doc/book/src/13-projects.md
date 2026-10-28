@@ -228,3 +228,16 @@ out/app.dll` does the same.
 The language server reads the project of the workspace folder: what the program starts at, whether it is a library,
 and the references its last build resolved (`out/NAME.references`). So types from packages and other projects are
 known to hover, go-to-definition and the typed diagnostics once the project has been built.
+
+What it does, for Nemerle code and for `grammar` and `space` blocks:
+
+- **Diagnostics** as you type: parse errors at once, then the compiler's own errors and warnings once edits pause.
+- **Hover** with a value's type where the cursor is. A value whose type follows the flow shows its type there
+  (`x : int` after `x = 1`), or the types it can be (`x : int | string`); where it is declared, every type it takes.
+- **Inlay hints** with the types inferred where none is written.
+- **Go to definition**, **find references** and **rename** (a type's name too, where it means that type).
+- **Completion** of members, names in scope and keywords, and **signature help** in a call's arguments.
+- **Formatting** of a file or a selection: each line is indented by the braces it is in, and keeps how it lines up
+  inside them. Strings, comments and `#pragma indent` files are left as they are.
+- **Quick fixes**: a name it cannot find gets a `using` of the namespace or module that has it, or the name written
+  with it; a value never used gets its name prefixed with `_`.

@@ -75,6 +75,39 @@ handler(null, System.EventArgs.Empty)
 clicked
 ```
 
+A delegate type is declared with `delegate`, and an event with `event`: other code subscribes with `+=` and leaves
+with `-=`, and the type that declares it raises it by calling it:
+
+```nemerle
+using System;
+using System.Console;
+
+public delegate Combine(a : int, b : int) : int;
+
+public class Button
+{
+  public event Clicked : EventHandler;
+  public Click() : void { when (Clicked != null) Clicked(this, EventArgs.Empty) }
+}
+
+def add = Combine((a, b) => a + b);
+WriteLine(add(2, 3));
+
+def button = Button();
+def onClick = EventHandler((_, _) => WriteLine("clicked"));
+button.Clicked += onClick;
+button.Click();
+button.Clicked -= onClick;
+button.Click();
+WriteLine("done")
+```
+
+```text
+5
+clicked
+done
+```
+
 ## Being used from C#
 
 A Nemerle library is a normal .NET assembly. Its public classes, variants (as class hierarchies), interfaces and

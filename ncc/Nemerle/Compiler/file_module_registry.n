@@ -932,8 +932,8 @@ internal sealed class ModuleInitMacro : IMacro
 }
 
 /// `__function_result(e, point)`: a return point of a function written without its result's type
-/// (MethodBuilder.InferredResult), numbered: typed once to learn the types its return points give (CollectingResult),
-/// then as the one type they give, or a Content holding one of them when they differ.
+/// (MethodBuilder.InferredResult), numbered: its value typed once, compiled once the body's return points are typed as
+/// the one type they give, or a Content holding one of them when they differ.
 internal sealed class FunctionResultMacro : IMacro
 {
   public GetName() : string { "__function_result" }
@@ -951,21 +951,54 @@ internal sealed class FunctionResultMacro : IMacro
     {
       | [SyntaxElement.Expression(e), SyntaxElement.Expression(point)] =>
         def m = ctx.CurrentMethodBuilder;
-        if (m.CollectingResult)
-        {
-          // (a value of several types gives each of them)
-          def types = match (ctx.FlowTypesOf(e)) { | _ :: _ :: _ as types => types | _ => [ctx.TypeExpr(e).Type] };
-          foreach (t in types) m.CollectedResults.Add(t);
-          match (point) { | PExpr.Literal(Literal.Integer(i, _, _)) => m.PointTypes[i :> int] = types | _ => () }
-          // (what it gives is not the result yet: the result's type stays to be learned)
-          <[ throw System.InvalidOperationException() ]>
-        }
-        else match (m.ResultTypes)
-        {
-          | _ :: _ :: _ => <[ Nemerle.Scopes.Content.Of($e) ]>
-          | _ => e
-        }
+        def index = match (point) { | PExpr.Literal(Literal.Integer(i, _, _)) => i :> int | _ => 0 };
+        // the value, typed once where it is, and the types it gives: a value of several types gives each of them
+        def several = ctx.FlowTypesOf(e);
+        def typed = match (several) { | _ :: _ :: _ => null | _ => ctx.TypeExpr(e) };
+        def types = if (typed == null) several else [typed.Type];
+        foreach (t in types) m.CollectedResults.Add(t);
+        m.PointTypes[index] = types;
+        m.PointLocations[index] = e.Location;
+        // what it is compiled as waits for the body's other return points: the one type they give, or a Content
+        // holding one of them (a type still unknown at the end, as a recursion's, adds nothing: NotYet's)
+        ctx.DelayMacro(last =>
+          if (!m.ResultBodyTyped || !last && m.CollectedResults.Exists(t => t.Hint.IsNone)) None()
+          else
+          {
+            when (m.ResultTypes == null) DecideResult(ctx, m);
+            match ((m.ResultTypes, typed))
+            {
+              | (_ :: _ :: _, null) => Some(<[ Nemerle.Scopes.Content.Of($e) ]>)
+              | (_ :: _ :: _, _) => Some(<[ Nemerle.Scopes.Content.Of($(typed : typed)) ]>)
+              | _ => Some(<[ $(typed : typed) ]>)
+            }
+          })
       | _ => Nemerle.Compiler.MessageMacros.FatalError("Invalid internal function result"); null
+    }
+  }
+
+  /// The function's result, once its return points' types are known: their distinct types (more than one, a
+  /// Content holding one of them, said on the result for other languages and, with -flow-log, where each comes from).
+  static DecideResult(ctx : Typer, m : MethodBuilder) : void
+  {
+    mutable distinct = [];
+    foreach (t in m.CollectedResults)
+      when (t.Hint.IsSome)
+      {
+        def fixed = t.DeepFix();
+        unless (distinct.Exists(d => d.Equals(fixed))) distinct ::= fixed
+      }
+    m.ResultTypes = distinct.Rev();
+    when (distinct is _ :: _ :: _)
+    {
+      ctx.Manager.FileModuleRegistry.SeveralResults = true;
+      when (ctx.Manager.CoreEnv.LookupType(["Nemerle", "Scopes", "ContentTypesAttribute"]) is Some(_))
+        m.AddResultAttribute(<[ Nemerle.Scopes.ContentTypes(..$(m.ResultTypes.Map(t => <[ typeof($(t : typed)) ]>))) ]>);
+      when (ctx.Manager.Options.FlowLog)
+        foreach (pair in m.PointTypes)
+          foreach (t when t.Hint.IsSome in pair.Value)
+            Message.Hint(if (m.PointLocations.ContainsKey(pair.Key)) m.PointLocations[pair.Key] else m.Location,
+                         $"flow: `$(m.Name)' gives $(t.DeepFix()) here")
     }
   }
 

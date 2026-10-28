@@ -180,6 +180,23 @@ for kind, runner in (('file', compile_file), ('script', run_script)):
     output, messages = runner('no-boxing', 'Run() : void { mutable x = 0; foreach (i in [1, 2, 3]) x = i; System.Console.WriteLine(x) }\nRun()\n')
     if output != '3' or 'boxes its' in messages:
         failures.append('single-type loop as a %s: printed %r, warned %r' % (kind, output, messages[-800:]))
+# a function's result of several types says them on its result, for other languages; -flow-log says where each comes from
+d = work / 'file' / 'result-types'
+d.mkdir(parents=True)
+(d / 'main.n').write_text('using System.Reflection;\nPick(c : bool) { if (c) "one" else 1 }\n'
+    'def m = typeof(main).GetMethod("Pick", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);\n'
+    'foreach (a is Nemerle.Scopes.ContentTypesAttribute in m.ReturnParameter.GetCustomAttributes(false)) '
+    'System.Console.WriteLine(m.ReturnType.Name + " " + string.Join(" ", System.Array.ConvertAll(a.Types, t => t.Name)))\n')
+r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'), '-launcher-', '-no-color', '-flow-log'],
+                   capture_output=True, text=True)
+log = r.stdout + r.stderr
+if r.returncode != 0 or "main.n:2:25:2:30: hint: flow: `Pick' gives string here" not in log or "main.n:2:36:2:37: hint: flow: `Pick' gives int here" not in log:
+    failures.append('-flow-log of a result of several types:\n' + log[-600:])
+else:
+    shutil.copy2(T / 'Nemerle.dll', d / 'Nemerle.dll')
+    shutil.copy2(T / 'ncc.runtimeconfig.json', d / 'main.runtimeconfig.json')
+    out = subprocess.run(['dotnet', str(d / 'main.exe')], capture_output=True, text=True).stdout.strip()
+    if out != 'Content String Int32': failures.append('the types of a result of several types: printed %r' % out)
 if failures:
     raise SystemExit('FAILED:\n' + '\n'.join(failures))
 print('PASS: %d cases of the flow of values print or fail the same as files and as scripts' % len(cases))

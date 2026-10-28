@@ -125,6 +125,33 @@ WriteLine($"$(shape.Name) of area $(shape.Area())")
 square of area 9
 ```
 
+An interface can build on others, and a member can implement an interface's member under another name with
+`implements`: it is then the interface's only, not one of the class's own:
+
+```nemerle
+using System.Console;
+
+public interface IShape { Area() : double; }
+public interface INamed { Name : string { get; } }
+public interface IFigure : IShape, INamed { }
+
+public class Circle : IFigure
+{
+  radius : double;
+  public this(radius : double) { this.radius = radius }
+  public Area() : double { 3.0 * radius * radius }
+  // (for the interface only: a Circle has no Name of its own)
+  private label : string implements INamed.Name { get { "circle" } }
+}
+
+def figure : IFigure = Circle(2.0);
+WriteLine($"$(figure.Name): $(figure.Area())")
+```
+
+```text
+circle: 12
+```
+
 ## Structs
 
 A `struct` is a value type. It is copied on assignment and stored inline, like .NET's `int` or `DateTime`:
@@ -148,6 +175,38 @@ WriteLine($"$(a.Width) $(b.Width)")
 ```text
 2 10
 ```
+
+A struct can have constructors, methods and properties, and implement interfaces. It cannot derive from another type,
+and its parameterless constructor is always there: it gives every field its default (zero, `false`, `null`). A struct
+stored as an interface is boxed: a copy of it lives in the heap:
+
+```nemerle
+using System.Console;
+
+public interface IArea { Area() : int; }
+
+public struct Rect : IArea
+{
+  public Width : int;
+  public Height : int;
+  public this(w : int, h : int) { Width = w; Height = h }
+  public Area() : int { Width * Height }
+  public Scaled(by : int) : Rect { Rect(Width * by, Height * by) }
+}
+
+def r = Rect(2, 3);
+def bigger = r.Scaled(2);
+def empty = Rect();
+def shape : IArea = bigger;
+WriteLine($"$(r.Area()) $(bigger.Area()) $(empty.Width) $(shape.Area())")
+```
+
+```text
+6 24 0 24
+```
+
+Since a struct is copied, an `extend` compiled after it (chapter 7) cannot add to it: the extension slot is only on
+classes. One in the same program can, as for any exported type.
 
 ## Static members and `module`
 

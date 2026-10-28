@@ -115,6 +115,30 @@ WriteLine("hello".Shout())
 HELLO!
 ```
 
+An extension method can be generic, and one declared in another file comes with a `using` of that file:
+
+```nemerle
+// file: util/text.n
+public Shout(this s : string) : string { s.ToUpper() + "!" }
+public Second[T](this items : list[T]) : T { items.Tail.Head }
+
+// file: main.n
+using System.Console;
+using util.text;
+
+WriteLine("hello".Shout());
+WriteLine([1, 2, 3].Second())
+```
+
+```text
+HELLO!
+2
+```
+
+An extension method is a function: it reads the object through its public members and adds nothing to it. To give a
+type of your program new fields, properties or interfaces, `extend` it (chapter 7). For C#, an extension method is a
+static method of its file's class, `util.text.Shout`, and C# calls it as an extension too.
+
 ## Default and named arguments
 
 ```nemerle
