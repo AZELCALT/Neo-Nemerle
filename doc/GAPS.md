@@ -22,10 +22,11 @@ it violates the type system, the same way generic types were "not here yet" befo
   parameters before it); the C# 13 loose-literal sugar (`F(1, 2, 3)`) is intentionally not provided — pass an array.
 - **C# 14 extension properties and static extension members.** Extension *methods* in an `extension(T) { … }` block
   already work (they emit as ordinary `[Extension]` statics); the block's properties are not imported yet.
-- **Nemerle's own shapes as C# sees them** (the reverse direction). A Nemerle function type surfaces as its own
-  delegate type rather than `Func`/`Action`; a value of several types surfaces as a `Content` with no C#-friendly
-  read; the output carries no nullable (`?`) annotations, so C# sees the API as null-oblivious. The planned route is
-  a C# support library the output passes through to present these shapes, rather than emitting each one natively.
+- **Nemerle's own shapes as C# sees them** (the reverse direction). A Nemerle function value crosses as a
+  `Nemerle.Builtins.Function` (an `apply` method, not a delegate) and a several-type value as a `Nemerle.Scopes.Content`
+  — both now reachable from C# through helpers rather than native shapes: `Nemerle.Interop.AsFunc`/`AsAction` wrap a
+  function into a `Func`/`Action`, and `Content` carries `Read[T]()`/`As[T]()`. What remains: the output carries no
+  nullable (`?`) annotations, so C#'s nullable analysis sees the API as null-oblivious (cosmetic; no warnings).
 
 ## Targets
 
