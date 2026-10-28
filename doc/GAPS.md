@@ -24,9 +24,8 @@ it violates the type system, the same way generic types were "not here yet" befo
   already work (they emit as ordinary `[Extension]` statics); the block's properties are not imported yet.
 - **Nemerle's own shapes as C# sees them** (the reverse direction). A Nemerle function type surfaces as its own
   delegate type rather than `Func`/`Action`; a value of several types surfaces as a `Content` with no C#-friendly
-  read; the output carries no nullable (`?`) annotations, so C# sees the API as null-oblivious; `[Extension]` is
-  written twice on an extension method. The planned route is a C# support library the output passes through to
-  present these shapes, rather than emitting each one natively.
+  read; the output carries no nullable (`?`) annotations, so C# sees the API as null-oblivious. The planned route is
+  a C# support library the output passes through to present these shapes, rather than emitting each one natively.
 
 ## Targets
 
