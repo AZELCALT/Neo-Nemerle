@@ -35,6 +35,7 @@ public record struct Size(int W, int H);
 public class Init { public int A { get; init; } public string B { get; set; } = ""; }
 public class Req { public required string Name { get; set; } public int Age { get; set; } }
 public class Deco { public void Deconstruct(out int a, out string b) { a = 1; b = "one"; } }
+public static class Ext { extension(string s) { public int Twice => s.Length * 2; public string Shout() => s.ToUpper(); } }
 public static class Api
 {
     public static string? MaybeNull(bool b) => b ? null : "x";
@@ -131,3 +132,7 @@ rejected('with', 'def i = Init();\n_ = i with { A = 1 };\n', "`with' copies a re
 run('outs', 'mutable v;\n_ = Api.TryGet(3, out v);\nF() : string { v }\nmutable x = 4;\nApi.Twice(ref x);\nG() : int { x }\n'
             'System.Console.WriteLine($"$v $(F()) $x $(G())")\n', ['v3 v3 8 8'],
     'an `out\'/`ref\' argument writes a top-level value (a function reads what it wrote)')
+
+# C# 14 extension members: an extension method already works; an extension property reads through its getter
+run('ext14', 'def s = "hi";\nSystem.Console.WriteLine($"$(s.Shout()) $(s.Twice)")\n', ['HI 4'],
+    'a C# 14 extension method and extension property (`s.Shout()`, `s.Twice`)')

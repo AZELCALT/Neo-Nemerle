@@ -4917,6 +4917,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         // (what an `extend' of this compilation adds to a compiled type)
         | Some ([]) when LateExtension (obj, mem_name) != null => TypeExpr (LateExtension (obj, mem_name), expected)
 
+        // a C# extension property read: `x.Twice' with no instance member is the getter `get_Twice(x)' (C# 14)
+        | Some ([]) when ExtensionGetter (obj, name, expected) != null => ExtensionGetter (obj, name, expected)
+
         | Some ([]) =>
           if (Manager.IsIntelliSenseMode)
             TExpr.Error()
@@ -5100,6 +5103,23 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       }
     }
 
+
+    // A C# extension property read: `obj.Name' with no instance member, where an extension declares a getter
+    // `get_Name(receiver)' that accepts `obj' (C# 14 extension properties). Builds the getter call, or null.
+    ExtensionGetter (obj : TExpr, name : PT.Splicable.Name, expected : TypeVar) : TExpr
+    {
+      mutable result = null;
+      foreach (getter in Manager.LibrariesManager.GetExtensionMethods ("get_" + name.body.Id, name.body.GetEnv (env)))
+        when (result == null)
+          match (getter.GetParameters ())
+          {
+            | [p] when obj.Type.TryRequire (p.ty.Fix ()) =>
+              def call = PExpr.Call (name.body.Location, PExpr.FromQualifiedIdentifier (Manager, getter.DeclaringType.FullName + "." + getter.Name), [PExpr.Typed (obj)]);
+              result = TypeExpr (call, expected)
+            | _ => ()
+          }
+      result
+    }
 
     IsBlockReturn (name : PT.Name) : bool
     {

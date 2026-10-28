@@ -1899,9 +1899,22 @@ using Nemerle.Compiler.Utility;
       decode_extension_methods (mgr : LibraryReferenceManager) : void
       {
         when (mgr.IsExtension (system_type))
+        {
+          // C# 14 extension properties/static members: the real accessors (`get_X'/`set_X') live on this class with
+          // no [Extension] of their own; the nested grouping types (`<G>$...', marked [Extension]) name the members.
+          // Collect those accessor names so they are registered too, alongside the classic [Extension] methods.
+          def accessors = System.Collections.Generic.HashSet();
+          foreach (nested in system_type.GetNestedTypes (SR.BindingFlags.Public %| SR.BindingFlags.NonPublic))
+            when (mgr.IsExtension (nested))
+              foreach (p in nested.GetProperties (SR.BindingFlags.Public %| SR.BindingFlags.NonPublic %| SR.BindingFlags.Instance %| SR.BindingFlags.Static %| SR.BindingFlags.DeclaredOnly))
+              {
+                _ = accessors.Add ("get_" + p.Name);
+                _ = accessors.Add ("set_" + p.Name);
+              }
           foreach (m is IMethod in GetMembers ())
-            when (m.IsStatic && mgr.IsExtension (m.GetHandle ()))
+            when (m.IsStatic && (mgr.IsExtension (m.GetHandle ()) || accessors.Contains (m.Name)))
               mgr.AddExtensionMethod (m);
+        }
       }
 
       internal override GetObsoletionDetails () : string * bool
