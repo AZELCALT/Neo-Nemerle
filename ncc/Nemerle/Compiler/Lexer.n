@@ -568,11 +568,10 @@ public abstract class LexerBase
             }
             else
             {
-              //Message.Error (this.Location, "preprocessor directives must occur only in lines beginning with whitespaces");
-              while (!IsEndOfLine(read_or_eol()))
-                ();
-
-              loop (false);
+              // a mid-line `#' is not a preprocessor directive: leave it for the tokenizer, which reads it as the
+              // operator `#' (C#'s index-from-end, `a[#1]'). Inside an eaten region (`#if false') it is skipped.
+              white_beginning = false;
+              if (eating_now > 0) loop (true) else true
             }
 
           | _ =>

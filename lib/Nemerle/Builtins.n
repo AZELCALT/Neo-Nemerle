@@ -1390,4 +1390,12 @@ public module NativeOps
   public ushr (x : uint,  n : int) : uint  { x >> n }
   public ushr (x : long,  n : int) : long  { unchecked (((x :> ulong) >> n) :> long) }
   public ushr (x : ulong, n : int) : ulong { x >> n }
+
+#if !NETSTANDARD2_0   // (.NET Standard 2.0 has no System.Index/System.Range)
+  // `@..' (CoreMacros): an `int' bound becomes an index from the start; an index-from-end passes through.
+  public toIndex (i : int)          : System.Index { System.Index (i) }
+  public toIndex (i : System.Index) : System.Index { i }
+  // the parser's `#n' (make_operator_call): an index counted from the end.
+  public fromEnd (n : int) : System.Index { System.Index (n, true) }
+#endif
 }

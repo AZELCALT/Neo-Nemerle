@@ -4468,6 +4468,20 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         | _ =>
           match (tExpr.Type.Hint)
           {
+            // C#'s index-from-end and range on a string: `s[#1]' is the char, `s[1..3]' a Substring (string has no
+            // Index/Range indexer of its own, as in C#)
+            | Some(FixedType.Class(ti, _)) when ti.FullName == "System.String" =>
+              def isNamed(t : TExpr, n : string) { match (t.Type.Hint) { | Some(FixedType.Class(c, _)) => c.FullName == n | _ => false } }
+              match (args.Map(TypeExpr))
+              {
+                | [idx] when isNamed(idx, "System.Index") =>
+                  Some(TypeExpr(<[ { def _s = $(tExpr : typed); _s[$(idx : typed).GetOffset(_s.Length)] } ]>, expected))
+                | [idx] when isNamed(idx, "System.Range") =>
+                  Some(TypeExpr(<[ { def _s = $(tExpr : typed); def (_o, _l) = $(idx : typed).GetOffsetAndLength(_s.Length); _s.Substring(_o, _l) } ]>, expected))
+                | _ =>
+                  Some(TypeIndexer(pExpr, <[ $(tExpr : typed) . $(ti.DefaultIndexerName : dyn) ]>, args, expected))
+              }
+
             | Some(FixedType.Class(ti, _)) when ti.DefaultIndexerName != null =>
               // Message.Debug ($ "using $(ti.DefaultIndexerName) for $ti");
               def idx = ti.DefaultIndexerName;
@@ -4508,23 +4522,33 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
               TypeOf(tExpr).ForceUnify(arty);
 
-              mutable args_amount = rank;
-
-              foreach (index in typed_args)
+              def isNamed(t : TExpr, n : string) { match (t.Type.Hint) { | Some(FixedType.Class(ti, _)) => ti.FullName == n | _ => false } }
+              match (typed_args)
               {
-                _ = Expect (TypeOf (index), InternalType.Int32, "array index");
-                --args_amount;
-              }
+                // C#'s index-from-end and range on an array: `a[#1]' reads `a[idx.GetOffset(a.Length)]', `a[1..3]' copies a sub-array
+                | [idx] when rank == 1 && isNamed(idx, "System.Index") =>
+                  Some(TypeExpr(<[ { def _a = $(tExpr : typed); _a[$(idx : typed).GetOffset(_a.Length)] } ]>, expected))
+                | [idx] when rank == 1 && isNamed(idx, "System.Range") =>
+                  Some(TypeExpr(<[ System.Runtime.CompilerServices.RuntimeHelpers.GetSubArray($(tExpr : typed), $(idx : typed)) ]>, expected))
+                | _ =>
+                  mutable args_amount = rank;
 
-              _ = Expect(expected, indexer_over_type, "array indexer");
+                  foreach (index in typed_args)
+                  {
+                    _ = Expect (TypeOf (index), InternalType.Int32, "array index");
+                    --args_amount;
+                  }
 
-              if (args_amount != 0)
-              {
-                ReportError(messenger, "wrong number of indexes");
-                None()
+                  _ = Expect(expected, indexer_over_type, "array indexer");
+
+                  if (args_amount != 0)
+                  {
+                    ReportError(messenger, "wrong number of indexes");
+                    None()
+                  }
+                  else
+                    Some(TExpr.ArrayIndexer (indexer_over_type, tExpr, typed_args))
               }
-              else
-                Some(TExpr.ArrayIndexer (indexer_over_type, tExpr, typed_args))
                 
             | Some(FixedType.Class(ti, [])) when ti.IsPointer => 
               match (args)

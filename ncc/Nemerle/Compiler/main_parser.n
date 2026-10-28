@@ -3989,6 +3989,9 @@ using Nemerle.Compiler.Utility;
     {
       if (name == "__await")
         PExpr.Call (e.Location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.AsyncMacros.__await"), [e])
+      // C#'s `#n': an index counted from the end (`#' cannot be a macro name, so it is lowered here)
+      else if (name == "#")
+        PExpr.Call (e.Location, PExpr.FromQualifiedIdentifier (Manager, "Nemerle.Builtins.NativeOps.fromEnd"), [e])
       else
         PExpr.Call (e.Location, PExpr.Ref (e.Location, MkName(name, e.Location)), [e])
     }

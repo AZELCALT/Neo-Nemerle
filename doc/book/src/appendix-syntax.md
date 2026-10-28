@@ -118,18 +118,25 @@ increase in indentation without a colon remains supported for existing code.
 Arithmetic `+ - * / %`, comparison `== != < <= > >=`, logical `&& || !`, bitwise `& | ^ ~ << >> >>>`, assignment `=`
 and compound `+= -= *= /=`, increment `++ --`, `::` for list cons. `@+` declares the operator `+` as a static method.
 `>>>` is C#'s unsigned (logical) right shift — it fills with zeros, never the sign bit. `nameof(x)` is the written
-name of a value, type or member as a string.
+name of a value, type or member as a string. `#n` indexes from the end (`#1` is the last, a `System.Index`) and
+`i..j` is a range (`System.Range`, either bound may be `#k`); indexing an array or string with one reads from the end
+or slices.
 
 ```nemerle
 using System.Console;
 WriteLine(-8 >>> 1);        // zero-filled, not -4
 def port = 8080;
-WriteLine(nameof(port))
+WriteLine(nameof(port));
+def a = array[10, 20, 30, 40];
+WriteLine(a[#1]);           // the last: 40
+WriteLine("hello"[1 .. #1]) // a slice: "ell"
 ```
 
 ```text
 2147483644
 port
+40
+ell
 ```
 
 ## Common compiler options

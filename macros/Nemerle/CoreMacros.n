@@ -100,6 +100,9 @@ using Nemerle.UtilityMacros;
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">>",    false, 230, 231)]
 // (C#'s unsigned/logical right shift: fills with zero, never the sign bit)
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ">>>",   false, 230, 231)]
+// (C#'s index-from-end `#1' (System.Index) and range `1..3' (System.Range); prefix `..' stays macro splicing)
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "#",     true,  281, 280)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "..",    false, 125, 126)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "..",    false, 230, 231)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "+",     false, 240, 241)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "-",     false, 240, 241)]
@@ -1619,6 +1622,14 @@ macro @<<= (e, val)
 macro @>>> (a, b)
 {
   <[ Nemerle.Builtins.NativeOps.ushr ($a, $b) ]>
+}
+
+// C#'s range `1..3' (System.Range). Either bound may be an index-from-end (`1..#1'); an `int' bound becomes an
+// index from the start. Two-bound form only (prefix `..' is macro splicing, so `..3'/`1..' are not written here).
+// `#n' (index-from-end) is a prefix operator the parser lowers in make_operator_call (`#' is not a macro name).
+macro @.. (a, b)
+{
+  <[ System.Range (Nemerle.Builtins.NativeOps.toIndex ($a), Nemerle.Builtins.NativeOps.toIndex ($b)) ]>
 }
 
 macro @>>= (e, val)

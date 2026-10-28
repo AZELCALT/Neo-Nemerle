@@ -116,7 +116,7 @@
     },
     "keywords": {
       "name": "keyword.control.nemerle",
-      "match": "\\b(implements|interface|namespace|protected|abstract|delegate|volatile|continue|override|internal|virtual|grammar|variant|mutable|foreach|finally|matches|private|partial|extern|repeat|sealed|params|syntax|public|unless|export|extend|return|struct|static|module|typeof|false|break|array|using|while|space|catch|class|scope|macro|where|yield|event|throw|match|dial|this|base|when|mask|void|else|lock|true|with|null|enum|out|try|def|and|fun|for|ref|new|if|as|is|do|in|_)\\b"
+      "match": "\\b(implements|interface|namespace|protected|abstract|delegate|volatile|continue|override|internal|virtual|grammar|variant|mutable|foreach|finally|matches|private|partial|extern|repeat|sealed|params|syntax|public|unless|export|extension|extend|return|struct|static|module|nameof|typeof|false|break|array|using|while|space|catch|class|scope|macro|where|yield|event|throw|match|dial|this|base|when|mask|void|else|lock|true|with|null|enum|out|try|def|and|fun|for|ref|new|if|as|is|do|in|_)\\b"
     },
     "types": {
       "name": "storage.type.nemerle",

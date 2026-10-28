@@ -133,6 +133,7 @@ suites = [
     ('type-flow', ['check-type-flow.py', '--toolchain', T]),
     ('extend', ['check-extend.py', '--toolchain', T]),
     ('extensions', ['check-extensions.py', '--toolchain', T]),
+    ('index-range', ['check-index-range.py', '--toolchain', T]),
     ('dynamic', ['check-dynamic.py', '--toolchain', T, '--references', R]),
     ('csharp-interop', ['check-csharp-interop.py', '--toolchain', T, '--references', R]),
     ('folder-modules', ['check-folder-modules.py', '--toolchain', T, '--references', R]),
