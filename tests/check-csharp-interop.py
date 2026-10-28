@@ -35,7 +35,14 @@ public record struct Size(int W, int H);
 public class Init { public int A { get; init; } public string B { get; set; } = ""; }
 public class Req { public required string Name { get; set; } public int Age { get; set; } }
 public class Deco { public void Deconstruct(out int a, out string b) { a = 1; b = "one"; } }
-public static class Ext { extension(string s) { public int Twice => s.Length * 2; public string Shout() => s.ToUpper(); } }
+public static class Ext {
+  static System.Collections.Generic.Dictionary<string,int> tags = new();
+  extension(string s) {
+    public int Twice => s.Length * 2;
+    public string Shout() => s.ToUpper();
+    public int Tag { get => tags.TryGetValue(s, out var v) ? v : 0; set => tags[s] = value; }
+  }
+}
 public static class Api
 {
     public static string? MaybeNull(bool b) => b ? null : "x";
@@ -136,3 +143,7 @@ run('outs', 'mutable v;\n_ = Api.TryGet(3, out v);\nF() : string { v }\nmutable 
 # C# 14 extension members: an extension method already works; an extension property reads through its getter
 run('ext14', 'def s = "hi";\nSystem.Console.WriteLine($"$(s.Shout()) $(s.Twice)")\n', ['HI 4'],
     'a C# 14 extension method and extension property (`s.Shout()`, `s.Twice`)')
+
+# an extension property write goes through its setter, read through its getter
+run('ext14_set', 'def s = "k";\ns.Tag = 7;\nAfter() : int { s.Tag }\nSystem.Console.WriteLine($"$(s.Tag) $(After())")\n', ['7 7'],
+    'a C# 14 extension property write (`s.Tag = 7` -> set_Tag) and read (`s.Tag` -> get_Tag)')

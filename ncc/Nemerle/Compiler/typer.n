@@ -2963,27 +2963,34 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             TExpr.Error();
 
         | PExpr.Assign(e1, e2) =>
-          if (Expect(expected, InternalType.Void, "assignment ``result''"))
+          // a C# extension property write (`obj.X = v' -> `set_X(obj, v)') when there is no settable member; else the
+          // ordinary assignment. ExtensionSetter types the receiver only when such a setter exists.
+          match (ExtensionSetter(e1, e2, expected))
           {
-            def et1 = TypeExpr(e1);
-            Nemerle.Compiler.UtilMacros.locate(e1.Location, CheckLValue(et1, need_ref = false, desc = "assignment target"));
-            def et2 = TypeExpr(e2);
-            def et2 =
-              match (e1)
+            | Some(res) => res
+            | None =>
+              if (Expect(expected, InternalType.Void, "assignment ``result''"))
               {
-                | PExpr.Ref (n) =>
-                  FlowUndecided (n.Id, et2);
-                  // (an inference copy's local for a top-level value bound to a result of several types: what its
-                  // Content holds, which the copy's own code matches on)
-                  if (n.Id.StartsWith ("_N_state_", StringComparison.Ordinal) && FlowResultSet (et2) is _ :: _ :: _)
-                    TypeExpr (<[ ($(et2 : typed).Value : object) ]>)
-                  else et2
-                | _ => et2
-              };
-            TExpr.Assign(et1, Nemerle.Compiler.UtilMacros.locate(e2.Location, AddCastTo(et2, et1.Type, "assigned value")))
+                def et1 = TypeExpr(e1);
+                Nemerle.Compiler.UtilMacros.locate(e1.Location, CheckLValue(et1, need_ref = false, desc = "assignment target"));
+                def et2 = TypeExpr(e2);
+                def et2 =
+                  match (e1)
+                  {
+                    | PExpr.Ref (n) =>
+                      FlowUndecided (n.Id, et2);
+                      // (an inference copy's local for a top-level value bound to a result of several types: what its
+                      // Content holds, which the copy's own code matches on)
+                      if (n.Id.StartsWith ("_N_state_", StringComparison.Ordinal) && FlowResultSet (et2) is _ :: _ :: _)
+                        TypeExpr (<[ ($(et2 : typed).Value : object) ]>)
+                      else et2
+                    | _ => et2
+                  };
+                TExpr.Assign(et1, Nemerle.Compiler.UtilMacros.locate(e2.Location, AddCastTo(et2, et1.Type, "assigned value")))
+              }
+              else
+                TExpr.Error()
           }
-          else
-            TExpr.Error();
 
 
         | PExpr.GenericSpecifier(fnc, gen_params) =>
@@ -5119,6 +5126,36 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             | _ => ()
           }
       result
+    }
+
+    // A C# extension property write: `obj.Name = value' with no instance member, where an extension declares a setter
+    // `set_Name(receiver, value)' that accepts `obj' (C# 14). Builds `set_Name(obj, value)', or None. The receiver is
+    // typed only when such a setter exists, so a plain `obj.field = v' is not typed twice.
+    ExtensionSetter (target : PExpr, value : PExpr, expected : TypeVar) : option[TExpr]
+    {
+      match (target)
+      {
+        | PExpr.Member (objP, PT.Splicable.Name (mn)) =>
+          mutable tObj = null;
+          mutable result = None ();
+          foreach (setter in Manager.LibrariesManager.GetExtensionMethods ("set_" + mn.Id, mn.GetEnv (env)))
+            when (result.IsNone)
+            {
+              when (tObj == null) tObj = TypeExpr (objP);
+              def hasInstanceMember =
+                match (tObj.Type.Hint) { | Some (FixedType.Class (tc, _)) => !tc.LookupMember (mn.Id, false).IsEmpty | _ => false };
+              unless (hasInstanceMember)
+                match (setter.GetParameters ())
+                {
+                  | [recv, _] when tObj.Type.TryRequire (recv.ty.Fix ()) =>
+                    def call = PExpr.Call (target.Location, PExpr.FromQualifiedIdentifier (Manager, setter.DeclaringType.FullName + "." + setter.Name), [PExpr.Typed (tObj), value]);
+                    result = Some (TypeExpr (call, expected))
+                  | _ => ()
+                }
+            }
+          result
+        | _ => None ()
+      }
     }
 
     IsBlockReturn (name : PT.Name) : bool
