@@ -30,10 +30,11 @@ it violates the type system, the same way generic types were "not here yet" befo
   `Nemerle.Builtins.Function` (an `apply` method, not a delegate) and a several-type value as a `Nemerle.Scopes.Content`
   — both now reachable from C# through helpers rather than native shapes: `Nemerle.Interop.AsFunc`/`AsAction` wrap a
   function into a `Func`/`Action`, and `Content` carries `Read[T]()`/`As[T]()`. The output carries no nullable (`?`)
-  annotations, so C#'s nullable analysis treats the API as null-oblivious — **by choice, not pending**: C# interop
-  works without them (oblivious is never an error, only no warnings), and Nemerle keeps no per-member nullability to
-  annotate precisely, so marking the stdlib nullable would be churn with no real gain. (A non-null marker on `[NotNull]`
-  members could be emitted if C# ever needs to know the guaranteed-non-null ones.)
+  annotations, and that is correct, not a gap: nullability is not a Nemerle type-system notion. A `string` is a
+  `string`, never `{string, null}`; the only union is a `Content` (several-type), and the `{T, null}` set exists only
+  when *reading* a C# `string?` (a CLR-API concept Nemerle imports, chapter 12). So there is nothing to annotate —
+  emitting "nullable" would misstate Nemerle's model, and emitting "non-null" would be unsafe (a value may still be
+  null at the CLR level). Oblivious is the honest emission; "nullable" is a read-side concern only, already handled.
 
 ## Targets
 
