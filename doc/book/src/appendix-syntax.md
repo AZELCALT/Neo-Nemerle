@@ -120,7 +120,8 @@ and compound `+= -= *= /=`, increment `++ --`, `::` for list cons. `@+` declares
 `>>>` is C#'s unsigned (logical) right shift — it fills with zeros, never the sign bit. `nameof(x)` is the written
 name of a value, type or member as a string. `#n` indexes from the end (`#1` is the last, a `System.Index`) and
 `i..j` is a range (`System.Range`, either bound may be `#k`); indexing an array or string with one reads from the end
-or slices.
+or slices. `x.:M()` / `x.:P` calls or reads a C# extension the dot way (the honest spelling for an extension, since a
+plain `.` would read as a real member); the plain call `Ext.M(x)` is the other way, and both reach the same method.
 
 ```nemerle
 using System.Console;

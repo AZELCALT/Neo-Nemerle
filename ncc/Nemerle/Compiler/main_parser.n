@@ -3970,6 +3970,15 @@ using Nemerle.Compiler.Utility;
             | _ => PExpr.Member (loc, e1, make_splicable (e2))
           }
 
+        // the extension dot-call `a.:M()' / `a.:P': the same access as `.', spelled to say "extension" (the plain
+        // call `Ext.M(a)' is the other way). Resolution is `.'s: a member, else the extension fallback.
+        | ".:" =>
+          match (e2)
+          {
+            | PExpr.ListLiteral (args) => PExpr.GenericSpecifier (loc, e1, args)
+            | _ => PExpr.Member (loc, e1, make_splicable (e2))
+          }
+
         | "=" => PExpr.Assign (loc, e1, e2)
         | ":" => PExpr.TypeEnforcement (loc, e1, e2)
         | ":>" => PExpr.TypeConversion (loc, e1, e2)

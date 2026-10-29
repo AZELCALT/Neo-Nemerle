@@ -147,3 +147,7 @@ run('ext14', 'def s = "hi";\nSystem.Console.WriteLine($"$(s.Shout()) $(s.Twice)"
 # an extension property write goes through its setter, read through its getter
 run('ext14_set', 'def s = "k";\ns.Tag = 7;\nAfter() : int { s.Tag }\nSystem.Console.WriteLine($"$(s.Tag) $(After())")\n', ['7 7'],
     'a C# 14 extension property write (`s.Tag = 7` -> set_Tag) and read (`s.Tag` -> get_Tag)')
+
+# the `.:` dot-call: C#'s `x.M()` form, spelled as an extension; method, property read, and property write
+run('dotcolon', 'def s = "hey";\ns.:Tag = 9;\nSystem.Console.WriteLine($"$(s.:Shout()) $(s.:Twice) $(s.:Tag)")\n', ['HEY 6 9'],
+    'the `.:` extension dot-call (`s.:Shout()`, `s.:Twice`, `s.:Tag = 9`)')

@@ -115,6 +115,9 @@ using Nemerle.UtilityMacros;
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "where", false, 284, 300)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "?.",    false, 285, 285)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ".",     false, 285, 301)]
+// `.:' is the dot way to call/read an extension (C#'s `x.M()' form, spelled so it reads as "extension"); it resolves
+// like `.' (a member, else the extension fallback). The plain call `Ext.M(x)'/`M(x)' is the other, optional way.
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ".:",    false, 285, 301)]
 
  // Nemerle.Imperative namespace
 

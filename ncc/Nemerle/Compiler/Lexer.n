@@ -614,6 +614,9 @@ public abstract class LexerBase
         else if (next == '.') {
           _ = read ();
           Token.Operator ("..")
+        } else if (next == ':') {
+          _ = read ();
+          Token.Operator (".:")
         } else
           Token.Operator (".")
 
