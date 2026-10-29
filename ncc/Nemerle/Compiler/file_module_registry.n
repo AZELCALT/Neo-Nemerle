@@ -679,7 +679,13 @@ public sealed class FileModuleRegistry
       // records none, its code's statements have theirs)
       def place = if (code.Location.FileIndex != 0) code.Location
                   else match (body) { | first :: _ when first.Location.FileIndex != 0 => first.Location + body.Last.Location | _ => code.Location };
-      def define(decl : ClassMember) : void { decl.Location = place; type.Define(decl) }
+      // these members hold the file's top-level code, so they resolve names in the env that carries the file's `using's
+      // (the one registered for the file). MethodEnvironment honours a member's env only when it is that exact object,
+      // and `_N_top_level' being async carries this env onto its generated state-machine method (AsyncMacros), so a
+      // re-parsing macro there (a `$"..."' hole) sees the open namespaces -- as it does for non-async top-level code.
+      mutable fileEnv = null;
+      _ = MemberEnvironments.TryGetValue(type.Location.FileIndex, out fileEnv);
+      def define(decl : ClassMember) : void { decl.Location = place; when (fileEnv != null) decl.SetEnv(fileEnv); type.Define(decl) }
       // the code as it would be without waiting, never run: typed first, as a file's Main and static constructor are
       // (in import order), it gives the file's state its types before the fields are made (the async function's
       // code is typed later, in its state machine)

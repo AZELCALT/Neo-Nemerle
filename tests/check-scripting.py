@@ -116,6 +116,11 @@ programs = {
                'def xs = List([1, 2, 3]);\n'
                'System.Console.WriteLine($"$(xs.Where(x => x > 1).Count()) $(StringBuilder().Length)")\n',
                '2 0'),
+    # the same through the top-level `await' path: the code runs in a generated async method, which must keep the
+    # using-bearing env so an interpolation hole it holds still resolves `using'-opened names.
+    'interp_await': ('using System.Linq;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n'
+                     'def xs = List([1, 2, 3]);\nawait Task.Yield();\n'
+                     'System.Console.WriteLine($"$(xs.Where(x => x > 1).Count())")\n', '2'),
 }
 ncc = args.toolchain.resolve() / 'ncc.exe'
 for name, (text, expected) in programs.items():
@@ -134,13 +139,3 @@ for name, (text, expected) in programs.items():
     ran = subprocess.run(['dotnet', str(program / (name + '.exe'))], cwd=program, capture_output=True, text=True, timeout=60)
     assert ran.returncode == 0 and ran.stdout.strip() == expected, '%s as a file printed %r %r' % (name, ran.stdout, ran.stderr)
 print('PASS: %d programs (async code, bindings) print the same as scripts (the embedded compiler) and as compiled files' % len(programs))
-# a `using'-opened name in an interpolation hole also resolves through a script's top-level `await' path (the code
-# then runs in a generated async method, which must keep the script's using-bearing env). Script-only: a plain file
-# does not run top-level `await'-with-extension-in-interpolation the same way (a separate, pre-existing file edge).
-await_interp = parity / 'await_interp.ns'
-await_interp.write_text('using System.Linq;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n'
-                        'def xs = List([1, 2, 3]);\nawait Task.Yield();\n'
-                        'System.Console.WriteLine($"$(xs.Where(x => x > 1).Count())")\n')
-said = cli('run', await_interp)
-assert said == '2', 'await interpolation script printed %r, expected %r' % (said, '2')
-print('PASS: a using-opened extension in an interpolation hole resolves through a script top-level await')
