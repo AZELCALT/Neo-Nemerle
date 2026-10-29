@@ -2755,18 +2755,25 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             match (TryTyping(() => TypeName(expression, expected)))
             {
               | TExpr.Error =>
+                // `string.Blank'/`string.Of(5)': a C# 14 static extension member reached through its on-type, found
+                // when the type has no such member of its own (it lives in another static class).
+                match (StaticExtensionMember(obj, name, expected))
+                {
+                  | result when result != null => result
+                  | _ =>
                 // XXX this is a proper place to employ some heuristic
                 // for example see if obj is uppercase identifier
-                def obj = if (messenger.InErrorMode) TryTyping(() => TypeExpr(obj))
-                          else                       TypeExpr(obj);
+                def tobj = if (messenger.InErrorMode) TryTyping(() => TypeExpr(obj))
+                           else                       TypeExpr(obj);
 
-                if (IsError(obj))
+                if (IsError(tobj))
                   TypeName(expression, expected)
                 else
                 {
-                  def tMember = TypeMemberExpr (expression, obj, name, expected);
+                  def tMember = TypeMemberExpr (expression, tobj, name, expected);
                   if (IsError (tMember)) TypeName (expression, expected)
                   else                   tMember
+                }
                 }
 
               | e =>
@@ -2964,7 +2971,13 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
         | PExpr.Assign(e1, e2) =>
           // a C# extension property write (`obj.X = v' -> `set_X(obj, v)') when there is no settable member; else the
-          // ordinary assignment. ExtensionSetter types the receiver only when such a setter exists.
+          // ordinary assignment. A static extension write (`string.Slot = v') is tried first, since it binds the
+          // target as a type -- ExtensionSetter would type `string' as a value and report an ambiguity.
+          match (match (e1) { | PExpr.Member(objP, PT.Splicable.Name as sn) => StaticExtensionSetter(objP, sn, e2, expected) | _ => null })
+          {
+            | res when res != null => res
+            | _ =>
+          // ExtensionSetter types the receiver only when such a setter exists.
           match (ExtensionSetter(e1, e2, expected))
           {
             | Some(res) => res
@@ -2990,6 +3003,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               }
               else
                 TExpr.Error()
+              }
           }
 
 
@@ -5155,6 +5169,74 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             }
           result
         | _ => None ()
+      }
+    }
+
+    // A C# 14 *static* extension member reached through the type it is on: `string.Blank' is the getter call
+    // `SExt.get_Blank()', `string.Of(5)' is the method group `SExt.Of' that the wrapping call applies. Both are static
+    // (no receiver), so they are keyed by their on-type at import and found here, not by a value. `objP' names the
+    // type; null when it names no type, or no such member is on it.
+    StaticExtensionMember (objP : PExpr, name : PT.Splicable.Name, expected : TypeVar) : TExpr
+    {
+      def tyVarEnv = if (CurrentFunction != null) CurrentFunction.tenv else current_type.Tenv;
+      def onType =
+        try
+        {
+          solver.PushState ();
+          def t = current_type.BindType (tyVarEnv, objP).Fix ();
+          if (messenger.LocalError) null
+          else match (t) { | FixedType.Class as c => c | _ => null }
+        }
+        finally { solver.PopState () };
+      if (onType == null) null
+      else
+      {
+        def menv = name.body.GetEnv (env);
+        def build (m : IMethod, call : bool) : TExpr
+        {
+          def target = PExpr.FromQualifiedIdentifier (Manager, m.DeclaringType.FullName + "." + m.Name);
+          TypeExpr (if (call) PExpr.Call (name.body.Location, target, []) else target, expected)
+        }
+        // a static extension method: the method group, which a wrapping call applies to its arguments
+        match (Manager.LibrariesManager.GetStaticExtensionMember (name.body.Id, onType, menv))
+        {
+          | m when m != null => build (m, false)
+          // a static extension property read: the getter call `get_Name()'
+          | _ =>
+            match (Manager.LibrariesManager.GetStaticExtensionMember ("get_" + name.body.Id, onType, menv))
+            {
+              | m when m != null => build (m, true)
+              | _ => null
+            }
+        }
+      }
+    }
+
+    // A C# 14 static extension property write, `string.Blank = v' -> `SExt.set_Blank(v)'. Like StaticExtensionMember,
+    // but the setter takes the new value and no receiver. Null when `objP' names no type or no such setter is on it.
+    StaticExtensionSetter (objP : PExpr, name : PT.Splicable.Name, value : PExpr, expected : TypeVar) : TExpr
+    {
+      def tyVarEnv = if (CurrentFunction != null) CurrentFunction.tenv else current_type.Tenv;
+      def onType =
+        try
+        {
+          solver.PushState ();
+          def t = current_type.BindType (tyVarEnv, objP).Fix ();
+          if (messenger.LocalError) null
+          else match (t) { | FixedType.Class as c => c | _ => null }
+        }
+        finally { solver.PopState () };
+      if (onType == null) null
+      else
+      {
+        def menv = name.body.GetEnv (env);
+        match (Manager.LibrariesManager.GetStaticExtensionMember ("set_" + name.body.Id, onType, menv))
+        {
+          | m when m != null =>
+            def call = PExpr.Call (name.body.Location, PExpr.FromQualifiedIdentifier (Manager, m.DeclaringType.FullName + "." + m.Name), [value]);
+            TypeExpr (call, expected)
+          | _ => null
+        }
       }
     }
 

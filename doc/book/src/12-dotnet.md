@@ -86,6 +86,39 @@ The rest of what C#'s metadata says beyond the types is kept too:
   That works when its values are members of their names. Otherwise call it: `p.Deconstruct(out a, out b)`.
 - `with` copies a record or a struct with some members changed: `def moved = point with { X = 5 }`.
 
+### Extension members
+
+A C# extension method is called as a member: `text.Shout()` is the static `Ext.Shout(text)`. C# 14 extension
+properties and static extension members work the same way — a C# `extension` block adds instance members *and* static
+members to a type, and Nemerle reaches all of them:
+
+```nemerle,ignore
+// C#
+public static class Ext {
+  extension(string s) {
+    public int Twice => s.Length * 2;           // instance property
+    public string Shout() => s.ToUpper();        // instance method
+  }
+  extension(string) {
+    public static string Blank => "";            // static property, reached through the type
+    public static string Of(int n) => new string('*', n);  // static method
+  }
+}
+
+// Nemerle
+def s = "hi";
+WriteLine(s.Twice);          // 4   -- instance property, through its getter
+WriteLine(s.Shout());        // HI  -- instance method
+WriteLine(string.Blank);     //     -- a static member, reached through the type `string'
+WriteLine(string.Of(3))      // *** -- a static method, same way
+```
+
+A property write goes through its setter (`s.Tag = 7`, `string.Slot = 3`). Every one of these also has an
+extension-dot spelling, `.:`, which says "this is an extension" where a plain `.` would read as a real member:
+`s.:Twice`, `s.:Shout()`, `string.:Blank`, `string.:Of(3)`. The plain static call is always available too:
+`Ext.Shout(s)`, `Ext.Of(3)` are ordinary static methods. (Extension members do not yet resolve inside a `$"..."`
+interpolation hole in a *script*; bind the value first, or use a compiled file.)
+
 ## Delegates and events
 
 A Nemerle function value converts to a .NET delegate wherever one is expected:

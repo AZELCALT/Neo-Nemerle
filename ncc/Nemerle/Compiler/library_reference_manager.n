@@ -53,6 +53,7 @@ using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.namespace_tree;
 using Nemerle.Compiler.syntax_definition;
 using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.Utility;
 
 /// LibRefManager for the referenced libraries
@@ -180,6 +181,32 @@ public class LibraryReferenceManager
       foreach (method in methods.ToArray())
         when (ExtensionOpen(method, env))
           yield method;
+  }
+
+  // A C# 14 static extension member's accessor by name, whose extension is on a type `onType' fits and whose
+  // namespace is open (the same visibility rule as an extension method). `string.Blank' reaches `get_Blank' here;
+  // `string.Of(5)' reaches `Of'. The type match (TryRequire) is done here so the on-type never crosses as a tuple.
+  public GetStaticExtensionMember(name : string, onType : TypeVar, env : GlobalEnv) : IMethod
+  {
+    def members = _static_extension_members.GetValueOrDefault(name);
+
+    when (members != null)
+      foreach ((method, memberOnType) in members.ToArray())
+        when (ExtensionOpen(method, env) && onType.TryRequire(memberOnType))
+          return method;
+    null
+  }
+
+  public AddStaticExtensionMember(m : IMethod, onType : TypeVar) : void
+  {
+    def members = _static_extension_members.GetValueOrDefault(m.Name);
+    if (members == null)
+    {
+      def members = SCG.List();
+      members.Add((m, onType));
+      _static_extension_members[m.Name] = members;
+    }
+    else members.Add((m, onType));
   }
 
   /// An extension method is usable where the namespace of its type is open (as in C#), or its type itself: `using
@@ -530,6 +557,10 @@ public class LibraryReferenceManager
   private mutable _construct_right_away : list[NamespaceTree.Node] = [];
   // extension method name -> list of extension methods
   private _extension_methods : Hashtable[string, SCG.List[IMethod]] = Hashtable();
+  // a C# 14 *static* extension member's accessor name (`get_Blank', `Of', `set_Blank') -> the real static method and
+  // the type the extension is on (its receiver, read from the grouping type). Keyed here, not in _extension_methods,
+  // because a static member has no receiver parameter to match a value against: it is reached through the type name.
+  private _static_extension_members : Hashtable[string, SCG.List[IMethod * TypeVar]] = Hashtable();
 
   /// Remove extension methods defined in code (not external).
   public RemoveInternalExtensionMethods() : void

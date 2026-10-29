@@ -1904,16 +1904,37 @@ using Nemerle.Compiler.Utility;
           // no [Extension] of their own; the nested grouping types (`<G>$...', marked [Extension]) name the members.
           // Collect those accessor names so they are registered too, alongside the classic [Extension] methods.
           def accessors = System.Collections.Generic.HashSet();
+          // A *static* extension member has no receiver parameter, so matching it to a value is impossible; it is
+          // reached through the type it is on. The on-type is the grouping's receiver -- the first parameter of its
+          // `<Extension>$' marker (nested one level deeper). Map each static skeleton's name to that receiver type.
+          def staticOnType = System.Collections.Generic.Dictionary();
+          def flags = SR.BindingFlags.Public %| SR.BindingFlags.NonPublic %| SR.BindingFlags.Instance %| SR.BindingFlags.Static %| SR.BindingFlags.DeclaredOnly;
           foreach (nested in system_type.GetNestedTypes (SR.BindingFlags.Public %| SR.BindingFlags.NonPublic))
             when (mgr.IsExtension (nested))
-              foreach (p in nested.GetProperties (SR.BindingFlags.Public %| SR.BindingFlags.NonPublic %| SR.BindingFlags.Instance %| SR.BindingFlags.Static %| SR.BindingFlags.DeclaredOnly))
+            {
+              foreach (p in nested.GetProperties (flags))
               {
                 _ = accessors.Add ("get_" + p.Name);
                 _ = accessors.Add ("set_" + p.Name);
               }
+              mutable receiver = null;
+              foreach (marker in nested.GetNestedTypes (SR.BindingFlags.Public %| SR.BindingFlags.NonPublic))
+                when (receiver == null)
+                  foreach (em in marker.GetMethods (flags))
+                    when (receiver == null && em.Name == "<Extension>$" && em.GetParameters ().Length > 0)
+                      receiver = em.GetParameters ()[0].ParameterType;
+              when (receiver != null)
+                foreach (sm in nested.GetMethods (flags))
+                  when (sm.IsStatic && sm.Name != "<Extension>$")
+                    staticOnType [sm.Name] = receiver;
+            }
           foreach (m is IMethod in GetMembers ())
+          {
             when (m.IsStatic && (mgr.IsExtension (m.GetHandle ()) || accessors.Contains (m.Name)))
               mgr.AddExtensionMethod (m);
+            when (m.IsStatic && staticOnType.ContainsKey (m.Name))
+              mgr.AddStaticExtensionMember (m, library.TypeOfType (null, staticOnType [m.Name]));
+          }
         }
       }
 

@@ -37,10 +37,16 @@ public class Req { public required string Name { get; set; } public int Age { ge
 public class Deco { public void Deconstruct(out int a, out string b) { a = 1; b = "one"; } }
 public static class Ext {
   static System.Collections.Generic.Dictionary<string,int> tags = new();
+  static int slot = 0;
   extension(string s) {
     public int Twice => s.Length * 2;
     public string Shout() => s.ToUpper();
     public int Tag { get => tags.TryGetValue(s, out var v) ? v : 0; set => tags[s] = value; }
+  }
+  extension(string) {
+    public static string Blank => "<blank>";
+    public static string Of(int n) => new string('*', n);
+    public static int Slot { get => slot; set => slot = value; }
   }
 }
 public static class Api
@@ -151,3 +157,10 @@ run('ext14_set', 'def s = "k";\ns.Tag = 7;\nAfter() : int { s.Tag }\nSystem.Cons
 # the `.:` dot-call: C#'s `x.M()` form, spelled as an extension; method, property read, and property write
 run('dotcolon', 'def s = "hey";\ns.:Tag = 9;\nSystem.Console.WriteLine($"$(s.:Shout()) $(s.:Twice) $(s.:Tag)")\n', ['HEY 6 9'],
     'the `.:` extension dot-call (`s.:Shout()`, `s.:Twice`, `s.:Tag = 9`)')
+
+# C# 14 *static* extension members reached through the type: a property read, a method, and a property write, through
+# both `.` and the extension `.:`. The on-type is read from the grouping type's receiver at import.
+run('ext14_static', 'string.Slot = 3;\nSystem.Console.WriteLine($"$(string.Blank) $(string.Of(2)) $(string.Slot)")\n', ['<blank> ** 3'],
+    'a C# 14 static extension member through the type (`string.Blank`, `string.Of(2)`, `string.Slot = 3`)')
+run('ext14_static_dotcolon', 'string.:Slot = 5;\nSystem.Console.WriteLine($"$(string.:Blank) $(string.:Of(4)) $(string.:Slot)")\n', ['<blank> **** 5'],
+    'a C# 14 static extension member through the extension dot (`string.:Blank`, `string.:Of(4)`, `string.:Slot = 5`)')
