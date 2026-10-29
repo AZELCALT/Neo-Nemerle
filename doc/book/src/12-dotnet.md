@@ -116,8 +116,7 @@ WriteLine(string.Of(3))      // *** -- a static method, same way
 A property write goes through its setter (`s.Tag = 7`, `string.Slot = 3`). Every one of these also has an
 extension-dot spelling, `.:`, which says "this is an extension" where a plain `.` would read as a real member:
 `s.:Twice`, `s.:Shout()`, `string.:Blank`, `string.:Of(3)`. The plain static call is always available too:
-`Ext.Shout(s)`, `Ext.Of(3)` are ordinary static methods. (Extension members do not yet resolve inside a `$"..."`
-interpolation hole in a *script*; bind the value first, or use a compiled file.)
+`Ext.Shout(s)`, `Ext.Of(3)` are ordinary static methods.
 
 ## Delegates and events
 

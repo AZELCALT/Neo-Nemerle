@@ -515,6 +515,10 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
                  else
                    <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>);
     (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
+    // the generated method holds the original body; give it the same env the body was written in, so a
+    // re-parsing macro (string-interpolation holes) sees the enclosing `using's -- in a script that env
+    // is the one registered for its top-level members, not the bare script-class env.
+    (method :> ClassMember.Function).SetEnv(m.Env);
     tb.Define(method);
     m.Body = Nemerle.Compiler.UtilMacros.locate(loc, <[ $(iterator : name) (..$arguments) ]>);
   }
@@ -552,6 +556,10 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
                  else
                    <[ decl: private $(iterator : name) (..$parameters) : $returned { $body } ]>);
     (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
+    // the generated method holds the original body; give it the same env the body was written in, so a
+    // re-parsing macro (string-interpolation holes) sees the enclosing `using's -- in a script that env
+    // is the one registered for its top-level members, not the bare script-class env.
+    (method :> ClassMember.Function).SetEnv(m.Env);
     tb.Define(method);
     m.Body = Nemerle.Compiler.UtilMacros.locate(loc, <[ $(iterator : name) (..$arguments) ]>);
   }
@@ -593,6 +601,10 @@ macro AsyncFunction(tb : TypeBuilder, m : ParsedMethod)
                else
                  <[ decl: private $(iterator : name) (..$parameters) : $ienumerable { $body } ]>);
   (method :> ClassMember.Function).header.TypeParameters = m.header.TypeParameters;
+  // the generated method holds the original body; give it the same env the body was written in, so a
+  // re-parsing macro (string-interpolation holes) sees the enclosing `using's -- in a script that env
+  // is the one registered for its top-level members, not the bare script-class env.
+  (method :> ClassMember.Function).SetEnv(m.Env);
   tb.Define(method);
   def start = <[ $(iterator : name) (..$arguments) ]>;
   m.Body = Nemerle.Compiler.UtilMacros.locate(loc,

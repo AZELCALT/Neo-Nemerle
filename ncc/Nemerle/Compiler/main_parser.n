@@ -1862,6 +1862,9 @@ using Nemerle.Compiler.Utility;
               field.modifiers.mods |= NemerleModifiers.CompilerMutable;
           def method = Nemerle.Compiler.UtilMacros.locate(location,
             <[ decl: [Nemerle.AsyncMacros.AsyncFunction] private $(topLevel : usesite)() : System.Threading.Tasks.Task { $captured } ]>);
+          // the top-level code runs here, so it is typed in the env that holds the script's `using' directives, not the
+          // bare script env: a macro that re-parses its text (`$"..."' holes) must see those namespaces as open.
+          method._env = parser.env;
           finalMembers.Add(method);
           <[ this.$(topLevel : usesite)().GetAwaiter().GetResult() ]>
         };
@@ -1870,10 +1873,20 @@ using Nemerle.Compiler.Utility;
         {
           | ClassMember.Function as constructor when constructor.name.GetName().Id == ".ctor" =>
             constructor.Body = <[ $(constructor.Body); $run ]>;
+            // top-level code without waits runs in the constructor; it needs the using-bearing env for the same reason.
+            constructor._env = parser.env;
           | _ => ();
         }
       def evaluate = <[ decl: public $(data.Prefix + "evaluate" : usesite)() : array[object] { this.$(resultName : usesite) } ]>;
       finalMembers.Add(evaluate);
+      // The top-level code is typed in the env that holds the script's `using' directives, not the bare script env, so
+      // a macro that re-parses its text (`$"..."' holes) sees those namespaces as open -- as it does in a file. The
+      // typer takes a member's env from FileModuleRegistry.MethodEnvironment, which honours it only when it is the one
+      // registered for the file and the member points at that same object; so register `parser.env' (the final env)
+      // and give the generated members that exact env (mirrors the file path at the end of ParseTopLevel).
+      foreach (member when member._env == null && !(member is ClassMember.TypeDeclaration) in finalMembers)
+        member._env = parser.env;
+      manager.FileModuleRegistry.MemberEnvironments[td.Location.FileIndex] = parser.env;
       def result = TopDeclaration.Class(td.Location, td.name, td.modifiers, td.typarms, td.t_extends, finalMembers.NToList());
       foreach (member in finalMembers) member._definedIn = result;
       [result]
