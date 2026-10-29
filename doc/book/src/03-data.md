@@ -139,6 +139,25 @@ middle
 
 `array.[2]` builds a two-dimensional array, which is indexed with `[row, column]`.
 
+A `[...]` literal is not tied to one type: it takes the shape the context asks for. Where a list is expected (or
+nothing says otherwise) it is a `list`, as above; where an **array** is expected it builds that array. So the same
+`[...]` serves a `list` parameter, an `array` parameter, an array-typed binding, or an array-typed result:
+
+```nemerle
+using System.Console;
+
+Total(ns : array[int]) : int { mutable sum = 0; foreach (n in ns) sum += n; sum }
+
+def xs : array[int] = [2, 3, 5, 7];   // an array binding: `[...]` builds the array
+WriteLine(xs.Length);
+WriteLine(Total([2, 3, 5, 7]))        // an array parameter: `[...]` builds the array
+```
+
+```text
+4
+17
+```
+
 ## Strings
 
 Strings are .NET strings. A `$` in front of a string literal turns on interpolation: `$name` inserts a variable, and

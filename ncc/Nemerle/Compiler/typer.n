@@ -3075,7 +3075,69 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
           TypeExpr (e, expected)
 
-        | PExpr.ListLiteral (elems) => TypeExpr (Macros.Lift (elems), expected)
+        | PExpr.ListLiteral (elems) =>
+          // `[...]` is a structural sequence literal: it takes the shape the context asks for.
+          // When an array is expected it builds that array (so `([...], 1)` reaches `(array[T], int)`,
+          // and `def a : array[int] = [...]` holds); with no array in sight it stays the classic
+          // immutable `list` (which already serves IEnumerable[T] and the rest), so bare `[1, 2, 3]`
+          // is still a list. The expected type is often a bare inference variable at this point
+          // (a call argument gets one, a type-enforced value carries the target as a cast hint), so
+          // the decision is delayed until the shape the context asks for is actually known.
+          def shape_wanted()
+          {
+            match (expected.Hint)
+            {
+              | Some(t) => Some(t)
+              | None =>
+                def ich = expected.ImplicitCastHint;
+                if (ich == null) None() else ich.Hint
+            }
+          }
+          def as_array() { PExpr.Array(expression.Location, <[ 1 ]>, PExpr.ListLiteral(expression.Location, elems)) }
+          def as_list()  { Macros.Lift(elems) }
+          // A `list` is the shape when the context is `list` itself, one of its variant options (`Cons`/`Nil`,
+          // which a non-empty/empty hint narrows to), `object`, or any interface (a list carries IEnumerable[T]
+          // and friends; an interface it does not carry has no constructor to build anyway). Decided with
+          // identity/interface checks only — `IsDerivedFrom` asserts its super types are already computed, which
+          // is not guaranteed for a hint seen mid-inference.
+          def is_list_shape(ti : TypeInfo)
+          {
+            ti.IsInterface
+            || ti.Equals(InternalType.Nemerle_list_tc)
+            || ti.Equals(InternalType.Object_tc)
+            || { def dt = ti.DeclaringType; dt != null && dt.Equals(InternalType.Nemerle_list_tc) }
+          }
+          def build(ft)
+          {
+            match (ft)
+            {
+              | FixedType.Array(_, 1)            => as_array()
+              | FixedType.Class(ti, _) when is_list_shape(ti) => as_list()
+              | FixedType.Class =>
+                // Any other concrete collection takes the elements through its own constructor:
+                // `C(array[...])`. An array is an `IEnumerable[T]` (so `List[T]`, `HashSet[T]`,
+                // `Queue[T]`, ... take it) and is exactly what a `Span[T]`/`ReadOnlySpan[T]` ctor wants.
+                PExpr.Call(expression.Location, PExpr.TypedType(expression.Location, ft), [as_array()])
+
+              | _ => as_list()   // tuple, function, a type variable, ...: the classic list
+            }
+          }
+          def resolve(last_chance)
+          {
+            match (shape_wanted())
+            {
+              | Some(ft) => Some(build(ft))
+              | None =>
+                // Nothing is asking for a particular shape (and may never): once the inference has
+                // otherwise settled, a `[...]` with no imposed shape is the classic list, which also
+                // defines its own type when it is the source rather than a consumer (`def l = [...]`).
+                if (last_chance || Manager.DelayedTypingsSecondPass) Some(as_list()) else None()
+            }
+          }
+          // The delayed node gets its own type, not `expected`: once resolved it is typed and then fitted to
+          // `expected` the ordinary way (a list boxes into an `object`/interface slot by subtyping, as a written-out
+          // `[...]` already does), rather than being unified with it (which a list and `object` fail).
+          TypeExpr (DelayMacro(resolve), expected)
         | PExpr.Throw(null) => TExpr.Throw(null)
         | PExpr.Throw(exceptionExpr) =>
           def tExceptionExpr = TypeExpr(exceptionExpr);
