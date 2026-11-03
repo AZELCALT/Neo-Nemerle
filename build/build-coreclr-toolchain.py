@@ -6,7 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
-from tooling import net10_runtime, verify_strong_name
+from tooling import net10_runtime, tune_compiler_runtime, verify_strong_name
 import buildcache
 
 parser = argparse.ArgumentParser()
@@ -88,6 +88,7 @@ for number in (1, 2):
         build('cli1', previous, [repo / 'ncc/Nemerle/CommandlineCompiler.n', repo / 'ncc/Nemerle/ProjectCommands.n'],
               current / 'ncc.exe', [current / 'Nemerle.Compiler.dll', current / 'Nemerle.Platform.dll', runtime / 'System.Console.dll', runtime / 'System.Linq.dll', runtime / 'System.Net.Http.dll', runtime / 'System.IO.Compression.dll', runtime / 'System.Text.Json.dll', runtime / 'System.Memory.dll', runtime / 'System.Reflection.Metadata.dll', runtime / 'System.Collections.Immutable.dll', runtime / 'System.IO.Compression.ZipFile.dll'], 'Nemerle.Compiler.snk',
               ['-source-root:' + str(repo / 'ncc'), *new_macros])
+        tune_compiler_runtime(current)
         new_macros = ['-no-stdmacros', '-macros:' + str(stage_macros / 'Nemerle.Macros.dll')]
     # Compile macros in an isolated output directory with their real identity;
     # never replace the executing compiler's standard macro assembly.
@@ -99,5 +100,6 @@ for number in (1, 2):
               'Nemerle.Compiler.snk', ['-target:library', '-source-root:' + str(repo / 'macros'), *new_runtime, *new_macros])
         build('cli2', previous, [repo / 'ncc/Nemerle/CommandlineCompiler.n', repo / 'ncc/Nemerle/ProjectCommands.n'],
               current / 'ncc.exe', [current / 'Nemerle.Compiler.dll', current / 'Nemerle.Platform.dll', runtime / 'System.Console.dll', runtime / 'System.Linq.dll', runtime / 'System.Net.Http.dll', runtime / 'System.IO.Compression.dll', runtime / 'System.Text.Json.dll', runtime / 'System.Memory.dll', runtime / 'System.Reflection.Metadata.dll', runtime / 'System.Collections.Immutable.dll', runtime / 'System.IO.Compression.ZipFile.dll'], 'Nemerle.Compiler.snk', ['-source-root:' + str(repo / 'ncc'), *new_runtime, *new_macros])
+        tune_compiler_runtime(current)
     previous = current
 print('Verified CoreCLR source toolchain:', previous / 'ncc.exe', flush=True)

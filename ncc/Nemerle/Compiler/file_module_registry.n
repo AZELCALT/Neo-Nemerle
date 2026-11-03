@@ -231,7 +231,7 @@ public sealed class FileModuleRegistry
 
   public IndexSources() : void
   {
-    paths.Clear(); owners.Clear();
+    paths.Clear(); owners.Clear(); directories = null;
     def root = Root;
     def prefix = root.TrimEnd(array[Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) + Path.DirectorySeparatorChar;
     def shortNames = manager.Options.FileNameNamespaces;
@@ -759,8 +759,29 @@ public sealed class FileModuleRegistry
 
   public IsDirectory(name : list[string]) : bool
   {
-    def prefix = name.ToString(".") + ".";
-    ModulePrefix(name) == null && (owners.Keys.:NToList() + External.Keys.:NToList()).Exists(_.StartsWith(prefix, StringComparison.Ordinal))
+    ModulePrefix(name) == null && Directories().Contains(name.ToString("."))
+  }
+
+  // Every proper dotted prefix of a module's name (`a', `a.b' for `a.b.c'): the folders. Name lookup asks for it on each
+  // candidate, so it is kept and made again only when a module is added (the tables only grow, or are cleared).
+  mutable directories : System.Collections.Generic.HashSet[string];
+  mutable directoriesFor : int = -1;
+  Directories() : System.Collections.Generic.HashSet[string]
+  {
+    def count = owners.Count + External.Count;
+    when (directories == null || directoriesFor != count)
+    {
+      directories = System.Collections.Generic.HashSet(StringComparer.Ordinal);
+      def add (name : string)
+      {
+        mutable dot = name.IndexOf('.');
+        while (dot > 0) { _ = directories.Add(name.Substring(0, dot)); dot = name.IndexOf('.', dot + 1) }
+      }
+      foreach (name in owners.Keys) add(name);
+      foreach (name in External.Keys) add(name);
+      directoriesFor = count;
+    }
+    directories
   }
 
   public HasClrNamespace(name : list[string]) : bool

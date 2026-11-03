@@ -11,7 +11,7 @@ iterating, not a bootstrap: run ./bootstrap before committing a compiler change.
 """
 import argparse, pathlib, re, shutil, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from tooling import artifact_path, net10_runtime, verify_strong_name
+from tooling import artifact_path, net10_runtime, tune_compiler_runtime, verify_strong_name
 import buildcache
 
 repo = pathlib.Path(__file__).resolve().parents[1]
@@ -89,6 +89,7 @@ if 'cli' in parts:
         runtime / 'System.Collections.Immutable.dll', runtime / 'System.IO.Compression.ZipFile.dll']
     build('cli', T / 'ncc.exe', [repo / 'ncc/Nemerle/CommandlineCompiler.n', repo / 'ncc/Nemerle/ProjectCommands.n'],
           cli_refs, ['-no-stdlib', '-r:' + str(base / 'Nemerle.dll'), '-source-root:' + str(repo / 'ncc')])
+    tune_compiler_runtime(T)
 py, b = sys.executable, repo / 'build'
 if 'nitra' in parts:
     text = step('nitra', [py, b / 'build-nitra-core.py', '--snapshot', 'Nitra', '--bootstrap', T,

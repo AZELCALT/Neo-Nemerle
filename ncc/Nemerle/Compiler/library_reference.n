@@ -269,7 +269,23 @@ using Nemerle.Compiler.Utility;
     mutable doEnsureCached : bool = false;
 
     // TODO: VladD2: Move this method into LibraryReferenceManager and make it independetnt from LibraryReference!
+    // An external type's TypeInfo is the same for the whole compilation (and its libraries'), and name lookup asks for
+    // it on every member it touches: kept once found. (A type of the program being compiled is not kept.)
+    type_infos : System.Collections.Generic.Dictionary[System.Type, TypeInfo] = System.Collections.Generic.Dictionary();
+
     internal TypeInfoOfType (framework_type : System.Type) : TypeInfo
+    {
+      mutable known;
+      if (type_infos.TryGetValue (framework_type, out known)) known
+      else
+      {
+        def found = TypeInfoOfTypeUncached (framework_type);
+        unless (found == null || found is TypeBuilder) type_infos [framework_type] = found;
+        found
+      }
+    }
+
+    TypeInfoOfTypeUncached (framework_type : System.Type) : TypeInfo
     {
       def genericArgsCount = framework_type.GetGenericArguments().Length;
       def (ns_node, path_to_type) = LibRefManager.framework_nesting(framework_type);
