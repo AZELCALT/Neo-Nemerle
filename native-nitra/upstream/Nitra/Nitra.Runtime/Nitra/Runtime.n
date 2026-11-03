@@ -171,28 +171,28 @@ public class ChemicalParseTreeContext : ISourceSnapshotProvider
 
       MakeBindingPowerMap();
 
-      def rules = Grammars.SelectMany(gd => gd.Rules).NToArray();
+      def rules = Grammars.:SelectMany(gd => gd.Rules).:NToArray();
 
       def extensionRuleDescriptors = rules
-        .OfType.[ExtensionRuleDescriptor]()
-        .Grouping(rd => (rd.BaseRule, rd))
+        .:OfType.[ExtensionRuleDescriptor]()
+        .:Grouping(rd => (rd.BaseRule, rd))
         .Map((baseRd, extetions) =>
         {
-          def prefix = extetions.OfType.[PrefixRuleDescriptor]().NToArray();
-          def postfix = extetions.OfType.[PostfixRuleDescriptor]().MapToArray(rd => (rd, GetBindingPower(baseRd, rd.BindingPower)));
+          def prefix = extetions.:OfType.[PrefixRuleDescriptor]().:NToArray();
+          def postfix = extetions.:OfType.[PostfixRuleDescriptor]().:MapToArray(rd => (rd, GetBindingPower(baseRd, rd.BindingPower)));
           Array.Sort.[PostfixRuleDescriptor * int](postfix, (((_, lbp), (_, rbp)) => lbp.CompareTo(rbp)));
-          (baseRd, (prefix, postfix.MapToArray((rd, _bp) => rd)))
+          (baseRd, (prefix, postfix.:MapToArray((rd, _bp) => rd)))
         });
 
-      foreach (extensibleRule in rules.OfType.[ExtensibleRuleDescriptor]())
+      foreach (extensibleRule in rules.:OfType.[ExtensibleRuleDescriptor]())
       {
         def (prefixDescriptors, postfixDescriptors) = extensionRuleDescriptors.GetValueOrDefault(extensibleRule, (array[], array[]));
         ExtensibleRules[extensibleRule] = ExtensibleRuleParserData(this, extensibleRule, prefixDescriptors, postfixDescriptors, ruleIdBuilder);
       }
 
       SimpleRuleParsers = Hashtable(rules
-        .OfType.[SimpleRuleDescriptor]()
-        .Map(rd => (rd, rd.NewParser(this, ruleIdBuilder))));
+        .:OfType.[SimpleRuleDescriptor]()
+        .:Map(rd => (rd, rd.NewParser(this, ruleIdBuilder))));
 
       foreach (extensibleRule in ExtensibleRules)
         extensibleRule.Value.Init(ruleIdBuilder);
@@ -205,11 +205,11 @@ public class ChemicalParseTreeContext : ISourceSnapshotProvider
 
       InitTokens();
 
-      Simples     = SimpleRuleParsers.Values.ToArray();
+      Simples     = SimpleRuleParsers.Values.:ToArray();
       def extensibleRules = ExtensibleRules.Values;
-      Prefixs     = extensibleRules.Map(data => data.PrefixParsers).Flatten().ToArray();
-      Postfixs    = extensibleRules.Map(data => data.PostfixParsers).Flatten().ToArray();
-      Extensibles = extensibleRules.Map(data => data.Parsers.Filter(_ != null)).Flatten().ToArray();
+      Prefixs     = extensibleRules.:Map(data => data.PrefixParsers).:Flatten().:ToArray();
+      Postfixs    = extensibleRules.:Map(data => data.PostfixParsers).:Flatten().:ToArray();
+      Extensibles = extensibleRules.:Map(data => data.Parsers.:Filter(_ != null)).:Flatten().ToArray();
 
       InitMandatoryTokenCount();
       InitConditionalEmpty();
@@ -327,7 +327,7 @@ public class ChemicalParseTreeContext : ISourceSnapshotProvider
             | TokenString                  => ()
             | ExtensibleCall    as subrule =>
               when (subrule.CanParseEmptyString)
-                subrulePredicates.UnionWith(subrule.RuleParser.PrefixRules.SelectMany(r => { initConditionalEmpty(r.SequenceInfo); seqMap[r.SequenceInfo] }));
+                subrulePredicates.UnionWith(subrule.RuleParser.PrefixRules.:SelectMany(r => { initConditionalEmpty(r.SequenceInfo); seqMap[r.SequenceInfo] }));
 
             | SimpleCall        as subrule =>
               when (subrule.CanParseEmptyString)
@@ -366,7 +366,7 @@ public class ChemicalParseTreeContext : ISourceSnapshotProvider
       foreach ((subrule, predicates) when predicates.Count > 1 in subruleMap.KeyValuePairs)
       {
         _ = predicates.Remove(null);
-        subrule.ConditionalEmpty = predicates.ToArray();
+        subrule.ConditionalEmpty = predicates.:ToArray();
       }
     }
 
@@ -747,7 +747,7 @@ public class ChemicalParseTreeContext : ISourceSnapshotProvider
 
     public Literals : Seq[string]
     {
-      get { Tokens.Values.OfType.[TokenParser.TokenString]().Select(t => t.Str) }
+      get { Tokens.Values.:OfType.[TokenParser.TokenString]().:Select(t => t.Str) }
     }
     
     public ParseAllGrammarTokens(pos : int, parseResult : ParseResult) : SCG.HashSet[int]
@@ -1004,12 +1004,12 @@ a:visited, a:link, a:active
       }
 
       def header = XElement("span");
-      def assemblies = Grammars.GroupBy(g => g.GetType().Assembly);
-      foreach (assembly in assemblies.OrderBy(a => a.Key.FullName))
+      def assemblies = Grammars.:GroupBy(g => g.GetType().Assembly);
+      foreach (assembly in assemblies.:OrderBy(a => a.Key.FullName))
       {
         header.Add(XElement("span", "Assemby: " + assembly.Key.FullName + "\r\n"));
 
-        foreach (syntaxModule in assembly.OrderBy(m => m.FullName))
+        foreach (syntaxModule in assembly.:OrderBy(m => m.FullName))
           header.Add(XElement("span", "  Syntax module: " + syntaxModule.FullName + "\r\n"));
       }
 
@@ -1018,8 +1018,8 @@ a:visited, a:link, a:active
       root.Add(XElement("span", "\r\n"));
 
       def parsers = SCG.List.[StartRuleParser](Simples);
-      parsers.AddRange(Extensibles.Where(e => e.BindingPower == 0));
-      def parsers2 = parsers.OrderByDescending(_.IsTokenRule).ThenBy(x => x.Descriptor.Name);
+      parsers.AddRange(Extensibles.:Where(e => e.BindingPower == 0));
+      def parsers2 = parsers.:OrderByDescending(_.IsTokenRule).:ThenBy(x => x.Descriptor.Name);
 
       foreach (parser in parsers2)
       {
@@ -1038,12 +1038,12 @@ a:visited, a:link, a:active
           root.Add(result);
           root.Add("\r\n{\r\n");
 
-          def extensionRules = SCG.List(parser.PrefixRules.OrderBy(r => r.Descriptor.Name));
-          extensionRules.AddRange(parser.PostfixRules.OrderBy(r => (r.Descriptor :> PostfixRuleDescriptor).BindingPower).ThenBy(r => r.Descriptor.Name));
+          def extensionRules = SCG.List(parser.PrefixRules.:OrderBy(r => r.Descriptor.Name));
+          extensionRules.AddRange(parser.PostfixRules.:OrderBy(r => (r.Descriptor :> PostfixRuleDescriptor).BindingPower).:ThenBy(r => r.Descriptor.Name));
 
           when (extensionRules.Count > 0)
           {
-            def maxNameLen = extensionRules.Max(r => r.Descriptor.Name.Length);
+            def maxNameLen = extensionRules.:Max(r => r.Descriptor.Name.Length);
             foreach(subParser in extensionRules)
               renderPrefix(subParser, maxNameLen);
           }
@@ -1053,13 +1053,13 @@ a:visited, a:link, a:active
         | _ => assert3(false);
       }
 
-      foreach (descriptor is RegularRuleDescriptor in seqInfoToLabelMap.Keys.Distinct().OrderByDescending(_.Name))
+      foreach (descriptor is RegularRuleDescriptor in seqInfoToLabelMap.Keys.:Distinct().:OrderByDescending(_.Name))
         root.AddFirst(XElement("span", XAttribute("id", getLabel(descriptor)), XElement("span", keywordCss, "regex"), " ", descriptor.Name, " = ", descriptor.RegexText, ";\r\n"));
 
       root.AddFirst(header);
 
       def template = XElement.Parse(HtmlTemplate);
-      def content = template.Descendants("content").First();
+      def content = template.Descendants("content").:First();
       Debug.Assert(content.Parent != null, "Missing content parent");
       content.Parent.ReplaceAll(root);
       template
@@ -1294,14 +1294,14 @@ public class CollectSymbolErrorsVisitor : IAstVisitor
         if (r.IsResolvedToEvaluated)
           processRef(r.ResolvedTo);
         else if (r.IsUnresolved)
-          CompilerMessages.Error(reference, $"Unresolved reference '$reference'");
+          CompilerMessages.:Error(reference, $"Unresolved reference '$reference'");
         else when (r.IsAmbiguous && !r.IgnoreAmbiguities)
         {
           def builder = StringBuilder(64)
-            .Append("<hint>'").HintMlEscape(reference).Append("' is an ambiguous reference between ")
-            .JoinAnd(r.Ambiguities, HintML.MakeHintMlPath(_, _, ".", true)).Append("</hint>");
+            .Append("<hint>'").:HintMlEscape(reference).Append("' is an ambiguous reference between ")
+            .:JoinAnd(r.Ambiguities, HintML.MakeHintMlPath(_, _, ".", true)).Append("</hint>");
           
-          CompilerMessages.Error(reference, builder.ToString());
+          CompilerMessages.:Error(reference, builder.ToString());
         }
       }
       
@@ -1381,7 +1381,7 @@ public sealed class SpanClass : ISerializable
       foreach (spanClass when StringComparer.Ordinal.Equals(spanClass.Name, name) in acc.GetDeclaredSpanClasses())
         return spanClass;
 
-    metadataReader.Project.FatalError(metadataReader.ErrorLocation, $"Span class '$name' not found in language '$language'.");
+    metadataReader.Project.:FatalError(metadataReader.ErrorLocation, $"Span class '$name' not found in language '$language'.");
   }
 }
 
@@ -1424,7 +1424,7 @@ public sealed class Style : ISerializable
       foreach (style when StringComparer.Ordinal.Equals(style.Name, name) in acc.GetDeclaredStyles())
         return style;
 
-    metadataReader.Project.FatalError(metadataReader.ErrorLocation, $"Style '$name' not found in language '$language'.")
+    metadataReader.Project.:FatalError(metadataReader.ErrorLocation, $"Style '$name' not found in language '$language'.")
   }
 }
 
@@ -1900,7 +1900,7 @@ public module NitraUtils
       foreach (sym in br.Symbols)
         _ = set.Add(sym);
         
-    BindResult.Union(set.ToImmutableArray(), res)
+    BindResult.Union(set.:ToImmutableArray(), res)
   }
   
   public ToBindResult[TSymbol](this res : LightList[BindResult[TSymbol]]) : BindResult[TSymbol]
@@ -1910,7 +1910,7 @@ public module NitraUtils
     {
       | 0 => BindResult.Nil()
       | 1 => res.FirstItem
-      | _ => MakeUnion(res.ToImmutableArray())
+      | _ => MakeUnion(res.:ToImmutableArray())
     }
   }
 
@@ -1932,7 +1932,7 @@ public module NitraUtils
     {
       | 0 => BindResult.Nil()
       | 1 => BindResult.Single(res.FirstItem)
-      | _ => BindResult.Multiple(res.ToImmutableArray())
+      | _ => BindResult.Multiple(res.:ToImmutableArray())
     }
   }
 } // module
@@ -2569,7 +2569,7 @@ public sealed class ParserHost
       return res;
 
     lock (_syncRoot)
-      grammarDescriptors.Fold(parent, (grammarDescriptor, acc) => AddGrammar(acc, grammarDescriptor))
+      grammarDescriptors.:Fold(parent, (grammarDescriptor, acc) => AddGrammar(acc, grammarDescriptor))
   }
 
   public MakeCompositeGrammar(grammarDescriptor : GrammarDescriptor) : CompositeGrammar
@@ -2874,7 +2874,7 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
         | _ is OperationCanceledException => throw;
         | e =>
           def error = GetParsingFailureError(maxFailPos);
-          this.ParseSession.CompilerMessages.Error(error.Location, error.Message);
+          this.ParseSession.CompilerMessages.:Error(error.Location, error.Message);
           IsSuccess = false;
           throw ParsingFailureException(error.ToString(), e, this);
       }
@@ -2902,9 +2902,9 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
       return UnexpectedEndOfFileError(Nitra.Runtime.Location(this, maxFailPos));
 
     def tokens = RuleParser.Grammar.ParseAllGrammarTokens(maxFailPos, this);
-    if (tokens.Any(isValidToken))
+    if (tokens.:Any(isValidToken))
     {
-      def longestToken = tokens.Max();
+      def longestToken = tokens.:Max();
       UnexpectedError(Nitra.Runtime.Location(this, maxFailPos, longestToken))
     }
     else
@@ -2912,7 +2912,7 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
       mutable pos = maxFailPos + 1; // range already checked
       while (pos < Text.Length)
       {
-        when (RuleParser.Grammar.ParseAllGrammarTokens(pos, this).Any(isValidToken))
+        when (RuleParser.Grammar.ParseAllGrammarTokens(pos, this).:Any(isValidToken))
           break;
         ++pos;
       }
@@ -3132,7 +3132,7 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
           {
             def walker = TriviaCollector();
             walker.Walk(this);
-            _trivia = walker.Trivia.OrderBy(x => x.Key.EndPos).ToArray();
+            _trivia = walker.Trivia.:OrderBy(x => x.Key.EndPos).:ToArray();
           }
         }
       }
@@ -3198,7 +3198,7 @@ public class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProv
       else
           0
     }
-    mutable errorIndex = Trivia.BinarySearch(cmp);
+    mutable errorIndex = Trivia.:BinarySearch(cmp);
     if (errorIndex >= 0)
     {
       for (mutable i = errorIndex - 1; i >= 0; i--)
@@ -3280,7 +3280,7 @@ public class ParseSession
   public ParseToEndOfString  : bool                     { get { _parseToEndOfString  } set { Check();                        _parseToEndOfString  = value; } }
   public RecoveryTimeout     : TimeSpan                 { get { _recoveryTimeout     } set { Check();                        _recoveryTimeout     = value; } }
   public OnRecovery          : Action[IParseResult]     { get { _onRecovery          } set { Check();                        _onRecovery          = value; } }
-  public DynamicExtensions   : Seq[GrammarDescriptor]   { get { _dynamicExtensions   } set { Check(); _dynamicExtensionsMap = value?.ToDictionary(d => d.FullName); _dynamicExtensions = value; } }
+  public DynamicExtensions   : Seq[GrammarDescriptor]   { get { _dynamicExtensions   } set { Check(); _dynamicExtensionsMap = value?.:ToDictionary(d => d.FullName); _dynamicExtensions = value; } }
   public Statistics          : StatisticsTask.Container { get { _statistics          } set { Check();                        _statistics          = value; } }
   public CompilerMessages    : ICompilerMessages        { get { _compilerMessages    } set { Check();                        _compilerMessages    = value; } }
   
@@ -3650,10 +3650,10 @@ public module CompilerMessagesExtensions
   public Warning   (this ast : IAst, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { GetCompilerMessage(context, ast).ReportMessage(CompilerMessageType.Warning,    ast.Location, text, num) }
   public Hint      (this ast : IAst, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { GetCompilerMessage(context, ast).ReportMessage(CompilerMessageType.Hint,       ast.Location, text, num) }
 
-  public Error     (this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { Error     (symbol.Declarations.First().Name, context, text, num) }
-  public FatalError(this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { FatalError(symbol.Declarations.First().Name, context, text, num) }
-  public Warning   (this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { Warning   (symbol.Declarations.First().Name, context, text, num) }
-  public Hint      (this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { Hint      (symbol.Declarations.First().Name, context, text, num) }
+  public Error     (this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { Error     (symbol.Declarations.:First().Name, context, text, num) }
+  public FatalError(this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { FatalError(symbol.Declarations.:First().Name, context, text, num) }
+  public Warning   (this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { Warning   (symbol.Declarations.:First().Name, context, text, num) }
+  public Hint      (this symbol : DeclarationSymbol, context : DependentPropertyEvalContext, text : string, num : int = -1) : void { Hint      (symbol.Declarations.:First().Name, context, text, num) }
 }
 
 // ---- ProjectSystem/IRootCompilerMessages.n (Nitra) ----
@@ -3995,7 +3995,7 @@ public module HintML
   
   public JoinAnd[T](this builder : StringBuilder, elems : Seq[T], converter : StringBuilder * T -> StringBuilder) : StringBuilder
   {
-    def ary             = elems.ToArray();
+    def ary             = elems.:ToArray();
     def isPrevLastIndex = ary.Length - 2;
     
     foreach (e in ary with i)
@@ -4017,15 +4017,15 @@ public module HintML
       .Append(" ")
       .Append(XmlEscape(name))
       .Append("=")
-      .HintMlQuote(text)
+      .:HintMlQuote(text)
   }
   
   public SymbolToHintMlWithSubHint(this builder : StringBuilder, symbol : DeclarationSymbol) : StringBuilder
   {
     builder
       .Append("<symbol")
-      .HintMlAttr("span-class", symbol.SpanClass.FullName)
-      .HintMlAttr("id", GetSymbolId(symbol).ToString())
+      .:HintMlAttr("span-class", symbol.SpanClass.FullName)
+      .:HintMlAttr("id", GetSymbolId(symbol).ToString())
       .Append(">")
       .Append(XmlEscape(symbol.Name))
       .Append("</symbol>")
@@ -4035,7 +4035,7 @@ public module HintML
   {
     builder
       .Append("<symbol")
-      .HintMlAttr("span-class", symbol.SpanClass.FullName)
+      .:HintMlAttr("span-class", symbol.SpanClass.FullName)
       .Append(">")
       .Append(XmlEscape(symbol.Name))
       .Append("</symbol>")
@@ -4062,7 +4062,7 @@ public module HintML
   
   public MakeLocations(this builder : StringBuilder, symbol : DeclarationSymbol) : StringBuilder
   {
-    def decls = symbol.GetDeclarationsUntyped().ToArray();
+    def decls = symbol.GetDeclarationsUntyped().:ToArray();
       
     when (decls.Length > 0)
       _ = builder.Append("<br/>");
@@ -4086,7 +4086,7 @@ public module HintML
         def text = if (file.IsFake) "<no file>" else (Path.GetFileName(path) + lineCol);
         def @goto = "goto:" + path + "[" + loc.StartPos + "," + loc.Length + "]";
         def hint = path + lineCol;
-        _ = builder.Append("<br/>Location: <ref").HintMlAttr("handler", @goto).HintMlAttr("hint", hint).Append(">").HintMlEscape(text).Append("</ref>");
+        _ = builder.Append("<br/>Location: <ref").:HintMlAttr("handler", @goto).:HintMlAttr("hint", hint).Append(">").:HintMlEscape(text).Append("</ref>");
       }
     }
     
@@ -5077,7 +5077,7 @@ public mask Errors
           match (this)
           {
             | Leaf => 1
-            | Node as n => n.Children.Sum(c => c.DebugTotalLength)
+            | Node as n => n.Children.:Sum(c => c.DebugTotalLength)
           }
         }
       }
@@ -5187,18 +5187,18 @@ public mask Errors
 
       if (errorSet.Count == 1)
       {
-        def pos = errorSet.First();
+        def pos = errorSet.:First();
         errors.Add(ExpectedError(Nitra.Runtime.Location(parseResult, pos), newContext));
       }
       else
-        foreach (pos in errorSet.OrderBy(x => x))
+        foreach (pos in errorSet.:OrderBy(x => x))
           errors.Add(ExpectedError(Nitra.Runtime.Location(parseResult, pos), newContext.Clone(pos).Simplify()));
 
       errors.AddRange(Unexpecteds);
 
       def compilerMessages = parseResult.ParseSession.CompilerMessages;
       foreach (error in errors)
-        compilerMessages.Error(error.Location, error.Message);
+        compilerMessages.:Error(error.Location, error.Message);
       
       ErrorCount = errors.Count;
     }
@@ -5390,7 +5390,7 @@ public mask Errors
     public this(loc : Nitra.Runtime.Location, expected : Seq[ParsedSequenceAndSubrule])
     {
       base(loc);
-      Expected = ReadOnlyCollection(expected.ToArray());
+      Expected = ReadOnlyCollection(expected.:ToArray());
     }
 
     public override Message : string { [Memoize] get { MakeMessage() } }
@@ -5411,10 +5411,10 @@ public mask Errors
 
     static SubruleToString(expected : Seq[ParsedSequenceAndSubrule]) : Seq[string]
     {
-      def res = expected.Select(e => e.Sequence.ParserHost.ParsingStates[e.Subrule.State].Description)
-        .Distinct()
-        .OrderBy(fun(x) { | "';'" | "','" => 0 | "'.'" => 1 | _ => x.Length })
-        .ThenBy(x => x);
+      def res = expected.:Select(e => e.Sequence.ParserHost.ParsingStates[e.Subrule.State].Description)
+        .:Distinct()
+        .:OrderBy(fun(x) { | "';'" | "','" => 0 | "'.'" => 1 | _ => x.Length })
+        .:ThenBy(x => x);
       res
     }
 
@@ -5462,7 +5462,7 @@ public mask Errors
       def maxLength = 30;
       def sb = StringBuilder(maxLength + 30);
       _ = sb.Append("Unexpected token: \'");
-      _ = sb.AppendEscapedString(Location.Source.Text, Location.StartPos, Math.Min(Location.Length, maxLength));
+      _ = sb.:AppendEscapedString(Location.Source.Text, Location.StartPos, Math.Min(Location.Length, maxLength));
       when (Location.Length > maxLength)
         _ = sb.Append("...");
       _ = sb.Append("\'");
@@ -6371,7 +6371,7 @@ public mask Reflection
       RawSize             = rawSize;
       RuleName            = ruleName;
       Description         = description;
-      Subrules            = subrulesWithMarkers.FilterToArray(info => !(info is SubruleInfo.Marker));
+      Subrules            = subrulesWithMarkers.:FilterToArray(info => !(info is SubruleInfo.Marker));
       SubrulesWithMarkers = subrulesWithMarkers;
       IsVoid              = isVoid;
 
@@ -6909,7 +6909,7 @@ public mask Typing
       if (_children == null)
         []
       else
-        _children.Values.SelectMany(getSymbols)
+        _children.Values.:SelectMany(getSymbols)
     }
 
     public GetSymbols() : list[Symbol]
@@ -7185,7 +7185,7 @@ public mask Typing
       match (this)
       {
         | Some(symbol) => symbol
-        | None         => messages.FatalError(this, $"Unresolved symbol $(this.GetText())"); //assert2(false); assert(false);
+        | None         => messages.:FatalError(this, $"Unresolved symbol $(this.GetText())"); //assert2(false); assert(false);
       }
     }
 
@@ -7338,7 +7338,7 @@ public mask Typing
       if (exclude == null)
         result
       else
-        result.Where(x => x : object != exclude)
+        result.:Where(x => x : object != exclude)
     }
 
     public ReportAlreadyDefined[T](newSymbol : T, messags : ICompilerMessages) : void
@@ -7347,12 +7347,12 @@ public mask Typing
       def ambiguousSyntaxModules = GetAmbiguous.[T](exclude = newSymbol);
       using (seq = ambiguousSyntaxModules.GetEnumerator())
         when (seq.MoveNext())
-          using (rootMsg = messags.RootError(newSymbol.FirstLocation, $"The $(seq.Current.Description) '$(newSymbol.Name)' already defined."))
+          using (rootMsg = messags.:RootError(newSymbol.FirstLocation, $"The $(seq.Current.Description) '$(newSymbol.Name)' already defined."))
             do
             {
               def otherSymbol = seq.Current;
               foreach (loc in otherSymbol.Locations)
-                rootMsg.Hint(loc, "previous definition.");
+                rootMsg.:Hint(loc, "previous definition.");
             }
             while(seq.MoveNext())
     }
@@ -7362,7 +7362,7 @@ public mask Typing
       get { "some symbols" }
     }
 
-    public override Locations : list[Location] { get { AmbiguousList.SelectMany(x => x.Locations).NToList() } }
+    public override Locations : list[Location] { get { AmbiguousList.:SelectMany(x => x.Locations).:NToList() } }
     public override FirstLocation : Location { get { AmbiguousList.Head.FirstLocation } }
   }
 

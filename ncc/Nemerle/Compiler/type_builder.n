@@ -2700,7 +2700,7 @@ public class TypeBuilder : TypeInfo
     def interfacesOnly = _.IsInterface;
 
     def implementedByThis = GetSuperTypes().:FilterLazy(interfacesOnly)
-                                           .MapLazy(ty => ty.DeepFix() :> FixedType.Class).NToArray();
+                                           .:MapLazy(ty => ty.DeepFix() :> FixedType.Class).:NToArray();
     //print(implementedByThis, "implementedByThis");
 
     def implementedByParent =
@@ -2711,11 +2711,11 @@ public class TypeBuilder : TypeInfo
           def subst = parent_type.tycon.MakeSubst(parent_type.args);
           parent_type.tycon.GetSuperTypes()
                      .:FilterLazy(interfacesOnly)
-                     .MapLazy(ty => subst.MonoApply(ty).DeepFix() :> FixedType.Class).NToArray();
+                     .:MapLazy(ty => subst.MonoApply(ty).DeepFix() :> FixedType.Class).:NToArray();
       };
     //print(implementedByParent, "implementedByParent");
 
-    def unimplementedInterfaces = implementedByThis.ExcludeLazy(implementedByParent).NToArray();
+    def unimplementedInterfaces = implementedByThis.:ExcludeLazy(implementedByParent).:NToArray();
     //print(unimplementedInterfaces, "unimplementedInterfaces");
 
     unimplementedInterfaces

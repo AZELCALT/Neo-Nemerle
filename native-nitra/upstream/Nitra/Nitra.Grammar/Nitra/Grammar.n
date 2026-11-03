@@ -92,7 +92,7 @@ public module AstUtils
     when (string.IsNullOrEmpty(name))
       return inMap;
 
-    def xs = literals.Select(x => x.Value.ValueOrDefault).Where(x => !string.IsNullOrEmpty(x)).Select(x => (x, name));
+    def xs = literals.:Select(x => x.Value.ValueOrDefault).:Where(x => !string.IsNullOrEmpty(x)).:Select(x => (x, name));
     inMap.ReplaceRange(xs)
   }
 
@@ -224,7 +224,7 @@ public module AstUtils
 
     def symbol = RuleListTypeSymbol();
     symbol.ElemType = elemType;
-    context.Init(symbol)
+    context.:Init(symbol)
   }
 
   public InitOption(context : DependentPropertyEvalContext, valueType : RuleTypeSymbol) : RuleTypeSymbol
@@ -234,7 +234,7 @@ public module AstUtils
 
     def symbol = RuleOptionTypeSymbol();
     symbol.ValueType = valueType;
-    context.Init(symbol)
+    context.:Init(symbol)
   }
 
   public CreateRuleTypeVar(context : DependentPropertyEvalContext) : RuleTypeVarSymbol
@@ -423,7 +423,7 @@ public module AstUtils
         members[index].ExpectedType = type;
     }
     else
-      loc.Error(context, $"Expected pattern of $(expectedMemberTypes.Count), got pattern of $(members.Count).");
+      loc.:Error(context, $"Expected pattern of $(expectedMemberTypes.Count), got pattern of $(members.Count).");
 
     returnType
   }
@@ -491,7 +491,7 @@ public module AstUtils
       | ast is AstTypeSymbol => VSome(ast)
       | typeSymbol is TypeSymbol =>                
         when (parsedValueType == null)
-          parsedValueType = context.BindFullName(1, "Nitra", "Runtime", "ParsedValue");
+          parsedValueType = context.:BindFullName(1, "Nitra", "Runtime", "ParsedValue");
         def constructedType = TopConstructedTypeSymbol();
         constructedType.TypeInfo = parsedValueType;
         constructedType.Args = ImmutableArray.Create(typeSymbol);
@@ -522,7 +522,7 @@ public module AstUtils
         when (parent is Nitra.Ast.LanguageSymbol)
           return null;
 
-      context.GetLanguage()
+      context.:GetLanguage()
     }
   }
 
@@ -561,7 +561,7 @@ public module AstUtils
         when (isDeclaration(parent))
           return null;
 
-      context.GetDeclaration()
+      context.:GetDeclaration()
     }
   }
 } // module
@@ -656,11 +656,11 @@ public module NemerleParser
 
   ParseImpl(parseTree : Nitra.Runtime.ParseTree, context : Context) : PExpr
   {
-    def env = context.GetNemerleEnvironment();
+    def env = context.:GetNemerleEnvironment();
     def simpleParse(parseTree : Nitra.Runtime.ParseTree) : PExpr
     {
       def text = parseTree.Location.GetText();
-      MainParser.ParseExpr(env, text, parseTree.NLocation())
+      MainParser.ParseExpr(env, text, parseTree.:NLocation())
     }
     simpleParse(parseTree)
   }
@@ -701,7 +701,7 @@ public class InMemoryNemerleFile : NemerleFile
     _source = newSource;
 
     ReParse();
-    GetCompilerMessages().TranslateTo(Project.CompilerMessages);
+    GetCompilerMessages().:TranslateTo(Project.CompilerMessages);
   }
 }
 
@@ -800,13 +800,13 @@ public abstract class NitraProject : Project
     {
       | [one] => Some(one)
       | []  =>
-        this.Error(Location.Default, $<#Unbound name '..$(path; ".")'.#>);
+        this.:Error(Location.Default, $<#Unbound name '..$(path; ".")'.#>);
         None()
 
       | many =>
-        using (root = this.RootWarning(Location.Default, $<#Ambiguous '..$(path; ".")' symbol.#>))
+        using (root = this.:RootWarning(Location.Default, $<#Ambiguous '..$(path; ".")' symbol.#>))
           foreach (s in many)
-            root.Hint(s.FirstLocation, "Previous definition.");
+            root.:Hint(s.FirstLocation, "Previous definition.");
         None()
     }
   }
@@ -899,7 +899,7 @@ public abstract class NitraProject : Project
     [DebuggerStepThroughAttribute]
     public NLocation(this symbol : Nitra.Declarations.DeclarationSymbol) : Nemerle.Compiler.AST.Location
     {
-      symbol.FirstDeclarationOrDefault.Location.NLocation()
+      symbol.FirstDeclarationOrDefault.Location.:NLocation()
     }
 
     public Identifiers(this parseTree : ListParseTree[G.Reference]) : list[Identifier]
@@ -1067,7 +1067,7 @@ public abstract class NitraProject : Project
       {
         | Some(name) => name
         | _ =>
-          def nameMap = context.GetContext.[ITokenNamesMapContext]().TokenNamesMap;
+          def nameMap = context.:GetContext.[ITokenNamesMapContext]().TokenNamesMap;
           if (nameMap.Find(value) is Some(symbol))
             symbol.Name
           else if (IsIdentifier(value))
@@ -1118,7 +1118,7 @@ public abstract class NitraProject : Project
       where T: Symbol
     {
       when (result.Messages.Count > 0)
-        result.Messages.TranslateTo(compilerMessages);
+        result.Messages.:TranslateTo(compilerMessages);
 
       MakeSymbolRef(result)
     }
@@ -1167,7 +1167,7 @@ public abstract class NitraProject : Project
             x.Location;
         buffer.Add(loc);
       }
-      def bindingResult = context.BindMany(buffer.ToNList());
+      def bindingResult = context.BindMany(buffer.:ToNList());
       MakeSymbolRefWithMessages(bindingResult, context)
     }
 
@@ -1233,7 +1233,7 @@ public abstract class NitraProject : Project
             x.Location;
         buffer.Add(loc);
       }
-      def bindingResult = context.BindMany(buffer.ToNList());
+      def bindingResult = context.BindMany(buffer.:ToNList());
       MakeSymbolRef(bindingResult)
     }
 
@@ -1257,7 +1257,7 @@ public abstract class NitraProject : Project
           }
           else
           {
-            compilerMessages.Error(ruleRef, "Cyclic rule call found.");
+            compilerMessages.:Error(ruleRef, "Cyclic rule call found.");
             FSM()
           }
 
@@ -1328,7 +1328,7 @@ public abstract class NitraProject : Project
     {
       def newFieldName   = MakeLiteralName(fieldName, value, context);
       def loc            = loc.FromEnd();
-      def languageRef    = context.GetContext.[SyntaxModuleContext]().SyntaxModuleSymbol.Language;
+      def languageRef    = context.:GetContext.[SyntaxModuleContext]().SyntaxModuleSymbol.Language;
       def spanClass      = if (languageRef is SymbolRef.Some(language)) GetSpanClassForString(loc, language, value) else null;
       Nitra.Model.Rule.String(loc, newFieldName, value, false, spanClass)
     }
@@ -1377,13 +1377,13 @@ public abstract class NitraProject : Project
         | 0 => null
         | 1 => candidates.FirstItem
         | _ =>
-          using (root = language.Node.Project.RootWarning(loc, $"Ambiguity between imported span class matchers for the \"$str\" literal rule, span class '$(candidates.FirstItem.FullName)' is used"))
+          using (root = language.Node.Project.:RootWarning(loc, $"Ambiguity between imported span class matchers for the \"$str\" literal rule, span class '$(candidates.FirstItem.FullName)' is used"))
           {
             def e = candidates.GetEnumerator();
             while(e.MoveNext())
             {
               def symbol = e.Current;
-              root.Hint(symbol.FirstLocation, $"Ambiguous span class '$(symbol.FullName)'");
+              root.:Hint(symbol.FirstLocation, $"Ambiguous span class '$(symbol.FullName)'");
             }
           }
           candidates.FirstItem
@@ -1393,7 +1393,7 @@ public abstract class NitraProject : Project
     [DebuggerStepThroughAttribute]
     public EvaluateSequenceRuleType(rules : IEnumerable[Nitra.Model.Rule]) : Nitra.Typing.RuleType
     {
-      EvaluateSequenceRuleType(rules.Select(_.Type))
+      EvaluateSequenceRuleType(rules.:Select(_.Type))
     }
 
     [DebuggerStepThroughAttribute]

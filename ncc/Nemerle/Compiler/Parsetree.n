@@ -1120,6 +1120,8 @@ using Nemerle.Compiler.Utility;
     | Name
       {
         body : Nemerle.Compiler.Parsetree.Name;
+        /// the name of `x.:name' (kept here too, so a rewrite that rebuilds the member access with it keeps the mark)
+        [RecordIgnore] public mutable IsExtensionDot : bool;
 
         public this(nameRef : PExpr.Ref)
         {

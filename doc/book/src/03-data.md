@@ -203,7 +203,7 @@ using System.Console;
 using Nemerle.Collections;
 
 def line = "  red, green ,blue ";
-def colours = line.Split(',').Map(c => c.Trim());
+def colours = line.Split(',').:Map(c => c.Trim());
 WriteLine(string.Join("|", colours))
 ```
 

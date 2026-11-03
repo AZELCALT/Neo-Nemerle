@@ -95,7 +95,7 @@ using Nemerle.ProjectCommands;
       #endif
       }
       // `ncc init|build|run|clean`: a project command, not a compilation
-      def arguments = Environment.GetCommandLineArgs().NToList().Tail;
+      def arguments = Environment.GetCommandLineArgs().:NToList().Tail;
       when (Projects.IsCommand(arguments)) Environment.Exit(Projects.Run(arguments));
       Options = CompilationOptions();
       Manager = ManagerClass(Options);
@@ -116,7 +116,7 @@ using Nemerle.ProjectCommands;
       {
         def dir = IO.Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         def path = IO.Path.Combine(dir, processName);
-        def argsList = Environment.GetCommandLineArgs().NToList();
+        def argsList = Environment.GetCommandLineArgs().:NToList();
         def args = $<#..$(argsList.Tail; " ")#>;
         def process = Process();
         process.StartInfo.UseShellExecute = false;
@@ -304,7 +304,7 @@ using Nemerle.ProjectCommands;
       Getopt.Parse(opts);
 
       if (sources.Count > 0)
-        cOptions.Sources = sources.ToNList();
+        cOptions.Sources = sources.:ToNList();
       else
         Getopt.Error("need at least one file to compile\n" + Getopt.Usage(opts))
     }

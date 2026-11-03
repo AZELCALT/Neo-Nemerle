@@ -255,7 +255,7 @@ internal module TyCodec
       def set_constraints (t, tv : StaticTypeVar)
       {
         def constraints = t.GetGenericParameterConstraints ();
-        tv.SetConstraints (t.GenericParameterAttributes, constraints.Map(t => lib.TypeOfType(tenv, t)))
+        tv.SetConstraints (t.GenericParameterAttributes, constraints.:Map(t => lib.TypeOfType(tenv, t)))
       }
 
       vars.:Iter2(tyvars, set_constraints);

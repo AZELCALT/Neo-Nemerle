@@ -1077,11 +1077,11 @@ using Nemerle.Compiler.XmlDump;
 #endif
           def skipped = SharedModules();
           def parseResults = Options.Sources.Filter(s => !skipped.Contains(s.FileIndex)).Map(Parser.Parse);
-          ShareContinuedTypes(parseResults.Map(r => r.TopDeclarations).Flatten());
+          ShareContinuedTypes(parseResults.Map(r => r.TopDeclarations).:Flatten());
           when (Options.FileModules)
           {
             FileModuleRegistry.ReportImportCycles();
-            FileModuleRegistry.CheckExportConflicts(parseResults.Map(r => r.TopDeclarations).Flatten());
+            FileModuleRegistry.CheckExportConflicts(parseResults.Map(r => r.TopDeclarations).:Flatten());
           }
 
           Message.MaybeBailout();    // we have detected multiple files already

@@ -95,7 +95,7 @@ programs = {
                 '  async def Local(n : int) : IAsyncEnumerable[int] { for (mutable i = 1; i <= n; i++) { await Task.Yield(); yield i } }\n'
                 '  mutable t = 0;\n  await foreach (x in Numbers(10)) { t += x; when (k % 3 == 0 && x == 5) break }\n'
                 '  await foreach (x in Local(4)) t += x;\n  t\n}\n'
-                'def all = await Task.WhenAll(Enumerable.Range(0, 4000).Select(k => Sum(k)));\nConsole.WriteLine(all.Sum())\n', '206640'),
+                'def all = await Task.WhenAll(Enumerable.Range(0, 4000).:Select(k => Sum(k)));\nConsole.WriteLine(all.:Sum())\n', '206640'),
     # (bindings that read earlier ones and the local functions above them, `mutable' as `def')
     'bindings': ('def T() : int { 5 }\ndef a = T();\nmutable t = a;\nt += 1;\ndef b = t * 2;\n'
                  'System.Console.WriteLine($"$a $t $b")\n', '5 6 12'),
@@ -105,7 +105,7 @@ programs = {
                'async def S(n : int, [EnumeratorCancellation] token : CancellationToken = default(CancellationToken)) : IAsyncEnumerable[int]\n'
                '{ for (mutable i = 0; i < n && !token.IsCancellationRequested; i++) { await Task.Yield(); yield i } }\n'
                'def source = CancellationTokenSource();\nmutable t = 0;\n'
-               'await foreach (x in S(10).WithCancellation(source.Token)) { t += x; when (x == 3) source.Cancel() }\n'
+               'await foreach (x in S(10).:WithCancellation(source.Token)) { t += x; when (x == 3) source.Cancel() }\n'
                'Console.WriteLine(t)\n', '6'),
     'plain': ('async def T() : System.Threading.Tasks.Task[int] { await System.Threading.Tasks.Task.Yield(); 2 }\n'
               'def n = T().Result;\nSystem.Console.WriteLine(n * 21)\n', '42'),
@@ -114,13 +114,13 @@ programs = {
     # a hole needs the namespace open).
     'interp': ('using System.Linq;\nusing System.Collections.Generic;\nusing System.Text;\n'
                'def xs = List([1, 2, 3]);\n'
-               'System.Console.WriteLine($"$(xs.Where(x => x > 1).Count()) $(StringBuilder().Length)")\n',
+               'System.Console.WriteLine($"$(xs.:Where(x => x > 1).:Count()) $(StringBuilder().Length)")\n',
                '2 0'),
     # the same through the top-level `await' path: the code runs in a generated async method, which must keep the
     # using-bearing env so an interpolation hole it holds still resolves `using'-opened names.
     'interp_await': ('using System.Linq;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\n'
                      'def xs = List([1, 2, 3]);\nawait Task.Yield();\n'
-                     'System.Console.WriteLine($"$(xs.Where(x => x > 1).Count())")\n', '2'),
+                     'System.Console.WriteLine($"$(xs.:Where(x => x > 1).:Count())")\n', '2'),
 }
 ncc = args.toolchain.resolve() / 'ncc.exe'
 for name, (text, expected) in programs.items():

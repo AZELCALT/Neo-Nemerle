@@ -1544,7 +1544,7 @@ public variant BindResult[TSymbol] : ISerializable
       public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
       {
         def symbols = metadataReader.ReadObjects(reader);
-        Multiple(symbols.ToImmutableArray())
+        Multiple(symbols.:ToImmutableArray())
       }
     }
   
@@ -1578,7 +1578,7 @@ public variant BindResult[TSymbol] : ISerializable
       public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
       {
         def results = metadataReader.ReadObjects(reader);
-        NitraUtils.MakeUnion(results.ToImmutableArray()) :> this
+        NitraUtils.MakeUnion(results.:ToImmutableArray()) :> this
       }
     }
     
@@ -1634,7 +1634,7 @@ public variant BindResult[TSymbol] : ISerializable
         {
           | 0 => Nil()
           | 1 => Single(res[0])
-          | _ => Multiple(res.ToImmutableArray())
+          | _ => Multiple(res.:ToImmutableArray())
         }
 
       | Hiding as h => 
@@ -1661,7 +1661,7 @@ public variant BindResult[TSymbol] : ISerializable
         {
           | 0 => Nil()
           | 1 => results[0]
-          | _ => NitraUtils.MakeUnion(results.ToImmutableArray())
+          | _ => NitraUtils.MakeUnion(results.:ToImmutableArray())
         }
 
       | Nil => Nil()
@@ -1684,7 +1684,7 @@ public variant BindResult[TSymbol] : ISerializable
         {
           | 0 => Nil()
           | 1 => Single(res[0])
-          | _ => Multiple(res.ToImmutableArray())
+          | _ => Multiple(res.:ToImmutableArray())
         }
 
       | Hiding as h => 
@@ -1711,7 +1711,7 @@ public variant BindResult[TSymbol] : ISerializable
         {
           | 0 => Nil()
           | 1 => results[0]
-          | _ => NitraUtils.MakeUnion(results.ToImmutableArray())
+          | _ => NitraUtils.MakeUnion(results.:ToImmutableArray())
         }
 
       | Nil => Nil()
@@ -1722,7 +1722,7 @@ public variant BindResult[TSymbol] : ISerializable
   {
     def displayCount = 5;
     def symbols = GetSymbols();
-    if (symbols.Length > displayCount) $"..$(symbols.Take(displayCount))..." else $"..$symbols"
+    if (symbols.Length > displayCount) $"..$(symbols.:Take(displayCount))..." else $"..$symbols"
   }
 }
 
@@ -1749,7 +1749,7 @@ public sealed class EmptyScope : Scope
 
   public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
   {
-    def id = nodeToIdMap.GetObjectId(this);
+    def id = nodeToIdMap.:GetObjectId(this);
     nodes.Add($<#Obj_$id [label="EmptyScope"]#>);
   }
 
@@ -1820,8 +1820,8 @@ public sealed class FilteringScope : Scope
 
   public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
   {
-    def id            = nodeToIdMap.GetObjectId(this);
-    def idScope       = nodeToIdMap.GetObjectId(this.Scope);
+    def id            = nodeToIdMap.:GetObjectId(this);
+    def idScope       = nodeToIdMap.:GetObjectId(this.Scope);
 
     nodes.Add($<#Obj_$id [label="FilteringScope"]#>);
     edges.Add($<#Obj_$id -> Obj_$idScope#>);
@@ -1910,7 +1910,7 @@ public sealed class HidingScope : Scope
           result.Add(symbol);
       }
         
-      result.OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+      result.:OrderBy(x => x.Name, StringComparer.Ordinal).:ToArray()
     }
   }
   
@@ -1942,9 +1942,9 @@ public sealed class HidingScope : Scope
   
   public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
   {
-    def id            = nodeToIdMap.GetObjectId(this);
-    def idScope       = nodeToIdMap.GetObjectId(this.Scope);
-    def idHidingScope = nodeToIdMap.GetObjectId(this.Hidden);
+    def id            = nodeToIdMap.:GetObjectId(this);
+    def idScope       = nodeToIdMap.:GetObjectId(this.Scope);
+    def idHidingScope = nodeToIdMap.:GetObjectId(this.Hidden);
 
     nodes.Add($<#Obj_$id [label="HidingScope"]#>);
     edges.Add($<#Obj_$id -> Obj_$idScope#>);
@@ -2103,7 +2103,7 @@ public sealed class StaticScope : TableScope
 
     public override AllSymbols : Seq[DeclarationSymbol]
     {
-      get { _nameTable.Values.SelectMany(symbols => symbols).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray() }
+      get { _nameTable.Values.:SelectMany(symbols => symbols).:OrderBy(x => x.Name, StringComparer.Ordinal).:ToArray() }
     }
     public virtual Symbols : Hashtable[int, list[DeclarationSymbol]].ValueCollection { get { _nameTable.Values } }
 
@@ -2142,16 +2142,16 @@ public sealed class StaticScope : TableScope
       else when (ambiguousSymbols.Add(concreteSymbol))
       {
         // фильтруем без учета конкретного типа
-        def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsSameIdentity(declaration));
+        def realAmbiguousSymbols = ambiguousSymbols.:FilterToArray(s => !concreteSymbol.Equals(s) && s.IsSameIdentity(declaration));
         when (realAmbiguousSymbols.Length > 0)
         {
           def cm = declaration.Source.File.TypingMessages;
-          using (nested = cm.RootError(name2, $"Redefinition of '$name2'"))
+          using (nested = cm.:RootError(name2, $"Redefinition of '$name2'"))
             foreach (ambiguous in realAmbiguousSymbols)
               foreach (d in ambiguous.Declarations)
-                nested.Hint(d.Name, "previous definition.");
+                nested.:Hint(d.Name, "previous definition.");
         }
-        _nameTable[name2.Id] = ambiguousSymbols.NToList();
+        _nameTable[name2.Id] = ambiguousSymbols.:NToList();
       }
 
       concreteSymbol.AddDeclaration(declaration);
@@ -2189,7 +2189,7 @@ public sealed class StaticScope : TableScope
           }
       }
 
-      foreach (pair in _nameTable.ToArray())
+      foreach (pair in _nameTable.:ToArray())
       {
         def newList = undefine(pair.Value);
 
@@ -2209,7 +2209,7 @@ public sealed class StaticScope : TableScope
       foreach (symbol is TSymbol when isMatch(symbol) in symbols)
         res.Add(symbol);
 
-      res.ToBindResult()
+      res.:ToBindResult()
     }
 
     public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
@@ -2220,7 +2220,7 @@ public sealed class StaticScope : TableScope
         def res = LightList();
         foreach (x is TSymbol in lookupResult)
           res.Add(x);
-        res.ToBindResult()
+        res.:ToBindResult()
       }
       else
         BindResult.Nil()
@@ -2228,8 +2228,8 @@ public sealed class StaticScope : TableScope
 
     public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
     {
-      def id = nodeToIdMap.GetObjectId(this);
-      def symbols = AllSymbols.ToArray();
+      def id = nodeToIdMap.:GetObjectId(this);
+      def symbols = AllSymbols.:ToArray();
       
       // make DOT HTML table for symbols
       
@@ -2279,7 +2279,7 @@ $<#<table border='0' cellspacing='0' cellpadding='3' bgcolor='lightskyblue'>
     
     public override ToString() : string
     {
-      $<#TableScope($(AllSymbols.Count()))]#>
+      $<#TableScope($(AllSymbols.:Count()))]#>
     }
 
     internal EnqueueSymbols(metadataWriter : MetadataWriter) : void
@@ -2339,14 +2339,14 @@ public sealed class UnionScope : Scope
   {
     get
     {
-      Scopes.SelectMany(scope => scope.AllSymbols).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+      Scopes.:SelectMany(scope => scope.AllSymbols).:OrderBy(x => x.Name, StringComparer.Ordinal).:ToArray()
     }
   }
 
   public override Bind[TSymbol](isMatch : Predicate[TSymbol]) : BindResult[TSymbol]
   {
-    def res = this.Scopes.Select(s => s.Bind(isMatch)).Where(r => r.HasResult).ToImmutableArray();
-    res.ToBindResult()
+    def res = this.Scopes.:Select(s => s.Bind(isMatch)).:Where(r => r.HasResult).:ToImmutableArray();
+    res.:ToBindResult()
   }
 
   public override Bind[TSymbol](reference : Reference) : BindResult[TSymbol]
@@ -2358,17 +2358,17 @@ public sealed class UnionScope : Scope
       when (br.HasResult)
         result.Add(br);
     }
-    result.ToBindResult()
+    result.:ToBindResult()
   }
 
   public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
   {
-    def id = nodeToIdMap.GetObjectId(this);
+    def id = nodeToIdMap.:GetObjectId(this);
     
     nodes.Add($<#Obj_$id [label="UnionScope"]#>);
     foreach (scope in Scopes)
     {
-      edges.Add($<#Obj_$id -> Obj_$(nodeToIdMap.GetObjectId(scope))#>);
+      edges.Add($<#Obj_$id -> Obj_$(nodeToIdMap.:GetObjectId(scope))#>);
       scope.ToDot(nodeToIdMap, nodes, edges);
     }
   }
@@ -2489,7 +2489,7 @@ public struct UnionScopeBuilder
   public ToScope() : Scope
   {
     if (_scopes != null)
-      UnionScope(_scopes.ToImmutableArray())
+      UnionScope(_scopes.:ToImmutableArray())
     else if (_scope4 : object != null)
       UnionScope(ImmutableArray.Create(_scope1, _scope2, _scope3, _scope4))
     else if (_scope3 : object != null)
@@ -2721,7 +2721,7 @@ public abstract class Ref[TSymbol] : IRef
         Language.ErrorSpanClass
       else if (IsAmbiguous)
         if (IgnoreAmbiguities)
-          this.Symbols.First(s => s.IsSpanClassEvaluated).SpanClass
+          this.Symbols.:First(s => s.IsSpanClassEvaluated).SpanClass
         else
           Language.ErrorSpanClass
       else if (Symbol.IsSpanClassEvaluated)
@@ -3027,7 +3027,7 @@ public abstract class Ref[TSymbol] : IRef
   {
     def displayCount = 5;
     def symbols = _symbols;
-    def syms = if (symbols.Length > displayCount) $"..$(symbols.Take(displayCount))..." else $"..$symbols";
+    def syms = if (symbols.Length > displayCount) $"..$(symbols.:Take(displayCount))..." else $"..$symbols";
     def typeName = typeof(TSymbol).Name;
     def resolvedTo = if (_resolvedTo != null) "R " else "";
     $"$resolvedTo$syms [$typeName]"
@@ -3308,10 +3308,10 @@ public abstract class SymbolBase
     try
     {
       def symbol  = this :> DeclarationSymbol;
-      _ = builder.Append("<keyword>").HintMlEscape(symbol.Kind).Append("</keyword> ").MakeHintMlPath(symbol, ".", needSubhint=false)
-          .MakeLocations(symbol);
+      _ = builder.Append("<keyword>").:HintMlEscape(symbol.Kind).Append("</keyword> ").:MakeHintMlPath(symbol, ".", needSubhint=false)
+          .:MakeLocations(symbol);
     }
-    catch { e => _ = builder.HintMlException(e); }
+    catch { e => _ = builder.:HintMlException(e); }
     builder.ToString()
   }
 

@@ -224,7 +224,7 @@ public class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
   private static LoadNitraMetadata(cancellationToken : CancellationToken, project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
   {
     when (manager is StubCompiler)
-      project.Init(manager.ReferencedAssemblies.Select(a => a.Assembly.GetName()));
+      project.Init(manager.ReferencedAssemblies.:Select(a => a.Assembly.GetName()));
 
     def assemblyWithMetadata = Dictionary();
     foreach (reference in manager.ReferencedAssemblies)
@@ -424,7 +424,7 @@ public class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
           unless (symbol.IsDeclaredInEvaluated)
             symbol.DeclaredIn = declaredIn;
           symbol.EvalProperties(context);
-          foreach (subNode in node.Children.Values.ToArray())
+          foreach (subNode in node.Children.Values.:ToArray())
             loadNsMemebers(subNode, symbol);
           
         // a file module (a top-level static class holding the file's types) is the namespace its path names
@@ -434,7 +434,7 @@ public class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
           unless (symbol.IsDeclaredInEvaluated)
             symbol.DeclaredIn = declaredIn;
           symbol.EvalProperties(context);
-          foreach (subNode in node.Children.Values.ToArray())
+          foreach (subNode in node.Children.Values.:ToArray())
             loadNsMemebers(subNode, symbol);
 
         | Cached(tycon) =>  addTopType(node, tycon);
@@ -446,7 +446,7 @@ public class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
     
     rootNamespace.EvalProperties(context);
     
-    foreach (node in nemerleNsRoot.Children.Values.ToArray())
+    foreach (node in nemerleNsRoot.Children.Values.:ToArray())
       loadNsMemebers(node, rootNamespace);
     
     def nodeToSymbolMap = nodeToSymbolMap;
@@ -648,7 +648,7 @@ internal class NitraProjectEvalPropertiesHost : ProjectEvalPropertiesHost
 
   public this(files : ImmutableArray[FileEvalPropertiesData], rootNamespace : NamespaceSymbol, rootScope : Scope)
   {
-    base(files, (rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate()).ToImmutableArray());
+    base(files, (rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate()).:ToImmutableArray());
     _rootNamespace = rootNamespace;
     _rootScope     = rootScope;
   }
@@ -742,7 +742,7 @@ public sealed class FileExtensionCollector
       if (_extensions.TryGetValue(extension, out existingFileExtension))
       {
         // TODO: use RootError, add hint to first definition of the extension
-        fileExtension.Error(context, $"Duplicated file extension '$extension'.");
+        fileExtension.:Error(context, $"Duplicated file extension '$extension'.");
       }
       else
         _extensions.Add(extension, fileExtension);
@@ -1018,12 +1018,12 @@ public sealed class ParseTreeTypeCtorScope : Scope
       }
     }
 
-    res.ToBindResult()
+    res.:ToBindResult()
   }
   
   public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], _edges : List[string]) : void
   {
-    def id            = nodeToIdMap.GetObjectId(this);
+    def id            = nodeToIdMap.:GetObjectId(this);
 
     nodes.Add($<#Obj_$id [label="ParseTreeTypeCtorScope"]#>);
   }
@@ -1093,7 +1093,7 @@ public abstract class RuleTypeScope : Scope
     get
     {
       Init();
-      _members.Symbols.OrderBy(x => x.Name, StringComparer.Ordinal).ToArray()
+      _members.Symbols.:OrderBy(x => x.Name, StringComparer.Ordinal).:ToArray()
     }
   } 
 
@@ -1124,12 +1124,12 @@ public abstract class RuleTypeScope : Scope
   {
     Init();
     
-    def id = nodeToIdMap.GetObjectId(this);
+    def id = nodeToIdMap.:GetObjectId(this);
 
     nodes.Add($<#Obj_$id [label="RuleTypeScope"]#>);
     foreach (symbol in AllSymbols)
     {
-      def symbolId = nodeToIdMap.GetObjectId(symbol);
+      def symbolId = nodeToIdMap.:GetObjectId(symbol);
       def symbolName = symbol.InitialName;
       nodes.Add($<#Sym_$symbolId [label="$symbolName", shape=box, style=filled, color=lightskyblue]#>);
       edges.Add($<#Obj_$id -> Sym_$symbolId#>);
@@ -1174,7 +1174,7 @@ public sealed class TupleRuleTypeScope : RuleTypeScope
       }
     }
     
-    result.ToBindResult()
+    result.:ToBindResult()
   }
 
   public override Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
@@ -1205,7 +1205,7 @@ public sealed class SyntaxModuleCollector
       if (_syntaxModules.TryGetValue(syntaxModule, out existingSyntaxModuleReference))
       {
         // TODO: use RootError, add hint to first definition of the symbol reference
-        declaration.Error(context, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
+        declaration.:Error(context, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
       }
       else
         _syntaxModules.Add(syntaxModule, declaration);

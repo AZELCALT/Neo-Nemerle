@@ -216,7 +216,7 @@ public class FSM
 
   public IncludeFSM(fsm : FSM) : FSM * int * Set[int]
   {
-    def transitions = fsm.Transitions.Fold(Transitions, (transition, transitions) =>
+    def transitions = fsm.Transitions.:Fold(Transitions, (transition, transitions) =>
     {
       def from = transition.From + StateCount;
       def to = transition.To + StateCount;
@@ -283,7 +283,7 @@ public module FSMBuilder
     | fsm :: fsms =>
       def append(fsm2 : FSM, fsm1 : FSM) : FSM
       {
-        def (fsm2, _, _) = fsm2.Wrap();
+        def (fsm2, _, _) = fsm2.:Wrap();
         def (fsm1, start, ok) = fsm1.IncludeFSM(fsm2);
         def fsm1 = fsm1.OkStates.Fold(fsm1, (state, fsm1) => fsm1.AddTransition(Transition.Epsilon(state, start)));
         def fsm1 = fsm1.SetOkStates(ok);
@@ -294,23 +294,23 @@ public module FSMBuilder
 
   public String(str : string) : FSM
   {
-    Seq(str.Map(Symbol))
+    Seq(str.:Map(Symbol))
   }
 
   public IString(str : string) : FSM
   {
-    Seq(str.Map(ISymbol))
+    Seq(str.:Map(ISymbol))
   }
 
   public Option(fsm : FSM) : FSM
   {
-    def (fsm, start, ok) = fsm.Wrap();
+    def (fsm, start, ok) = fsm.:Wrap();
     fsm.AddTransition(Transition.Epsilon(start, ok))
   }
 
   public RepeatMin(min : int, fsm : FSM) : FSM
   {
-    def (fsm, _, _) = fsm.Wrap();
+    def (fsm, _, _) = fsm.:Wrap();
     def loop = fsm
       .OkStates.Fold(fsm, (state, fsm) =>
         {
@@ -323,7 +323,7 @@ public module FSMBuilder
 
   public RepeatMinMax(min : int, max : int, fsm : FSM) : FSM
   {
-    def (fsm, _, _) = fsm.Wrap();
+    def (fsm, _, _) = fsm.:Wrap();
     Seq($[0..min - 1].Map(_ => fsm).Append($[0..max - min - 1].Map(_ => Option(fsm))))
   }
 
@@ -365,7 +365,7 @@ public module FSMBuilder
     def (fsm, okState) = fsm.NewOkState();
     def append(fsm2 : FSM, fsm1 : FSM) : FSM
     {
-      def (fsm2, _, _) = fsm2.Wrap();
+      def (fsm2, _, _) = fsm2.:Wrap();
       def (fsm1, start, ok) = fsm1.IncludeFSM(fsm2);
       def fsm1 = fsm1.AddTransition(Transition.Epsilon(startState, start));
       def fsm1 = ok.Fold(fsm1, (ok, fsm1) => fsm1.AddTransition(Transition.Epsilon(ok, okState)));
@@ -383,7 +383,7 @@ public class FSMMatch
   public static MakeMatcher(fsm : FSM) : RegularExpressionMatcher
   {
     def fsm = FSMTransform.MakeDeterministic(fsm);
-    def transMap = fsm.Transitions.Cast.[Transition.Symbol]().Grouping(trans => (trans.From, trans));
+    def transMap = fsm.Transitions.:Cast.[Transition.Symbol]().:Grouping(trans => (trans.From, trans));
     def transitions = array(fsm.StateCount);
     def start = fsm.StartState;
     def okStates = fsm.OkStates;
@@ -427,7 +427,7 @@ public module FSMTransform
 {
   public Normalize(fsm : FSM) : FSM
   {
-    def transitions = fsm.Transitions.Fold(Hashtable(), (transition : Transition, transitions) =>
+    def transitions = fsm.Transitions.:Fold(Hashtable(), (transition : Transition, transitions) =>
       transitions.Update((transition.From, transition.To), (RangeSet(), false), (chars, epsilon) =>
         match (transition)
         {
@@ -439,7 +439,7 @@ public module FSMTransform
 
     def transitions = transitions.Fold([], ((from, to), (chars, epsilon), transitions) =>
     {
-      def transitions = if (!chars.Ranges.IsEmpty())
+      def transitions = if (!chars.Ranges.:IsEmpty())
         Transition.Symbol(from, to, chars) :: transitions;
       else
         transitions;
@@ -467,7 +467,7 @@ public module FSMTransform
   public Product(fsms : list[FSM], makeIsOkState : list[int] -> (Set[int] -> bool)) : FSM
   {
     def (result, resultStart) = FSM().NewStartState();
-    def (result, resultOkStates) = fsms.Fold((result, []), (fsm, (result, resultOkStates)) =>
+    def (result, resultOkStates) = fsms.:Fold((result, []), (fsm, (result, resultOkStates)) =>
     {
       def (result, fsmStart, fsmOkStates) = result.IncludeFSM(fsm);
       def (result, fsmOkState) = result.NewState();
@@ -488,7 +488,7 @@ public module FSMTransform
   private MakeDeterministic(fsm : FSM, isOkState : Set[int] -> bool) : FSM
   {
     def fsm = Normalize(fsm);
-    def symbolTransitionsMap = fsm.Transitions.OfType.[Transition.Symbol]().Grouping(t => (t.From, t));
+    def symbolTransitionsMap = fsm.Transitions.OfType.[Transition.Symbol]().:Grouping(t => (t.From, t));
     def symbolTransitions(state)
     {
       mutable transitions;
@@ -498,7 +498,7 @@ public module FSMTransform
         EmptySymbolList
     }
 
-    def epsilonTransitionsMap = fsm.Transitions.OfType.[Transition.Epsilon]().Grouping(t => (t.From, t));
+    def epsilonTransitionsMap = fsm.Transitions.OfType.[Transition.Epsilon]().:Grouping(t => (t.From, t));
     def epsilonTransitions(state)
     {
       mutable transitions;
@@ -512,8 +512,8 @@ public module FSMTransform
     {
       def rec(state, set)
       {
-        def states = epsilonTransitions(state).Map(_.To).Filter(state => !set.Contains(state));
-        states.Fold(set.AddList(states), rec);
+        def states = epsilonTransitions(state).:Map(_.To).Filter(state => !set.Contains(state));
+        states.:Fold(set.AddList(states), rec);
       }
       set.Fold(set, rec);
     }
@@ -556,8 +556,8 @@ public module FSMTransform
             _ = allChars.Update((range.to : int + 1, false), [], states => transition.To :: states);
           }
 
-      def allChars = allChars.MapToArray(pair => (pair.Key[0], pair.Key[1], pair.Value));
-      def allChars = allChars.SortInplace(((c1, b1, _), (c2, b2, _)) =>
+      def allChars = allChars.:MapToArray(pair => (pair.Key[0], pair.Key[1], pair.Value));
+      def allChars = allChars.:SortInplace(((c1, b1, _), (c2, b2, _)) =>
         {
           def res = c1.CompareTo(c2);
           if (res == 0)
@@ -604,7 +604,7 @@ public module FSMTransform
     def fsm = Normalize(fsm);
     def (fsm, failState) = fsm.NewState();
     def transitions = array(fsm.StateCount);
-    foreach ((state, stateTransitions) in fsm.Transitions.Cast.[Transition.Symbol]().Grouping(t => (t.From, t)).KeyValuePairs)
+    foreach ((state, stateTransitions) in fsm.Transitions.:Cast.[Transition.Symbol]().:Grouping(t => (t.From, t)).KeyValuePairs)
     {
       def ranges = SCG.List();
       foreach (transition in stateTransitions)
@@ -845,7 +845,7 @@ public sealed class RangeSet
     foreach (ch in str)
       set.Add(RangeSet().AddRange(ch, ch));
 
-    set.NToList()
+    set.:NToList()
   }
 
   public AddRange(category : UnicodeCategory) : RangeSet
@@ -943,12 +943,12 @@ public sealed class RangeSet
 
   public Sum(that : RangeSet) : RangeSet
   {
-    Ranges.Fold(that, (range, that) => that.AddRange(range));
+    Ranges.:Fold(that, (range, that) => that.AddRange(range));
   }
 
   public Sub(that : RangeSet) : RangeSet
   {
-    that.Ranges.Fold(this, (range, rangeSet) => rangeSet.RemoveRange(range));
+    that.Ranges.:Fold(this, (range, rangeSet) => rangeSet.RemoveRange(range));
   }
 
   public Intersect(that : RangeSet) : RangeSet
@@ -1073,7 +1073,7 @@ public variant RegularRule : Located
         _ = buffer.Append(EscapeStringChar(c));
       buffer.Append("'")
     }
-    StringBuilder().AppendRegularRule(this, callHandler, stringHandler, 0).ToString()
+    StringBuilder().:AppendRegularRule(this, callHandler, stringHandler, 0).ToString()
   }
 }
 
@@ -1091,20 +1091,20 @@ public module RegularRuleExtensions
     _ = match (rule)
     {
       | Call as call                                   => callHandler(buffer, call)
-      | Choice(rules)                                  => buffer.AppendRegularRules(rules, callHandler, stringHandler, priority, " | ")
-      | Sequence(rules)                                => buffer.AppendRegularRules(rules, callHandler, stringHandler, priority, " ")
-      | Subtract(rule1, rule2)                         => buffer.AppendRegularRules([rule1, rule2], callHandler, stringHandler, priority, " - ")
-      | Repeat(min, max, rule)                         => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).AppendRepeatQuantifier(min, max)
-      | RepeatWithSeparator(min, max, rule, separator) => buffer.Append('(').AppendRegularRule(rule, callHandler, stringHandler, 0).Append(", ").AppendRegularRule(separator, callHandler, stringHandler, 0).Append(")").AppendRepeatQuantifier(min, max)
+      | Choice(rules)                                  => buffer.:AppendRegularRules(rules, callHandler, stringHandler, priority, " | ")
+      | Sequence(rules)                                => buffer.:AppendRegularRules(rules, callHandler, stringHandler, priority, " ")
+      | Subtract(rule1, rule2)                         => buffer.:AppendRegularRules([rule1, rule2], callHandler, stringHandler, priority, " - ")
+      | Repeat(min, max, rule)                         => buffer.:AppendRegularRule(rule, callHandler, stringHandler, priority).:AppendRepeatQuantifier(min, max)
+      | RepeatWithSeparator(min, max, rule, separator) => buffer.Append('(').:AppendRegularRule(rule, callHandler, stringHandler, 0).Append(", ").:AppendRegularRule(separator, callHandler, stringHandler, 0).Append(")").:AppendRepeatQuantifier(min, max)
       | Chars(StringOpt = Some(str))                   => stringHandler(buffer, str)
-      | Chars([rangeSet])                              => buffer.AppendRangeSet(rangeSet)
+      | Chars([rangeSet])                              => buffer.:AppendRangeSet(rangeSet)
       | Chars(rangeSets)                               =>
         _ = buffer.Append('(');
         foreach (rangeSet in rangeSets with index)
         {
           when (index > 0)
             _ = buffer.Append(" | ");
-          _ = buffer.AppendRangeSet(rangeSet)
+          _ = buffer.:AppendRangeSet(rangeSet)
         }
         buffer.Append(')')
     }
@@ -1137,7 +1137,7 @@ public module RegularRuleExtensions
     {
       when (index > 0)
         _ = buffer.Append(separator);
-      _ = buffer.AppendRegularRule(rule, callHandler, stringHandler, currentPriority)
+      _ = buffer.:AppendRegularRule(rule, callHandler, stringHandler, currentPriority)
     }
     buffer
   }
@@ -1506,7 +1506,7 @@ public variant SequenceCompileInfo
       [RecordIgnore] mutable AllSubrules      : array[SubruleCompileInfo];
       [RecordIgnore] mutable StateCount       : int;
 
-      public AllNonMarkerSubrules : array[SubruleCompileInfo] { [Memoize] get { AllSubrules.FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
+      public AllNonMarkerSubrules : array[SubruleCompileInfo] { [Memoize] get { AllSubrules.:FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
 
       public CodeForStates(startState : int, mutable endState : int, skipOptionalStates : bool) : array[string]
       {
@@ -1520,7 +1520,7 @@ public variant SequenceCompileInfo
 
         def subrule2 =
           if  (endState < 0)
-            owner1.NonMarkerSubrules.Last()
+            owner1.NonMarkerSubrules.:Last()
           else
             AllNonMarkerSubrules[endState];
         def owner2 = subrule2.Owner;
@@ -1550,7 +1550,7 @@ public variant SequenceCompileInfo
   | ListWithSeparatorSeparator { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.ListWithSeparator).UseCounter } } }
   | Predicate { IsAnd : bool }
 
-  public NonMarkerSubrules    : array[SubruleCompileInfo] { [Memoize] get { Subrules.FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
+  public NonMarkerSubrules    : array[SubruleCompileInfo] { [Memoize] get { Subrules.:FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
   internal static MakeSequenceCompileInfo(ruleSymbol : SyntaxRuleSymbol) : SequenceCompileInfo.Root
   {
     def nestedSequencies = SCG.List();
@@ -1567,8 +1567,8 @@ public variant SequenceCompileInfo
     {
       def rules = conv(rule);
       def tailPredicates = takePredicates();
-      if (tailPredicates.Length > 0 || rules.ForAll(r => r is SubruleCompileInfo.Marker))
-        rules.Append(SubruleCompileInfo.Empty(Rule.String(rule.Location.FromEnd(), "", ""), tailPredicates));
+      if (tailPredicates.Length > 0 || rules.:ForAll(r => r is SubruleCompileInfo.Marker))
+        rules.:Append(SubruleCompileInfo.Empty(Rule.String(rule.Location.FromEnd(), "", ""), tailPredicates));
       else
         rules;
     }
@@ -1590,7 +1590,7 @@ public variant SequenceCompileInfo
         | Repeat                as rule => array[SubruleCompileInfo.List             (rule, takePredicates(), SequenceCompileInfo.ListItem(rule.Rule, convAndAppendPredicates(rule.Rule)), rule.MinCount, rule.MaxCount)]
         | RepeatWithSeparator   as rule => array[SubruleCompileInfo.ListWithSeparator(rule, takePredicates(), SequenceCompileInfo.ListWithSeparatorItem(rule.Rule, convAndAppendPredicates(rule.Rule)), SequenceCompileInfo.ListWithSeparatorSeparator(rule.Separator, convAndAppendPredicates(rule.Separator)), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
         | String                as rule => array[SubruleCompileInfo.TokenString      (rule, takePredicates(), rule.Str)]
-        | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
+        | Sequence              as rule => rule.Rules.Map(conv(_)).:Flatten().:NToArray();
         | Call(RuleRef.Some(ruleSymbol) as ruleRef, bindingPower) =>
           match (ruleSymbol)
           {
@@ -1598,9 +1598,9 @@ public variant SequenceCompileInfo
             | SimpleRuleSymbol     as rs => array[SubruleCompileInfo.SimpleCall    (rule, takePredicates(), rs)]
             | RegularRuleSymbol    as rs => array[SubruleCompileInfo.RegularCall   (rule, takePredicates(), rs)]
             | MarkerSymbol         as rs => array[SubruleCompileInfo.Marker        (rule,          array[], rs)]
-            | _                          => Nemerle.Compiler.MessageMacros.FatalError(ruleRef.NLocation(), $"ICE! Nitra typing bug: invalid symbol bound. $(ruleSymbol.GetType().Name)");
+            | _                          => Nemerle.Compiler.MessageMacros.FatalError(ruleRef.:NLocation(), $"ICE! Nitra typing bug: invalid symbol bound. $(ruleSymbol.GetType().Name)");
           }
-        | Call(RuleRef.None as ruleRef, _) => Nemerle.Compiler.MessageMacros.FatalError(ruleRef.NLocation(), "ICE! Nitra typing bug: not bound symbol.");
+        | Call(RuleRef.None as ruleRef, _) => Nemerle.Compiler.MessageMacros.FatalError(ruleRef.:NLocation(), "ICE! Nitra typing bug: not bound symbol.");
         //| Choice(rules)                 => assert3(false, "Надо реализовать");
         //| Chars(chars)                  => assert3(false, "Надо реализовать");
       }
@@ -1656,7 +1656,7 @@ public variant SequenceCompileInfo
       for (mutable i = 1; i < subrules.Length; ++i)
         subrules[i].Offset = subrules[i - 1].Offset + subrules[i - 1].Size;
 
-      match (subrules.Find(subrule => !(subrule is SubruleCompileInfo.Marker)))
+      match (subrules.:Find(subrule => !(subrule is SubruleCompileInfo.Marker)))
       {
         | Some(subrule) =>
           subrule.AllocateRawTree = true;
@@ -1998,8 +1998,8 @@ public module UnicodeCategoryTable
     {
       _nameToCategoryTable[str] = cat;
       _categoryToRangeSetTable[cat] = ranges
-        .FilterLazy((c, _) => c == cat)
-        .Fold(RangeSet(), ((_, range), set) => set.AddRange(range));
+        .:FilterLazy((c, _) => c == cat)
+        .:Fold(RangeSet(), ((_, range), set) => set.AddRange(range));
     }
   }
 

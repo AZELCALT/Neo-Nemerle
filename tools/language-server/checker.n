@@ -54,15 +54,15 @@ public module Checker
     def str(n : JsonNode) { if (n == null) null else n.GetValue.[string]() }
     def root = Path.GetFullPath(str(request["root"]));
     def overlay = SCG.Dictionary.[string, string](StringComparer.Ordinal);
-    foreach (f in request.Field("files").AsArray()) overlay[Path.GetFullPath(str(f["path"]))] = str(f["text"]);
-    def libraries = if (request["libraries"] is JsonArray) request.Field("libraries").AsArray().Select(l => str(l)).ToList() else SCG.List();
+    foreach (f in request.:Field("files").AsArray()) overlay[Path.GetFullPath(str(f["path"]))] = str(f["text"]);
+    def libraries = if (request["libraries"] is JsonArray) request.:Field("libraries").AsArray().:Select(l => str(l)).:ToList() else SCG.List();
     def flag(name : string) { match (request[name]) { | null => false | v => v.GetValue.[bool]() } }
     // (a type's rename: where its name is, to tell which type of that name it is)
     when (request["renameAt"] != null)
     {
-      RenameAtPath = Path.GetFullPath(str(request.Field("renameAt")["path"]));
-      RenameAtLine = request.Field("renameAt").Field("line").GetValue.[int]();
-      RenameAtColumn = request.Field("renameAt").Field("column").GetValue.[int]()
+      RenameAtPath = Path.GetFullPath(str(request.:Field("renameAt")["path"]));
+      RenameAtLine = request.:Field("renameAt").:Field("line").GetValue.[int]();
+      RenameAtColumn = request.:Field("renameAt").:Field("column").GetValue.[int]()
     }
     // completion: the marker goes where the cursor is, and the typer says what fits there
     mutable completion = null;
@@ -72,10 +72,10 @@ public module Checker
     when (request["signature"] != null) Signature = true;
     when (request["complete"] != null)
     {
-      def at = request.Field("complete");
+      def at = request.:Field("complete");
       def path = Path.GetFullPath(str(at["path"]));
-      cursorLine = at.Field("line").GetValue.[int]();
-      def (text, prefix) = Mark(Text(path, overlay) ?? "", cursorLine, at.Field("column").GetValue.[int]());
+      cursorLine = at.:Field("line").GetValue.[int]();
+      def (text, prefix) = Mark(Text(path, overlay) ?? "", cursorLine, at.:Field("column").GetValue.[int]());
       overlay[path] = text;
       completion = prefix; completing = path;
     }
@@ -84,36 +84,36 @@ public module Checker
     def checkOnce() : JsonObject
     {
       if (completingScript) Scripts.Check(completing, overlay, completion)
-      else Check(root, overlay, str(request["references"]), libraries.NToList(), flag("fileNameNamespaces"), flag("all"), completion,
+      else Check(root, overlay, str(request["references"]), libraries.:NToList(), flag("fileNameNamespaces"), flag("all"), completion,
                  str(request["renameType"]))
     }
     mutable result = checkOnce();
     // an unfinished line elsewhere in the file stops the compiler before the cursor: without the lines its errors are
     // on (blanked, so lines keep their numbers), the typer gets to the cursor
-    when (completing != null && (result["completion"] == null || result.Field("completion").AsArray().Count == 0))
+    when (completing != null && (result["completion"] == null || result.:Field("completion").AsArray().Count == 0))
     {
       def broken = SCG.HashSet.[int]();
-      foreach (d in result.Field("diagnostics").AsArray())
-        when (d.Field("severity").GetValue.[int]() == 1 && Path.GetFullPath(str(d["path"])) == completing && d.Field("line").GetValue.[int]() != cursorLine)
-          for (mutable l = d.Field("line").GetValue.[int](); l <= d.Field("endLine").GetValue.[int](); l++) when (l != cursorLine) _ = broken.Add(l);
+      foreach (d in result.:Field("diagnostics").AsArray())
+        when (d.:Field("severity").GetValue.[int]() == 1 && Path.GetFullPath(str(d["path"])) == completing && d.:Field("line").GetValue.[int]() != cursorLine)
+          for (mutable l = d.:Field("line").GetValue.[int](); l <= d.:Field("endLine").GetValue.[int](); l++) when (l != cursorLine) _ = broken.Add(l);
       when (broken.Count > 0)
       {
         def lines = overlay[completing].Split('\n');
         foreach (l when l >= 1 && l <= lines.Length in broken) lines[l - 1] = string(' ', lines[l - 1].Length);
         overlay[completing] = string.Join("\n", lines);
         def retry = checkOnce();
-        when (retry["completion"] != null && retry.Field("completion").AsArray().Count > 0) result = retry;
+        when (retry["completion"] != null && retry.:Field("completion").AsArray().Count > 0) result = retry;
       }
     }
     // the open scripts, which the workspace check leaves out: each compiled by the scripting host, for its diagnostics
     // and the facts of its typed code (hover, go-to-definition)
     when (completing == null && request["renameType"] == null)
-      foreach (pair in overlay.ToArray())
+      foreach (pair in overlay.:ToArray())
         when (Scripts.IsScript(pair.Key, pair.Value))
         {
           def script = Scripts.Check(pair.Key, overlay, null);
-          foreach (d in script.Field("diagnostics").AsArray().ToArray()) { _ = script.Field("diagnostics").AsArray().Remove(d); result.Field("diagnostics").AsArray().Add(d) }
-          foreach (f in script.Field("facts").AsArray().ToArray()) { _ = script.Field("facts").AsArray().Remove(f); result.Field("facts").AsArray().Add(f) }
+          foreach (d in script.:Field("diagnostics").AsArray().:ToArray()) { _ = script.:Field("diagnostics").AsArray().Remove(d); result.:Field("diagnostics").AsArray().Add(d) }
+          foreach (f in script.:Field("facts").AsArray().:ToArray()) { _ = script.:Field("facts").AsArray().Remove(f); result.:Field("facts").AsArray().Add(f) }
         }
     output.Write(result.ToJsonString());
     output.Flush();
@@ -166,8 +166,8 @@ public module Checker
     def workspace = try
       {
         Directory.EnumerateFiles(root, "*.n", SearchOption.AllDirectories)
-          .Where(p => !Skipped.Any(s => p.Substring(root.Length).Split(Path.DirectorySeparatorChar).Contains(s)))
-          .Take(5000).ToList()
+          .:Where(p => !Skipped.:Any(s => p.Substring(root.Length).Split(Path.DirectorySeparatorChar).:Contains(s)))
+          .:Take(5000).:ToList()
       }
       catch { | _ => SCG.List() };
     foreach (path in workspace)
@@ -201,7 +201,7 @@ public module Checker
     def diagnostics = JsonArray();
     def facts = JsonArray();
     def result = JsonObject();
-    result["files"] = JsonArray(files.Select(f => JsonValue.Create(f) : JsonNode).ToArray());
+    result["files"] = JsonArray(files.:Select(f => JsonValue.Create(f) : JsonNode).:ToArray());
     result["diagnostics"] = diagnostics; result["facts"] = facts;
     when (files.Count > 0)
     {
@@ -216,8 +216,8 @@ public module Checker
         options.TargetIsLibrary = !project.IsProgram;
         when (project.IsProgram && project.Main != "main.n")
           options.MainClass = (Path.ChangeExtension(project.Main, null) :> string).Replace('/', '.').Replace('\\', '.');
-        def resolved = if (File.Exists(project.ReferencesFile)) File.ReadAllLines(project.ReferencesFile).Where(l => l.Length > 0).ToArray()
-                       else project.Assemblies.Select(a => Path.GetFullPath(Path.Combine(project.Root, a))).ToArray();
+        def resolved = if (File.Exists(project.ReferencesFile)) File.ReadAllLines(project.ReferencesFile).:Where(l => l.Length > 0).:ToArray()
+                       else project.Assemblies.:Select(a => Path.GetFullPath(Path.Combine(project.Root, a))).:ToArray();
         foreach (r in resolved) when (File.Exists(r)) libraries = r :: libraries;
       }
       else options.TargetIsLibrary = !files.Contains(Path.Combine(root, "main.n"));
@@ -226,7 +226,7 @@ public module Checker
       options.ProgressBar = false; options.ColorMessages = false; options.IgnoreConfusion = true;
       options.TargetReferenceDirectory = references;
       options.ReferencedLibraries = libraries;
-      options.Sources = files.Select(f => StringSource(Location.GetFileIndex(f), Text(f, overlay)) : ISource).NToList();
+      options.Sources = files.:Select(f => StringSource(Location.GetFileIndex(f), Text(f, overlay)) : ISource).:NToList();
       def completer = if (completion != null) CompletionManager(options, completion, Signature) else null;
       def manager = if (completer != null) completer : ManagerClass else ManagerClass(options);
       def types = SCG.List.[string * string * Location]();
@@ -251,7 +251,7 @@ public module Checker
     def wanted = SCG.Dictionary.[string, SCG.List[string]](StringComparer.Ordinal);
     foreach (d in diagnostics)
     {
-      def m = Unbound.Match(d.Field("message").GetValue.[string]());
+      def m = Unbound.Match(d.:Field("message").GetValue.[string]());
       when (m.Success && !wanted.ContainsKey(m.Groups[1].Value)) wanted[m.Groups[1].Value] = SCG.List();
     }
     when (wanted.Count > 0)
@@ -275,7 +275,7 @@ public module Checker
               | NamespaceTree.TypeInfoCache.NamespaceReference => walk(child, full, depth + 1)
               | NamespaceTree.TypeInfoCache.Cached(ti) when modules.Contains(full) =>
                 // a module: its types and its functions
-                foreach (n in wanted.Keys.ToArray())
+                foreach (n in wanted.Keys.:ToArray())
                   when (ti.GetNestedTypes().Exists(t => t.Name == n && t.IsPublic) || ti.LookupMember(n).Exists(m => m.IsStatic && !m.IsPrivate))
                     add(n, full);
                 walk(child, full, depth + 1)
@@ -295,11 +295,11 @@ public module Checker
       finally { ManagerClass.Instance = previous }
       foreach (d in diagnostics)
       {
-        def m = Unbound.Match(d.Field("message").GetValue.[string]());
+        def m = Unbound.Match(d.:Field("message").GetValue.[string]());
         when (m.Success && wanted[m.Groups[1].Value].Count > 0)
         {
-          def found = wanted[m.Groups[1].Value].OrderBy(x => x, StringComparer.Ordinal).Take(8);
-          d["imports"] = JsonArray(found.Select(x => JsonValue.Create(x) : JsonNode).ToArray());
+          def found = wanted[m.Groups[1].Value].:OrderBy(x => x, StringComparer.Ordinal).:Take(8);
+          d["imports"] = JsonArray(found.:Select(x => JsonValue.Create(x) : JsonNode).:ToArray());
         }
       }
     }
@@ -455,7 +455,7 @@ public module Checker
                 && !manager.FileModuleRegistry.Usings.Contains(tb.FullName))
             types.Add((tb.Name, tb.FullName, tb.Location)))
       catch { | e => when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + e.ToString()) }
-      when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + string.Join(", ", types.Select(x => { def (n, f, _) = x; n + "=" + f }).ToArray()));
+      when (Environment.GetEnvironmentVariable("NEMERLE_CHECK_DEBUG") != null) Console.Error.WriteLine("types: " + string.Join(", ", types.:Select(x => { def (n, f, _) = x; n + "=" + f }).:ToArray()));
       // a member's declaration is a fact too, where its name is (hover and go-to-definition there, and its place among
       // the references): a method's when it is typed, the type's fields and properties with its first one
       def declarations = SCG.HashSet.[string]();
@@ -605,8 +605,8 @@ public module Checker
       // what facts show is something else of that name (a local, a member)
       def others = SCG.HashSet.[string]();
       foreach (f in facts)
-        when (f["name"] != null && f.Field("name").GetValue.[string]() == name && f.Field("kind").GetValue.[string]() != "constructor" && f["nameLine"] != null)
-          _ = others.Add(f.Field("path").GetValue.[string]() + ":" + f.Field("nameLine").GetValue.[int]().ToString() + ":" + f.Field("nameColumn").GetValue.[int]().ToString());
+        when (f["name"] != null && f.:Field("name").GetValue.[string]() == name && f.:Field("kind").GetValue.[string]() != "constructor" && f["nameLine"] != null)
+          _ = others.Add(f.:Field("path").GetValue.[string]() + ":" + f.:Field("nameLine").GetValue.[int]().ToString() + ":" + f.:Field("nameColumn").GetValue.[int]().ToString());
       def spans = JsonArray();
       foreach (path in files)
         foreach ((chain, at) in named(path))
@@ -647,8 +647,8 @@ public module Checker
         // what facts show is something else of that name (a local, a member)
         def others = SCG.HashSet.[string]();
         foreach (f in facts)
-          when (f["name"] != null && f.Field("name").GetValue.[string]() == name && f.Field("kind").GetValue.[string]() != "constructor" && f["nameLine"] != null)
-            _ = others.Add(f.Field("path").GetValue.[string]() + ":" + f.Field("nameLine").GetValue.[int]().ToString() + ":" + f.Field("nameColumn").GetValue.[int]().ToString());
+          when (f["name"] != null && f.:Field("name").GetValue.[string]() == name && f.:Field("kind").GetValue.[string]() != "constructor" && f["nameLine"] != null)
+            _ = others.Add(f.:Field("path").GetValue.[string]() + ":" + f.:Field("nameLine").GetValue.[int]().ToString() + ":" + f.:Field("nameColumn").GetValue.[int]().ToString());
         def spans = JsonArray();
         def previous = ManagerClass.Instance;
         ManagerClass.Instance = manager;
@@ -745,7 +745,7 @@ public sealed class CompletionManager : ManagerClass
   {
     def shown = parameters.Map(p => if (p[0] == null || p[0] == "") p[1] else p[0] + " : " + p[1]);
     def label = name + "(" + string.Join(", ", shown) + ")" + (if (returned == null) "" else " : " + returned);
-    unless (Signatures.Any(s => s.Field("label").GetValue.[string]() == label))
+    unless (Signatures.:Any(s => s.:Field("label").GetValue.[string]() == label))
     {
       def item = JsonObject(); item["label"] = JsonValue.Create(label);
       def ps = JsonArray(); foreach (p in shown) { def x = JsonObject(); x["label"] = JsonValue.Create(p); ps.Add(x) }

@@ -114,6 +114,7 @@ using Nemerle.UtilityMacros;
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ":>",    false, 270, 246)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "where", false, 284, 300)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "?.",    false, 285, 285)]
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "?.:",   false, 285, 285)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", ".",     false, 285, 301)]
 // `.:' is the dot way to call/read an extension (C#'s `x.M()' form, spelled so it reads as "extension"); it resolves
 // like `.' (a member, else the extension fallback). The plain call `Ext.M(x)'/`M(x)' is the other, optional way.
@@ -421,7 +422,7 @@ internal module UsingMacroGenerator
         try { $body }
         catch { ..$catch_cases }
       ]>;
-    preexps.FoldLeft2(postexps, body,
+    preexps.:FoldLeft2(postexps, body,
       (pre, post, acc) => <[ $pre; try { $acc } finally { $post } ]>);
   }
 }
@@ -770,7 +771,7 @@ syntax ("foreach", "(", inexpr, ")", body)
           lengths[i] = Macros.NewSymbol();
         }
 
-        def indices_list = indices.AsList().RevMap(x => <[ $(x : name) ]>);
+        def indices_list = indices.:AsList().RevMap(x => <[ $(x : name) ]>);
         def build_loops(depth)
         {
           /// build expression defining iteration symbols

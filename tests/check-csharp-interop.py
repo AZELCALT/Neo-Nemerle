@@ -158,6 +158,10 @@ rejected('dot_linq', 'using System.Linq;\ndef a = array[1, 2];\n_ = a.Sum();\n',
 rejected('dot_prop', 'def s = "hi";\n_ = s.Twice;\n', hint, 1, 'a plain `.` to a C# extension property read is an error')
 rejected('dot_set', 'def s = "hi";\ns.Tag = 1;\n', hint, 1, 'a plain `.` to a C# extension property write is an error')
 rejected('dot_static', '_ = string.Blank;\n', hint, 1, 'a plain `.` to a C# 14 static extension member is an error')
+rejected('dot_chain', 'using System.Linq;\ndef d = System.Collections.Generic.Dictionary.[int, int]();\n_ = d.Keys.Distinct();\n', hint, 1,
+         'a plain `.` to an extension at the end of a dotted chain is an error (not an unbound name)')
+run('nullsafe_ext', 'def s : string = "ab";\ndef n : string = null;\nSystem.Console.WriteLine($"$(s?.:Shout()) [$(n?.:Shout())]")\n', ['AB []'],
+    'the null-safe extension dot `?.:` reaches an extension when the receiver is not null')
 rejected('dotcolon_member', 'def s = "hi";\n_ = s.:Length;\n', "is a member of", 1,
          'the extension dot `.:` to a real member is an error')
 

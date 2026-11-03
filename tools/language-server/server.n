@@ -115,13 +115,13 @@ public sealed class Server
             | "shutdown" => shutdownRequested = true; transport.Respond(id, null)
             | "exit" => exitCode = if (shutdownRequested) 0 else 1; running = false
             | "textDocument/didOpen" =>
-              def d = message.Field("params").Field("textDocument");
+              def d = message.:Field("params").:Field("textDocument");
               def doc = Document(Str(d["uri"]), Str(d["text"]), Int(d["version"]));
               lock (documents) documents[doc.Uri] = doc;
               jobs.Add(Job.Analyze(doc.Uri, doc.Version))
             | "textDocument/didChange" =>
-              def p = message["params"]; def uri = Str(p.Field("textDocument")["uri"]); def version = Int(p.Field("textDocument")["version"]);
-              def changes = p.Field("contentChanges").AsArray();
+              def p = message["params"]; def uri = Str(p.:Field("textDocument")["uri"]); def version = Int(p.:Field("textDocument")["version"]);
+              def changes = p.:Field("contentChanges").AsArray();
               when (changes.Count > 0)
               {
                 // each change in order: a range of the text as it is after the ones before it, or the whole text
@@ -131,7 +131,7 @@ public sealed class Server
                 jobs.Add(Job.Analyze(uri, version))
               }
             | "textDocument/didClose" =>
-              def uri = Str(message.Field("params").Field("textDocument")["uri"]);
+              def uri = Str(message.:Field("params").:Field("textDocument")["uri"]);
               lock (documents) _ = documents.Remove(uri);
               jobs.Add(Job.Close(uri))
             | "textDocument/semanticTokens/full" | "textDocument/foldingRange" | "textDocument/documentSymbol"
@@ -139,7 +139,7 @@ public sealed class Server
             | "textDocument/prepareRename" | "textDocument/rename" | "textDocument/documentHighlight" | "textDocument/inlayHint"
             | "textDocument/signatureHelp" | "workspace/symbol" | "textDocument/formatting" | "textDocument/rangeFormatting"
             | "textDocument/codeAction" =>
-              jobs.Add(Job.Request(message.Field("id").DeepClone(), method, message.Field("params").DeepClone()))
+              jobs.Add(Job.Request(message.:Field("id").DeepClone(), method, message.:Field("params").DeepClone()))
             | _ => when (id != null) transport.RespondError(id, -32601, "method not supported: " + method)
           }
         }
@@ -232,7 +232,7 @@ public sealed class Server
             transport.Notify("textDocument/publishDiagnostics", p)
           | Job.Request(id, "workspace/symbol", parameters) => transport.Respond(id, WorkspaceSymbols(Str(parameters["query"]) ?? ""))
           | Job.Request(id, method, parameters) =>
-            def doc = Current(Str(parameters.Field("textDocument")["uri"]));
+            def doc = Current(Str(parameters.:Field("textDocument")["uri"]));
             if (doc == null) transport.Respond(id, null)
             else
             {
@@ -250,11 +250,11 @@ public sealed class Server
                 | "textDocument/formatting" => transport.Respond(id, Formatting(r, parameters["options"], 0, int.MaxValue))
                 | "textDocument/rangeFormatting" =>
                   def range = parameters["range"];
-                  transport.Respond(id, Formatting(r, parameters["options"], Int(range.Field("start")["line"]), Int(range.Field("end")["line"])))
+                  transport.Respond(id, Formatting(r, parameters["options"], Int(range.:Field("start")["line"]), Int(range.:Field("end")["line"])))
                 | "textDocument/codeAction" => transport.Respond(id, CodeActions(doc, r, parameters["range"]))
                 | "textDocument/references" =>
                   def context = parameters["context"];
-                  transport.Respond(id, References(doc, parameters["position"], context != null && context["includeDeclaration"] != null && context.Field("includeDeclaration").GetValue.[bool]()))
+                  transport.Respond(id, References(doc, parameters["position"], context != null && context["includeDeclaration"] != null && context.:Field("includeDeclaration").GetValue.[bool]()))
                 | "textDocument/prepareRename" => transport.Respond(id, PrepareRename(doc, parameters["position"]))
                 | "textDocument/rename" =>
                   match (Rename(doc, parameters["position"], Str(parameters["newName"])))
@@ -355,7 +355,7 @@ public sealed class Server
     def request = JsonObject();
     request["root"] = JsonValue.Create(root); request["references"] = JsonValue.Create(references);
     request["fileNameNamespaces"] = JsonValue.Create(fileNameNamespaces);
-    request["libraries"] = JsonArray(libraries.Select(l => JsonValue.Create(l) : JsonNode).ToArray());
+    request["libraries"] = JsonArray(libraries.:Select(l => JsonValue.Create(l) : JsonNode).:ToArray());
     def files = JsonArray();
     lock (documents)
       foreach (d in documents.Values)
@@ -403,7 +403,7 @@ public sealed class Server
           def request = JsonObject();
           request["root"] = JsonValue.Create(root); request["references"] = JsonValue.Create(references);
           request["fileNameNamespaces"] = JsonValue.Create(fileNameNamespaces);
-          request["libraries"] = JsonArray(libraries.Select(l => JsonValue.Create(l) : JsonNode).ToArray());
+          request["libraries"] = JsonArray(libraries.:Select(l => JsonValue.Create(l) : JsonNode).:ToArray());
           def files = JsonArray();
           foreach (path in stale) { def f = JsonObject(); f["path"] = JsonValue.Create(path); f["text"] = JsonValue.Create(current[path]); files.Add(f) }
           request["files"] = files;
@@ -413,7 +413,7 @@ public sealed class Server
             | null => ()
             | answer =>
               def facts = SCG.Dictionary.[string, SCG.List[JsonObject]](StringComparer.Ordinal);
-              foreach (f in answer.Field("facts").AsArray())
+              foreach (f in answer.:Field("facts").AsArray())
               {
                 def path = Str(f["path"]);
                 unless (facts.ContainsKey(path)) facts[path] = SCG.List();
@@ -421,9 +421,9 @@ public sealed class Server
               }
               // every file the check typed is up to date: the stale ones and the files they import
               def typed = SCG.HashSet.[string](stale, StringComparer.Ordinal);
-              foreach (f in answer.Field("files").AsArray()) _ = typed.Add(Str(f));
+              foreach (f in answer.:Field("files").AsArray()) _ = typed.Add(Str(f));
               // a check stopped by an error typed only part of the files: one without facts is not marked as done
-              def failed = answer.Field("diagnostics").AsArray().Any(d => Int(d["severity"]) == 1);
+              def failed = answer.:Field("diagnostics").AsArray().:Any(d => Int(d["severity"]) == 1);
               foreach (path in typed)
                 when (current.ContainsKey(path))
                 {
@@ -459,7 +459,7 @@ public sealed class Server
         def current = lock (checkWanted) checkGeneration;
         when (result != null && current == generation)
         {
-          log.WriteLine("checked " + request.Field("files").AsArray().Count.ToString() + " open file(s) in " + started.ElapsedMilliseconds.ToString() + " ms");
+          log.WriteLine("checked " + request.:Field("files").AsArray().Count.ToString() + " open file(s) in " + started.ElapsedMilliseconds.ToString() + " ms");
           jobs.Add(Job.Typed(result))
         }
       }
@@ -472,16 +472,16 @@ public sealed class Server
   {
     def before = SCG.HashSet.[string](typedDiagnostics.Keys);
     // a compilation with errors stops before typing the rest: a file it typed no fact of keeps its earlier facts
-    def failed = result.Field("diagnostics").AsArray().Any(d => Int(d["severity"]) == 1);
+    def failed = result.:Field("diagnostics").AsArray().:Any(d => Int(d["severity"]) == 1);
     def earlier = SCG.Dictionary(typedFacts);
     typedDiagnostics.Clear(); typedFacts.Clear();
-    foreach (d in result.Field("diagnostics").AsArray())
+    foreach (d in result.:Field("diagnostics").AsArray())
     {
       def path = Str(d["path"]);
       unless (typedDiagnostics.ContainsKey(path)) typedDiagnostics[path] = SCG.List();
       typedDiagnostics[path].Add(d.AsObject());
     }
-    foreach (f in result.Field("facts").AsArray())
+    foreach (f in result.:Field("facts").AsArray())
     {
       def path = Str(f["path"]);
       unless (typedFacts.ContainsKey(path)) typedFacts[path] = SCG.List();
@@ -492,7 +492,7 @@ public sealed class Server
     foreach (path in affected)
     {
       // an open file is matched by path: an editor's URI spelling (an escaped drive letter) can differ from ours
-      def open = lock (documents) documents.Values.FirstOrDefault(d => PathOf(d.Uri) == path);
+      def open = lock (documents) documents.Values.:FirstOrDefault(d => PathOf(d.Uri) == path);
       def uri = if (open != null) open.Uri else UriOf(path);
       match (Current(uri))
       {
@@ -535,7 +535,7 @@ public sealed class Server
   Formatting(r : AnalysisResult, options : JsonNode, first : int, last : int) : JsonNode
   {
     def tabSize = if (options != null && options["tabSize"] != null) Int(options["tabSize"]) else 2;
-    def spaces = options == null || options["insertSpaces"] == null || options.Field("insertSpaces").GetValue.[bool]();
+    def spaces = options == null || options["insertSpaces"] == null || options.:Field("insertSpaces").GetValue.[bool]();
     def edits = JsonArray();
     foreach ((line, text) in format.Lines(r, tabSize, spaces, first, last))
     {
@@ -563,7 +563,7 @@ public sealed class Server
           mutable known;
           unless (declared.TryGetValue(file.Key, out known) && known[0] == hash)
           {
-            known = (hash, SCG.HashSet(analyzer.Analyze(file.Key, 0, file.Value).Symbols.Select(x => x.Name)));
+            known = (hash, SCG.HashSet(analyzer.Analyze(file.Key, 0, file.Value).Symbols.:Select(x => x.Name)));
             declared[file.Key] = known;
           }
           when (known[1].Contains(name))
@@ -582,7 +582,7 @@ public sealed class Server
   {
     def actions = JsonArray();
     def path = PathOf(doc.Uri);
-    def first = Int(range.Field("start")["line"]); def last = Int(range.Field("end")["line"]);
+    def first = Int(range.:Field("start")["line"]); def last = Int(range.:Field("end")["line"]);
     def action(title : string, diagnostic : JsonObject, edits : list[int * int * string], preferred : bool) : void
     {
       def changes = JsonObject(); def items = JsonArray();
@@ -630,7 +630,7 @@ public sealed class Server
             {
               // what the check found (namespaces, the modules it compiled), and the workspace's other modules
               def found = SCG.List.[string]();
-              when (d["imports"] != null) foreach (from in d.Field("imports").AsArray()) found.Add(Str(from));
+              when (d["imports"] != null) foreach (from in d.:Field("imports").AsArray()) found.Add(Str(from));
               foreach (from in ModulesWith(written, path)) unless (found.Contains(from)) found.Add(from);
               def (at, blank) = usingAt();
               foreach (from in found)
@@ -664,7 +664,7 @@ public sealed class Server
       | null => null
       | f when f["target"] == null => null
       | f =>
-        def t = f.Field("target");
+        def t = f.:Field("target");
         def position(line : int, column : int) { def p = JsonObject(); p["line"] = JsonValue.Create(Math.Max(0, line - 1)); p["character"] = JsonValue.Create(Math.Max(0, column - 1)); p }
         def range = JsonObject(); range["start"] = position(Int(t["line"]), Int(t["column"])); range["end"] = position(Int(t["endLine"]), Int(t["endColumn"]));
         def x = JsonObject(); x["uri"] = JsonValue.Create(UriOf(Str(t["path"]))); x["range"] = range; x
@@ -712,8 +712,8 @@ public sealed class Server
   {
     def items = JsonArray();
     def path = PathOf(doc.Uri);
-    def first = if (range != null) Int(range.Field("start")["line"]) + 1 else 1;
-    def last = if (range != null) Int(range.Field("end")["line"]) + 1 else int.MaxValue;
+    def first = if (range != null) Int(range.:Field("start")["line"]) + 1 else 1;
+    def last = if (range != null) Int(range.:Field("end")["line"]) + 1 else int.MaxValue;
     def lines = doc.Text.Split('\n');
     def seen = SCG.HashSet.[string]();
     when (path != null && typedFacts.ContainsKey(path))
@@ -757,7 +757,7 @@ public sealed class Server
         foreach (file in Directory.EnumerateFiles(root, "*.n", SearchOption.AllDirectories))
         {
           def relative = Path.GetRelativePath(root, file).Split(Path.DirectorySeparatorChar);
-          unless (relative.Take(relative.Length - 1).Any(d => d.StartsWith(".") || d == "out" || d == "bin" || d == "obj" || d == "node_modules"))
+          unless (relative.:Take(relative.Length - 1).:Any(d => d.StartsWith(".") || d == "out" || d == "bin" || d == "obj" || d == "node_modules"))
             texts[Path.GetFullPath(file)] = try { File.ReadAllText(file) } catch { | _ => null }
         }
       catch { | _ => () }
@@ -834,19 +834,19 @@ public sealed class Server
       }
       def called = text.Substring(0, open) + "()" + (if (close >= 0) text.Substring(close + 1) else text.Substring(offset));
       def request = CheckRequest();
-      foreach (f in request.Field("files").AsArray()) when (Str(f["path"]) == path) f["text"] = JsonValue.Create(called);
+      foreach (f in request.:Field("files").AsArray()) when (Str(f["path"]) == path) f["text"] = JsonValue.Create(called);
       def at = JsonObject(); at["path"] = JsonValue.Create(path);
       at["line"] = JsonValue.Create(r.Lines.Line(stop) + 1); at["column"] = JsonValue.Create(r.Lines.Column(stop) + 1);
       request["complete"] = at; request["signature"] = JsonValue.Create(true);
       match (RunChecker(request, false))
       {
         | null => null
-        | answer when answer["signatures"] == null || answer.Field("signatures").AsArray().Count == 0 => null
+        | answer when answer["signatures"] == null || answer.:Field("signatures").AsArray().Count == 0 => null
         | answer =>
-          def signatures = answer.Field("signatures").AsArray().DeepClone().AsArray();
+          def signatures = answer.:Field("signatures").AsArray().DeepClone().AsArray();
           mutable active = 0;
           for (mutable k = signatures.Count - 1; k >= 0; k--)
-            when (signatures[k].Field("parameters").AsArray().Count > commas) active = k;
+            when (signatures[k].:Field("parameters").AsArray().Count > commas) active = k;
           def x = JsonObject(); x["signatures"] = signatures;
           x["activeSignature"] = JsonValue.Create(active); x["activeParameter"] = JsonValue.Create(commas); x
       }
@@ -928,7 +928,7 @@ public sealed class Server
       {
         | null => ()
         | answer =>
-          when (answer["completion"] != null) foreach (item in answer.Field("completion").AsArray()) items.Add(item.DeepClone());
+          when (answer["completion"] != null) foreach (item in answer.:Field("completion").AsArray()) items.Add(item.DeepClone());
           log.WriteLine("completion: " + items.Count.ToString() + " item(s) in " + started.ElapsedMilliseconds.ToString() + " ms")
       }
     }
@@ -952,8 +952,8 @@ public sealed class Server
             }
           }
       }
-    def labels = SCG.HashSet.[string](items.Select(i => Str(i["label"]) + "/" + Int(i["kind"]).ToString()));
-    def typedWords = SCG.HashSet.[string](items.Where(i => Int(i["kind"]) == 14).Select(i => Str(i["label"])));
+    def labels = SCG.HashSet.[string](items.:Select(i => Str(i["label"]) + "/" + Int(i["kind"]).ToString()));
+    def typedWords = SCG.HashSet.[string](items.:Where(i => Int(i["kind"]) == 14).:Select(i => Str(i["label"])));
     foreach (b in basics)
       when (Int(b["kind"]) == 15 || !typedWords.Contains(Str(b["label"])))
         when (labels.Add(Str(b["label"]) + "/" + Int(b["kind"]).ToString())) items.Add(b.DeepClone());
@@ -1042,7 +1042,7 @@ public sealed class Server
       {
         | null => (null, null, null, null)
         | answer =>
-          def facts = answer.Field("facts").AsArray();
+          def facts = answer.:Field("facts").AsArray();
           def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
           mutable found = null;
           foreach (f in facts)
@@ -1051,11 +1051,11 @@ public sealed class Server
               // on a use (its name, or its whole span), or on the declaration's name
               def onUse = Str(f["path"]) == path && (if (f["nameLine"] != null) Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))
                                                    else Inside(line, column, Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"])));
-              def t = f.Field("target");
+              def t = f.:Field("target");
               def onDeclaration = Str(t["path"]) == path && t["nameLine"] != null && Inside(line, column, Int(t["nameLine"]), Int(t["nameColumn"]), Int(t["nameLine"]), Int(t["nameEndColumn"]));
               when (onUse || onDeclaration) found = f.AsObject();
             }
-          if (found == null) (null, null, null, facts) else (found.Field("target").AsObject(), Str(found["name"]), Str(found["kind"]), facts)
+          if (found == null) (null, null, null, facts) else (found.:Field("target").AsObject(), Str(found["name"]), Str(found["kind"]), facts)
       }
     }
   }
@@ -1074,7 +1074,7 @@ public sealed class Server
       {
         def onUse = if (f["nameLine"] != null) Inside(line, column, Int(f["nameLine"]), Int(f["nameColumn"]), Int(f["nameLine"]), Int(f["nameEndColumn"]))
                     else Inside(line, column, Int(f["line"]), Int(f["column"]), Int(f["endLine"]), Int(f["endColumn"]));
-        def t = f.Field("target");
+        def t = f.:Field("target");
         def onDeclaration = Str(t["path"]) == path && t["nameLine"] != null && Inside(line, column, Int(t["nameLine"]), Int(t["nameColumn"]), Int(t["nameLine"]), Int(t["nameEndColumn"]));
         when (onUse || onDeclaration) found = f;
       }
@@ -1097,11 +1097,11 @@ public sealed class Server
   SymbolFast(doc : Document, position : JsonNode) : JsonObject * SCG.List[JsonNode] * bool
   {
     def live = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
-    if (live != null) (live.Field("target").AsObject(), UsesOf(Str(live["id"])).Select(f => f : JsonNode).ToList(), true)
+    if (live != null) (live.:Field("target").AsObject(), UsesOf(Str(live["id"])).:Select(f => f : JsonNode).:ToList(), true)
     else
     {
       def (target, _, _, facts) = Symbol(doc, position);
-      (target, if (facts == null) SCG.List() else facts.ToList(), false)
+      (target, if (facts == null) SCG.List() else facts.:ToList(), false)
     }
   }
 
@@ -1133,12 +1133,12 @@ public sealed class Server
     def answer = lastWorkspaceCheck;
     if (answer == null) (null, null)
     else if (answer["typeRenameError"] != null) (null, Str(answer["typeRenameError"]))
-    else if (answer["typeRename"] != null && answer.Field("typeRename").AsArray().Count > 0)
+    else if (answer["typeRename"] != null && answer.:Field("typeRename").AsArray().Count > 0)
     {
       // the word must be one of the places (on a use or the declaration of the type)
       def path = PathOf(doc.Uri); def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
-      def places = answer.Field("typeRename").AsArray();
-      if (places.Any(s => Str(s["path"]) == path && Int(s["line"]) == line && column >= Int(s["column"]) && column <= Int(s["endColumn"]))) (places, null)
+      def places = answer.:Field("typeRename").AsArray();
+      if (places.:Any(s => Str(s["path"]) == path && Int(s["line"]) == line && column >= Int(s["column"]) && column <= Int(s["endColumn"]))) (places, null)
       else (null, null)
     }
     else (null, null)
@@ -1148,7 +1148,7 @@ public sealed class Server
   {
     // a member or a local, from the index; a type (it has no facts of its own) from a whole-workspace check
     def fast = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
-    if (fast != null && Renamable.Contains(Str(fast["kind"])) && fast.Field("target")["nameLine"] != null)
+    if (fast != null && Renamable.:Contains(Str(fast["kind"])) && fast.:Field("target")["nameLine"] != null)
     {
       def x = JsonObject(); x["range"] = NameRange(fast) ?? NameRange(fast["target"]); x["placeholder"] = JsonValue.Create(Str(fast["name"])); x
     }
@@ -1167,7 +1167,7 @@ public sealed class Server
         match (symbol)
         {
           | (null, _, _, _) => null
-          | (target, name, kind, facts) when Renamable.Contains(kind) && target["nameLine"] != null =>
+          | (target, name, kind, facts) when Renamable.:Contains(kind) && target["nameLine"] != null =>
             // the range at the cursor: the use's or the declaration's name
             def line = Int(position["line"]) + 1; def column = Int(position["character"]) + 1;
             def path = PathOf(doc.Uri);
@@ -1190,13 +1190,13 @@ public sealed class Server
   /// A workspace edit renaming the symbol at a position everywhere, or (null, why not).
   Rename(doc : Document, position : JsonNode, newName : string) : JsonNode * string
   {
-    if (newName == null || !Identifier.IsMatch(newName) || Keywords.Contains(newName)) (null, "`" + newName + "' is not a name")
+    if (newName == null || !Identifier.IsMatch(newName) || Keywords.:Contains(newName)) (null, "`" + newName + "' is not a name")
     else
     {
       // a member or a local: its uses from the index, with no compilation
       def fast = if (index != null && index.Ready) LiveFactAt(doc, position) else null;
-      if (fast != null && Renamable.Contains(Str(fast["kind"])) && fast.Field("target")["nameLine"] != null)
-        RenameUses(fast.Field("target").AsObject(), UsesOf(Str(fast["id"])), newName)
+      if (fast != null && Renamable.:Contains(Str(fast["kind"])) && fast.:Field("target")["nameLine"] != null)
+        RenameUses(fast.:Field("target").AsObject(), UsesOf(Str(fast["id"])), newName)
       else
       {
         def symbol = Symbol(doc, position);
@@ -1211,18 +1211,18 @@ public sealed class Server
               def uri = UriOf(Str(s["path"]));
               unless (changes.ContainsKey(uri)) changes[uri] = JsonArray();
               def e = JsonObject(); e["range"] = RangeOf(Int(s["line"]), Int(s["column"]), Int(s["line"]), Int(s["endColumn"]));
-              e["newText"] = JsonValue.Create(newName); changes.Field(uri).AsArray().Add(e);
+              e["newText"] = JsonValue.Create(newName); changes.:Field(uri).AsArray().Add(e);
             }
             def x = JsonObject(); x["changes"] = changes; (x, null)
           | _ =>
             match (symbol)
             {
               | (null, _, _, _) => (null, "there is nothing to rename here")
-              | (_, _, kind, _) when !Renamable.Contains(kind) => (null, "a " + kind + " cannot be renamed here")
+              | (_, _, kind, _) when !Renamable.:Contains(kind) => (null, "a " + kind + " cannot be renamed here")
               | (target, _, _, _) when target["nameLine"] == null => (null, "the declaration's name is not found in its source")
               | (target, _, _, facts) =>
                 def key = Key(target);
-                RenameUses(target, facts.Where(f => f["target"] != null && Key(f["target"]) == key).Select(f => f.AsObject()).ToList(), newName)
+                RenameUses(target, facts.:Where(f => f["target"] != null && Key(f["target"]) == key).:Select(f => f.AsObject()).:ToList(), newName)
             }
         }
       }
@@ -1232,7 +1232,7 @@ public sealed class Server
   /// The workspace edit renaming a symbol: its declaration's name and every use's.
   RenameUses(target : JsonObject, uses : SCG.List[JsonObject], newName : string) : JsonNode * string
   {
-    if (uses.Any(f => f["nameLine"] == null)) (null, "some uses of it are not plain names (generated code); rename them by hand")
+    if (uses.:Any(f => f["nameLine"] == null)) (null, "some uses of it are not plain names (generated code); rename them by hand")
     else
     {
       def edits = SCG.Dictionary.[string, JsonArray]();
@@ -1308,7 +1308,7 @@ public sealed class Server
     def seen = SCG.HashSet.[int]();
     foreach ((m, ml, kind, mods) in meanings) when (seen.Add(m)) tokens.Add((m, ml, kind, mods));
     // sorted, non-overlapping, split at line ends, delta encoded
-    def sorted = tokens.OrderBy(t => t[0]).ThenByDescending(t => t[1]).ToList();
+    def sorted = tokens.:OrderBy(t => t[0]).:ThenByDescending(t => t[1]).:ToList();
     def data = JsonArray();
     mutable lastLine = 0; mutable lastChar = 0; mutable covered = 0;
     foreach ((offset, length, kind, mods) in sorted)
@@ -1355,7 +1355,7 @@ public sealed class Server
       def children = JsonArray(); foreach (c in s.Children) children.Add(convert(c));
       x["children"] = children; x
     }
-    def items = JsonArray(); foreach (s in r.Symbols.OrderBy(s => s.Start)) items.Add(convert(s)); items
+    def items = JsonArray(); foreach (s in r.Symbols.:OrderBy(s => s.Start)) items.Add(convert(s)); items
   }
 }
 
@@ -1369,7 +1369,7 @@ internal module Program
     mutable shortNames = false;
     mutable typecheck = true;
     def libraries = SCG.List.[string]();
-    when (args.Contains("--check")) return Checker.Run(Console.In, Console.Out);
+    when (args.:Contains("--check")) return Checker.Run(Console.In, Console.Out);
     for (mutable i = 0; i < args.Length; ++i)
       match (args[i])
       {
@@ -1407,8 +1407,8 @@ internal module Program
       else
       {
         def tfm = "net" + Environment.Version.Major.ToString() + ".0";
-        def candidates = Directory.GetDirectories(packs).Select(d => Path.Combine(d, "ref", tfm)).Where(Directory.Exists)
-                           .OrderByDescending(d => Version.Parse(Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(d))))).ToList();
+        def candidates = Directory.GetDirectories(packs).:Select(d => Path.Combine(d, "ref", tfm)).:Where(Directory.Exists)
+                           .:OrderByDescending(d => Version.Parse(Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(d))))).:ToList();
         if (candidates.Count > 0) candidates[0] else null
       }
     }

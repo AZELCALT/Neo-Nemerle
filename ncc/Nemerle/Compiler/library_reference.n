@@ -181,7 +181,7 @@ using Nemerle.Compiler.Utility;
           | [asmName, pKey] when !string.IsNullOrEmpty(this.Manager.Options.StrongAssemblyKeyName)
                                  && currentAssemblyName == asmName
             =>
-            match(pKey.ToLower().SplitToList(array['=']))
+            match(pKey.ToLower().:SplitToList(array['=']))
             {
               | ["publickey", key] when toHexString(publicKey()).ToLower() == key.ToLower() => true;
               | ["publickeytoken", key]

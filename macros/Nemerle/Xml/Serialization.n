@@ -72,7 +72,7 @@ macro XmlMultidimensionalArray (t : TypeBuilder, f : ParsedField)
       def $(lengths [i] : name) = $(fname : name).GetLength ($(i : int))
     ]> :: bodySequence;
   }
-  def lengthsIndex = lengths.MapToList(x => <[ $(x : name) ]>);
+  def lengthsIndex = lengths.:MapToList(x => <[ $(x : name) ]>);
   
   //// create variable containing top array with result
   bodySequence = <[ def result = array ($(lengths [0] : name)) ]> :: bodySequence;

@@ -123,7 +123,7 @@ name of a value, type or member as a string. `#n` indexes from the end (`#1` is 
 or slices. `x.:M()` / `x.:P` calls or reads an extension (C#'s, LINQ's, a `this`-parameter function): `.:` reaches only
 extensions and a plain `.` only members, each an error that points to the other. The plain call `Ext.M(x)` is the
 other way to an extension. A C# 14 *static* extension member is reached through the type it is on —
-`string.:Blank`, `string.:Of(5)`.
+`string.:Blank`, `string.:Of(5)`. `x?.:M()` is `?.` to an extension: `x.:M()` when `x` is not null.
 
 ```nemerle
 using System.Console;

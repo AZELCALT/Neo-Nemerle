@@ -97,7 +97,7 @@ internal module BindingUtils
   {
     using (msgs = CompilerMessageList())
     {
-      msgs.Error(name, $"Unbound name '$(name.GetText())'");
+      msgs.:Error(name, $"Unbound name '$(name.GetText())'");
       BindingResult(name, [], msgs.GetMessages())
     }
   }
@@ -107,10 +107,10 @@ internal module BindingUtils
   {
     using (msgs = CompilerMessageList())
     {
-      using (rootMsg = msgs.RootError(name, $"'$(name.GetText())' is an ambiguous reference (see related messages)"))
+      using (rootMsg = msgs.:RootError(name, $"'$(name.GetText())' is an ambiguous reference (see related messages)"))
         foreach (s in result)
           foreach (loc in s.Locations)
-            rootMsg.Hint(loc, "Previous definition.");
+            rootMsg.:Hint(loc, "Previous definition.");
       BindingResult(name, result.OfType(), msgs.GetMessages())
     }
   }
@@ -188,7 +188,7 @@ public class EnteredNamespaceContext : EnteredScopeContext, INemerleEnvironmentC
   [Memoize]
   GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
   {
-    def parentEnv = Parent.GetNemerleEnvironment();
+    def parentEnv = Parent.:GetNemerleEnvironment();
     parentEnv.EnterIntoNamespace(Namespace.Node.FullNameParts)
   }
 
@@ -221,8 +221,8 @@ public abstract class EnteredScopeContext : Context
 
         | NamespaceOrTypeAliasContext(Alias = NamespaceOrTypeAliasSymbol as aliasSymbol) =>
           when (aliasMap.Find(aliasSymbol.Name) is Some(previousDefinition))
-            using (rootMsg = Project.RootError(aliasSymbol.FirstLocation, $"Redifinition of alias $(aliasSymbol.Name)."))
-              rootMsg.Error(previousDefinition.FirstLocation, "previous definition");
+            using (rootMsg = Project.:RootError(aliasSymbol.FirstLocation, $"Redifinition of alias $(aliasSymbol.Name)."))
+              rootMsg.:Error(previousDefinition.FirstLocation, "previous definition");
           lookupSymbols(context.Parent, openedNamespaces, aliasMap.Replace(aliasSymbol.Name, aliasSymbol))
 
         | _ => lookupSymbols(context.Parent, openedNamespaces, aliasMap)
@@ -397,7 +397,7 @@ public class KeywordRegexContext : Context
   public this(parent : Context, matchTokens : G.RegexExpression, ruleName : G.QualifiedReference)
   {
     base(parent);
-    def rule = parent.Bind(ruleName);
+    def rule = parent.:Bind(ruleName);
     def parent     = TryGetParent.[KeywordRegexContext]();
     when (rule is Some(ruleSymbol))
       KeywordRegexes = (matchTokens, ruleSymbol) :: (parent?.KeywordRegexes ?? []);
@@ -408,7 +408,7 @@ public class KeywordRegexContext : Context
     [Memoize] get
     {
       def compilerMessages = Project;
-      KeywordRegexes.Map((re, rule) => (re.Typing().MakeMatcher(compilerMessages), rule))
+      KeywordRegexes.Map((re, rule) => (re.Typing().:MakeMatcher(compilerMessages), rule))
     }
   }
 
@@ -512,8 +512,8 @@ public sealed class MapSyntaxContext : SimpleNameContext[SyntaxMappingParameterS
     foreach (p in parameters)
     {
       if (_symbolMap.Find(p.Name) is Some(existingParameter))
-        using (root = this.RootError(p.FirstLocation, $"Redefinition of AST mapping parameter '$(p.Name)'"))
-          root.Hint(existingParameter.FirstLocation, "previous definition");
+        using (root = this.:RootError(p.FirstLocation, $"Redefinition of AST mapping parameter '$(p.Name)'"))
+          root.:Hint(existingParameter.FirstLocation, "previous definition");
       else
         _symbolMap = _symbolMap.Add(p.Name, p)
     }
@@ -544,20 +544,20 @@ public sealed class NamespaceOrTypeAliasContext : Context, INemerleEnvironmentCo
     base(parent);
     Name  = name;
     Path  = path;
-    def p = this.GetParent.[EnteredNamespaceContext]();
-    Alias = NamespaceOrTypeAliasSymbol(name, p.TryBind(path));
+    def p = this.:GetParent.[EnteredNamespaceContext]();
+    Alias = NamespaceOrTypeAliasSymbol(name, p.:TryBind(path));
   }
 
   [Memoize]
   GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
   {
-    def parentEnv = Parent.GetNemerleEnvironment();
-    parentEnv.AddNamespaceAlias(Name.Value(), Path.Parts(), Path.NLocation())
+    def parentEnv = Parent.:GetNemerleEnvironment();
+    parentEnv.AddNamespaceAlias(Name.Value(), Path.Parts(), Path.:NLocation())
   }
 
   public override ToString() : string
   {
-    "using " + Alias.Name + " = " + Alias.RealSymbol.Map(sym => sym.FullName)
+    "using " + Alias.Name + " = " + Alias.RealSymbol.:Map(sym => sym.FullName)
   }
 }
 
@@ -573,20 +573,20 @@ public class OpenNamespaceOrTypeContext : Context, INemerleEnvironmentContext
     base(parent);
     OpenPath   = path;
     def scopeContext = GetParent.[EnteredScopeContext]();
-    (OpenSymbol, IsAlreadyOpen) = match (scopeContext.TryBind(path))
+    (OpenSymbol, IsAlreadyOpen) = match (scopeContext.:TryBind(path))
     {
       | SymbolRef.Some(symbol) as result =>
         def checkAlreadyOpen(_ : OpenNamespaceOrTypeContext)
         {
           | null => (result, false)
           | OpenNamespaceOrTypeContext(OpenSymbol = SymbolRef.Some(other)) as context when symbol : object == other =>
-            using (rootMsg = Project.RootWarning(path, $"Symbol '$(symbol.FullName)' is already open (see related messages)"))
-              rootMsg.Hint(context.OpenPath, "Previous definition.");
+            using (rootMsg = Project.:RootWarning(path, $"Symbol '$(symbol.FullName)' is already open (see related messages)"))
+              rootMsg.:Hint(context.OpenPath, "Previous definition.");
             (SymbolRef.None(result.Location, true), true)
 
-          | context => checkAlreadyOpen(context.TryGetParent.[OpenNamespaceOrTypeContext]())
+          | context => checkAlreadyOpen(context.:TryGetParent.[OpenNamespaceOrTypeContext]())
         }
-        checkAlreadyOpen(parent.TryGetContext.[OpenNamespaceOrTypeContext]())
+        checkAlreadyOpen(parent.:TryGetContext.[OpenNamespaceOrTypeContext]())
 
       | SymbolRef.None as result =>
         // FIXME: we can't determine if that namespace actualy does not exists
@@ -597,11 +597,11 @@ public class OpenNamespaceOrTypeContext : Context, INemerleEnvironmentContext
   [Memoize]
   GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
   {
-    def parentEnv = Parent.GetNemerleEnvironment();
+    def parentEnv = Parent.:GetNemerleEnvironment();
     if (IsAlreadyOpen)
       parentEnv
     else
-      parentEnv.AddOpenNamespace(OpenPath.Parts(), OpenPath.NLocation())
+      parentEnv.AddOpenNamespace(OpenPath.Parts(), OpenPath.:NLocation())
   }
 
   public override ToString() : string
@@ -624,7 +624,7 @@ public class ParseTreePatternVariableContext : SimpleNameContext[ParseTreePatter
       when (variables == null)
       {
         variables =
-          match (this.TryGetParent.[ParseTreePatternVariableContext]())
+          match (this.:TryGetParent.[ParseTreePatternVariableContext]())
           {
             | null   => Map(currentVariables.KeyValuePairs)
             | parent => parent.SymbolMap.ReplaceRange(currentVariables.KeyValuePairs)
@@ -641,8 +641,8 @@ public class ParseTreePatternVariableContext : SimpleNameContext[ParseTreePatter
     mutable existingVariable;
     if (currentVariables.TryGetValue(newVariable.Name, out existingVariable))
     {
-      using (relatedMessages = Project.RootError(newVariable.FirstLocation, $"Redefinition of pattern variable '$(newVariable.Name)'"))
-        relatedMessages.Hint(existingVariable.FirstLocation, "Previous definition")
+      using (relatedMessages = Project.:RootError(newVariable.FirstLocation, $"Redefinition of pattern variable '$(newVariable.Name)'"))
+        relatedMessages.:Hint(existingVariable.FirstLocation, "Previous definition")
     }
     else
       currentVariables.Add(newVariable.Name, newVariable)
@@ -705,13 +705,13 @@ public abstract class PrecedenceContext : Context
             when (context.Relations.Count == 0)
               relations.Add(PrecedenceRelation(symbol, prevContext.Symbol.Name, context.Symbol.Name));
           else when (context.Relations.Count == 0)
-            context.Error(context.Name, "Implicit precedence can't follow explicit precedence.");
+            context.:Error(context.Name, "Implicit precedence can't follow explicit precedence.");
         }
         prevContext = context;
         relations.AddRange(context.Relations);
       | _ => assert3(false);
     }
-    (relations.NToList(), allPrecedences.Map(name => Precedence(symbol, name)));
+    (relations.:NToList(), allPrecedences.:Map(name => Precedence(symbol, name)));
   }
 }
 
@@ -797,13 +797,13 @@ public sealed class PrecedenceNamedContext : PrecedenceContext
         match (symbols)
         {
           | [symbol]    => symbol
-          | []          => this.Error(identifier, "Undeclared precedence."); null
-          | symbol :: _ => this.Error(identifier, "Ambiguous precedence."); symbol
+          | []          => this.:Error(identifier, "Undeclared precedence."); null
+          | symbol :: _ => this.:Error(identifier, "Ambiguous precedence."); symbol
         }
       }
       def symbols = names.Map(bind);
-      unless (symbols.Count(s => s : object == Symbol) == 1)
-        this.Error(errorLoc, "On of precedencies must be same as current precedence.");
+      unless (symbols.:Count(s => s : object == Symbol) == 1)
+        this.:Error(errorLoc, "On of precedencies must be same as current precedence.");
       mutable prevSymbol = null;
       foreach (symbol in symbols)
       {
@@ -964,7 +964,7 @@ public sealed class SyntaxModuleBodyContext : EnteredScopeContext, ITokenNamesMa
       }
       def walk(baseContext)
       {
-        match (baseContext.TryGetParent.[OpenNamespaceOrTypeContext]())
+        match (baseContext.:TryGetParent.[OpenNamespaceOrTypeContext]())
         {
           | null => Map()
           | OpenNamespaceOrTypeContext(OpenSymbol = Some(SyntaxModuleSymbol as moduleSymbol)) as context =>
@@ -982,7 +982,7 @@ public sealed class SyntaxModuleBodyContext : EnteredScopeContext, ITokenNamesMa
     def result = GetSpaceRule(context, ruleName);
     when (result.IsNone && !_whitespaceHintShown)
     {
-      Project.Hint(loc, $"Declare whitespace handling rule '$ruleName' or import 'Nitra.Core' syntax module from Nitra.Runtime library.");
+      Project.:Hint(loc, $"Declare whitespace handling rule '$ruleName' or import 'Nitra.Core' syntax module from Nitra.Runtime library.");
       _whitespaceHintShown = true;
     }
     result;
@@ -1012,9 +1012,9 @@ public sealed class SyntaxModuleContext : EnteredScopeContext
   public this(parent : Context, name : G.Name)
   {
     base(parent);
-    def p = this.GetParent.[EnteredNamespaceContext]();
+    def p = this.:GetParent.[EnteredNamespaceContext]();
     def compilerMessages = Project;
-    SyntaxModuleSymbol = p.Namespace.BindByHierarchy.[ParsedSyntaxModuleSymbol](name, compilerMessages).GetValue(compilerMessages);
+    SyntaxModuleSymbol = p.Namespace.:BindByHierarchy.[ParsedSyntaxModuleSymbol](name, compilerMessages).GetValue(compilerMessages);
   }
 
   public override CurrentSymbols  : list[Symbol] { get { [SyntaxModuleSymbol] } }
@@ -1353,7 +1353,7 @@ public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
         foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
         {
           def firstSymbol = group.Nodes.FirstItem;
-          using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Declaration '$(firstSymbol.FullName)' is cyclic."))
+          using (root = Node.Project.:RootError(firstSymbol.FirstLocation, $"Declaration '$(firstSymbol.FullName)' is cyclic."))
           {
             // 'foreach' causes invalid IL
             def e = group.Nodes.GetEnumerator();
@@ -1361,7 +1361,7 @@ public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
             while (e.MoveNext())
             {
               def symbol = e.Current;
-              root.Hint(symbol.FirstLocation, $"Circular base declaration dependency '$(symbol.FullName)' for declaration '$(firstSymbol.FullName)'.");
+              root.:Hint(symbol.FirstLocation, $"Circular base declaration dependency '$(symbol.FullName)' for declaration '$(firstSymbol.FullName)'.");
             }
           }
         }
@@ -1462,9 +1462,9 @@ public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
         {
           when (baseAst.Symbol is SymbolRef.Some(s))
           unless (sealedSymbolFromBase.IsSubtypeOf(s))
-            using (root = Node.Project.RootError(FirstLocation, $"Symbol inheritance is not available from sealed symbol '$(sealedSymbolFromBase.FullName)'."))
+            using (root = Node.Project.:RootError(FirstLocation, $"Symbol inheritance is not available from sealed symbol '$(sealedSymbolFromBase.FullName)'."))
             {
-              root.Hint(sealedSymbolFromBase.FirstLocation, "Sealed symbol.");
+              root.:Hint(sealedSymbolFromBase.FirstLocation, "Sealed symbol.");
               break;
             }
         }
@@ -1579,10 +1579,10 @@ public abstract class PropertyContainerSymbol : SingleDefSymbol
         if (table.TryGetValue(p1.Name, out p2))
         {
           def s2 = p2.PropertyContainer;
-          using (root = Node.Project.RootError(this.FirstLocation, $"Inherited $(s1.Description) '$(s1.FullName)' and $(s2.Description) '$(s2.FullName)' have properties with same name '$(p1.Name)'."))
+          using (root = Node.Project.:RootError(this.FirstLocation, $"Inherited $(s1.Description) '$(s1.FullName)' and $(s2.Description) '$(s2.FullName)' have properties with same name '$(p1.Name)'."))
           {
-            root.Hint(p1.FirstLocation, "Property declaration.");
-            root.Hint(p2.FirstLocation, "Property declaration.");
+            root.:Hint(p1.FirstLocation, "Property declaration.");
+            root.:Hint(p2.FirstLocation, "Property declaration.");
           }
         }
         else
@@ -1600,7 +1600,7 @@ public abstract class PropertyContainerSymbol : SingleDefSymbol
         if (table.ContainsKey(p.Name))
           table[p.Name] = p;
         else
-          Node.Project.Error(p.FirstLocation, $"Property '$(p.Name)' to override not found.");
+          Node.Project.:Error(p.FirstLocation, $"Property '$(p.Name)' to override not found.");
       }
       else
       {
@@ -1608,8 +1608,8 @@ public abstract class PropertyContainerSymbol : SingleDefSymbol
         if (table.TryGetValue(p.Name, out existingProperty))
         {
           def s = existingProperty.PropertyContainer;
-          using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from $(s.Description) '$(s.FullName)'."))
-            root.Hint(existingProperty.FirstLocation, "Property declaration.");
+          using (root = Node.Project.:RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from $(s.Description) '$(s.FullName)'."))
+            root.:Hint(existingProperty.FirstLocation, "Property declaration.");
         }
         else
           table.Add(p.Name, p);
@@ -1908,7 +1908,7 @@ public sealed class ParsedSimpleSymbolSymbol : SymbolSymbol, IDependentStatement
     | DependentStatement.Assign(Path = [Identifier(Value = name) as identifier], Expression = expr) when _builtInMethodNames.Contains(name) =>
       mutable existingStatement;
       if (_builtInMethods.TryGetValue(name, out existingStatement))
-        Node.Project.Error(statement, $"Duplicate implementation of '$name' method.")
+        Node.Project.:Error(statement, $"Duplicate implementation of '$name' method.")
       else
         _builtInMethods.Add(name, (identifier, expr));
 
@@ -2244,7 +2244,7 @@ public abstract class SpanClassSymbol : SingleDefSymbol
       assert(Node != null);
       match (this.RegularRule)
       {
-        | Some(rr) => rr.MakeMatcher(Node.Project)
+        | Some(rr) => rr.:MakeMatcher(Node.Project)
         | None     => nullMatcher
       }
     }
@@ -2350,7 +2350,7 @@ public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraph
     get
     {
       when (spanClasses : object == null)
-        spanClasses = AllSpanClasses.FilterToArray(x => x.RegularRule.HasValue);
+        spanClasses = AllSpanClasses.:FilterToArray(x => x.RegularRule.HasValue);
       spanClasses
     }
   }
@@ -2376,7 +2376,7 @@ public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraph
         foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
         {
           def firstSymbol = group.Nodes.FirstItem;
-          using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Language '$(firstSymbol.FullName)' is cyclic."))
+          using (root = Node.Project.:RootError(firstSymbol.FirstLocation, $"Language '$(firstSymbol.FullName)' is cyclic."))
           {
             // 'foreach' causes invalid IL
             def e = group.Nodes.GetEnumerator();
@@ -2384,7 +2384,7 @@ public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraph
             while (e.MoveNext())
             {
               def symbol = e.Current;
-              root.Hint(symbol.FirstLocation, $"Circular base language dependency '$(symbol.FullName)' for language '$(firstSymbol.FullName)'.");
+              root.:Hint(symbol.FirstLocation, $"Circular base language dependency '$(symbol.FullName)' for language '$(firstSymbol.FullName)'.");
             }
           }
         }
@@ -2436,10 +2436,10 @@ public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraph
         if (table.TryGetValue(p1.Name, out p2))
         {
           def s2 = p2.DeclaringLanguage;
-          using (root = Node.Project.RootError(this.FirstLocation, $"Inherited language '$(s1.FullName)' and language '$(s2.FullName)' have span classes with same name '$(p1.Name)'."))
+          using (root = Node.Project.:RootError(this.FirstLocation, $"Inherited language '$(s1.FullName)' and language '$(s2.FullName)' have span classes with same name '$(p1.Name)'."))
           {
-            root.Hint(p1.FirstLocation, "Span class declaration.");
-            root.Hint(p2.FirstLocation, "Span class declaration.");
+            root.:Hint(p1.FirstLocation, "Span class declaration.");
+            root.:Hint(p2.FirstLocation, "Span class declaration.");
           }
         }
         else
@@ -2456,8 +2456,8 @@ public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraph
       if (table.TryGetValue(p.Name, out existingSpanClass))
       {
         def s = existingSpanClass.DeclaringLanguage;
-        using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of span class '$(p.Name)', span class inherited from language '$(s.FullName)'."))
-          root.Hint(existingSpanClass.FirstLocation, "Span class declaration.");
+        using (root = Node.Project.:RootError(p.FirstLocation, $"Redefinition of span class '$(p.Name)', span class inherited from language '$(s.FullName)'."))
+          root.:Hint(existingSpanClass.FirstLocation, "Span class declaration.");
       }
       else
         table.Add(p.Name, p);
@@ -2503,7 +2503,7 @@ public sealed class ParsedLanguageSymbol : LanguageSymbol
   {
     mutable unused;
     unless (Uri.TryCreate(value, UriKind.Absolute, out unused))
-      Node.Project.Error(loc, "Invalid absolute URL specified.");
+      Node.Project.:Error(loc, "Invalid absolute URL specified.");
 
     _properties.SetProperty("LicenseUrl", loc, value)
   }
@@ -2511,7 +2511,7 @@ public sealed class ParsedLanguageSymbol : LanguageSymbol
   internal AddSyntaxModule(loc : Location, syntaxModule : SyntaxModuleSymbol) : void
   {
     when (_syntaxModules.Contains(syntaxModule))
-      Node.Project.Error(loc, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
+      Node.Project.:Error(loc, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
 
     _syntaxModules ::= syntaxModule;
   }
@@ -2521,14 +2521,14 @@ public sealed class ParsedLanguageSymbol : LanguageSymbol
     if (_startRule is SymbolRef.None(IsGenerated = true))
       _startRule = startRule
     else
-      using (root = Node.Project.RootError(startRule, "Redefinition of start rule"))
-        root.Hint(_startRule, "First seen here");
+      using (root = Node.Project.:RootError(startRule, "Redefinition of start rule"))
+        root.:Hint(_startRule, "First seen here");
   }
 
   internal AddFileExtension(loc : Location, ext : string) : void
   {
     when (_fileExtensions.Contains(ext))
-      Node.Project.Error(loc, $"Duplicated file extension '$ext'.");
+      Node.Project.:Error(loc, $"Duplicated file extension '$ext'.");
 
     _fileExtensions ::= ext;
   }
@@ -2666,8 +2666,8 @@ public sealed class PropertyBag
   {
     mutable existingValue;
     if (_table.TryGetValue(name, out existingValue))
-      using (rootError = _symbol.Node.Project.RootError(loc, $"Duplicated assignment of '$name' property"))
-        rootError.Hint(existingValue[0], "First assigned here");
+      using (rootError = _symbol.Node.Project.:RootError(loc, $"Duplicated assignment of '$name' property"))
+        rootError.:Hint(existingValue[0], "First assigned here");
     else
       _table.Add(name, (loc, value))
   }
@@ -2788,12 +2788,12 @@ public variant ParseTreeCtor
 
   public static AppendCtor(this buffer : StringBuilder, ctor : ParseTreeCtor) : StringBuilder
   {
-    buffer.Append(ctor.Name).Append('(').AppendNTimes(ctor.Arity, "_", ", ").Append(')')
+    buffer.Append(ctor.Name).Append('(').:AppendNTimes(ctor.Arity, "_", ", ").Append(')')
   }
  
   public override ToString() : string
   {
-    StringBuilder().AppendCtor(this).ToString()
+    StringBuilder().:AppendCtor(this).ToString()
   }
 }
 
@@ -2863,13 +2863,13 @@ public variant ParseTreePattern : Nitra.Runtime.Located
     match (pattern)
     {
       | Var(n)           => buffer.Append(n)
-      | Ctor(ctor, args) => buffer.Append(ctor.Name).Append('(').AppendList(args, AppendPattern, ", ").Append(')')
+      | Ctor(ctor, args) => buffer.Append(ctor.Name).Append('(').:AppendList(args, AppendPattern, ", ").Append(')')
     }
   }
  
   public override ToString() : string
   {
-    StringBuilder().AppendPattern(this).ToString()
+    StringBuilder().:AppendPattern(this).ToString()
   }
 }
 
@@ -2908,13 +2908,13 @@ internal module PatternTyper
           | (true,   true) => loop(patternSeq.Current.Typing(ruleTypeSeq.Current, context) :: result, errorReported)
           | (false,  true) =>
             unless (errorReported)
-              context.Error(patternSeq.Current.Location + patterns.Location.FromEnd(), $"Too many patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).");
+              context.:Error(patternSeq.Current.Location + patterns.Location.FromEnd(), $"Too many patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).");
             result
 
           | (true, false) =>
             unless (errorReported)
             unless (result is [ParseTreePattern(IsWildcard = true)]) // treat single '_' as sequence of '_' with proper length
-              context.Error(patterns, $"Too few patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).");
+              context.:Error(patterns, $"Too few patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).");
             loop(ParseTreePattern.Wildcard(patterns.Location.FromEnd(), ruleTypeSeq.Current) :: result, true)
         }
       }
@@ -2936,7 +2936,7 @@ internal module PatternTyper
 
   private ReportTypeMismatch(location : Location, ruleType : RuleType, ctor : ParseTreeCtor, context : Context) : ParseTreePattern
   {
-    context.Error(location, $"Expected '$(ruleType)' found '$(ctor)'.");
+    context.:Error(location, $"Expected '$(ruleType)' found '$(ctor)'.");
     ParseTreePattern.Wildcard(location, ruleType)
   }
 
@@ -2949,7 +2949,7 @@ internal module PatternTyper
         def var = ParseTreePattern.Var(location, ruleType, identifier);
         unless (var.IsWildcard)
         {
-          def patternContext = context.GetContext.[ParseTreePatternVariableContext]();
+          def patternContext = context.:GetContext.[ParseTreePatternVariableContext]();
           def variableSymbol = ParseTreePatternVariableSymbol(identifier, ruleType);
           patternContext.AddVariable(variableSymbol);
         }
@@ -2971,7 +2971,7 @@ internal module PatternTyper
     match (ruleType, TryBindCtor(identifier))
     {
       | (_, null) =>
-        context.Error(identifier, $"Unbound name '$(identifier.Value)'.");
+        context.:Error(identifier, $"Unbound name '$(identifier.Value)'.");
         ParseTreePattern.Wildcard(location, ruleType)
 
       | (Tuple,             Tuple) => assert(false, "Tuples not supported here")
@@ -3209,7 +3209,7 @@ internal module SyntaxMappingTyper
           expr
         else
         {
-          compilerMessages.Error(type, $"Expected AST type '$astType' got '$exprType'.");
+          compilerMessages.:Error(type, $"Expected AST type '$astType' got '$exprType'.");
           SyntaxMappingExpr.Error(type)
         }
 
@@ -3226,7 +3226,7 @@ internal module SyntaxMappingTyper
         }
         else
         {
-          compilerMessages.Error(type, $"Expected AST type '$astType' got option.");
+          compilerMessages.:Error(type, $"Expected AST type '$astType' got option.");
           SyntaxMappingExpr.Error(type)
         }
 
@@ -3239,7 +3239,7 @@ internal module SyntaxMappingTyper
             SyntaxMappingExpr.ListCtor(type, astSymbol, itemExprs)
 
           | _ =>
-            compilerMessages.Error(type, $"Expected AST type '$astType' got list.");
+            compilerMessages.:Error(type, $"Expected AST type '$astType' got list.");
             SyntaxMappingExpr.Error(type)
         }
 
@@ -3273,7 +3273,7 @@ internal module SyntaxMappingTyper
       else
         VNone();
 
-    def items = node.ItemExprs.Item1.MapToList(_.MakeType(ruleSymbol, itemTypeHintOpt));
+    def items = node.ItemExprs.Item1.:MapToList(_.MakeType(ruleSymbol, itemTypeHintOpt));
     SyntaxMappingType.List(node.Location, items)
   }
 
@@ -3313,7 +3313,7 @@ internal module SyntaxMappingTyper
         SyntaxMappingType.Ast(node, variable.Type, expr)
 
       | _ :: _ =>
-        result1.Messages.TranslateTo(node.Context);
+        result1.Messages.:TranslateTo(node.Context);
         SyntaxMappingType.Undefined(node)
 
       | [] =>
@@ -3324,7 +3324,7 @@ internal module SyntaxMappingTyper
         }
         else
         {
-          node.Context.Error(name, $"Unbound name '$(name.Value)'.");
+          node.Context.:Error(name, $"Unbound name '$(name.Value)'.");
           SyntaxMappingType.Undefined(node)
         }
     }
@@ -3334,7 +3334,7 @@ internal module SyntaxMappingTyper
   {
     def error(errorLoc : ILocated, message : string)
     {
-      node.Context.Error(errorLoc, message);
+      node.Context.:Error(errorLoc, message);
       SyntaxMappingType.Undefined(node)
     }
     def unboundName(name : Identifier)
@@ -3384,13 +3384,13 @@ internal module SyntaxMappingTyper
   public TypeCall(node : G.MapSyntaxExpression.Call, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
   {
     def exprType      = node.Expr.MakeType(ruleSymbol, VNone());
-    def argumentTypes = node.ArgumentExprs.Item1.MapToList(_.MakeType(ruleSymbol, VNone()));
+    def argumentTypes = node.ArgumentExprs.Item1.:MapToList(_.MakeType(ruleSymbol, VNone()));
     match (exprType)
     {
       | Undefined       => SyntaxMappingType.Undefined(node)
       | ParseTree(path) => SyntaxMappingType.Call(node, path, argumentTypes)
       | _               =>
-        node.Context.Error(node, "Syntax mapping invokation is not allowed here.");
+        node.Context.:Error(node, "Syntax mapping invokation is not allowed here.");
         SyntaxMappingType.Undefined(node)
     }
   }
@@ -3402,11 +3402,11 @@ internal module SyntaxMappingTyper
     {
       | Undefined       => SyntaxMappingType.Undefined(node)
       | ParseTree(path) =>
-        def cases = node.MatchCases.Item1.MapToList(_.MakeType(path.Type, ruleSymbol, typeHintOpt));
+        def cases = node.MatchCases.Item1.:MapToList(_.MakeType(path.Type, ruleSymbol, typeHintOpt));
         SyntaxMappingType.Match(node, path, cases)
 
       | _ =>
-        node.Context.Error(node, "Parse tree matching is not allowed here.");
+        node.Context.:Error(node, "Parse tree matching is not allowed here.");
         SyntaxMappingType.Undefined(node)
     }
   }
@@ -3425,11 +3425,11 @@ internal module SyntaxMappingTyper
           if (path.Type is RuleType.List(itemType))
           {
             def itemSymbol = ParseTreePatternVariableSymbol(node.ItemName.Identifier(), itemType);
-            node.EachExpr.Context.GetContext.[ParseTreePatternVariableContext]().AddVariable(itemSymbol);
+            node.EachExpr.Context.:GetContext.[ParseTreePatternVariableContext]().AddVariable(itemSymbol);
 
             def accumulatorReference = node.AccumulatorName2.Identifier();
             unless (node.AccumulatorSymbol.Name == accumulatorReference.Value)
-              node.Context.Error(accumulatorReference, $"Unbound name '$(accumulatorReference.Value)'.");
+              node.Context.:Error(accumulatorReference, $"Unbound name '$(accumulatorReference.Value)'.");
 
             def initExpr = MakeExpression(node.InitExpr.MakeType(ruleSymbol, VSome(astType)), astType, node.Context);
             def eachExpr = MakeExpression(node.EachExpr.MakeType(ruleSymbol, VSome(astType)), astType, node.Context);
@@ -3438,19 +3438,19 @@ internal module SyntaxMappingTyper
           }
           else
           {
-            node.Context.Error(path, $"Expected list rule type got '$(path.Type)'.");
+            node.Context.:Error(path, $"Expected list rule type got '$(path.Type)'.");
             SyntaxMappingType.Undefined(node)
           }
 
         | _ =>
-          node.Context.Error(node, "Parse tree list folding is not allowed here.");
+          node.Context.:Error(node, "Parse tree list folding is not allowed here.");
           SyntaxMappingType.Undefined(node)
       }
     }
     else
     {
       _ = node.MakeReturnType(AstType.Void(node));
-      node.Context.Error(node, "Type inference is not supported, please specify type with ':' operator.");
+      node.Context.:Error(node, "Type inference is not supported, please specify type with ':' operator.");
       SyntaxMappingType.Undefined(node)
     }
   }
@@ -3511,7 +3511,7 @@ internal module SyntaxMappingTyper
     }
     def error(message : string) : SyntaxMappingType
     {
-      compilerMessages.Error(loc, message);
+      compilerMessages.:Error(loc, message);
       SyntaxMappingType.Undefined(loc)
     }
     def selectOverload(targetRuleSymbol : SyntaxRuleSymbol, returnTypePred : AstType -> bool, resultBuilder : AstType * list[SyntaxMappingExpr] -> SyntaxMappingType) : SyntaxMappingType
@@ -3550,7 +3550,7 @@ internal module SyntaxMappingTyper
       {
         | 1 =>
           def (syntaxMapping, args, subMessages) = buffer.FirstItem;
-          subMessages.GetMessages().TranslateTo(compilerMessages);
+          subMessages.GetMessages().:TranslateTo(compilerMessages);
           resultBuilder(syntaxMapping.ReturnType, args)
 
         | 0 =>
@@ -3572,9 +3572,9 @@ internal module SyntaxMappingTyper
           }
 
         | _ =>
-          using (root = compilerMessages.RootError(loc, $"Ambiguous '$(targetRuleSymbol.FullName)' AST mapping."))
+          using (root = compilerMessages.:RootError(loc, $"Ambiguous '$(targetRuleSymbol.FullName)' AST mapping."))
             foreach ((syntaxMapping, _, _) in buffer.ToArray())
-              root.Hint(syntaxMapping.FirstLocation, "AST mapping ambiguity.");
+              root.:Hint(syntaxMapping.FirstLocation, "AST mapping ambiguity.");
           SyntaxMappingType.Undefined(loc)
       }
     }
@@ -3673,7 +3673,7 @@ internal module SyntaxMappingTyper
       def expr = MakeExpression(caseType, returnType, compilerMessages);
       caseExprs.Add(SyntaxMappingCase(caseLoc, pattern, expr));
     }
-    SyntaxMappingType.Ast(loc, returnType, SyntaxMappingExpr.Match(loc, path, caseExprs.ToNList(), returnType))
+    SyntaxMappingType.Ast(loc, returnType, SyntaxMappingExpr.Match(loc, path, caseExprs.:ToNList(), returnType))
   }
 
   private NavigateThroughTuples(path : ParseTreePath) : ParseTreePath
@@ -3885,7 +3885,7 @@ public sealed class ParsedExtensionRuleSymbol : BaseExtensionRuleSymbol
         def name2 = if (IsIdentifier(name1)) ToPascalCase(name1) else "";
 
         when (name2 == "")
-          declarationSite.Node.Project.Error(node, "Can't infer name for this rule.");
+          declarationSite.Node.Project.:Error(node, "Can't infer name for this rule.");
         (node.Location.WithSpan(NSpan(node.Pipe.EndPos)), name2);
       };
 
@@ -3974,7 +3974,7 @@ public abstract class RegularRuleSymbol : RuleDefSymbol, IRuleDeclarationSite
     [Memoize] get
     {
       assert(Node != null);
-      FSMTransform.MakeDeterministic(this.Rule.ConvertRegularRuleToFsm(Node.Project))
+      FSMTransform.MakeDeterministic(this.Rule.:ConvertRegularRuleToFsm(Node.Project))
     }
   }
   public        override Description         : string      { get { "regular rule" } }
@@ -4019,7 +4019,7 @@ public sealed class ParsedRegularRuleSymbol : RegularRuleSymbol
 [Record]
 public abstract class RuleDefSymbol : RuleSymbol
 {
-  public RuleMethods                  : list[RuleMethodSymbol] { [Memoize] get { Node.GetChildren.[RuleMethod.RuleMethodSymbol]().NToList() } }
+  public RuleMethods                  : list[RuleMethodSymbol] { [Memoize] get { Node.GetChildren.[RuleMethod.RuleMethodSymbol]().:NToList() } }
 
   public abstract Type                : RuleType              { get; }
   public abstract Options             : RuleDefinitionOptions { get; }
@@ -4215,7 +4215,7 @@ public abstract class SyntaxRuleSymbol : RuleDefSymbol
   internal virtual AddSyntaxMapping(symbol : SyntaxMappingSymbol) : void
   {
     assert(Node != null);
-    Node.Project.Error(symbol.FirstLocation, "AST mapping is not allowed here")
+    Node.Project.:Error(symbol.FirstLocation, "AST mapping is not allowed here")
   }
 }
 
@@ -4252,7 +4252,7 @@ public sealed class ParsedTokenLiteralSymbol : TokenLiteralSymbol
 {
   private _stringLiterals : ListParseTree[L.StringLiteral];
 
-  public override StringLiterals : list[string] { [Memoize] get { _stringLiterals.MapToList(_.Value())  } }
+  public override StringLiterals : list[string] { [Memoize] get { _stringLiterals.:MapToList(_.Value())  } }
 }
 
 // ---- Symbols/SyntaxModuleSymbol.n (Nitra.Typing) ----
@@ -4313,9 +4313,9 @@ public sealed class ParsedSyntaxModuleSymbol : SyntaxModuleSymbol
         if (null == context)
           acc
         else
-          loop(context.TryGetParent(), context.TokenLiteral :: acc)
+          loop(context.:TryGetParent(), context.TokenLiteral :: acc)
       }
-      loop(_node.FinalContext.TryGetContext(), [])
+      loop(_node.FinalContext.:TryGetContext(), [])
     }
   }
 
@@ -4328,9 +4328,9 @@ public sealed class ParsedSyntaxModuleSymbol : SyntaxModuleSymbol
         if (null == context)
           acc
         else
-          loop(context.TryGetParent(), if (context.OpenSymbol is Some(SyntaxModuleSymbol as symbol)) symbol :: acc else acc)
+          loop(context.:TryGetParent(), if (context.OpenSymbol is Some(SyntaxModuleSymbol as symbol)) symbol :: acc else acc)
       }
-      loop(_node.FinalContext.TryGetContext(), [])
+      loop(_node.FinalContext.:TryGetContext(), [])
     }
   }
 
@@ -4345,7 +4345,7 @@ public sealed class ParsedSyntaxModuleSymbol : SyntaxModuleSymbol
         when (curRelations != null)
           relations.AddRange(curRelations);
       }
-      relations.NToList();
+      relations.:NToList();
     }
   }
 
@@ -4360,7 +4360,7 @@ public sealed class ParsedSyntaxModuleSymbol : SyntaxModuleSymbol
         when (curPrecedences != null)
           allPrecedences.AddRange(curPrecedences);
       }
-      allPrecedences.NToList();
+      allPrecedences.:NToList();
     }
   }
 }
@@ -4405,8 +4405,8 @@ public module TypingUtils
   {
     def insertWhitespaceRules() : List[Rule]
     {
-      def keywordContext = context.TryGetContext.[KeywordRegexContext]();
-      def moduleContext  = context.GetContext.[SyntaxModuleBodyContext]();
+      def keywordContext = context.:TryGetContext.[KeywordRegexContext]();
+      def moduleContext  = context.:GetContext.[SyntaxModuleBodyContext]();
       def makeCall(loc, sSymbol) { Rule.Call(loc, sSymbol.Type, sSymbol.Name, RuleRef.Some(loc, true, sSymbol), BindingPowerInfo.Zero); }
       def getSpaceRule(loc) { moduleContext.GetSpaceRule(context, "s", loc) }
       def tryAddSpaceRule(rule, loc)
@@ -4428,7 +4428,7 @@ public module TypingUtils
           def buffer = List();
           foreach (r in rule.Rules)
             transformToBuffer(r, buffer);
-          (Rule.Sequence(rule, buffer.ToNList()), None())
+          (Rule.Sequence(rule, buffer.:ToNList()), None())
 
         | String              as rule =>
           def loc = rule.Location.FromEnd();
@@ -4529,7 +4529,7 @@ public module TypingUtils
           }
         finalRules.Add(fieldRule.UpdateFieldName(indexedFieldName));
       }
-      finalRules.ToNList();
+      finalRules.:ToNList();
     }
 
     def rules =
@@ -4560,7 +4560,7 @@ public module TypingUtils
         arity++;
     }
 
-    def rulesWithoutVoid = symbol.Rule.Rules.FilterToArray(rule => !(rule.Type is RuleType.Void));
+    def rulesWithoutVoid = symbol.Rule.Rules.:FilterToArray(rule => !(rule.Type is RuleType.Void));
     def end = rulesWithoutVoid.Length - 1;
     mutable firstIsArg = false;
     mutable lastIsArg = false;
@@ -4614,17 +4614,17 @@ public module TypingUtils
     {
       | SymbolRef.Some(StructuralPropertySymbol(Type = OptionList(Qualified as name)) as astProperty)
       | SymbolRef.Some(StructuralPropertySymbol(Type =       List(Qualified as name)) as astProperty) =>
-        if (context.Bind.[AstSymbol](name) is SymbolRef.Some(baseType))
+        if (context.:Bind.[AstSymbol](name) is SymbolRef.Some(baseType))
           (astProperty, baseType)
         else
           (astProperty, null)
 
       | SymbolRef.Some(StructuralPropertySymbol(Type = t) as astProperty) as loc =>
-        context.Error(loc, $"Property '$(astProperty.Name)' has invalid type '$t'. Only list of declarations can be decomposed.");
+        context.:Error(loc, $"Property '$(astProperty.Name)' has invalid type '$t'. Only list of declarations can be decomposed.");
         (astProperty, null)
 
       | SymbolRef.Some(_) as loc =>
-        context.Error(loc, "Expected structural property in 'decompose' block.");
+        context.:Error(loc, "Expected structural property in 'decompose' block.");
         (null, null)
 
       | SymbolRef.None => (null, null)
@@ -4640,7 +4640,7 @@ public module TypingUtils
   internal BindAstSymbolFromMappingExtension(loc : Location, qid : list[Location], context : Context, compilerMessages : ICompilerMessages) : SymbolRef[AstSymbol]
   {
     def candidates    =
-      match (context.GetContext.[MapSyntaxContext]().ReturnType)
+      match (context.:GetContext.[MapSyntaxContext]().ReturnType)
       {
         | Ast(astSymbol) | List(astSymbol) | OptionList(astSymbol) | Option(astSymbol) => astSymbol.Node.BindMany(qid)
         | NemerleExpr | NemerleContext | Void => []
@@ -4662,7 +4662,7 @@ public module TypingUtils
     {
       | VSome(p) => SymbolRef.Some(fieldName.Location, false, p)
       | VNone    =>
-        compilerMessages.Error(fieldName, $"Unbound property '$name'.");
+        compilerMessages.:Error(fieldName, $"Unbound property '$name'.");
         SymbolRef.None(fieldName.Location, false)
     }
   }
@@ -4676,8 +4676,8 @@ public module TypingUtils
       def property = mappingField.Property;
       if (initializedProperties.ContainsKey(property))
       {
-        using (messages = compilerMessages.RootError(mappingField, $"Duplicated assignment of field '$(property.Name)'."))
-          messages.Hint(initializedProperties[property], "First assigned here.");
+        using (messages = compilerMessages.:RootError(mappingField, $"Duplicated assignment of field '$(property.Name)'."))
+          messages.:Hint(initializedProperties[property], "First assigned here.");
       }
       else
         initializedProperties.Add(property, mappingField);
@@ -4686,10 +4686,10 @@ public module TypingUtils
     foreach (StructuralPropertySymbol as property in astSymbol.AllProperties)
     {
       unless (initializedProperties.ContainsKey(property))
-        compilerMessages.Error(errorLoc, $"Assignment of field '$(property.Name)' is required.");
+        compilerMessages.:Error(errorLoc, $"Assignment of field '$(property.Name)' is required.");
     }
 
-    SyntaxMappingExpr.AstCtor(loc, astSymbol, mappingFields.NToList())
+    SyntaxMappingExpr.AstCtor(loc, astSymbol, mappingFields.:NToList())
   }
 
   // ---- merged from Typing/TypingUtils-MakePropertyProjectionType.n ----
@@ -4697,13 +4697,13 @@ public module TypingUtils
   {
     def bind(name : NType.Qualified, ctor : _ * _ -> PropertyProjectionType) : option[PropertyProjectionType]
     {
-      if (context.Bind.[AstSymbol](name) is SymbolRef.Some(targetType))
+      if (context.:Bind.[AstSymbol](name) is SymbolRef.Some(targetType))
       {
         if (targetType.IsSubtypeOf(baseType))
           Some(ctor(projectionSource, targetType))
         else
         {
-          context.Error(name, $"Declaration '$(targetType.FullName)' is not subtype of declaration '$(baseType.FullName)'.");
+          context.:Error(name, $"Declaration '$(targetType.FullName)' is not subtype of declaration '$(baseType.FullName)'.");
           None()
         }
       }
@@ -4719,7 +4719,7 @@ public module TypingUtils
         | Option    (Qualified as name) => bind(name, PropertyProjectionType.Option)
         | Qualified as name             => bind(name, PropertyProjectionType.Single)
         | t =>
-          context.Error(t, $"Invalid property type '$t'.");
+          context.:Error(t, $"Invalid property type '$t'.");
           None()
       }
     }
@@ -4732,7 +4732,7 @@ public module TypingUtils
     def t      = nitraType.Typing(context)[0];
     def result = NTypeToAstType(t, context);
     when (result.IsVoid)
-      context.Error(nitraType, $"Type '$t' is not valid AST type");
+      context.:Error(nitraType, $"Type '$t' is not valid AST type");
     result
   }
 
@@ -4743,7 +4743,7 @@ public module TypingUtils
       false
     else
     {
-      def env = parts.Head.NemerleEnv ?? context.GetNemerleEnvironment();
+      def env = parts.Head.NemerleEnv ?? context.:GetNemerleEnvironment();
       match (env.LookupType(parts.Map(p => p.Name)))
       {
         | Some(symbol) => symbol.FullName == fullName
@@ -4757,7 +4757,7 @@ public module TypingUtils
     match (t)
     {
       | Qualified as name =>
-        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+        if (context.:TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
           AstType.Ast(t.Location, astSymbol)
         else if (IsNemerleCompilerType(name, context, "Nemerle.Compiler.Parsetree.PExpr"))
           AstType.NemerleExpr(t.Location)
@@ -4769,19 +4769,19 @@ public module TypingUtils
         }
 
       | OptionList(Qualified as name) =>
-        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+        if (context.:TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
           AstType.OptionList(t.Location, astSymbol)
         else
           AstType.Void(t.Location)
 
       | List(Qualified as name) =>
-        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+        if (context.:TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
           AstType.List(t.Location, astSymbol)
         else
           AstType.Void(t.Location)
 
       | Option(Qualified as name) =>
-        if (context.TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
+        if (context.:TryBind.[AstSymbol](name) is SymbolRef.Some(astSymbol))
           AstType.Option(t.Location, astSymbol)
         else
         {
@@ -4798,7 +4798,7 @@ public module TypingUtils
     if ((propertyContainer : object) is IDependentStatementContainer as container)
       container.AddStatement(statement)
     else
-      compilerMessages.Error(statement, $"Dependent property statement is not allowed in $(propertyContainer.Description).");
+      compilerMessages.:Error(statement, $"Dependent property statement is not allowed in $(propertyContainer.Description).");
   }
 
   // ---- merged from Typing/TypingUtils-SetNameReferenceSyntaxMapping.n ----
@@ -4812,7 +4812,7 @@ public module TypingUtils
         {
           def loc            = symbol.FirstLocation;
           def returnType     = AstType.Ast(loc, referenceSymbol);
-          def expr           = SyntaxMappingExpr.Code(loc, Nemerle.Compiler.UtilMacros.locate(loc.NLocation(), <[ $(PExpr.FromQualifiedIdentifier(managerClass, referenceSymbol.FullName))(this) ]>));
+          def expr           = SyntaxMappingExpr.Code(loc, Nemerle.Compiler.UtilMacros.locate(loc.:NLocation(), <[ $(PExpr.FromQualifiedIdentifier(managerClass, referenceSymbol.FullName))(this) ]>));
           def mappingSymbol  = ChemicalSyntaxMappingSymbol(loc, symbol, [], returnType);
           mappingSymbol.SetExpression(expr);
           symbol.AddSyntaxMapping(mappingSymbol);
@@ -4825,7 +4825,7 @@ public module TypingUtils
         {
           def loc           = symbol.FirstLocation;
           def returnType    = AstType.Ast(loc, nameSymbol);
-          def expr          = SyntaxMappingExpr.Code(loc, Nemerle.Compiler.UtilMacros.locate(loc.NLocation(), <[ $(PExpr.FromQualifiedIdentifier(managerClass, nameSymbol.FullName))(this) ]>));
+          def expr          = SyntaxMappingExpr.Code(loc, Nemerle.Compiler.UtilMacros.locate(loc.:NLocation(), <[ $(PExpr.FromQualifiedIdentifier(managerClass, nameSymbol.FullName))(this) ]>));
           def mappingSymbol = ChemicalSyntaxMappingSymbol(loc, symbol, [], returnType);
           mappingSymbol.SetExpression(expr);
           symbol.AddSyntaxMapping(mappingSymbol);
@@ -4853,7 +4853,7 @@ public module TypingUtils
     def reportError(container : PropertyContainerSymbol, property : DependentPropertySymbol) : void
     {
       def loc = makeLocation(container, property);
-      project.Error(loc, $"Output dependent property '$(property.Name)' is never assigned to.");
+      project.:Error(loc, $"Output dependent property '$(property.Name)' is never assigned to.");
     }
 
     def visitedSymbols = SCG.HashSet();
@@ -4936,15 +4936,15 @@ public module TypingUtils
     def result = LightList();
     foreach (identifier in baseList)
     {
-      match (context.Bind.[AstSymbol](identifier))
+      match (context.:Bind.[AstSymbol](identifier))
       {
         | SymbolRef.Some(AbstractAstSymbol as astSymbol) as symbolRef =>
           if (!isDeclaration && astSymbol.IsDeclaration)
-            context.Error(symbolRef, "Only abstract ast can be specified in base ast list.")
+            context.:Error(symbolRef, "Only abstract ast can be specified in base ast list.")
           else
             result.Add(astSymbol)
 
-        | SymbolRef.Some as symbolRef => context.Error(symbolRef, "Only abstract declarations can be specified in base declarations list.");
+        | SymbolRef.Some as symbolRef => context.:Error(symbolRef, "Only abstract declarations can be specified in base declarations list.");
         | _ => ()
       }
     }
@@ -4963,12 +4963,12 @@ public module TypingUtils
   {
     if (isExtension)
     {
-      compilerMessages.Error(loc, "Modifier 'abstract' is not valid on extension ast");
+      compilerMessages.:Error(loc, "Modifier 'abstract' is not valid on extension ast");
       acc
     }
     else if (acc)
     {
-      compilerMessages.Error(loc, "Duplicate 'abstract' modifier");
+      compilerMessages.:Error(loc, "Duplicate 'abstract' modifier");
       acc
     }
     else
@@ -4979,19 +4979,19 @@ public module TypingUtils
   {
     if (acc %&& value)
     {
-      compilerMessages.Error(loc, $"Duplicate '$(value.GetText())' modifier");
+      compilerMessages.:Error(loc, $"Duplicate '$(value.:GetText())' modifier");
       acc
     }
     else if (isAbstract)
     {
-      compilerMessages.Error(loc, $"Modifier '$(value.GetText())' is not compatible with 'abstract'");
+      compilerMessages.:Error(loc, $"Modifier '$(value.:GetText())' is not compatible with 'abstract'");
       acc
     }
     else if (isDeclaration)
       acc %| value
     else
     {
-      compilerMessages.Error(loc, $"Modifier '$(value.GetText())' is not valid on ast");
+      compilerMessages.:Error(loc, $"Modifier '$(value.:GetText())' is not valid on ast");
       acc
     }
   }
@@ -5002,27 +5002,27 @@ public module TypingUtils
   {
     def newFieldName : string = _fieldName ?? QualifiedName.LastIdentifier().Value;
 
-    when (context.TryBind.[RuleAliasSymbol](QualifiedName) is SymbolRef.Some(alias))
+    when (context.:TryBind.[RuleAliasSymbol](QualifiedName) is SymbolRef.Some(alias))
       return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
 
-    def ruleRef = context.Bind.[RuleSymbol](QualifiedName);
+    def ruleRef = context.:Bind.[RuleSymbol](QualifiedName);
     def (type, spanClass) =
       if (ruleRef is SymbolRef.Some(RuleDefSymbol as ruleSymbol))
       {
         when (ruleSymbol is ExtensionRuleSymbol)
-          context.Error(QualifiedName,
+          context.:Error(QualifiedName,
             "You can't use directly reference an extension rule. Use reference to extensible rule instead or make a separate rule.");
 
-        def declarationSiteContext = context.GetContext.[RuleDeclarationSiteContext]();
+        def declarationSiteContext = context.:GetContext.[RuleDeclarationSiteContext]();
         match (declarationSiteContext.DeclarationSite)
         {
           | declarationSite is ExtendSyntaxSymbol =>
             when (declarationSite.Extend is Some(declaration) when declaration.IsToken)
-              context.Error(ruleRef, "Can't refer to a syntax rule from token.");
+              context.:Error(ruleRef, "Can't refer to a syntax rule from token.");
 
           | declarationSite is RuleDefSymbol =>
             when (declarationSite.IsToken && !ruleSymbol.IsToken)
-              context.Error(ruleRef, "Can't refer to a syntax rule from token.");
+              context.:Error(ruleRef, "Can't refer to a syntax rule from token.");
 
           | _                  => ()
         }
@@ -5055,7 +5055,7 @@ public module TypingUtils
   internal TypeLanguageInheritance(languageInheritance : OptionParseTree[SequenceParseTree[NSpan, G.QualifiedReference]], context : Context, symbol : LanguageSymbol) : SymbolRef[LanguageSymbol]
   {
     if (languageInheritance.HasValue)
-      context.Bind(languageInheritance.Value.Item2)
+      context.:Bind(languageInheritance.Value.Item2)
     else if ((context.Project :> NitraProject).LanguageSymbolOpt is Some(languageSymbol) when (symbol : object != languageSymbol))
       SymbolRef.Some(languageInheritance.Location, true, languageSymbol)
     else
@@ -5103,7 +5103,7 @@ public module TypingUtils
         if (matchKeyMarker(r))
         {
           if (mark)
-            context.Error(r, "The Identifiers.key marker must follow before literal.");
+            context.:Error(r, "The Identifiers.key marker must follow before literal.");
           else
             mark = true;
         }
@@ -5112,14 +5112,14 @@ public module TypingUtils
           if (r is String as str)
             str.IsKeyToken = true;
           else
-            context.Error(r, "The Identifiers.key marker must follow before literal.");
+            context.:Error(r, "The Identifiers.key marker must follow before literal.");
 
           mark = false;
         }
       }
     }
 
-    def rules = flat.NToList();
+    def rules = flat.:NToList();
     def type  = Utils.EvaluateSequenceRuleType(rules);
     Rule.Sequence(self.Location, type, Utils.MakeName(fieldName, rules, context), rules);
   }
@@ -5141,8 +5141,8 @@ public module TypingUtils
           mutable existingOverload;
           if (declaredOverloads.TryGetValue(key, out existingOverload))
           {
-            using (root = project.RootError(syntaxMapping.FirstLocation, "Redefinition of AST mapping"))
-              root.Hint(existingOverload.FirstLocation, "previous definition");
+            using (root = project.:RootError(syntaxMapping.FirstLocation, "Redefinition of AST mapping"))
+              root.:Hint(existingOverload.FirstLocation, "previous definition");
           }
           else
             declaredOverloads.Add(key, syntaxMapping)
@@ -5175,19 +5175,19 @@ public module TypingUtils
             if (mappingsToOverride.TryGetValue(pair.Key, out baseSyntaxMapping))
             {
               unless (syntaxMapping.ReturnType.IsSubtypeOf(baseSyntaxMapping.ReturnType))
-                project.Error(syntaxMapping.FirstLocation, $"AST mapping returning '$(baseSyntaxMapping.ReturnType)' is required.");
+                project.:Error(syntaxMapping.FirstLocation, $"AST mapping returning '$(baseSyntaxMapping.ReturnType)' is required.");
               _ = mappingsToOverride.Remove(pair.Key);
             }
             else
-              project.Error(syntaxMapping.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) not found in base rule '$(baseRuleSymbol.FullName)'.");
+              project.:Error(syntaxMapping.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) not found in base rule '$(baseRuleSymbol.FullName)'.");
           }
 
           when (mappingsToOverride.Count > 0)
             foreach (pair in mappingsToOverride)
             {
               def syntaxMapping = pair.Value;
-              using (root = project.RootError(ruleSymbol.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) returning '$(syntaxMapping.ReturnType)' is required"))
-                root.Hint(syntaxMapping.FirstLocation, "base definition");
+              using (root = project.:RootError(ruleSymbol.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) returning '$(syntaxMapping.ReturnType)' is required"))
+                root.:Hint(syntaxMapping.FirstLocation, "base definition");
             }
 
         | _ => ()

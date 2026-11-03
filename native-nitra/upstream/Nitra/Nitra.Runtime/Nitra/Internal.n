@@ -325,7 +325,7 @@ public sealed class ExtensibleRuleParser : StartRuleParser
 
   public IsExtension(parsingSequencer : ParsingSequence) : bool
   {
-    PrefixRules.Exists(prefix => prefix.ParsingSequence : object == parsingSequencer) || PostfixRules.Exists(postfix => postfix.ParsingSequence : object == parsingSequencer)
+    PrefixRules.:Exists(prefix => prefix.ParsingSequence : object == parsingSequencer) || PostfixRules.:Exists(postfix => postfix.ParsingSequence : object == parsingSequencer)
   }
 
   // ---- merged from ExtensibleRuleParser/ExtensibleRuleParser.n ----
@@ -742,14 +742,14 @@ public module DotUtils
   public EscapeString(str : string) : string
   {
     def sb = Text.StringBuilder(str.Length);
-    _ = sb.AppendEscapedString(str);
+    _ = sb.:AppendEscapedString(str);
     sb.ToString()
   }
 
   [DebuggerStepThroughAttribute]
   public AppendEscapedString(this sb : Text.StringBuilder, str : string) : Text.StringBuilder
   {
-    sb.AppendEscapedString(str, 0, str.Length);
+    sb.:AppendEscapedString(str, 0, str.Length);
   }
 
   [DebuggerStepThroughAttribute]
@@ -1041,8 +1041,8 @@ public sealed class ExtensibleRuleParserData : IParserInfo
       parser.BindingPower = Grammar.GetBindingPower(rd, postfixRd.BindingPower);
       parser
     }
-    PrefixParsers       = PrefixDescriptors.Map(rd => rd.NewParser(Grammar, ruleIdBuilder, this));
-    PostfixParsers      = PostfixDescriptors.Map(newPostfix);
+    PrefixParsers       = PrefixDescriptors.:Map(rd => rd.NewParser(Grammar, ruleIdBuilder, this));
+    PostfixParsers      = PostfixDescriptors.:Map(newPostfix);
   }
 
   internal GetParser(bindingPowerName : string) : ExtensibleRuleParser
@@ -2498,7 +2498,7 @@ public mask Recovery
 
     public UpdateSubrules(end : int) : void
     {
-      foreach ((subrule, subruleTokenChanges) when (subrule.End == end || subrule.Begin >= end) in ParsedSubrules.KeyValuePairs.ToArray().SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))//TODO:Optimize
+      foreach ((subrule, subruleTokenChanges) when (subrule.End == end || subrule.Begin >= end) in ParsedSubrules.KeyValuePairs.:ToArray().:SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))//TODO:Optimize
       {
         def subruleParseRecord = ParseRecord(this, subrule.State, subrule.Begin);
         mutable startChanges;
@@ -2633,19 +2633,19 @@ public mask Recovery
         when (startPos - showLen > 0)
           _ = sb.Append("…");
 
-        _ = sb.Append(text.SafeLeftSubstring(startPos, showLen));
+        _ = sb.Append(text.:SafeLeftSubstring(startPos, showLen));
 
         _ = sb.Append("■");
 
         def middle = if (curPos >= 0) curPos - startPos else showLen;
 
-        _ = sb.Append(text.SafeRightSubstring(startPos, middle));
+        _ = sb.Append(text.:SafeRightSubstring(startPos, middle));
 
         when (curPos >= 0)
           _ = sb.Append("▸");
 
         when (middle < showLen)
-        _ = sb.Append(text.SafeRightSubstring(startPos + middle, showLen - middle));
+        _ = sb.Append(text.:SafeRightSubstring(startPos + middle, showLen - middle));
 
         when (startPos + showLen <= text.Length)
           _ = sb.Append("…");
@@ -2753,7 +2753,7 @@ public mask Recovery
     public GetEarleyState(staticState : int) : int
     {
       def earleyState = _staticStateToEarleyMap[staticState];
-      assert2(States.Exists(s => s.Id == earleyState));
+      assert2(States.:Exists(s => s.Id == earleyState));
       earleyState
     }
 
@@ -2982,7 +2982,7 @@ public mask Recovery
         def nextIndex = if (withSeparator) state.Id + 2 else state.Id + 1;
         seq.IsNullable
           || contains(seq.StartStates, state.Id) && contains(seq.StartStates, nextIndex)
-          || state.Prev.Any(s => s < state.Id && (contains(seq.ParserHost.ParsingStates[s].Next, nextIndex) || contains(seq.ParserHost.ParsingStates[s].Next, -1)))
+          || state.Prev.:Any(s => s < state.Id && (contains(seq.ParserHost.ParsingStates[s].Next, nextIndex) || contains(seq.ParserHost.ParsingStates[s].Next, -1)))
       }
       def printState(sb : Text.StringBuilder, state : ParsingState) : void
       {
@@ -3100,7 +3100,7 @@ public mask Recovery
       foreach (subrule in parsedSubrules)
       {
         nodeEdges[subrule.State, subrule.Begin] = [];
-        when (subrule.End == end && ParserHost.ParsingStates[subrule.State].Next.Contains(-1))
+        when (subrule.End == end && ParserHost.ParsingStates[subrule.State].Next.:Contains(-1))
           nodeEdges[-1, subrule.End] = [];
       }
 
@@ -3125,7 +3125,7 @@ public mask Recovery
       foreach ((subrule, _) in parsedSubrules)
       {
         nodeEdges[subrule.State, subrule.Begin] = [];
-        when (subrule.End == end && ParserHost.ParsingStates[subrule.State].Next.Contains(-1))
+        when (subrule.End == end && ParserHost.ParsingStates[subrule.State].Next.:Contains(-1))
           nodeEdges[-1, subrule.End] = [];
       }
 
@@ -3393,8 +3393,8 @@ public mask Recovery
         tmpStateSet.Clear();
         collectAll(state);
         tmpStateSet
-          .MapToArrayFiltered(state => startStates.Contains(state), state => { def ps = startStates[state]; if (ps == null) -1 else ps.Id })
-          .SortInplace(_.CompareTo(_));
+          .:MapToArrayFiltered(state => startStates.Contains(state), state => { def ps = startStates[state]; if (ps == null) -1 else ps.Id })
+          .:SortInplace(_.CompareTo(_));
       }
       def startStates = collectStates(StartState);
 
@@ -3410,7 +3410,7 @@ public mask Recovery
       {
         mutable prev;
         state.Prev = if (prevStates.TryGetValue(state.Id, out prev))
-          prev.ToArray().SortInplace(_.CompareTo(_));
+          prev.:ToArray().:SortInplace(_.CompareTo(_));
         else
           array[];
       }
@@ -3421,10 +3421,10 @@ public mask Recovery
 
       def endStates = SCG.List();
       foreach ((state, _, _) in parsingStates)
-        when (state.Next.Exists(_ == -1))
+        when (state.Next.:Exists(_ == -1))
           endStates.Add(state.Id);
 
-      def parsingSequence = parsingSequenceCtor(startStates, endStates.ToArray().SortInplace(_.CompareTo(_)), parsingStates.MapToArray((state, _, _) => state), staticStateToEarley);
+      def parsingSequence = parsingSequenceCtor(startStates, endStates.ToArray().:SortInplace(_.CompareTo(_)), parsingStates.:MapToArray((state, _, _) => state), staticStateToEarley);
       foreach (state in parsingSequence.States)
         state.Owner = parsingSequence;
       parsingSequence
@@ -3636,7 +3636,7 @@ public mask Recovery
 
     public override ToString() : string
     {
-      $"$Id $(Next.NToList()) $(Prev.NToList()) $Description"
+      $"$Id $(Next.:NToList()) $(Prev.:NToList()) $Description"
     }
   }
 
@@ -3727,7 +3727,7 @@ public mask Recovery
         }
         else
           foreach ((nextSubrule, _) in subrules with nextIndex)
-            when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
+            when (subrule.End == nextSubrule.Begin && state.Next.:Contains(nextSubrule.State))
             {
               walk(nextIndex);
               walkCalled = true;
@@ -3788,7 +3788,7 @@ public mask Recovery
           def subrules = GetSubrulesAndChanges(seq, end);
           foreach ((subrule, changes) in subrules)
           {
-            def sequences = seq.GetSequencesForSubrule(subrule).ToArray();
+            def sequences = seq.GetSequencesForSubrule(subrule).:ToArray();
             if (sequences.Length > 0)
             {
               assert(sequences.Length == 1);
@@ -3898,7 +3898,7 @@ public mask Recovery
         foreach (state in dynamicExtensibleStates)
           stateEndChanges[state, end] = changes;
 
-      def allSubrules = seq.ParsedSubrules.KeyValuePairs.ToArray().SortInplace(SubrulesComparison);
+      def allSubrules = seq.ParsedSubrules.KeyValuePairs.:ToArray().:SortInplace(SubrulesComparison);
       def host = ParseResult.ParserHost;
 
       for (mutable i = allSubrules.Length - 1; i >= 0; --i)
@@ -3925,7 +3925,7 @@ public mask Recovery
         }
       }
 
-      subrules.ToArray().SortInplace(ParsingOrderSubrulesComparison);
+      subrules.ToArray().:SortInplace(ParsingOrderSubrulesComparison);
     }
 
     // ---- merged from Internal/Recovery/RecoveryParser/RecoveryParser.Delete.n ----
@@ -4105,7 +4105,7 @@ public mask Recovery
         }
         prevMaxPos = MaxPos;
       
-        def records = Records[curMaxPos].MapToArrayFiltered(r => !r.Key.IsComplete && !IsInsideToken(memoization, grammar, r.Key.Sequence), r => r.Key);
+        def records = Records[curMaxPos].:MapToArrayFiltered(r => !r.Key.IsComplete && !IsInsideToken(memoization, grammar, r.Key.Sequence), r => r.Key);
         def leafRecords = GetLeafTokens(records);
       
         Debug.IndentSize = 2;
@@ -4200,7 +4200,7 @@ public mask Recovery
                 continue;
             
               Parse();
-              foreach ((oldRecord, newState) in stopperToken.Value.Distinct())
+              foreach ((oldRecord, newState) in stopperToken.Value.:Distinct())
               {
                 when (newState < 0)
                   break;
@@ -4607,7 +4607,7 @@ public mask Recovery
           | _ => ()
         }
         
-      throw LiteralCompletionException(result.OrderBy(x => x).ToArray())
+      throw LiteralCompletionException(result.:OrderBy(x => x).:ToArray())
     }
 
     public RecoveryFromAllErrors() : void
@@ -4673,7 +4673,7 @@ public mask Recovery
         mutable count;
         do
         {
-          def records = Records[maxPos].KeyValuePairs.ToArray(); // to materialize collection
+          def records = Records[maxPos].KeyValuePairs.:ToArray(); // to materialize collection
           count = records.Length;
 
           // Находим все состояния которые могут съедать мусор
@@ -4686,12 +4686,12 @@ public mask Recovery
                   break;
                 }
 
-          def sequences = SCG.HashSet(Records[maxPos].Keys.Select(r => r.Sequence));
+          def sequences = SCG.HashSet(Records[maxPos].Keys.:Select(r => r.Sequence));
           foreach (sequence when sequence.ParsingSequence.SequenceInfo != null in sequences)
           {
             when (IsInsideToken(memoization, grammar, sequence) && !sequence.ParsingSequence.CanConsumeErrorTokens)
               continue;
-            foreach ((subrule, _) in sequence.ParsedSubrules.KeyValuePairs.NToArray())//TODO optimize
+            foreach ((subrule, _) in sequence.ParsedSubrules.KeyValuePairs.:NToArray())//TODO optimize
               when (subrule.State >= 0 && subrule.End == maxPos)
               {
                 def record = ParseRecord(sequence, subrule.State, subrule.Begin);

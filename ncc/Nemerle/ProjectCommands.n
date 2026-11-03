@@ -41,9 +41,9 @@ internal module Projects
     def all = args.ToArray();
     mutable at = 0;
     while (at < all.Length && all[at].StartsWith("-", StringComparison.Ordinal)) at++;
-    def before = all.Take(at).NToList();
+    def before = all.:Take(at).:NToList();
     def command = all[at];
-    def rest = all.Skip(at + 1).NToList();
+    def rest = all.:Skip(at + 1).:NToList();
     try
     {
       match (command)
@@ -51,7 +51,7 @@ internal module Projects
         | "init" => Init(rest)
         | _ =>
           def split = Array.IndexOf(all, "--", at + 1);
-          def (own, programArgs) = if (split < 0) (rest, []) else (all.Skip(at + 1).Take(split - at - 1).NToList(), all.Skip(split + 1).NToList());
+          def (own, programArgs) = if (split < 0) (rest, []) else (all.:Skip(at + 1).:Take(split - at - 1).:NToList(), all.:Skip(split + 1).:NToList());
           def positional = own.Filter(a => !a.StartsWith("-", StringComparison.Ordinal));
           def options = own.Filter(a => a.StartsWith("-", StringComparison.Ordinal) && a != "--offline");
           def offline = own.Contains("--offline");
@@ -111,7 +111,7 @@ internal module Projects
     loop(args);
     def root = Path.GetFullPath(folder);
     when (name == null) name = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar));
-    def valid(n : string) { n.Length > 0 && (char.IsLetter(n[0]) || n[0] == '_') && n.ToCharArray().ForAll(c => char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.') }
+    def valid(n : string) { n.Length > 0 && (char.IsLetter(n[0]) || n[0] == '_') && n.ToCharArray().:ForAll(c => char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.') }
     unless (valid(name))
     {
       Console.Error.WriteLine("ncc: `" + name + "' is not a project name (letters, digits, `_', `-', `.'); give one with --name");
@@ -134,7 +134,7 @@ internal module Projects
     if (library)
     {
       // a library's file is its module: `using <file>;` imports it
-      def moduleName = if (name.ToCharArray().ForAll(c => char.IsLetterOrDigit(c) || c == '_')) name else "library";
+      def moduleName = if (name.ToCharArray().:ForAll(c => char.IsLetterOrDigit(c) || c == '_')) name else "library";
       write(moduleName + ".n",
             "// A library. Every file is a module named by its path (this one is `" + moduleName + "'); a program imports it\n"
             "// with `using " + moduleName + ";` and calls `" + moduleName + ".Greet(...)`.\n\n"
@@ -260,7 +260,7 @@ internal module Projects
     def output = project.OutputDirectory;
     _ = Directory.CreateDirectory(output);
     def stampFile = Path.Combine(output, project.Name + ".stamp");
-    def stamp = Stamp(project, sources, references, options + targetOptions.NToList());
+    def stamp = Stamp(project, sources, references, options + targetOptions.:NToList());
     def binary = project.Binary;
     if (File.Exists(binary) && File.Exists(stampFile) && File.ReadAllText(stampFile) == stamp)
       Console.WriteLine(project.Name + ": up to date")
@@ -301,7 +301,7 @@ internal module Projects
     }
     // the runtime: Nemerle.dll and what the references need, next to the binary
     def runtimeFiles = Latest(runtimeFiles);
-    def runtime = runtimeLibrary :: runtimeFiles.NToList();
+    def runtime = runtimeLibrary :: runtimeFiles.:NToList();
     foreach (f in runtime)
     {
       def target = Path.Combine(output, Path.GetFileName(f));
@@ -407,12 +407,12 @@ internal module Projects
     def all = if (offline)
       {
         def dir = Path.Combine(CacheRoot, id.ToLowerInvariant());
-        if (Directory.Exists(dir)) Directory.GetDirectories(dir).Map(Path.GetFileName).Filter(v => !v.EndsWith(".partial", StringComparison.Ordinal)).NToList() else []
+        if (Directory.Exists(dir)) Directory.GetDirectories(dir).:Map(Path.GetFileName).:Filter(v => !v.EndsWith(".partial", StringComparison.Ordinal)).:NToList() else []
       }
       else try
       {
         def json = Text.Json.JsonDocument.Parse(Get(Feed + "/" + id.ToLowerInvariant() + "/index.json"));
-        json.RootElement.GetProperty("versions").EnumerateArray().Map(e => e.GetString()).NToList()
+        json.RootElement.GetProperty("versions").EnumerateArray().:Map(e => e.GetString()).:NToList()
       }
       catch { | _ => [] };
     def parse(v : string) { mutable x; if (Version.TryParse(v, out x)) x else Version(0, 0) }
@@ -424,16 +424,16 @@ internal module Projects
   {
     if (offline)
     {
-      if (Directory.Exists(CacheRoot)) Directory.GetDirectories(CacheRoot).Map(Path.GetFileName).Filter(d => d.StartsWith(prefix.ToLowerInvariant(), StringComparison.Ordinal)).NToList() else []
+      if (Directory.Exists(CacheRoot)) Directory.GetDirectories(CacheRoot).:Map(Path.GetFileName).:Filter(d => d.StartsWith(prefix.ToLowerInvariant(), StringComparison.Ordinal)).:NToList() else []
     }
     else try
     {
       def index = Text.Json.JsonDocument.Parse(Get("https://api.nuget.org/v3/index.json"));
       def search = index.RootElement.GetProperty("resources").EnumerateArray()
-        .Find(r => (r.GetProperty("@type").GetString() ?? "").StartsWith("SearchQueryService", StringComparison.Ordinal));
+        .:Find(r => (r.GetProperty("@type").GetString() ?? "").StartsWith("SearchQueryService", StringComparison.Ordinal));
       def result = Text.Json.JsonDocument.Parse(Get(search.Value.GetProperty("@id").GetString() + "?q=" + Uri.EscapeDataString(prefix) + "&prerelease=false&take=200"));
-      result.RootElement.GetProperty("data").EnumerateArray().Map(e => e.GetProperty("id").GetString())
-        .Filter(i => i.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.x64", StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.arm64", StringComparison.OrdinalIgnoreCase)).NToList()
+      result.RootElement.GetProperty("data").EnumerateArray().:Map(e => e.GetProperty("id").GetString())
+        .Filter(i => i.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.x64", StringComparison.OrdinalIgnoreCase) && !i.EndsWith(".Msi.arm64", StringComparison.OrdinalIgnoreCase)).:NToList()
     }
     catch { | _ => [] }
   }
@@ -529,7 +529,7 @@ internal module Projects
     _ = nuspec.Append("    <description>").Append(escape(project.Description ?? project.Name + ", a Nemerle library")).Append("</description>\n");
     when (project.License != null) _ = nuspec.Append("    <license type=\"expression\">").Append(escape(project.License)).Append("</license>\n");
     when (project.Repository != null) _ = nuspec.Append("    <repository type=\"git\" url=\"").Append(escape(project.Repository)).Append("\" />\n");
-    _ = nuspec.Append("    <tags>").Append(escape(string.Join(" ", ("nemerle" :: project.Tags.NToList()).ToArray()))).Append("</tags>\n");
+    _ = nuspec.Append("    <tags>").Append(escape(string.Join(" ", ("nemerle" :: project.Tags.:NToList()).ToArray()))).Append("</tags>\n");
     // the package's icon, from the [package] section
     mutable icon = null;
     when (project.Icon != null)
@@ -588,11 +588,11 @@ internal module Projects
       text(id + ".nuspec", nuspec);
       foreach ((name, file) in files)
         _ = IO.Compression.ZipFileExtensions.CreateEntryFromFile(archive, file, name);
-      def extensions = files.Map(f => Path.GetExtension(f[0]).TrimStart('.')).Distinct().ToArray();
+      def extensions = files.:Map(f => Path.GetExtension(f[0]).TrimStart('.')).:Distinct().:ToArray();
       text("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
            + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\" />"
            + "<Default Extension=\"nuspec\" ContentType=\"application/octet\" />"
-           + string.Concat(extensions.Map(e => "<Default Extension=\"" + e + "\" ContentType=\"application/octet\" />")) + "</Types>\n");
+           + string.Concat(extensions.:Map(e => "<Default Extension=\"" + e + "\" ContentType=\"application/octet\" />")) + "</Types>\n");
       text("_rels/.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
            + "<Relationship Type=\"http://schemas.microsoft.com/packaging/2010/07/manifest\" Target=\"/" + id + ".nuspec\" Id=\"R1\" /></Relationships>\n");
     }
@@ -631,10 +631,10 @@ internal module Projects
     def local = if (!Directory.Exists(packs)) null else
     {
       def mine = Directory.GetDirectories(packs, "Microsoft.NETCore.App.Host.*")
-        .Where(d => { def r = (Path.GetFileName(d) :> string).Substring("Microsoft.NETCore.App.Host.".Length);
+        .:Where(d => { def r = (Path.GetFileName(d) :> string).Substring("Microsoft.NETCore.App.Host.".Length);
                       r == rid || !rid.StartsWith("win", StringComparison.Ordinal) && !rid.StartsWith("osx", StringComparison.Ordinal)
                                   && !r.StartsWith("win", StringComparison.Ordinal) && !r.StartsWith("osx", StringComparison.Ordinal) && r.EndsWith("-" + arch, StringComparison.Ordinal) });
-      mine.SelectMany(d => Directory.GetFiles(d, file, SearchOption.AllDirectories)).OrderByDescending(f => f).FirstOrDefault()
+      mine.:SelectMany(d => Directory.GetFiles(d, file, SearchOption.AllDirectories)).:OrderByDescending(f => f).:FirstOrDefault()
     };
     if (local != null) local
     else
@@ -686,7 +686,7 @@ internal module Projects
         for (mutable i = 0; i < placeholder.Length; i++) bytes[at + i] = 0;
         Array.Copy(name, 0, bytes, at, name.Length);
         // only rewrite a launcher that differs (an unchanged one keeps its time stamp)
-        unless (File.Exists(launcher) && File.ReadAllBytes(launcher).SequenceEqual(bytes))
+        unless (File.Exists(launcher) && File.ReadAllBytes(launcher).:SequenceEqual(bytes))
         {
           File.WriteAllBytes(launcher, bytes);
           unless (Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows))
@@ -712,7 +712,7 @@ internal module Projects
 
   ReadList(path : string) : SCG.IEnumerable[string]
   {
-    if (File.Exists(path)) File.ReadAllLines(path).Filter(l => l.Length > 0) else []
+    if (File.Exists(path)) File.ReadAllLines(path).:Filter(l => l.Length > 0) else []
   }
 
   /// What the build depends on: the compiler, the project file, the sources, the references and the options.
@@ -744,7 +744,7 @@ internal module Projects
     def last = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
     foreach (path in paths) last[Path.GetFileName(path)] = path;
     def kept = SCG.HashSet(last.Values, StringComparer.Ordinal);
-    paths.Distinct().Where(kept.Contains).ToList()
+    paths.:Distinct().:Where(kept.Contains).:ToList()
   }
 
   ResolvePackages(project : Project, offline : bool, compile : SCG.List[string], runtime : SCG.List[string], target : Nemerle.Platform.ClrTarget) : void
@@ -756,14 +756,14 @@ internal module Projects
     def scripting = Assembly.LoadFrom(Path.Combine(toolchain, "Nemerle.Scripting.dll"));
     def type(name : string) : Type
     {
-      match (scripting.GetTypes().Find(t => t.Name == name)) { | Some(t) => t | None => throw InvalidOperationException("Nemerle.Scripting has no " + name) }
+      match (scripting.GetTypes().:Find(t => t.Name == name)) { | Some(t) => t | None => throw InvalidOperationException("Nemerle.Scripting has no " + name) }
     }
     def resolverType = Assembly.LoadFrom(adapter).GetType("Nemerle.Scripting.NuGet.NuGetScriptResolver", true) :> Type;
     def data = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
     def cache = Path.Combine(if (data == "") Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share") else data,
                              "Nemerle", "scripting", "packages");
     // a feed folder is relative to the project
-    def feeds = project.Repositories.Select(r => { mutable uri; if (Uri.TryCreate(r, UriKind.Absolute, out uri) && !uri.IsFile) r else Path.GetFullPath(Path.Combine(project.Root, r)) }).ToArray();
+    def feeds = project.Repositories.:Select(r => { mutable uri; if (Uri.TryCreate(r, UriKind.Absolute, out uri) && !uri.IsFile) r else Path.GetFullPath(Path.Combine(project.Root, r)) }).:ToArray();
     def resolver = Activator.CreateInstance(resolverType, array[cache : object, feeds : object]);
     (resolverType.GetProperty("Offline") :> PropertyInfo).SetValue(resolver, offline);
     def source = Activator.CreateInstance(type("ScriptSource"), array["" : object, project.File]);
@@ -791,8 +791,8 @@ internal module Projects
     def list(field : string) : SCG.List[string] { (result.GetType().GetField(field) :> FieldInfo).GetValue(result) :> SCG.List[string] }
     // the runtime library is the toolchain's own (a package of a Nemerle library depends on Neo.Nemerle.Runtime)
     def own(path : string) { Path.GetFileName(path) == "Nemerle.dll" }
-    compile.AddRange(list("CompilationReferences").Filter(p => !own(p)));
-    runtime.AddRange(list("RuntimeReferences").Filter(p => !own(p)));
+    compile.AddRange(list("CompilationReferences").:Filter(p => !own(p)));
+    runtime.AddRange(list("RuntimeReferences").:Filter(p => !own(p)));
     runtime.AddRange(list("NativeReferences"));
   }
 }

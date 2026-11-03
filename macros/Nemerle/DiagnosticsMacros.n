@@ -76,7 +76,7 @@ macro Trace (_ : TypeBuilder, m : MethodBuilder,
                def $("_line" : usesite) = $(e.Location.Line : int);
                def $("_expr" : usesite) = $(exps_strings.Pop () : string);
                $tracecall;
-             ]>, e]).Flatten();
+             ]>, e]).:Flatten();
           <[ { ..$nseq } ]>
         | _ => x
       }

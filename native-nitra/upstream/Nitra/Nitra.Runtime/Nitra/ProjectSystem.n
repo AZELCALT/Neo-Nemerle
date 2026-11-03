@@ -63,7 +63,7 @@ public module CompilerMessageExtensions
   {
     if (message.HasNestedMessages)
       using (root = target.ReportRootMessage(message.Type, message.Location, message.Text, message.Number))
-        message._nestedMessages.TranslateTo(root)
+        message._nestedMessages.:TranslateTo(root)
     else
       target.ReportMessage(message.Type, message.Location, message.Text, message.Number)
   }
@@ -71,7 +71,7 @@ public module CompilerMessageExtensions
   public TranslateTo(this messages : Seq[CompilerMessage], target : ICompilerMessages) : void
   {
     foreach (message in messages)
-      message.TranslateTo(target)
+      message.:TranslateTo(target)
   }
 }
 
@@ -915,12 +915,12 @@ public abstract class Project : ICompilerMessages
 
   public GetProjectSupport() : IProjectSupport
   {
-    def files = Files.ToArray();
+    def files = Files.:ToArray();
 
     when (files.Length == 0)
       return null;
     
-    def fileWithAst = files.FirstOrDefault(f => f.Ast != null);
+    def fileWithAst = files.:FirstOrDefault(f => f.Ast != null);
     
     when (fileWithAst == null)
       return null;
@@ -938,7 +938,7 @@ public abstract class Project : ICompilerMessages
 
   public virtual UpdateProperties(cancellationToken : CancellationToken) : void
   {
-    def files = Files.ToArray();
+    def files = Files.:ToArray();
 
     when (files.Length == 0)
       return;

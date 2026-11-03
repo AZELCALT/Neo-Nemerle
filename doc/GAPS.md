@@ -30,6 +30,13 @@ it violates the type system, the same way generic types were "not here yet" befo
   emitting "nullable" would misstate Nemerle's model, and emitting "non-null" would be unsafe (a value may still be
   null at the CLR level). Oblivious is the honest emission; "nullable" is a read-side concern only, already handled.
 
+## Extensions
+
+- **A Nitra grammar's code still reaches an extension through a plain `.`.** Code in a `.nitra` file is compiled by
+  the boot toolchain's Nitra, whose parser predates the extension-dot mark, so `.:` there would read as `.`. Until
+  boot carries the mark, a member written in a `.nitra` file keeps the old rule (a member, else an extension), like
+  code a macro writes. With boot refreshed past this, `.nitra` code moves to `.:` and the exception goes.
+
 ## Targets
 
 - **Android and Apple targets build libraries, not apps.** The app (APK, IPA) is packaged and compiled ahead of time

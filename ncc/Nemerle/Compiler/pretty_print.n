@@ -365,7 +365,7 @@ using Nemerle.Compiler.Utility;
 
         | PExpr.Lambda (fd) =>
           acc.Write ("fun ");
-          unless (fd.header.TypeParameters.tyvars.IsEmpty ())
+          unless (fd.header.TypeParameters.tyvars.:IsEmpty ())
             acc.Write (fd.header.TypeParameters.tyvars.ToString ());
           acc.Write (" ("); print_funparms (fd.header.Parameters); acc.Write (") ");
           acc.Write (": "); SprintExpr (ctx, fd.header.ReturnType, indentation, acc); acc.Write (" ");

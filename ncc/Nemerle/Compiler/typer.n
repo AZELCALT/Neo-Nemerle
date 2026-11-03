@@ -155,7 +155,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     {
       match (expr)
       {
-        | PExpr.Member as m when m.IsExtensionDot => MemberDot.Extension
+        | PExpr.Member as m when m.IsExtensionDot || m.member is PT.Splicable.Name where (IsExtensionDot = true) => MemberDot.Extension
+        // (a Nitra grammar's code goes through the boot toolchain's Nitra, which drops the `.:' mark until boot has
+        // it: it keeps the old rule for now)
+        | PExpr.Member as m when m.Location.File != null && m.Location.File.EndsWith (".nitra", System.StringComparison.Ordinal) => MemberDot.Any
         | PExpr.Member as m when !m.Location.IsGenerated && m.member != null && !m.member.Location.IsGenerated => MemberDot.Plain
         | _ => MemberDot.Any
       }
@@ -2821,7 +2824,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
         // `x.:M' / `string.:Blank': the extension dot reaches only an extension -- a static one through the type it
         // is on (C# 14, `string.:Of(5)'), else one whose receiver is the value
-        | PExpr.Member (obj, PT.Splicable.Name as name) when (expression :> PExpr.Member).IsExtensionDot =>
+        | PExpr.Member (obj, PT.Splicable.Name as name) when DotOf (expression) == MemberDot.Extension =>
           match (if (CanBeTypeName(obj) && !IsLocalName(obj)) StaticExtensionMember(obj, name, expected) else null)
           {
             | result when result != null => result
@@ -2859,7 +2862,14 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 else
                 {
                   def tMember = TypeMemberExpr (expression, tobj, name, expected);
-                  if (IsError (tMember)) TypeName (expression, expected)
+                  if (IsError (tMember) && DotOf (expression) == MemberDot.Plain && ExtensionFits (tobj, name.body))
+                  {
+                    // (a dotted name tried as a qualified name first: its miss names the extension, not `unbound'; the
+                    // member lookup has usually said so already)
+                    unless (messenger.LocalError) ReportDotHint (name.body, TypeOf (tobj).ToString ());
+                    TExpr.Error ()
+                  }
+                  else if (IsError (tMember)) TypeName (expression, expected)
                   else                   tMember
                 }
                 }
@@ -5105,7 +5115,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         // a C# extension property read: `x.:Twice' is the getter `get_Twice(x)' (C# 14)
         | Some ([]) when dot != MemberDot.Plain && ExtensionGetter (obj, name, expected) != null => ExtensionGetter (obj, name, expected)
         | Some ([]) when dot == MemberDot.Plain && !Manager.IsIntelliSenseMode && ExtensionGetter (obj, name, expected) != null =>
-          ReportError (messenger, ExtensionDotHint (mem_name.Id, TypeOf (obj).ToString (), "x"));
+          ReportDotHint (mem_name, TypeOf (obj).ToString ());
           TExpr.Error ()
 
         | Some ([]) =>
@@ -5130,11 +5140,37 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       }
     }
 
+    /// Reports the plain-`.' hint for `name' on `on'.
+    internal ReportDotHint (name : PT.Name, on : string) : void
+    {
+      ReportError (messenger, ExtensionDotHint (name.Id, on, "x"))
+    }
+
     /// The error for a plain `.' that names an extension (`what' is how the receiver is written in the hint).
     internal static ExtensionDotHint (name : string, on : string, what : string) : string
     {
       $"`$name' is an extension, not a member of $on: reach it with the extension dot, `$what.:$name', or call it"
        " plainly with the receiver as its first argument"
+    }
+
+    /// An extension named `name' whose receiver `obj' fits.
+    internal ExtensionFits (obj : TExpr, name : PT.Name) : bool
+    {
+      match (obj.Type.Hint)
+      {
+        | Some (t) =>
+          mutable fits = false;
+          foreach (m in Manager.LibrariesManager.GetExtensionMethods (name.Id, name.GetEnv (env)))
+            unless (fits)
+              fits = match (m.GetFreshType ())
+                     {
+                       | (FixedType.Fun (FixedType.Tuple (first :: _), _), _) => t.TryRequire (first)
+                       | (FixedType.Fun (first, _), _) => t.TryRequire (first)
+                       | _ => false
+                     };
+          fits
+        | None => false
+      }
     }
 
     /// The error for `.:' that names a member, not an extension.
@@ -5305,7 +5341,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             | MemberDot.Any => res + members
             | MemberDot.Plain =>
               when (members.IsEmpty && !for_completion && !Manager.IsIntelliSenseMode && res.Exists (fits))
-                ReportError (messenger, ExtensionDotHint (name.Id, possible_type.ToString (), "x"));
+                ReportDotHint (name, possible_type.ToString ());
               members
             | MemberDot.Extension =>
               when (res.IsEmpty && !members.IsEmpty && !for_completion && !Manager.IsIntelliSenseMode)
@@ -6912,10 +6948,17 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       }
 
       def sym = Macros.NewSymbol ();
+      // `_.:M' keeps the extension dot on the lambda's member access
+      def access (written : PExpr, mem : PT.Splicable) : PExpr
+      {
+        def m = PExpr.Member (written.Location, <[ $(sym : name) ]>, mem);
+        m.IsExtensionDot = DotOf (written) == MemberDot.Extension;
+        m
+      }
       match (expr) {
         // cases for special operator
         | <[ _ . $mem ]> =>
-          <[ fun ($(sym : name)) { $(sym : name) . $mem } ]>
+          <[ fun ($(sym : name)) { $(access (expr, mem)) } ]>
 
         | <[ _ :> $ty ]> =>
           <[ fun ($(sym : name)) { $(sym : name) :> $ty } ]>
@@ -6927,7 +6970,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         | <[ _ . $mem ( .. $parms ) ]> =>
           def (lambda_parms, parms) = transform_parms (parms);
           def parm = <[ parameter: $(sym : name) ]>;
-          <[ fun (.. $(parm :: lambda_parms)) { $(sym : name) . $mem (.. $parms) } ]>
+          def written = match (expr) { | PExpr.Call (f, _) => f | e => e };
+          <[ fun (.. $(parm :: lambda_parms)) { $(access (written, mem)) (.. $parms) } ]>
 
         | <[ $fn ( .. $parms ) ]> =>
           def (lambda_parms, parms) = transform_parms (parms);
@@ -8328,6 +8372,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               | Some ([]) when typer.LateExtension (e, name) != null =>
                 SetKind (Kind.Resolved (typer.TypeExpr (typer.LateExtension (e, name), expected), []))
 
+              | Some ([]) when access.dot == Typer.MemberDot.Plain && typer.ExtensionFits (e, name) =>
+                typer.ReportDotHint (name, typer.TypeOf (e).ToString ());
+                SetKind (Kind.Error ())
+
               | Some ([]) =>
                 ReportError (messenger, $"there is no member named `$(name)' in $(typer.TypeOf (e)) with type $expected");
                 SetKind (Kind.Error ())
@@ -9085,14 +9133,14 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       
       def tyCmpsForward  = getBetterList(f1, f2);
       def tyCmpsBackward = getBetterList(f2, f1);
-      def tyCmpPairs = tyCmpsForward.ZipToArray(tyCmpsBackward);
+      def tyCmpPairs = tyCmpsForward.:ZipToArray(tyCmpsBackward);
       
       // exclude identical pairs (for example (true, true) or (false, false))
       // The (true, true) pair cause in case (object * object)
       // The (false, false) pair cause if type not comparable
-      def differPairs = tyCmpPairs.FilterToArray(_ != _);
+      def differPairs = tyCmpPairs.:FilterToArray(_ != _);
       
-      def isBetterOverload = differPairs.Exists((p1, _) => p1) && !differPairs.Exists((_, p2) => p2);
+      def isBetterOverload = differPairs.:Exists((p1, _) => p1) && !differPairs.:Exists((_, p2) => p2);
       
       // Message.Debug($"X $o1==$(NList.FromArray(f1)) != $o2==$(NList.FromArray(f2))");
       //Message.Debug ($"cmp:$o1,$o2 $(f1.Length) ==> $res");
@@ -9146,7 +9194,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       def matchs1 = formalTypes1.:Map2ToArray(makeArgsTypes(o1), matchType);
       def matchs2 = formalTypes2.:Map2ToArray(makeArgsTypes(o2), matchType);
       assert(matchs1.Length == matchs2.Length);
-      def differPairs = matchs1.ZipToArray(matchs2).Filter(_ != _);
+      def differPairs = matchs1.:ZipToArray(matchs2).:Filter(_ != _);
 
       if (differPairs.IsEmpty)
       {
@@ -9242,13 +9290,13 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           def res1 = RemoveExtensionMethods(res0);
           def res2 = GetMinimal(res1, IsBetterOverload);
           def res3 = res2.:FilterIfExists(AintVarArgs);
-          def res4 = res3.FilterIfExists(DidntMamboJumbo);
-          def res5 = res4.FilterIfExists(AintGeneric);
+          def res4 = res3.:FilterIfExists(DidntMamboJumbo);
+          def res5 = res4.:FilterIfExists(AintGeneric);
           // (as in C#: a candidate that needs no default arguments filled in beats one that does, so IndexOf(span,
           // value) wins over IndexOf(span, value, comparer = null))
-          def res6 = res5.FilterIfExists(o => !o.UsedDefaultParms);
+          def res6 = res5.:FilterIfExists(o => !o.UsedDefaultParms);
           // (as in C#: Task.Run(async () => ...) takes the lambda as a Func[Task], not as an Action)
-          def res6 = res6.FilterIfExists(o => !o.UsedAsyncVoid);
+          def res6 = res6.:FilterIfExists(o => !o.UsedAsyncVoid);
 
           // Message.Debug ($"gbo: $parms ---> $res6");
 

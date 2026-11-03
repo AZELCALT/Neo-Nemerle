@@ -322,7 +322,7 @@ public sealed class Analyzer
 
   ProvideHost(m : ManagerClass, definitions : SCG.List[NitraDocument]) : INitraNativeSourceHost
   {
-    def key = String.Join("\u0000", definitions.Select(d => d.Source));
+    def key = String.Join("\u0000", definitions.:Select(d => d.Source));
     mutable host : INitraNativeSourceHost;
     unless (hosts.TryGetValue(key, out host))
     {
@@ -424,7 +424,7 @@ public sealed class Analyzer
         }
       }
       // the uses: identifiers of those names in the block, outside its strings and comments (Nitra's spans say where)
-      def quoted = result.Tokens.Where(t => (t[2] == Legend.String || t[2] == Legend.Comment) && t[0] >= g.Start && t[0] < g.End).ToList();
+      def quoted = result.Tokens.:Where(t => (t[2] == Legend.String || t[2] == Legend.Comment) && t[0] >= g.Start && t[0] < g.End).:ToList();
       def inQuoted(pos : int) { quoted.Exists(t => pos >= t[0] && pos < t[0] + t[1]) }
       def body = text.Substring(g.Start, g.End - g.Start);
       foreach (name in names)

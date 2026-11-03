@@ -136,7 +136,7 @@ public class ExternalSymbolLoader : IDisposable
 
   protected virtual ReportSymbolLoadFailure(reader : MetadataReader, exception : Exception, location : Location) : void
   {
-    reader.Project.Warning(location, $"Failed to read metadata from referenced assembly: $(exception.Message)");
+    reader.Project.:Warning(location, $"Failed to read metadata from referenced assembly: $(exception.Message)");
   }
 }
 
@@ -156,7 +156,7 @@ public class DefaultExternalSymbolPropertyReader : IExternalSymbolPropertyReader
 {
   public virtual ReadPropertyValue[T](project : Project, symbol : Symbol, propertyName : string) : T
   {
-    project.FatalError(symbol.FirstLocation, $"Cannot read value of property '$propertyName : $(typeof(T))' for symbol '$(symbol.FullName)'")
+    project.:FatalError(symbol.FirstLocation, $"Cannot read value of property '$propertyName : $(typeof(T))' for symbol '$(symbol.FullName)'")
   }
 }
 
@@ -409,7 +409,7 @@ public sealed class MetadataReader : IMetadataReader, IDisposable
         when (s.AssemblyId == assemblyId && string.Equals(s.SymbolTypeId, externalSymbolRef.SymbolTypeId, StringComparison.InvariantCulture))
           return s;
 
-      _ = Project.FatalError.[object](SymbolLocation, $"Failed to load symbol '$(node.FullName)'. Add project reference to assembly '$assemblyName'.")
+      _ = Project.:FatalError.[object](SymbolLocation, $"Failed to load symbol '$(node.FullName)'. Add project reference to assembly '$assemblyName'.")
     }
 
     assert2(false, $"Symbol $symbolId is not resolved.");
@@ -468,10 +468,10 @@ public sealed class MetadataWriter : IMetadataWriter, IDisposable
   public WriteSymbols() : void
   {
     def exportableSymbols = CollectExportableSymbols();
-    WriteNameTree(exportableSymbols.Select(_.Node));
+    WriteNameTree(exportableSymbols.:Select(_.Node));
     WriteSymbolHeadersAndSerializeSymbols(exportableSymbols);
     WriteReferencedAssemblies();
-    WriteNameTree(_externalSymbols.Select(_.Node));
+    WriteNameTree(_externalSymbols.:Select(_.Node));
     WriteExternalSymbolInfo();
     WriteSymbolBodies();
     _writer.Flush();
@@ -505,7 +505,7 @@ public sealed class MetadataWriter : IMetadataWriter, IDisposable
   private WriteSymbolHeadersAndSerializeSymbols(symbols : IEnumerable[IExportableSymbol]) : void
   {
     // tree symbols
-    foreach (group in symbols.GroupBy(_.SymbolTypeId))
+    foreach (group in symbols.:GroupBy(_.SymbolTypeId))
     {
       _writer.Write(group.Key);
       foreach (symbol in group)
@@ -529,7 +529,7 @@ public sealed class MetadataWriter : IMetadataWriter, IDisposable
     }
 
     // non tree symbols fully populated only after actual serialization
-    foreach (group in _nonTreeSymbols.GroupBy(_.SymbolTypeId))
+    foreach (group in _nonTreeSymbols.:GroupBy(_.SymbolTypeId))
     {
       _writer.Write(group.Key);
       foreach (symbol in group)
@@ -560,7 +560,7 @@ public sealed class MetadataWriter : IMetadataWriter, IDisposable
 
   private WriteExternalSymbolInfo() : void
   {
-    foreach (group in _externalSymbols.GroupBy(_.SymbolTypeId))
+    foreach (group in _externalSymbols.:GroupBy(_.SymbolTypeId))
     {
       _writer.Write(group.Key);
       foreach (symbol in group)

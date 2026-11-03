@@ -429,15 +429,15 @@ public module AstExprExtensions
       | (Expr.Sum, "System.String", _) => e1Type
       | (Expr.Sum, _, "System.String") => e2Type
       | (Expr.Sum, "System.Char", "System.Char") => PlatformTypes.String
-      | (Expr.Sum, _, "System.Char") when e1Type.IsNumeric() => e1Type
-      | (Expr.Sum, "System.Char", _) when e2Type.IsNumeric() => e2Type
+      | (Expr.Sum, _, "System.Char") when e1Type.:IsNumeric() => e1Type
+      | (Expr.Sum, "System.Char", _) when e2Type.:IsNumeric() => e2Type
       | (_, "System.Double", _) => PlatformTypes.Double
       | (_, _, "System.Double") => PlatformTypes.Double
       | (_, "System.Float", _) => e1Type
       | (_, _, "System.Float") => e2Type
       | (_, "System.Int64", _) => e1Type
       | (_, _, "System.Int64") => e2Type
-      | (_, _, _) when e1Type.IsNumeric() && e2Type.IsNumeric() => e1Type
+      | (_, _, _) when e1Type.:IsNumeric() && e2Type.:IsNumeric() => e1Type
       | _ => e1Type
     }
   }
@@ -446,17 +446,17 @@ public module AstExprExtensions
   {
     def parm = parameterScope
                      .Symbols
-                     .SelectMany(s => s)
-                     .OfType.[FormalParameterSymbol]()
-                     .FirstOrDefault(s => s.Index == parameterIndex :> (uint));
+                     .:SelectMany(s => s)
+                     .:OfType.[FormalParameterSymbol]()
+                     .:FirstOrDefault(s => s.Index == parameterIndex :> (uint));
     
     parm.Type
   }
   
   public IsBinaryOpCompatible(this expr : BinaryExpr, left : TypeSymbol, right : TypeSymbol) : bool
   {
-    if (left.IsNumeric() && right.IsNumeric()) true
-    else if (left.IsNumeric() && !right.IsNumeric()) false
+    if (left.:IsNumeric() && right.:IsNumeric()) true
+    else if (left.:IsNumeric() && !right.:IsNumeric()) false
     else if ((left.FullName == "System.String" || right.FullName == "System.String") && expr is Expr.Sum) true
     else true
   }
@@ -480,18 +480,18 @@ public module AstExprExtensions
   private DoArgumentsMatchParameters(parameterScope : TableScope, argumentTypes : ImmutableArray[TypeSymbol]) : bool
   {
     def parms = parameterScope.Symbols
-                              .SelectMany(s => s)
-                              .OfType.[FormalParameterSymbol]()
-                              .OrderBy(p => p.Index)
-                              .ToList();
+                              .:SelectMany(s => s)
+                              .:OfType.[FormalParameterSymbol]()
+                              .:OrderBy(p => p.Index)
+                              .:ToList();
         
     when (parms.Count != argumentTypes.Length)
       return false;
         
-    def zipped = parms.Zip(argumentTypes, (parm, argType) => (parm, argType));
+    def zipped = parms.:Zip(argumentTypes, (parm, argType) => (parm, argType));
         
     foreach ((parm, argType) in zipped)
-      when(!argType.IsSubtypeOf(parm.Type) && !argType.HasImplicitConversion(parm.Type))
+      when(!argType.:IsSubtypeOf(parm.Type) && !argType.:HasImplicitConversion(parm.Type))
         return false;
     
     true
@@ -527,7 +527,7 @@ public module AstExprExtensions
         }
 
         | _ => 
-        host.Error(context, "Invocation of " + left + " not supported");
+        host.:Error(context, "Invocation of " + left + " not supported");
         Ref.CreateUnresolved(host.Location)
     }
   }
@@ -924,8 +924,8 @@ public class TopSubstScope : Scope
   
   public override ToDot(nodeToIdMap : SCG.Dictionary[object, int], nodes : SCG.List[string], edges : SCG.List[string]) : void
   {
-    def id      = nodeToIdMap.GetObjectId(this);
-    def idScope = nodeToIdMap.GetObjectId(this._typeInfo.Scope);
+    def id      = nodeToIdMap.:GetObjectId(this);
+    def idScope = nodeToIdMap.:GetObjectId(this._typeInfo.Scope);
 
     nodes.Add($<#Obj_$id [label="TopSubstScope $id"]#>);
     edges.Add($<#Obj_$id -> Obj_$idScope#>);
@@ -1079,8 +1079,8 @@ public class CustomAttributeLookupScope : Scope
   
   public override ToDot(nodeToIdMap : Dictionary[object, int], nodes : List[string], edges : List[string]) : void
   {
-    def id            = nodeToIdMap.GetObjectId(this);
-    def idScope       = nodeToIdMap.GetObjectId(_scope);
+    def id            = nodeToIdMap.:GetObjectId(this);
+    def idScope       = nodeToIdMap.:GetObjectId(_scope);
 
     nodes.Add($<#Obj_$id [label="CustomAttributeLookupScope $id"]#>);
     edges.Add($<#Obj_$id -> Obj_$idScope#>);
@@ -1208,7 +1208,7 @@ public sealed class AstTypeUnifier : TypeUnifier
       return true;
 
     when (subtype is SupportsInheritanceTypeSymbol(IsBaseTypeSetEvaluated = true, BaseTypeSet = baseTypeSet))
-      return baseTypeSet.AncestorTypes.Contains(supertype);
+      return baseTypeSet.AncestorTypes.:Contains(supertype);
 
     false
   }
@@ -1293,7 +1293,7 @@ public module AstUtils
     def arguments = 
       match (qualifiedReference1)
       {
-        | QualifiedReference.Generic(QualifiedName = QualifiedReference.Simple(Name = Reference(Text = "#Tuple")), Arguments = tupleArguments) => tupleArguments.Append(qualifiedReference2)
+        | QualifiedReference.Generic(QualifiedName = QualifiedReference.Simple(Name = Reference(Text = "#Tuple")), Arguments = tupleArguments) => tupleArguments.:Append(qualifiedReference2)
         | _ => QualifiedReference.AstList(qualifiedReference1.Location, qualifiedReference1, qualifiedReference2)
       };
 
@@ -1495,13 +1495,13 @@ public module AstUtils
 
   public IsPartial(declarations : Seq[GenericContainerType]) : bool
   {
-    declarations.FirstOrDefault()?.IsPartial.ValueOrDefault
+    declarations.:FirstOrDefault()?.IsPartial.ValueOrDefault
   }
   
   public FilterDeclaredTypeSymbol(memberTable : TableScope) : IList[NestedTypeSymbol]
   {
     def symbols = memberTable.Symbols;
-    symbols.SelectMany(s => s.OfType.[NestedTypeSymbol]()).ToArray()
+    symbols.:SelectMany(s => s.OfType.[NestedTypeSymbol]()).:ToArray()
   }
 
   public IsSubtypeOf(this symbol1 : TypeSymbol, symbol2 : TypeSymbol) : bool
@@ -1544,16 +1544,16 @@ public module AstUtils
     def decimal = PlatformTypes.Decimal.FullName;
     
     match(from) {
-      | x when x.FullName == sbyte => [short, int, long, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == byte => [short, ushort, int, uint, long, ulong, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == short => [int, long, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == ushort => [int, uint, long, ulong, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == int => [long, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == uint => [long, ulong, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == long => [float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == ulong => [float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == char => [ushort, int, uint, long, ulong, float, double, decimal].Any(s => s == to.FullName)
-      | x when x.FullName == float => [double].Any(s => s == to.FullName)
+      | x when x.FullName == sbyte => [short, int, long, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == byte => [short, ushort, int, uint, long, ulong, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == short => [int, long, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == ushort => [int, uint, long, ulong, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == int => [long, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == uint => [long, ulong, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == long => [float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == ulong => [float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == char => [ushort, int, uint, long, ulong, float, double, decimal].:Any(s => s == to.FullName)
+      | x when x.FullName == float => [double].:Any(s => s == to.FullName)
       | _ => false
     }
   }

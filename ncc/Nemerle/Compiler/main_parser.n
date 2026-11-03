@@ -3994,8 +3994,29 @@ using Nemerle.Compiler.Utility;
             | _ =>
               def m = PExpr.Member (loc, e1, make_splicable (e2));
               m.IsExtensionDot = true;
+              match (m.member) { | Splicable.Name as n => n.IsExtensionDot = true | _ => () }
               m
           }
+
+        // `a?.:M(x)': `?.' to an extension -- `a.:M(x)' when `a' is not null, else the default value
+        | "?.:" =>
+          def access (n : Name)
+          {
+            def name = Splicable.Name (e2.Location, n);
+            name.IsExtensionDot = true;
+            def m = PExpr.Member (e2.Location, <[ e1 ]>, name);
+            m.IsExtensionDot = true;
+            m
+          }
+          def e2' =
+            match (e2)
+            {
+              | PExpr.Ref (n)               => access (n)
+              | PExpr.Call (PExpr.Ref (n), parms) => PExpr.Call (e2.Location, access (n), parms)
+              | PExpr.Indexer (PExpr.Ref (n), parms) => PExpr.Indexer (e2.Location, access (n), parms)
+              | _ => { Message.Error (e2.Location, "`?.:' takes an extension's name, call or index"); e2 }
+            };
+          Util.set (loc, <[ { def e1 = $e1; mutable result; when (e1 != null) result = $e2'; result } ]>)
 
         | "=" => PExpr.Assign (loc, e1, e2)
         | ":" => PExpr.TypeEnforcement (loc, e1, e2)

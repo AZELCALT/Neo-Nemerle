@@ -215,8 +215,8 @@ Show() : string
   def data = array[1, 2, 3, 4];
   def view = Span.[int](data);
   view[0] = 10;                                  // writes data[0]
-  def words = "hello world".AsSpan();
-  $"$(data[0]) $(Sum(view.Slice(1, 2))) $(words.Slice(words.IndexOf(' ') + 1).ToString())"
+  def words = "hello world".:AsSpan();
+  $"$(data[0]) $(Sum(view.Slice(1, 2))) $(words.Slice(words.:IndexOf(' ') + 1).ToString())"
 }
 
 Console.WriteLine(Show())

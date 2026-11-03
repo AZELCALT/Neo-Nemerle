@@ -418,8 +418,8 @@ public class XmlDoc {
     //
     def appendTypeNameAndArgs (sb, typeName, args) {
        sb.Append (typeName)
-         .AppendUnless (args.IsEmpty,
-           sb => sb.Append ("{").AppendList (args, (sb, e) => AppendParmTypeName (sb, e, m), ",").Append ("}"));
+         .:AppendUnless (args.IsEmpty,
+           sb => sb.Append ("{").:AppendList (args, (sb, e) => AppendParmTypeName (sb, e, m), ",").Append ("}"));
     }
 
     // Append function argument types & return type.
@@ -444,7 +444,7 @@ public class XmlDoc {
         // multidimension arrays are 0 based, while unidimension arrays are -1 based.
         // Since all xml doc tools are aware of this bug, we must be compatible with it too.
         //
-        .:AppendWhen(rank > 1, sb => sb.AppendNTimes (rank, "0:", ","))
+        .:AppendWhen(rank > 1, sb => sb.:AppendNTimes (rank, "0:", ","))
         .Append ("]");
     }
 
@@ -500,9 +500,9 @@ public class XmlDoc {
           .Append (".").Append (m.Name.Replace ('.', '#'))
           .:AppendUnless (tyParmsCount == 0,
             sb => sb.Append ("``").Append (tyParmsCount))
-          .AppendUnless (parms.IsEmpty,
-            sb => sb.Append ("(").AppendList (parms, (sb, p) => AppendParmTypeName (sb, p.ty, method), ",").Append (")"))
-          .AppendWhen (method.Name == "op_Explicit" || method.Name == "op_Implicit",
+          .:AppendUnless (parms.IsEmpty,
+            sb => sb.Append ("(").:AppendList (parms, (sb, p) => AppendParmTypeName (sb, p.ty, method), ",").Append (")"))
+          .:AppendWhen (method.Name == "op_Explicit" || method.Name == "op_Implicit",
             sb => AppendParmTypeName (sb.Append("~"), method.ReturnType, method));
 
       | MemberKinds.TypeInfo

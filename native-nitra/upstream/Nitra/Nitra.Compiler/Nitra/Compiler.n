@@ -158,7 +158,7 @@ public sealed class CompilingNitraProject : NitraProject
     {
       | null =>
         def project = CompilingNitraProject(manager);
-        project.Init(manager.ReferencedAssemblies.Select(a => a.Assembly.GetName()));
+        project.Init(manager.ReferencedAssemblies.:Select(a => a.Assembly.GetName()));
         manager.UserData.Add(key, project);
         project
 
@@ -269,7 +269,7 @@ public sealed class CompilingNitraProject : NitraProject
     def check(loc : Location, name : string) : void
     {
       when (RestrictedNames.Contains(name))
-        this.Error(loc, $"Name '$name' is restricted due to internal use");
+        this.:Error(loc, $"Name '$name' is restricted due to internal use");
     }
 
     foreach (syntaxModule in this.Environment.Root.GetDescendants.[ParsedSyntaxModuleSymbol]())
@@ -694,7 +694,7 @@ internal sealed class AbstractAstEmitter : AstEmitter
 
   public override DefineTypes() : void
   {
-    Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.:NLocation(),
     {
       assert(_tb == null);
 
@@ -810,7 +810,7 @@ internal sealed class AbstractAstEmitter : AstEmitter
     def isEvaluatedName = GetIsEvaluatedPropertyName(symbol);
     def mods            = AttributesAndModifiers(NemerleAttributes.Public, [MakePropertyAttribute(symbol, bitMask)]);
     def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(symbol.Name);
-    def hasValueBit = _ambiguousTb.GetBitFieldManager().Allocate();
+    def hasValueBit = _ambiguousTb.:GetBitFieldManager().Allocate();
     _ambiguousTb.Define(<[ decl:  private mutable $(backingFieldName : usesite) : $(propertyType : typed) ]>);
     _ambiguousTb.Define(<[ decl:
       ..$mods $(name : usesite) : $(propertyType : typed)
@@ -927,7 +927,7 @@ internal abstract class AstEmitter : BaseAstEmitter
       }
     ]>);
 
-    nestedType.DefineConditional("DEBUG_EVAL_DEPENDENT_PROPERTIES", <[ decl:
+    nestedType.:DefineConditional("DEBUG_EVAL_DEPENDENT_PROPERTIES", <[ decl:
       public override EvalProperties(context : Nitra.Declarations.DependentPropertyEvalContext) : void
       {
         if (this.IsAmbiguous)
@@ -992,7 +992,7 @@ internal abstract class BaseAstEmitter
 
   protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol) : void
   {
-    Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+    Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.:NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
     {
       def evalMethod = CompileStatements(tb, symbol, <[ decl:
         public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
@@ -1009,7 +1009,7 @@ internal abstract class BaseAstEmitter
 
   protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[PropertySymbol, FixedType]) : void
   {
-    Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+    Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.:NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
     {
       def evalMethod = CompileStatements(tb, symbol, <[ decl:
         ..$(GetDependentEvaluationModifiers()) EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
@@ -1061,7 +1061,7 @@ internal abstract class BaseAstEmitter
 
     foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
     {
-      Nemerle.Compiler.UtilMacros.locate(statement.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(statement.:NLocation(),
       {
         match (statement)
         {
@@ -1082,15 +1082,15 @@ internal abstract class BaseAstEmitter
             {
               | FixedType.Class(ti, _) as pathType =>
                 unless (pathType.TryRequire(Environment.CollectorTypeVar))
-                  Message.Error(statement.NLocation(), $"Type '$pathType' does not implement '$(Environment.CollectorTypeInfo.FullName)' interface.");
+                  Message.Error(statement.:NLocation(), $"Type '$pathType' does not implement '$(Environment.CollectorTypeInfo.FullName)' interface.");
 
                 match (ti.GetMembers().Find(m => m is IMethod && m.IsCustomAttributeDefined(CollectAttribute)))
                 {
                   | Some(m) => body.Add(<[ NitraMacros.PExprAnchor($(compilePath(statement)).$(m.Name : usesite)($(prepareExpr(rawExpr)))) ]>);
-                  | None    => Message.Error(statement.NLocation(), $"Type '$pathType' does not contain any method marked with '$CollectAttribute' attribute.")
+                  | None    => Message.Error(statement.:NLocation(), $"Type '$pathType' does not contain any method marked with '$CollectAttribute' attribute.")
                 }
 
-              | t => Message.Error(statement.NLocation(), $"Type '$t' is not valid in staged initialization statement.");
+              | t => Message.Error(statement.:NLocation(), $"Type '$t' is not valid in staged initialization statement.");
             }
         }
       })
@@ -1253,7 +1253,7 @@ internal abstract class BaseAstEmitter
                 def name2    = node.DeclaredIn.FullName;
                 surroundwith (related_messages)
                 {
-                  Message.Error(symbol.FirstLocation.NLocation(), $"Multiple assign of property '$pathText' in parents: '$name1' and '$name2'.");
+                  Message.Error(symbol.FirstLocation.:NLocation(), $"Multiple assign of property '$pathText' in parents: '$name1' and '$name2'.");
                   Message.Hint(existingNode.Location, $"First assign of '$pathText' from '$name1'.");
                   Message.Hint(node.Location,         $"Second assign of '$pathText' from '$name2'.");
                 }
@@ -1500,9 +1500,9 @@ internal abstract class BaseAstEmitter
           {
             Message.Error(a.Location, $"Reversing stage dependency detected: property '$(target.FullName)' from stage '$(target.Stage)' value depends on property '$(source.FullName)' from stage '$(source.Stage)'.");
             when (target.AssemblyId == AssemblyIds.CurrentAssembly)
-              Message.Hint(target.FirstLocation.NLocation(), $"Assigned property from stage '$(target.Stage)'.");
+              Message.Hint(target.FirstLocation.:NLocation(), $"Assigned property from stage '$(target.Stage)'.");
             when (source.AssemblyId == AssemblyIds.CurrentAssembly)
-              Message.Hint(source.FirstLocation.NLocation(), $"Dependend property from stage '$(source.Stage)'.");
+              Message.Hint(source.FirstLocation.:NLocation(), $"Dependend property from stage '$(source.Stage)'.");
           }
         }
 
@@ -1640,7 +1640,7 @@ internal abstract class BaseAstEmitter
     {
       def (properties, collectorProperties) = collectDependendOn(call, SCG.HashSet());
       _ = collectorProperties.RemoveAll(x => x.Equals(call.Path));
-      def bit   = tb.GetBitFieldManager().Allocate();
+      def bit   = tb.:GetBitFieldManager().Allocate();
       def expr1 = <[ $(compileCode(call.DeclaredIn, call.Code)); $(bit.Set()); ]>;
       def expr2 = 
         match (call)
@@ -1679,7 +1679,7 @@ internal abstract class BaseAstEmitter
 
   private CheckLoopsAndReport(dependencyGraph : PropertyDependencyGraph) : void
   {
-    def components = GraphAlgorithms.FindStronglyConnectedComponents(dependencyGraph.Nodes.Values).ToArray();
+    def components = GraphAlgorithms.FindStronglyConnectedComponents(dependencyGraph.Nodes.Values).:ToArray();
     foreach (component when component.Nodes.Count > 1 in components)
     {
       surroundwith (related_messages)
@@ -1732,10 +1732,14 @@ internal abstract class BaseAstEmitter
           when (symbol.LookupProperty(name.Id).HasValue)
             result(Nemerle.Compiler.UtilMacros.locate(expr.Location, <[ self.$(name : name) ]>))
 
-        | Member(obj, m) =>
+        | Member(obj, m) as member =>
           def newObj = PrepareExprForInheritableEvaluation(symbol, obj, isQuotation, ref isChildrenModified);
           when (isChildrenModified)
-            result(PExpr.Member(expr.Location, newObj, m))
+          {
+            def rebuilt = PExpr.Member(expr.Location, newObj, m);
+            rebuilt.IsExtensionDot = member.IsExtensionDot; // (`x.:M' stays the extension dot)
+            result(rebuilt)
+          }
 
         | Call(func, args) =>
           def newFunc = PrepareExprForInheritableEvaluation(symbol, func, isQuotation, ref isChildrenModified);
@@ -2010,7 +2014,7 @@ internal abstract class BaseAstEmitter
   {
     def propertyType     = TypeCompiler.CompileDependentPropertyType(symbol);
     def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(symbol.Name);
-    Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(symbol.FirstLocation.:NLocation(),
     {
       tb.Define(<[ decl:
         [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
@@ -2115,7 +2119,7 @@ internal abstract class BaseAstEmitter
 
     def makeBody(tb : TypeBuilder) : PExpr
     {
-      def fields = tb.GetBitFieldManager().GetFields();
+      def fields = tb.:GetBitFieldManager().GetFields();
       if (fields.Length > 0)
       {
         def body = SCG.List();
@@ -2158,7 +2162,7 @@ internal abstract class BaseAstEmitter
 
     def makeBody(tb : TypeBuilder) : PExpr
     {
-      def fieldManager = tb.GetBitFieldManager();
+      def fieldManager = tb.:GetBitFieldManager();
       def fields       = fieldManager.GetFields();
       if (fields.Length > 0)
       {
@@ -2212,7 +2216,7 @@ internal abstract class BaseAstEmitter
 
     def makeBody(tb : TypeBuilder) : PExpr
     {
-      def fields = tb.GetBitFieldManager().GetFields();
+      def fields = tb.:GetBitFieldManager().GetFields();
       if (fields.Length > 0)
         <[ this.$(fields[0] : usesite) ]>
       else
@@ -2288,12 +2292,12 @@ internal abstract class BaseAstEmitter
     }
 
     mutable acc = null;
-    foreach (g in properties.Where(_.IsDependent).GroupBy(makeKey))
+    foreach (g in properties.:Where(_.IsDependent).:GroupBy(makeKey))
     {
       match (g.Key)
       {
-        | (DependencyPath.This, true) when !debug => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.Select(getBitField)));
-        | (path, true) when !debug && g.Count() > 1 =>
+        | (DependencyPath.This, true) when !debug => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.:Select(getBitField)));
+        | (path, true) when !debug && g.:Count() > 1 =>
           mutable bitMask = 0;
           foreach (item in g)
             bitMask |= getMask(item);
@@ -2360,7 +2364,7 @@ internal abstract class CollectionAstEmitter : BaseAstEmitter
 
   public DefineTypes(ownerTb : TypeBuilder) : void
   {
-    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.:NLocation(),
     {
       def itemType = Environment.GetAstType(Symbol);
 
@@ -2385,7 +2389,7 @@ internal abstract class CollectionAstEmitter : BaseAstEmitter
 
     def define()
     {
-      def bits                 = _concreteTb.GetBitFieldManager();
+      def bits                 = _concreteTb.:GetBitFieldManager();
       def collectionProperties = SCG.Dictionary();
       foreach (propertySymbol in dependentProperties)
       {
@@ -2401,7 +2405,7 @@ internal abstract class CollectionAstEmitter : BaseAstEmitter
       DefineResetPropertiesMethod(_concreteTb, null);
       DefineIsAllPropertiesEvaluatedProperty(_concreteTb, null);
 
-      _concreteTb.DefineConditional("DEBUG_EVAL_DEPENDENT_PROPERTIES", <[ decl:
+      _concreteTb.:DefineConditional("DEBUG_EVAL_DEPENDENT_PROPERTIES", <[ decl:
         public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
         {
           $(MakeEvalPropertiesBody(collectionProperties))
@@ -2409,7 +2413,7 @@ internal abstract class CollectionAstEmitter : BaseAstEmitter
       ]>);
     }
 
-    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
+    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.:NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
   }
 
   protected static LinkProperties(source : DependencyPath, target : DependencyPath, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], resultBuilder : PExpr -> PExpr = null) : PExpr
@@ -2890,7 +2894,7 @@ internal variant PropertyDependencyCode
         dataCalls.Add(dataCall);
       }
 
-      PropertyContainer.SetPropertyDependency(PropertyDependencyData(dataNodes.ToNList(), dataCalls.ToNList()));
+      PropertyContainer.SetPropertyDependency(PropertyDependencyData(dataNodes.:ToNList(), dataCalls.:ToNList()));
     }
 
     public static Load(propertyContainerSymbol : PropertyContainerSymbol) : array[PropertyDependencyNode] * array[PropertyDependencyCall]
@@ -2901,21 +2905,21 @@ internal variant PropertyDependencyCode
       def nodes   = array(dataNodes.Length);
       foreach (n in dataNodes with i)
       {
-        | Use                => nodes[i] = PropertyDependencyNode.Use(n.DeclaredIn, n.Path, n.NLocation(), n.IsCollector);
+        | Use                => nodes[i] = PropertyDependencyNode.Use(n.DeclaredIn, n.Path, n.:NLocation(), n.IsCollector);
         | Assign(methodName) =>
-          def loc  = n.NLocation();
+          def loc  = n.:NLocation();
           def code = PropertyDependencyCode.Compiled(loc, methodName);
           nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, loc, n.IsCollector, code);
       }
 
       foreach (n in nodes with i)
-        n.DependendOn.UnionWith(dataNodes[i].DependendOn.Select(to => nodes[to]));
+        n.DependendOn.UnionWith(dataNodes[i].DependendOn.:Select(to => nodes[to]));
 
       def dataCalls = propertyContainerSymbol.PropertyDependency.Calls.ToArray();
       def calls = array(dataCalls.Length);
       foreach (c in dataCalls with i)
       {
-        def loc  = c.NLocation();
+        def loc  = c.:NLocation();
         def code = PropertyDependencyCode.Compiled(loc, c.CompiledMethodName);
         calls[i] = 
           match (c)
@@ -2927,7 +2931,7 @@ internal variant PropertyDependencyCode
       }
 
       foreach (c in calls with i)
-        c.DependendOn.UnionWith(dataCalls[i].DependendOn.Select(to => nodes[to]));
+        c.DependendOn.UnionWith(dataCalls[i].DependendOn.:Select(to => nodes[to]));
 
       (nodes, calls)
     }
@@ -3003,8 +3007,8 @@ internal variant PropertyDependencyNode : IGraphNode[PropertyDependencyNode], IP
 
     def edges = List();
 
-    foreach (node in nodes.OrderBy(n => n.Order))
-      foreach (to in node.DependendOn.OrderBy(n => n.Order))
+    foreach (node in nodes.:OrderBy(n => n.Order))
+      foreach (to in node.DependendOn.:OrderBy(n => n.Order))
         edges.Add($<#$(name(node)) -> $(name(to))#>);
     
     def callNodes = List();
@@ -3022,7 +3026,7 @@ internal variant PropertyDependencyNode : IGraphNode[PropertyDependencyNode], IP
       
       callNodes.Add($<#$to [label="$label" color=purple shape=box]#>);
       
-      foreach (node in call.DependendOn.OrderBy(n => n.Order))
+      foreach (node in call.DependendOn.:OrderBy(n => n.Order))
         edges.Add($<#$(name(node)) -> $to#>);
     }
 
@@ -3051,7 +3055,7 @@ internal variant PropertyDependencyNode : IGraphNode[PropertyDependencyNode], IP
   public static TryBreakCyclesInStructuralProperties(graph : Seq[PropertyDependencyNode]) : void
   {
     mutable isCycled = false;
-    def components = GraphAlgorithms.FindStronglyConnectedComponents(graph).ToArray();
+    def components = GraphAlgorithms.FindStronglyConnectedComponents(graph).:ToArray();
 
     foreach (component when component.Nodes.Count > 1 in components)
     {
@@ -3082,7 +3086,7 @@ internal variant PropertyDependencyNode : IGraphNode[PropertyDependencyNode], IP
     mutable index = 0;
     mutable cycling = false;
 
-    def roots = GetRoots(graphNodes).ToArray();
+    def roots = GetRoots(graphNodes).:ToArray();
     
     foreach (node in roots)
       cycling |= node.Sort(ref index);
@@ -3185,7 +3189,7 @@ internal sealed class SimpleAstEmitter : AstEmitter
 
   public override DefineTypes() : void
   {
-    Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.:NLocation(),
     {
       assert(_tb == null);
 
@@ -3266,7 +3270,7 @@ internal sealed class SimpleAstEmitter : AstEmitter
 
     def defineDependentProperty(propertySymbol : DependentPropertySymbol) : void
     {
-      def bit    = _tb.GetBitFieldManager().Allocate();
+      def bit    = _tb.:GetBitFieldManager().Allocate();
       def bitMask   = if (bit.IsFromFirstField) bit.Mask else 0;
       def bitKey = if (propertySymbol.OverrideProperty is SymbolRef.Some(DependentPropertySymbol as originalPropertySymbol)) originalPropertySymbol else propertySymbol;
       dependentProps.Add(propertySymbol);
@@ -3432,7 +3436,7 @@ internal sealed class SimpleAstEmitter : AstEmitter
 
   private CompileProjection(properties : SCG.List[ProjectedPropertySymbol], result : SCG.List[PExpr]) : void
   {
-    foreach (g in properties.Where(p => p.ProjectionType.IsSome).GroupBy(p => p.ProjectionType.Value.ProjectionSource))
+    foreach (g in properties.:Where(p => p.ProjectionType.IsSome).:GroupBy(p => p.ProjectionType.Value.ProjectionSource))
     {
       def projectionSource = g.Key;
       def init = SCG.List();
@@ -3550,7 +3554,7 @@ internal sealed class SymbolEmitter : BaseAstEmitter
     assert(_tb : object == null);
 
     def nemerleEnv = Environment.NamespaceOfSymbol(_symbol);
-    Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.:NLocation(),
     {
       def astType = Environment.GetAstType(_symbol.Declaration);
       match(_symbol)
@@ -3600,7 +3604,7 @@ internal sealed class SymbolEmitter : BaseAstEmitter
             when (propertySymbol.PropertyContainer == _symbol)
             {
               def isEvaluatedName = GetIsEvaluatedPropertyName(propertySymbol);
-              Nemerle.Compiler.UtilMacros.locate(propertySymbol.FirstLocation.NLocation(),
+              Nemerle.Compiler.UtilMacros.locate(propertySymbol.FirstLocation.:NLocation(),
               {
                 _tb.Define(<[decl: $(isEvaluatedName : usesite) : bool { get; }]>);
                 _tb.Define(<[decl: $(propertySymbol.Name : usesite) : $(TypeCompiler.Compile(propertySymbol.Type)) { get; set; }]>);
@@ -3616,7 +3620,7 @@ internal sealed class SymbolEmitter : BaseAstEmitter
         foreach (s in _symbol.AllProperties)
         {
           | DependentPropertySymbol as propertySymbol =>
-            def bit    = _tb.GetBitFieldManager().Allocate();
+            def bit    = _tb.:GetBitFieldManager().Allocate();
             def bitMask   = if (bit.IsFromFirstField) bit.Mask else 0;
             def bitKey = if (propertySymbol.OverrideProperty is SymbolRef.Some(DependentPropertySymbol as originalPropertySymbol)) originalPropertySymbol else propertySymbol;
             _dependentPropBits.Add(bitKey, bit);
@@ -3627,7 +3631,7 @@ internal sealed class SymbolEmitter : BaseAstEmitter
             def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(propertySymbol.Name);
             def propertyType = TypeCompiler.Compile(propertySymbol.Type);
             def isEvaluatedName = GetIsEvaluatedPropertyName(propertySymbol);
-            Nemerle.Compiler.UtilMacros.locate(propertySymbol.FirstLocation.NLocation(),
+            Nemerle.Compiler.UtilMacros.locate(propertySymbol.FirstLocation.:NLocation(),
             {
               _tb.Define(<[decl: private mutable $(backingFieldName : usesite) : $propertyType ]>);
               _tb.Define(<[decl: public $(isEvaluatedName : usesite) : bool { get { ($(backingFieldName : usesite) : object) != null } } ]>);
@@ -3689,7 +3693,7 @@ internal sealed class SymbolEmitter : BaseAstEmitter
       | ParsedSimpleSymbolSymbol(BuiltInMethods = methodOverrides) =>
         foreach ((identifier, expr) in methodOverrides)
         {
-          Nemerle.Compiler.UtilMacros.locate(identifier.NLocation(),
+          Nemerle.Compiler.UtilMacros.locate(identifier.:NLocation(),
           {
             def method = match (Environment.SymbolBaseTypeInfo.LookupMember(identifier.Value))
               {
@@ -3706,7 +3710,7 @@ internal sealed class SymbolEmitter : BaseAstEmitter
         DefineResetPropertiesMethod(_tb, null);
         DefineIsAllPropertiesEvaluatedProperty(_tb, null);
 
-        Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.NLocation(),
+        Nemerle.Compiler.UtilMacros.locate(_symbol.FirstLocation.:NLocation(),
         {
           def symbolType           = _tb.GetMemType();
           def serializationMembers = SCG.List();
@@ -3806,7 +3810,7 @@ internal sealed class ExtensibleRuleDescriptorEmitter : RuleDescriptorEmitter[Ex
     DefineIsStartRuleProperty();
 
     def isDynamicExtensibleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.Options.IsDynamicSyntaxExtentionPoint, t => <[ $(t : bool) ]>);
-    DescriptorTb.DefineConditional(<[ decl: public override IsDynamicExtensible : bool { get { $isDynamicExtensibleExpr } } ]>);
+    DescriptorTb.:DefineConditional(<[ decl: public override IsDynamicExtensible : bool { get { $isDynamicExtensibleExpr } } ]>);
 
     def createParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol =>
         <[
@@ -3818,7 +3822,7 @@ internal sealed class ExtensibleRuleDescriptorEmitter : RuleDescriptorEmitter[Ex
               this,
               grammar)
         ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateParseTree(startPos : int, endPos : int, parseResult : Nitra.Runtime.ParseResult, grammar : Nitra.Runtime.CompositeGrammar) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3827,7 +3831,7 @@ internal sealed class ExtensibleRuleDescriptorEmitter : RuleDescriptorEmitter[Ex
     ]>);
 
     def createMissingParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol => <[ $(Owner.Environment.GetParseTreeType(ruleSymbol) : typed).AmbiguousOrMissingNode(parseResult, pos) ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateMissingParseTree(parseResult : Nitra.Runtime.ParseResult, pos : int) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3836,7 +3840,7 @@ internal sealed class ExtensibleRuleDescriptorEmitter : RuleDescriptorEmitter[Ex
     ]>);
 
     def createAmbiguousParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol => <[ $(Owner.Environment.GetParseTreeType(ruleSymbol) : typed).AmbiguousOrMissingNode(ambiguities :> array[$(Owner.Environment.GetParseTreeType(ruleSymbol) : typed)], ambiguityType) ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateAmbiguousParseTree(ambiguities : array[Nitra.Runtime.ParseTree], ambiguityType :  Nitra.Runtime.ParseTreeAmbiguityType) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3859,11 +3863,11 @@ internal sealed class PostfixRuleDescriptorEmitter : RuleDescriptorEmitter[Exten
     base.DefineDescriptor();
     DefineNewParserMethod(<[ Nitra.Internal.PostfixRuleParser ]>, [<[parameter: parserData : Nitra.Internal.ExtensibleRuleParserData ]>]);
 
-    def baseRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.BaseRule.GetValue(Owner.Environment.Project), _.GetRuleDescriptorRef());
-    DescriptorTb.DefineConditional(<[decl: public override BaseRule : Nitra.Runtime.ExtensibleRuleDescriptor { get { $baseRuleExpr } } ]>);
+    def baseRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.BaseRule.GetValue(Owner.Environment.Project), _.:GetRuleDescriptorRef());
+    DescriptorTb.:DefineConditional(<[decl: public override BaseRule : Nitra.Runtime.ExtensibleRuleDescriptor { get { $baseRuleExpr } } ]>);
 
     def bindingPowerExpr = MakeRuleSelector(ruleSymbol => <[ $((ruleSymbol.ExtensionType :> ExtensionRuleSymbol.ExtensionRuleType.Postfix).BindingPower.Name : string) ]>);
-    DescriptorTb.DefineConditional(<[decl: public override BindingPower : string { get { $bindingPowerExpr } } ]>);
+    DescriptorTb.:DefineConditional(<[decl: public override BindingPower : string { get { $bindingPowerExpr } } ]>);
 
     def createParseTreeExpr1 = MakeRuleSelectorForParseTree(ruleSymbol =>
       <[
@@ -3874,7 +3878,7 @@ internal sealed class PostfixRuleDescriptorEmitter : RuleDescriptorEmitter[Exten
           rawTreePtr,
           parseResult)
       ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateParseTree(prefix : Nitra.Runtime.ParseTree, prefixStartPos : int, pos : ref int, rawTreePtr : int, parseResult : Nitra.Runtime.ParseResult) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3892,7 +3896,7 @@ internal sealed class PostfixRuleDescriptorEmitter : RuleDescriptorEmitter[Exten
           recoveredSubrulesIndex,
           parseResult)
       ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateParseTree(prefix : Nitra.Runtime.ParseTree, prefixStartPos : int, startPos : int, endPos : int, recoveredSubrulesIndex : int, parseResult : Nitra.Runtime.ParseResult) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3914,8 +3918,8 @@ internal sealed class PrefixRuleDescriptorEmitter : RuleDescriptorEmitter[Extens
     base.DefineDescriptor();
     DefineNewParserMethod(<[ Nitra.Internal.PrefixRuleParser ]>, [<[parameter: parserData : Nitra.Internal.ExtensibleRuleParserData ]>]);
 
-    def baseRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.BaseRule.GetValue(Owner.Environment.Project), _.GetRuleDescriptorRef());
-    DescriptorTb.DefineConditional(<[decl: public override BaseRule : Nitra.Runtime.ExtensibleRuleDescriptor { get { $baseRuleExpr } } ]>);
+    def baseRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.BaseRule.GetValue(Owner.Environment.Project), _.:GetRuleDescriptorRef());
+    DescriptorTb.:DefineConditional(<[decl: public override BaseRule : Nitra.Runtime.ExtensibleRuleDescriptor { get { $baseRuleExpr } } ]>);
 
     def createParseTreeExpr1 = MakeRuleSelectorForParseTree(ruleSymbol =>
       <[
@@ -3924,7 +3928,7 @@ internal sealed class PrefixRuleDescriptorEmitter : RuleDescriptorEmitter[Extens
           rawTreePtr,
           parseResult)
       ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateParseTree(pos : ref int, rawTreePtr : int, parseResult : Nitra.Runtime.ParseResult) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3940,7 +3944,7 @@ internal sealed class PrefixRuleDescriptorEmitter : RuleDescriptorEmitter[Extens
           recoveredSubrulesIndex,
           parseResult)
       ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateParseTree(startPos : int, endPos : int, recoveredSubrulesIndex : int, parseResult : Nitra.Runtime.ParseResult) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -3992,15 +3996,15 @@ internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmit
   protected virtual  BaseArgsNamesAndTypes : Seq[string * PExpr] { get { array[] } }
   protected virtual  BaseArgs(symbol : TRuleSymbol)  : Seq[PExpr] { IgnoreParams(); array[] }
 
-  protected virtual  BaseArgsNames  : Seq[PExpr]      { get { BaseArgsNamesAndTypes.Map(x => <[ $(x[0] : global) ]>) } }
-  protected virtual  BaseParameters : Seq[PParameter] { get { BaseArgsNamesAndTypes.Map(x => <[ parameter: $(x[0] : global) : $(x[1]) ]>) } }
+  protected virtual  BaseArgsNames  : Seq[PExpr]      { get { BaseArgsNamesAndTypes.:Map(x => <[ $(x[0] : global) ]>) } }
+  protected virtual  BaseParameters : Seq[PParameter] { get { BaseArgsNamesAndTypes.:Map(x => <[ parameter: $(x[0] : global) : $(x[1]) ]>) } }
 
   [RecordIgnore] protected DescriptorTb : TypeBuilder { get; private set; }
 
   public virtual DefineDescriptor() : void
   {
     assert(DescriptorTb == null);
-    def baseParameters = [<[ parameter: idInGrammar : int ]>, <[ parameter: isTokenRule : bool ]>, <[ parameter: isKeyToken : bool ]>, <[ parameter: isVoid : bool ]>, <[ parameter: operatorInfo : Nitra.Runtime.OperatorInfo ]>, <[ parameter: arity : int ]>].Concat(BaseParameters);
+    def baseParameters = [<[ parameter: idInGrammar : int ]>, <[ parameter: isTokenRule : bool ]>, <[ parameter: isKeyToken : bool ]>, <[ parameter: isVoid : bool ]>, <[ parameter: operatorInfo : Nitra.Runtime.OperatorInfo ]>, <[ parameter: arity : int ]>].:Concat(BaseParameters);
     DescriptorTb = Owner.GrammarTB.DefineNestedType(<[decl:
       private sealed class $(ClassName : usesite) : $BaseType
       {
@@ -4026,14 +4030,14 @@ internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmit
     ]>);
 
     def nameExpr = MakeRuleSelector(ruleSymbol => <[ $( $<#..$(ruleSymbol.ModuleRelativeName; ".")#> : string) ]>);
-    DescriptorTb.DefineConditional(<[decl: public override Name : string { get { $nameExpr } } ]>);
+    DescriptorTb.:DefineConditional(<[decl: public override Name : string { get { $nameExpr } } ]>);
 
     foreach (ruleSymbol in RuleSymbols)
     {
       def ctor      = <[ $(DescriptorTb.GetMemType() : typed) ]>;
-      def fieldName = ruleSymbol.DecorateRuleDescriptorName();
+      def fieldName = ruleSymbol.:DecorateRuleDescriptorName();
 
-      Owner.GrammarTB.DefineConditional(<[ decl:
+      Owner.GrammarTB.:DefineConditional(<[ decl:
         public static $(fieldName : usesite) : $BaseType =
           $ctor
             (
@@ -4048,16 +4052,16 @@ internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmit
       ]>);
     }
 
-    if (RuleSymbols.Any(ruleSymbol => ruleSymbol.Options.SpanClassSymbol != null))
+    if (RuleSymbols.:Any(ruleSymbol => ruleSymbol.Options.SpanClassSymbol != null))
     {
       def spanClassExpr = MakeRuleSelector(
         ruleSymbol => if (ruleSymbol.Options.SpanClassSymbol != null) Some(ruleSymbol.Options.SpanClassSymbol) else None(),
         spanClass  => if (spanClass is Some(s)) Owner.Environment.MakeSpanClassRef(s) else <[ null ]>);
 
-      DescriptorTb.DefineConditional(<[ decl: public override SpanClass : Nitra.Runtime.SpanClass { get { $spanClassExpr } } ]>);
+      DescriptorTb.:DefineConditional(<[ decl: public override SpanClass : Nitra.Runtime.SpanClass { get { $spanClassExpr } } ]>);
     }
     else
-      DescriptorTb.DefineConditional(<[ decl: public override SpanClass : Nitra.Runtime.SpanClass { get { null } } ]>);
+      DescriptorTb.:DefineConditional(<[ decl: public override SpanClass : Nitra.Runtime.SpanClass { get { null } } ]>);
   }
 
   public Emit() : void
@@ -4090,9 +4094,9 @@ internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmit
   protected MakeRuleSelector[TKey](group : TRuleSymbol -> TKey, maker : TKey -> PExpr) : PExpr
   {
     def cases = SCG.List();
-    foreach (pair in RuleSymbols.Grouping(r => (group(r), r)))
+    foreach (pair in RuleSymbols.:Grouping(r => (group(r), r)))
     {
-      def patterns = pair.Value.Map(ruleSymbol => <[ $(ruleSymbol.IdInGrammar : int) ]>);
+      def patterns = pair.Value.:Map(ruleSymbol => <[ $(ruleSymbol.IdInGrammar : int) ]>);
       def body     = maker(pair.Key);
       def case     = MatchCase(patterns, body);
       cases.Add(case);
@@ -4104,8 +4108,8 @@ internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmit
   protected DefineNewParserMethod(returnType : PExpr, parameters : list[PParameter]) : void
   {
     def args = parameters.Map(parameter => <[ $(parameter.Name : global) ]>);
-    def parserExpr = MakeRuleSelector(ruleSymbol => <[ $(Owner.GrammarImplTB.GetMemType() : typed).$(ruleSymbol.DecorateRuleClassName() : global)(grammar, ruleIdBuilder, ..$args) ]>);
-    DescriptorTb.DefineConditional(<[decl:
+    def parserExpr = MakeRuleSelector(ruleSymbol => <[ $(Owner.GrammarImplTB.GetMemType() : typed).$(ruleSymbol.:DecorateRuleClassName() : global)(grammar, ruleIdBuilder, ..$args) ]>);
+    DescriptorTb.:DefineConditional(<[decl:
       public override NewParser(..$(<[parameter: grammar : Nitra.Runtime.CompositeGrammar ]> :: <[parameter: ruleIdBuilder : Nitra.Internal.RuleIdBuilder ]> :: parameters)) : $returnType
       {
         $parserExpr
@@ -4116,7 +4120,7 @@ internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmit
   protected DefineIsStartRuleProperty() : void
   {
     def isStartRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.Options.IsStart, isStart => <[ $(isStart : bool) ]>);
-    DescriptorTb.DefineConditional(<[decl: public override IsStartRule : bool { get { $isStartRuleExpr } } ]>);
+    DescriptorTb.:DefineConditional(<[decl: public override IsStartRule : bool { get { $isStartRuleExpr } } ]>);
   }
 }
 
@@ -4134,7 +4138,7 @@ internal sealed class SimpleRuleDescriptorEmitter : RuleDescriptorEmitter[Simple
     DefineIsStartRuleProperty();
 
     def createParseTreeExpr = MakeRuleSelectorForParseTree(ruleSymbol => <[ $(Owner.Environment.GetParseTreeType(ruleSymbol) : typed).CreateParseTree(startPos, endPos, parseResult, grammar) ]>);
-    DescriptorTb.DefineConditional(<[ decl:
+    DescriptorTb.:DefineConditional(<[ decl:
       public override CreateParseTree(startPos : int, endPos : int, parseResult : Nitra.Runtime.ParseResult, grammar : Nitra.Runtime.CompositeGrammar) : Nitra.Runtime.ParseTree
       {
         IgnoreParams();
@@ -4314,7 +4318,7 @@ public class EmitterEnvironment
 
     when (mods.FindAttributeWithArgs(PropertyAttributeTypeInfo, env) is Some((_, [<[ $(fullName : string) ]>, <[ $(bitMask : int) ]>, <[ $(_isIn) ]>, <[ $_isOut ]> ])))
     {
-      def result = Root.BindMany.[PropertySymbol](fullName.SplitToList('.'));
+      def result = Root.BindMany.[PropertySymbol](fullName.:SplitToList('.'));
       return match (result)
       {
         | [one] => PropertyLookupResult.DeclaredProperty(one, bitMask)
@@ -4417,10 +4421,10 @@ internal sealed class FsmEmitter
     def fsm = FSMTransform.MakeDeterministic(Fsm);
     def okState  = fsm.StateCount;
     def endState = fsm.StateCount + 1;
-    def labels = Environment.MakeLabels(fsm.StateCount + 2);
+    def labels = Environment.:MakeLabels(fsm.StateCount + 2);
     def goto(n)  { labels[n].Goto() }
     def label(n) { labels[n].Label() }
-    def states = $[0..fsm.StateCount - 1].Fold(Dictionary(), (state, states) =>
+    def states = $[0..fsm.StateCount - 1].:Fold(Dictionary(), (state, states) =>
       {
         def transitions = fsm.Transitions.Filter(t => t.From == state);
         def symbolTransitions = transitions.MapFiltered(_ is Transition.Symbol, _ :> Transition.Symbol);
@@ -4436,7 +4440,7 @@ internal sealed class FsmEmitter
     for (mutable state = 0; state < fsm.StateCount; ++state)
     {
       def (isOkState, symbolTransitions) = states[state];
-      when (!symbolTransitions.IsEmpty())
+      when (!symbolTransitions.:IsEmpty())
       {
         statements.Add(label(state));
         when (isOkState)
@@ -4445,7 +4449,7 @@ internal sealed class FsmEmitter
         def getDestination(transition)
         {
           def (isOkState, symbolTransitions) = states[transition.To];
-          if (symbolTransitions.IsEmpty())
+          if (symbolTransitions.:IsEmpty())
             if (isOkState)
               okState;
             else
@@ -4472,7 +4476,7 @@ internal sealed class FsmEmitter
     statements.Add(<[ okPos = curPos ]>);
     statements.Add(label(endState));
     statements.Add(<[ okPos ]>);
-    PExpr.Sequence(statements.NToList());
+    PExpr.Sequence(statements.:NToList());
   }
 
   // ---- merged from Generation/Fsm/TestCharConditionCode.n ----
@@ -4497,7 +4501,7 @@ internal sealed class FsmEmitter
         }
         def rset = rset.Ranges.Map(cmp);
 
-        def (rsetSize, rset) = rset.Fold((0, []), ((sz, r), (rsetSize, rset)) => (rsetSize + sz, r :: rset));
+        def (rsetSize, rset) = rset.:Fold((0, []), ((sz, r), (rsetSize, rset)) => (rsetSize + sz, r :: rset));
 
         def gen(ranges)
         {
@@ -4505,7 +4509,7 @@ internal sealed class FsmEmitter
           | range :: ranges => <[ $range || $(gen(ranges))]>
           | []              => <[ false ]>
         }
-        (rsetSize, gen(rset.Reverse().Flatten()))
+        (rsetSize, gen(rset.Reverse().:Flatten()))
       }
 
       if (Environment.EnableOptimization)
@@ -4527,7 +4531,7 @@ internal sealed class FsmEmitter
 
     def binarySearch(rset : RangeSet) : PExpr
     {
-      def ranges = rset.Ranges.NToArray();
+      def ranges = rset.Ranges.:NToArray();
       def rec(first, last)
       {
         match (last - first)
@@ -4589,7 +4593,7 @@ public sealed class BitField
   public static CheckAll(bits : Seq[BitField]) : PExpr
   {
     mutable acc : PExpr;
-    foreach (g in bits.GroupBy(bit => bit.FieldName))
+    foreach (g in bits.:GroupBy(bit => bit.FieldName))
     {
       mutable bitMask = 0;
       foreach (bit in g)
@@ -4645,7 +4649,7 @@ public sealed class BitFieldManager
       _tb.Define(<[ decl: [RecordIgnore, Nemerle.ExtensionsMacros.EqualsIgnore] private mutable $(newField : usesite) : int ]>);
     }
     def index     = _bitsAllocated;
-    def fieldName = _fields.Last();
+    def fieldName = _fields.:Last();
     def bitMask      = unchecked(1 << (index % BitFieldSize));
     _bitsAllocated += 1;
     BitField(fieldName, bitMask, _fields.Count == 1)
@@ -4683,7 +4687,7 @@ internal module EnvironmentExtensions
   public GetRuleDescriptorRef(this symbol : RuleSymbol) : PExpr
   {
     def moduleSymbol = symbol.DeclaringModule;
-    def path = moduleSymbol.Node.FullNameParts + [symbol.DecorateRuleDescriptorName()];
+    def path = moduleSymbol.Node.FullNameParts + [symbol.:DecorateRuleDescriptorName()];
     PExprUtils.FromQualifiedIdentifier(path);
   }
 
@@ -4697,7 +4701,7 @@ internal module EnvironmentExtensions
   public GetParserClassRef(this symbol : RuleSymbol) : PExpr
   {
     def moduleSymbol = symbol.DeclaringModule;
-    def path = moduleSymbol.Node.FullNameParts + [AssemblyConstants.GrammarImplName, symbol.DecorateRuleClassName()];
+    def path = moduleSymbol.Node.FullNameParts + [AssemblyConstants.GrammarImplName, symbol.:DecorateRuleClassName()];
     PExprUtils.FromQualifiedIdentifier(path);
   }
 }
@@ -4795,7 +4799,7 @@ public module PExprUtils
   public FromQualifiedIdentifier(qid : list[Identifier]) : PExpr
   {
     | []            => throw ArgumentOutOfRangeException("qid", "Non empty list required");
-    | first :: tail => FromQualifiedMember(Nemerle.Compiler.UtilMacros.locate(first.NLocation(), <[ $(first.Value : usesite) ]>), tail)
+    | first :: tail => FromQualifiedMember(Nemerle.Compiler.UtilMacros.locate(first.:NLocation(), <[ $(first.Value : usesite) ]>), tail)
   }
 
   public FromQualifiedMember(obj : PExpr, qid : list[string]) : PExpr
@@ -4812,7 +4816,7 @@ public module PExprUtils
     match (qid)
     {
       | []            => obj
-      | first :: tail => FromQualifiedMember(Nemerle.Compiler.UtilMacros.locate(first.NLocation(), <[ $obj.$(first.Value : usesite) ]>), tail)
+      | first :: tail => FromQualifiedMember(Nemerle.Compiler.UtilMacros.locate(first.:NLocation(), <[ $obj.$(first.Value : usesite) ]>), tail)
     }
   }
 
@@ -4820,15 +4824,15 @@ public module PExprUtils
   {
     def expandSequence(expr : PExpr)
     {
-      | Sequence(exprs) => if (recursive) exprs.FlattenPExprSequence(true) else exprs
+      | Sequence(exprs) => if (recursive) exprs.:FlattenPExprSequence(true) else exprs
       | _               => [expr]
     }
-    seq.Map(expandSequence).Flatten();
+    seq.:Map(expandSequence).:Flatten();
   }
 
   public static FlattenPExpr(this expr : IEnumerable[PExpr]) : PExpr
   {
-    PExpr.Sequence(expr.NToList()).FlattenPExpr();
+    PExpr.Sequence(expr.:NToList()).:FlattenPExpr();
   }
 
   public static FlattenPExpr(this expr : PExpr) : PExpr
@@ -4838,7 +4842,7 @@ public module PExprUtils
       if (after)
         match (expr)
         {
-          | PExpr.Sequence(exprs) => PExpr.Sequence(exprs.FlattenPExprSequence(false))
+          | PExpr.Sequence(exprs) => PExpr.Sequence(exprs.:FlattenPExprSequence(false))
           | expr => expr
         }
       else
@@ -4905,7 +4909,7 @@ internal class LanguageEmitter
   public DefineTypes() : void
   {
     assert(_tb : object == null);
-    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.:NLocation(),
     {
       def baseLanguage =
         if (Symbol.Parent is SymbolRef.Some(parent))
@@ -4934,7 +4938,7 @@ internal class LanguageEmitter
 
     foreach (style in Symbol.Styles)
     {
-      Nemerle.Compiler.UtilMacros.locate(style.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(style.FirstLocation.:NLocation(),
       {
         def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(style.Name);
         _tb.Define(<[ decl:
@@ -4963,7 +4967,7 @@ internal class LanguageEmitter
 
     foreach (spanClass in Symbol.SpanClasses)
     {
-      Nemerle.Compiler.UtilMacros.locate(spanClass.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(spanClass.FirstLocation.:NLocation(),
       {
         def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(spanClass.Name);
         _tb.Define(<[ decl:
@@ -4983,7 +4987,7 @@ internal class LanguageEmitter
 
     def nameToExpr(n : string) : PExpr { <[ $(n : usesite) ]> }
 
-    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(Symbol.FirstLocation.:NLocation(),
     {
       def parentExpr =
         if (Symbol.Parent is SymbolRef.Some(parent))
@@ -5007,13 +5011,13 @@ internal class LanguageEmitter
       _tb.Define(<[ decl: ..$(MakeMods()) Copyright                : string         { get { $(Symbol.Copyright                : string) } } ]>);
       _tb.Define(<[ decl: ..$(MakeMods()) LicenseUrl               : System.Uri     { get { $licenseUrlExpr } } ]>);
       _tb.Define(<[ decl: ..$(MakeMods()) RequireLicenseAcceptance : bool           { get { $(Symbol.RequireLicenseAcceptance : bool  ) } } ]>);
-      _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredStyles() : array[Nitra.Runtime.Style] { array[..$(localStyles.Values.MapToList(nameToExpr))] } ]>);
-      _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredSpanClasses() : array[Nitra.Runtime.SpanClass] { array[..$(localSpanClasses.MapToList(nameToExpr))] } ]>);
-      _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredGrammars() : array[Nitra.Runtime.GrammarDescriptor] { array[..$(Symbol.SyntaxModules.MapToList(_.GetGrammarDescriptorRef()))] } ]>);
+      _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredStyles() : array[Nitra.Runtime.Style] { array[..$(localStyles.Values.:MapToList(nameToExpr))] } ]>);
+      _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredSpanClasses() : array[Nitra.Runtime.SpanClass] { array[..$(localSpanClasses.:MapToList(nameToExpr))] } ]>);
+      _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredGrammars() : array[Nitra.Runtime.GrammarDescriptor] { array[..$(Symbol.SyntaxModules.:MapToList(_.:GetGrammarDescriptorRef()))] } ]>);
 
       def startRuleExpr =
         if (Symbol.StartRule is SymbolRef.Some(startRule))
-          startRule.GetRuleDescriptorRef()
+          startRule.:GetRuleDescriptorRef()
         else
           <[ null ]>;
 
@@ -5177,7 +5181,7 @@ public sealed class DefaultNTypeCompiler : NTypeCompiler
 
   public override Compile(t : NType) : PExpr
   {
-    Nemerle.Compiler.UtilMacros.locate(t.Location.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(t.Location.:NLocation(),
       match (t)
       {
         | Predefined(t)    => MakeNemerleType(t)
@@ -5190,7 +5194,7 @@ public sealed class DefaultNTypeCompiler : NTypeCompiler
 
           if (parts is first :: other)
           {
-            mutable acc = Nemerle.Compiler.UtilMacros.locate(first.Location.NLocation(),
+            mutable acc = Nemerle.Compiler.UtilMacros.locate(first.Location.:NLocation(),
               match (first.TypeArguments)
               {
                 | []                                => <[ $(makeName(first) : name) ]>
@@ -5199,10 +5203,10 @@ public sealed class DefaultNTypeCompiler : NTypeCompiler
               });
             foreach (t in other)
             {
-              Nemerle.Compiler.UtilMacros.locate(t.Location.NLocation(),
+              Nemerle.Compiler.UtilMacros.locate(t.Location.:NLocation(),
               {
                 acc = <[ $acc . $(makeName(t) : name) ]>;
-                unless (t.TypeArguments.IsEmpty())
+                unless (t.TypeArguments.:IsEmpty())
                   acc = <[ $acc[..$(t.TypeArguments.Map(Compile))]]>;
               });
             }
@@ -5318,7 +5322,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
         if(members.Count == 1)
           members[0]
         else
-          FieldExpr.Tuple(members.ToNList())
+          FieldExpr.Tuple(members.:ToNList())
       }
       else
       {
@@ -5372,7 +5376,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
         <[ throw System.ArgumentOutOfRangeException("id") ]>;
     }
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __ReadSequenceParseTreeStandardMode(id : int, pos : ref int) : $(Environment.ParseTreeTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.ParseTreeTypeVar : typed)].ReadSequence
       {
@@ -5380,7 +5384,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __ReadSequenceSpanStandardMode(id : int, pos : ref int) : $(Environment.NSpanTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.NSpanTypeVar : typed)].ReadSequence
       {
@@ -5388,7 +5392,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __ReadSequenceParseTreeRecoveryMode(id : int, recoveredSubrulesIndex : int) : $(Environment.ParseTreeTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.ParseTreeTypeVar : typed)].ReadSequence
       {
@@ -5396,7 +5400,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __ReadSequenceSpanRecoveryMode(id : int, recoveredSubrulesIndex : int) : $(Environment.NSpanTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.NSpanTypeVar : typed)].ReadSequence
       {
@@ -5404,7 +5408,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __ReadEmptySequenceParseTree(id : int, _subruleStartPos : int) : $(Environment.ParseTreeTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.ParseTreeTypeVar : typed)].ReadEmptySequence
       {
@@ -5412,7 +5416,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __ReadEmptySequenceSpan(id : int, _subruleStartPos : int) : $(Environment.NSpanTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.NSpanTypeVar : typed)].ReadEmptySequence
       {
@@ -5420,7 +5424,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __CreateAmbiguousSequenceParseTree(id : int, ambiguities : array[$(Environment.ParseTreeTypeVar : typed)]) : $(Environment.ParseTreeTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.ParseTreeTypeVar : typed)].CreateAmbiguousSequence
       {
@@ -5428,7 +5432,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       }
     ]>);
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       private __CreateAmbiguousSequenceSpan(_ : int, _ : array[$(Environment.NSpanTypeVar : typed)]) : $(Environment.NSpanTypeVar : typed)
         implements Nitra.Internal.ISequenceParseTreeLoader[$(Environment.NSpanTypeVar : typed)].CreateAmbiguousSequence
       {
@@ -5472,7 +5476,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       {
         if (IsSubruleAcceptedForParseTree(subrule))
         {
-          def varName = subrule.MakeVariableName("pt");
+          def varName = subrule.:MakeVariableName("pt");
           subruleValues.Add(varName, subrule);
 
           statementsStandardMode.Add(<[ def $(varName : usesite) = $(CompileSubruleValueStandardMode(subrule, rawTreePointer, ref needRuleParserStandardMode)) ]>);
@@ -5497,13 +5501,13 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
         | _ =>
           statementsStandardMode.Insert(0, <[ def sequenceStartPos = pos; ]>);
-          statementsStandardMode.Add(<[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, sequenceStartPos, pos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
+          statementsStandardMode.Add(<[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, sequenceStartPos, pos), ..$(subruleValues.:MapToList(nameToExpr))) ]>);
 
           statementsRecoveryMode.Add(<[ def sequenceStartPos = subruleStarts[0].Pos ]>);
           statementsRecoveryMode.Add(<[ def sequenceEndPos = subruleStarts[subruleStarts.Length - 1].Pos ]>);
-          statementsRecoveryMode.Add(<[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, sequenceStartPos, sequenceEndPos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
+          statementsRecoveryMode.Add(<[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, sequenceStartPos, sequenceEndPos), ..$(subruleValues.:MapToList(nameToExpr))) ]>);
 
-          statementsEmptyRecoveryMode.Add(<[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, _subruleStartPos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
+          statementsEmptyRecoveryMode.Add(<[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, _subruleStartPos), ..$(subruleValues.:MapToList(nameToExpr))) ]>);
       }
 
       def id               = _sequenceCompilationResults.Count;
@@ -5539,7 +5543,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
   private MakeRuleParserDefinition() : PExpr
   {
-    <[ def ruleParser = parseResult.GetRuleParser(rawTreePtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>
+    <[ def ruleParser = parseResult.GetRuleParser(rawTreePtr) :> $(this.RuleSymbol.:GetParserClassRef()) ]>
   }
 
   private GetArgumentsForCreateParseTree(compilationResult : SequenceCompilationResult) : PExpr * PExpr * int * PExpr
@@ -5583,7 +5587,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
               $(parentRawTreePointer.GetSize(subrule)),
               parseResult,
               $(subrule.BindingPower.Name : string),
-              $(subrule.Symbol.GetRuleDescriptorRef()),
+              $(subrule.Symbol.:GetRuleDescriptorRef()),
               ruleParser.Grammar);
           ]>
         }
@@ -5619,7 +5623,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
               $(parentRawTreePointer.Var),
               $(subrule.Offset),
               ref pos,
-              $(callInfo.Symbol.GetRuleDescriptorRef()),
+              $(callInfo.Symbol.:GetRuleDescriptorRef()),
               $(callInfo.BindingPower.Name : string))
           ]>
         }
@@ -5678,7 +5682,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
               _subruleEndPos,
               parseResult,
               $(subrule.BindingPower.Name : string),
-              $(subrule.Symbol.GetRuleDescriptorRef()),
+              $(subrule.Symbol.:GetRuleDescriptorRef()),
               parsingSequence.Grammar);
           ]>
 
@@ -5704,7 +5708,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           <[
             Nitra.Internal.ParseTreeFactory.CreateDynamicExtensionPointList.[$(itemType : typed)](
               this.parseResult, state, _subruleStartPos, _subruleEndPos,
-              $(callInfo.Symbol.GetRuleDescriptorRef()),
+              $(callInfo.Symbol.:GetRuleDescriptorRef()),
               $(callInfo.BindingPower.Name : string))
           ]>
         }
@@ -5851,7 +5855,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
     when (statements.Count > 0)
     {
-      _nodeTb.DefineConditional(<[ decl:
+      _nodeTb.:DefineConditional(<[ decl:
         [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
         public sealed override Apply(visitor : Nitra.Runtime.ParseTreeVisitor) : Nitra.Runtime.ParseTree
         {
@@ -5945,16 +5949,16 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           {
             | 0 => (ChemicalRuleType.StaticString(),               <[ Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location.Default, ..$exprs) ]>)
             | 1 => (memberTypes[0],                                <[ def $(patternVariables[0] : usesite)                                   = $obj; Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location.Default, ..$exprs) ]>)
-            | _ => (ChemicalRuleType.Tuple(memberTypes.NToList()), <[ def (..$(patternVariables.MapToList(name => <[ $(name : usesite) ]>))) = $obj; Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location.Default, ..$exprs) ]>)
+            | _ => (ChemicalRuleType.Tuple(memberTypes.:NToList()), <[ def (..$(patternVariables.:MapToList(name => <[ $(name : usesite) ]>))) = $obj; Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location.Default, ..$exprs) ]>)
           }
       }
     }
 
-    _chemicalTb.DefineConditional(<[ decl: private sourceProvider   : Nitra.Runtime.ISourceSnapshotProvider; ]>);
-    _chemicalTb.DefineConditional(<[ decl: private span             : $(Environment.NSpanTypeVar : typed); ]>);
-    _chemicalTb.DefineConditional(<[ decl: public override Location : Nitra.Runtime.Location                      { get { Nitra.Runtime.Location(this.sourceProvider.GetSource(), this.span) } } ]>);
-    _chemicalTb.DefineConditional(<[ decl: public override Span     : $(Environment.NSpanTypeVar : typed) { get { this.span } } ]>);
-    _chemicalTb.DefineConditional(<[ decl: public override File     : $(Environment.FileTypeVar : typed)  { get { this.sourceProvider.GetSource().File } } ]>);
+    _chemicalTb.:DefineConditional(<[ decl: private sourceProvider   : Nitra.Runtime.ISourceSnapshotProvider; ]>);
+    _chemicalTb.:DefineConditional(<[ decl: private span             : $(Environment.NSpanTypeVar : typed); ]>);
+    _chemicalTb.:DefineConditional(<[ decl: public override Location : Nitra.Runtime.Location                      { get { Nitra.Runtime.Location(this.sourceProvider.GetSource(), this.span) } } ]>);
+    _chemicalTb.:DefineConditional(<[ decl: public override Span     : $(Environment.NSpanTypeVar : typed) { get { this.span } } ]>);
+    _chemicalTb.:DefineConditional(<[ decl: public override File     : $(Environment.FileTypeVar : typed)  { get { this.sourceProvider.GetSource().File } } ]>);
 
     def ctorParameters = SCG.List();
     ctorParameters.Add(<[ parameter: sourceProvider : Nitra.Runtime.ISourceSnapshotProvider ]>);
@@ -5973,7 +5977,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
     foreach (field in fields)
     {
-      _chemicalTb.DefineConditional(<[ decl:
+      _chemicalTb.:DefineConditional(<[ decl:
         public override $(field.Name : usesite) : $(field.Type : typed) { get; }
       ]>);
 
@@ -5986,11 +5990,11 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       ctorArguments.Add(expr);
     }
 
-    _chemicalTb.DefineConditional(<[ decl:
+    _chemicalTb.:DefineConditional(<[ decl:
       public this(..$ctorParameters) { ..$ctorStatements }
     ]>);
 
-    _chemicalTb.DefineConditional(<[ decl:
+    _chemicalTb.:DefineConditional(<[ decl:
       protected override GetSourceSnapshotProvider() : Nitra.Runtime.ISourceSnapshotProvider
       {
         this.sourceProvider
@@ -6005,7 +6009,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     recognizedArguments.Add(<[ span ]>);
     foreach(field in fields)
       recognizedArguments.Add(<[ $(field.Name : usesite) ]>);
-    _nodeTb.DefineConditional(<[ decl:
+    _nodeTb.:DefineConditional(<[ decl:
       public static CreateRecognizedParseTree(..$ctorParameters) : $(_nodeTb.GetMemType() : typed)
       {
         unchecked($(_chemicalTb.GetMemType() : typed)(..$recognizedArguments))
@@ -6013,7 +6017,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     ]>);
 
     DefineSelectedFactory(fields, _chemicalTb, _nodeTb);
-    _nodeTb.DefineConditional(<[ decl:
+    _nodeTb.:DefineConditional(<[ decl:
       [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
       public static CreateParseTree(..$createParameters) : $(_nodeTb.GetMemType() : typed)
       {
@@ -6086,14 +6090,14 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           {
             | 0 => (ChemicalRuleType.StaticString(),               <[ () ]>)
             | 1 => (memberTypes[0],                                exprs[0])
-            | _ => (ChemicalRuleType.Tuple(memberTypes.NToList()), <[ (..$exprs) ]>)
+            | _ => (ChemicalRuleType.Tuple(memberTypes.:NToList()), <[ (..$exprs) ]>)
           }
       }
     }
 
     foreach (field in fields)
     {
-      _nodeTb.DefineConditional(<[ decl:
+      _nodeTb.:DefineConditional(<[ decl:
         public new abstract $(field.Name : usesite) : $(field.Type : typed) { get; }
       ]>);
 
@@ -6103,7 +6107,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
         | ruleType =>
           def (propertyType, expr) = traverse(ruleType, <[ this.$(field.Name : usesite) ]>);
           unless (propertyType is ChemicalRuleType.StaticString)
-            _nodeTb.DefineConditional(<[ decl:
+            _nodeTb.:DefineConditional(<[ decl:
               public $(field.Name + "Data" : usesite) : $(Environment.GetParseTreeType(propertyType) : typed)
               {
                 [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
@@ -6168,9 +6172,9 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     foreach (syntaxMapping in this.RuleSymbol.SyntaxMappings)
     {
       def returnType = Environment.GetAstType(syntaxMapping.ReturnType);
-      def parms      = syntaxMapping.Parameters.Map(p => Nemerle.Compiler.UtilMacros.locate(p.FirstLocation.NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
+      def parms      = syntaxMapping.Parameters.Map(p => Nemerle.Compiler.UtilMacros.locate(p.FirstLocation.:NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
       _baseTb.Define(<[ decl: public abstract $(syntaxMapping.Name : usesite)(..$parms) : $returnType ]>);
-      when (parms.IsEmpty())
+      when (parms.:IsEmpty())
         DefineGetAstUntypedMethod(_baseTb, syntaxMapping);
     }
   }
@@ -6203,7 +6207,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
     def compileAccess(path : ParseTreePath, needsParseTreeCheck : bool, compile : PExpr -> PExpr) : PExpr
     {
-      def loc = path.Location.NLocation();
+      def loc = path.Location.:NLocation();
       match (path)
       {
         | This                       => compile(Nemerle.Compiler.UtilMacros.locate(loc, <[ this ]>))
@@ -6407,10 +6411,10 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       compileDecision(decision, body, accessCache);
 
       when (canFail)
-        Environment.Project.Warning(errorLoc, "Matching is not exhaustive.");
+        Environment.Project.:Warning(errorLoc, "Matching is not exhaustive.");
 
       foreach (case in redundantCases)
-        Environment.Project.Warning(case, "Match case is redundant.");
+        Environment.Project.:Warning(case, "Match case is redundant.");
 
       <[ {..$body } ]>
     })
@@ -6436,7 +6440,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           body.Add(<[ def $(varName : usesite) = $(CompileSyntaxMapping(arg, loc)) ]>);
           argRefs.Add(<[ $(varName : usesite) ]>)
       }
-      def itemExpr = CompileSyntaxMappingInvokation(itemPath, itemType, argRefs.ToNList());
+      def itemExpr = CompileSyntaxMappingInvokation(itemPath, itemType, argRefs.:ToNList());
       body.Add(getBody(itemExpr));
 
       <[
@@ -6451,7 +6455,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
   {
     assert(expr != null);
 
-    Nemerle.Compiler.UtilMacros.locate(expr.Location.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(expr.Location.:NLocation(),
     {
       match (expr)
       {
@@ -6565,7 +6569,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
   private DefineGetAstUntypedMethod(tb : TypeBuilder, syntaxMapping : SyntaxMappingSymbol) : void
   {
-    assert(syntaxMapping.Parameters.IsEmpty());
+    assert(syntaxMapping.Parameters.:IsEmpty());
 
     unless (syntaxMapping.ReturnType is AstType.NemerleExpr)
     tb.Define(<[ decl: public override GetAstUntyped() : $(Environment.AstTypeVar : typed) { this.$(syntaxMapping.Name : usesite)() } ]>);
@@ -6575,7 +6579,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
   {
     def returnType = Environment.GetAstType(syntaxMapping.ReturnType);
     def mods       = AttributesAndModifiers(modifiers, []);
-    def parms      = syntaxMapping.Parameters.Map(p => Nemerle.Compiler.UtilMacros.locate(p.FirstLocation.NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
+    def parms      = syntaxMapping.Parameters.Map(p => Nemerle.Compiler.UtilMacros.locate(p.FirstLocation.:NLocation(), <[ parameter: $(p.Name : usesite) : $(Environment.GetAstType(p.Type)) ]>));
     def isOverride = modifiers %&& NemerleModifiers.Override;
     when (parms.IsEmpty && !isOverride)
       DefineGetAstUntypedMethod(tb, syntaxMapping);
@@ -6638,25 +6642,25 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
   // ---- merged from Generation/ParseTree/DefineMembers-ParsedNode.n ----
   protected DefineParsedNodeCtorAndFields(fields : SCG.List[FieldInfo], _parsedTb : TypeBuilder) : void
   {
-    _parsedTb.DefineConditional(<[ decl: private parseResult : Nitra.Runtime.ParseResult; ]>);
-    _parsedTb.DefineConditional(<[ decl: private rawTreePtr  : int; ]>);
-    _parsedTb.DefineConditional(<[ decl: private startPos    : int; ]>);
-    _parsedTb.DefineConditional(<[ decl: private endPos      : int; ]>);
+    _parsedTb.:DefineConditional(<[ decl: private parseResult : Nitra.Runtime.ParseResult; ]>);
+    _parsedTb.:DefineConditional(<[ decl: private rawTreePtr  : int; ]>);
+    _parsedTb.:DefineConditional(<[ decl: private startPos    : int; ]>);
+    _parsedTb.:DefineConditional(<[ decl: private endPos      : int; ]>);
 
-    _parsedTb.DefineConditional(<[ decl: public    override Location          : Nitra.Runtime.Location                      { get { Nitra.Runtime.Location(this.parseResult, this.startPos, this.endPos) } } ]>);
-    _parsedTb.DefineConditional(<[ decl: public    override Span              : $(Environment.NSpanTypeVar : typed) { get { $(Environment.NSpanTypeVar : typed)(this.startPos, this.endPos) } } ]>);
-    _parsedTb.DefineConditional(<[ decl: public    override File              : $(Environment.FileTypeVar : typed)  { get { this.parseResult.SourceSnapshot.File } } ]>);
-    _parsedTb.DefineConditional(<[ decl: protected override PrettyPrintSource : Nitra.Runtime.IPrettyPrintSource            { get { this.parseResult } } ]>);
+    _parsedTb.:DefineConditional(<[ decl: public    override Location          : Nitra.Runtime.Location                      { get { Nitra.Runtime.Location(this.parseResult, this.startPos, this.endPos) } } ]>);
+    _parsedTb.:DefineConditional(<[ decl: public    override Span              : $(Environment.NSpanTypeVar : typed) { get { $(Environment.NSpanTypeVar : typed)(this.startPos, this.endPos) } } ]>);
+    _parsedTb.:DefineConditional(<[ decl: public    override File              : $(Environment.FileTypeVar : typed)  { get { this.parseResult.SourceSnapshot.File } } ]>);
+    _parsedTb.:DefineConditional(<[ decl: protected override PrettyPrintSource : Nitra.Runtime.IPrettyPrintSource            { get { this.parseResult } } ]>);
 
     def rawTreePtr = RawTreePointer.Existing(this.RuleSymbol.Sequence, this, "rawTreePtr");
 
-    def endPosExpr = this.RuleSymbol.Sequence.NonMarkerSubrules.Fold(<[ pos ]>, (subrule, acc) => <[ $acc + $(rawTreePtr.GetSize(subrule)) ]>);
+    def endPosExpr = this.RuleSymbol.Sequence.NonMarkerSubrules.:Fold(<[ pos ]>, (subrule, acc) => <[ $acc + $(rawTreePtr.GetSize(subrule)) ]>);
 
     match (this.RuleSymbol)
     {
       | SimpleRuleSymbol
       | ExtensionRuleSymbol(ExtensionType = Prefix) =>
-        _parsedTb.DefineConditional(<[decl:
+        _parsedTb.:DefineConditional(<[decl:
           [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
           public this(pos : ref int, rawTreePtr : int, parseResult : Nitra.Runtime.ParseResult)
           {
@@ -6678,7 +6682,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           }
         ]>);
 
-        _parsedTb.DefineConditional(<[decl:
+        _parsedTb.:DefineConditional(<[decl:
           [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
           public this(startPos : int, endPos : int, recoveredSubrulesIndex : int, parseResult : Nitra.Runtime.ParseResult)
           {
@@ -6693,9 +6697,9 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
         ]>);
 
       | ExtensionRuleSymbol(ExtensionType = Postfix) as symbol =>
-        _parsedTb.DefineConditional(<[ decl: private parseTreeStartPos : int; ]>);
-        _parsedTb.DefineConditional(<[ decl: private prefix      : $(Environment.GetParseTreeType(symbol.BaseRule.GetValue(Environment.Project)) : typed); ]>);
-        _parsedTb.DefineConditional(<[ decl:
+        _parsedTb.:DefineConditional(<[ decl: private parseTreeStartPos : int; ]>);
+        _parsedTb.:DefineConditional(<[ decl: private prefix      : $(Environment.GetParseTreeType(symbol.BaseRule.GetValue(Environment.Project)) : typed); ]>);
+        _parsedTb.:DefineConditional(<[ decl:
           [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
           public this(prefix : $(Environment.GetParseTreeType(symbol.BaseRule.GetValue(Environment.Project)) : typed), prefixStartPos : int, pos : ref int, rawTreePtr : int, parseResult : Nitra.Runtime.ParseResult)
           {
@@ -6719,7 +6723,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           }
         ]>);
 
-        _parsedTb.DefineConditional(<[ decl:
+        _parsedTb.:DefineConditional(<[ decl:
           [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
           public this(prefix : $(Environment.GetParseTreeType(symbol.BaseRule.GetValue(Environment.Project)) : typed), prefixStartPos : int, startPos : int, endPos : int, recoveredSubrulesIndex : int, parseResult : Nitra.Runtime.ParseResult)
           {
@@ -6817,7 +6821,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           };
           <[
             ..$tupleCode;
-            Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, $startPos, $endPos), ..$(tupleArgs.MapToList((name, _) => <[ $(name : usesite) ]>)))
+            Nitra.Runtime.ConcreteSequenceParseTree(Nitra.Runtime.Location(parseResult, $startPos, $endPos), ..$(tupleArgs.:MapToList((name, _) => <[ $(name : usesite) ]>)))
           ]>
       }
       def statementsRecoveryMode = compileRecoveryMode(field.Expr);
@@ -6828,7 +6832,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
         if (needCaching)
         {
           def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(field.Name);
-          _parsedTb.DefineConditional(<[ decl: private mutable $(backingFieldName : usesite) : $(field.Type : typed); ]>);
+          _parsedTb.:DefineConditional(<[ decl: private mutable $(backingFieldName : usesite) : $(field.Type : typed); ]>);
           assert(!field.Type.IsValueType);
           <[
             when ($(backingFieldName : usesite) : object == null)
@@ -6840,7 +6844,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
         }
         else code;
 
-      _parsedTb.DefineConditional(<[ decl:
+      _parsedTb.:DefineConditional(<[ decl:
         public override $(field.Name : usesite) : $(field.Type : typed)
         {
           get { unchecked ($codeWithCaching) }
@@ -6848,7 +6852,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
       ]>);
     }
 
-    _parsedTb.DefineConditional(<[ decl:
+    _parsedTb.:DefineConditional(<[ decl:
       protected override GetSourceSnapshotProvider() : Nitra.Runtime.ISourceSnapshotProvider
       {
         this.parseResult
@@ -6865,7 +6869,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     {
       def name          = Nemerle.Compiler.Utility.Util.tmpname("PrettyPrint" + title);
       def parseTreeType = Environment.GetParseTreeType(ruleType);
-      _nodeTb.DefineConditional(<[ decl:
+      _nodeTb.:DefineConditional(<[ decl:
         private static $(name : usesite)(writer : Nitra.Runtime.PrettyPrintWriter, source : Nitra.Runtime.IPrettyPrintSource, parseTree : $(parseTreeType : typed), spanClass : Nitra.Runtime.SpanClass) : void
         {
           if (parseTree.IsAmbiguous)
@@ -7045,19 +7049,19 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
           ..$code;
         }
       ]>;
-    _nodeTb.DefineConditional(decl);
+    _nodeTb.:DefineConditional(decl);
   }
 
   protected DefineAmbiguousOrMissingPrettyPrint(_ambiguousOrMissingTb : TypeBuilder) : void
   {
-    _ambiguousOrMissingTb.DefineConditional(<[ decl:
+    _ambiguousOrMissingTb.:DefineConditional(<[ decl:
       [Nemerle.Diagnostics.CompileStatistic("PrettyPrint")]
       public override PrettyPrint(writer : Nitra.Runtime.PrettyPrintWriter, _callerBindingPower : int, spanClass : Nitra.Runtime.SpanClass) : void
       {
         if (this.IsAmbiguous)
           writer.AmbiguousNode(this, spanClass);
         else
-          writer.MissingNode($(this.RuleSymbol.GetRuleDescriptorRef()));
+          writer.MissingNode($(this.RuleSymbol.:GetRuleDescriptorRef()));
       }
     ]>);
   }
@@ -7067,7 +7071,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
   {
     foreach (method in this.RuleSymbol.RuleMethods)
     {
-      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.:NLocation(),
         match (method)
         {
           | RuleMethod.AbstractSymbol(Signature = signature, IsCached = isCached) =>
@@ -7092,7 +7096,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
   {
     foreach (method in this.RuleSymbol.RuleMethods)
     {
-      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.:NLocation(),
         match (method)
         {
           | RuleMethod.DefSymbol       (Signature = signature, IsCached = isCached, Body = body) =>
@@ -7112,7 +7116,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
   {
     foreach (method in this.RuleSymbol.RuleMethods)
     {
-      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.:NLocation(),
         match (method)
         {
           | RuleMethod.DefSymbol(Signature = signature, IsCached = isCached, Body = body) =>
@@ -7148,7 +7152,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
     foreach (method in this.RuleSymbol.RuleMethods)
     {
-      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(method.FirstLocation.:NLocation(),
         match (method)
         {
           | RuleMethod.AbstractSymbol  (Signature = signature, AstType = astType, IsCached = isCached)
@@ -7205,12 +7209,12 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     def result = SCG.List();
     foreach (p in signature.Params)
     {
-      Nemerle.Compiler.UtilMacros.locate(p.Location.NLocation(),
+      Nemerle.Compiler.UtilMacros.locate(p.Location.:NLocation(),
       {
         result.Add(<[ parameter: $(p.Name.Value : usesite) : $(TypeCompiler.Compile(p.Type)) ]>);
       });
     }
-    result.ToNList()
+    result.:ToNList()
   }
 
   private MakeReturnType(signature : RuleMethod.RuleMethodSignature) : PExpr
@@ -7229,7 +7233,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
   private static addRecursionCheck(tb : TypeBuilder, body : PExpr) : PExpr.Sequence
   {
-    def bitField = tb.GetBitFieldManager().Allocate();
+    def bitField = tb.:GetBitFieldManager().Allocate();
     <[
       when ($(bitField.Read()))
         throw System.InvalidOperationException("Recursion detected (see stack trace for details).");
@@ -7241,7 +7245,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
   private static addCaching(tb : TypeBuilder, name : string, type : PExpr, body : PExpr, flags : NemerleModifiers) : PExpr
   {
-    def bitField = tb.GetBitFieldManager().Allocate();
+    def bitField = tb.:GetBitFieldManager().Allocate();
     def fieldName = Nemerle.Compiler.Utility.Util.tmpname(name + "_cache");
     tb.Define(<[ decl: private mutable $(fieldName : usesite) : $type ]>);
     def mods = Modifiers(flags, []);
@@ -7298,7 +7302,7 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
 
     // Fix #NTR-32 by adding excess module "Nested"
     when (nestedTb == null)
-      Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(), nestedTb = nodeTb.DefineNestedType(<[ decl: public module Nested { } ]>));
+      Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(), nestedTb = nodeTb.DefineNestedType(<[ decl: public module Nested { } ]>));
 
     nestedTb.DefineNestedType(td)
   }
@@ -7350,10 +7354,10 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     foreach(rule in RuleSymbol.SubRules with index)
       unless(rule.Type is RuleType.Void) args.Add(SelectedValue(rule,<[ Nitra.Runtime.SelectedFields.Field(node,$(index : int)) ]>));
     unless(args.Count==fields.Count+2) throw InvalidOperationException("native selected field schema mismatch");
-    nodeTb.DefineConditional(<[ decl:
+    nodeTb.:DefineConditional(<[ decl:
       public static GetRecognitionRuleName() : string { $(RuleSymbol.Node.FullName : string) }
     ]>);
-    nodeTb.DefineConditional(<[ decl:
+    nodeTb.:DefineConditional(<[ decl:
       public static CreateSelected(provider : Nitra.Runtime.ISourceSnapshotProvider, selected : Nemerle.Compiler.NitraStructures.NitraStructure,
         create : System.Func[string,Nitra.Runtime.ISourceSnapshotProvider,Nemerle.Compiler.NitraStructures.NitraStructure,object]) : object
       {
@@ -7393,7 +7397,7 @@ internal sealed class ExtendSyntaxParseTreeEmitter : IParseTreeEmitter
   {
     assert(_tb == null);
 
-    Nemerle.Compiler.UtilMacros.locate(this.ExtendSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.ExtendSymbol.FirstLocation.:NLocation(),
     {
       _tb = defineType(<[ decl: public module $(ExtendSymbol.Name : usesite) { } ]>);
     });
@@ -7443,12 +7447,12 @@ internal sealed class ExtensibleRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     assert(!IsTypesDefined);
 
-    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(),
     {
       _baseTb = defineType(<[decl:
         public new abstract partial class $(this.RuleSymbol.Name : usesite) : $(Environment.ParseTreeTypeVar : typed)
         {
-          public override RuleDescriptor : Nitra.Runtime.RuleDescriptor { get { $(RuleSymbol.GetRuleDescriptorRef()) } }
+          public override RuleDescriptor : Nitra.Runtime.RuleDescriptor { get { $(RuleSymbol.:GetRuleDescriptorRef()) } }
         }
       ]>);
 
@@ -7481,7 +7485,7 @@ internal sealed class ExtensibleRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     assert(IsTypesDefined);
 
-    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(),
     {
       DefineCreateMethod();
       DefineExtensibleRuleGetAstMethod(_baseTb);
@@ -7498,7 +7502,7 @@ internal sealed class ExtensibleRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     when (this.RuleSymbol.Options.IsStart)
     {
-      _baseTb.DefineConditional(<[ decl:
+      _baseTb.:DefineConditional(<[ decl:
         [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
         public static CreateParseTree(parseResult : Nitra.Runtime.IParseResult) : $(_baseTb.GetMemType() : typed)
         {
@@ -7508,7 +7512,7 @@ internal sealed class ExtensibleRuleParseTreeEmitter : RuleParseTreeEmitter
             parseResult.ParseEnd,
             parseResult,
             "0",
-            $(this.RuleSymbol.GetRuleDescriptorRef()),
+            $(this.RuleSymbol.:GetRuleDescriptorRef()),
             parseResult.RuleParser.Grammar);
         }
       ]>);
@@ -7557,12 +7561,12 @@ internal sealed class ExtensionRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     assert(!IsTypesDefined);
 
-    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(),
     {
       _nodeTb = defineType(<[decl:
         public new abstract partial class $(this.RuleSymbol.Name : usesite) : $(Environment.GetParseTreeType((this.RuleSymbol :> ExtensionRuleSymbol).BaseRule.GetValue(Environment.Project)) : typed)
         {
-          public override RuleDescriptor : Nitra.Runtime.RuleDescriptor { get { $(RuleSymbol.GetRuleDescriptorRef()) } }
+          public override RuleDescriptor : Nitra.Runtime.RuleDescriptor { get { $(RuleSymbol.:GetRuleDescriptorRef()) } }
         }
       ]>);
 
@@ -7584,7 +7588,7 @@ internal sealed class ExtensionRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     assert(IsTypesDefined);
 
-    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(),
     {
       def fields = GetFields();
       DefineParseTreeCtorAndFields(fields, _nodeTb);
@@ -7657,12 +7661,12 @@ internal sealed class SimpleRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     assert(!IsTypesDefined);
 
-    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(),
     {
       _baseTb = defineType(<[decl:
         public new abstract partial class $(this.RuleSymbol.Name : usesite) : $(Environment.ParseTreeTypeVar : typed)
         {
-          public override RuleDescriptor : Nitra.Runtime.RuleDescriptor { get { $(RuleSymbol.GetRuleDescriptorRef()) } }
+          public override RuleDescriptor : Nitra.Runtime.RuleDescriptor { get { $(RuleSymbol.:GetRuleDescriptorRef()) } }
         }
       ]>);
 
@@ -7705,7 +7709,7 @@ internal sealed class SimpleRuleParseTreeEmitter : RuleParseTreeEmitter
   {
     assert(IsTypesDefined);
 
-    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.NLocation(),
+    Nemerle.Compiler.UtilMacros.locate(this.RuleSymbol.FirstLocation.:NLocation(),
     {
       DefineCreateMethod();
 
@@ -7728,11 +7732,11 @@ internal sealed class SimpleRuleParseTreeEmitter : RuleParseTreeEmitter
 
   private DefineCreateMethod() : void
   {
-    _baseTb.DefineConditional(<[ decl:
+    _baseTb.:DefineConditional(<[ decl:
       [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
       public static CreateParseTree(pos : ref int, size : int, parseResult : Nitra.Runtime.ParseResult, grammar : Nitra.Runtime.CompositeGrammar) : $(_baseTb.GetMemType() : typed)
       {
-        def ruleParser = grammar.GetSimpleRuleParser($(this.RuleSymbol.GetRuleDescriptorRef()));
+        def ruleParser = grammar.GetSimpleRuleParser($(this.RuleSymbol.:GetRuleDescriptorRef()));
         if (size > 0 || ruleParser.CanParseEmptyString)
         {
           def rawTreePtr = parseResult.TryGetRawTree(pos, ruleParser.RuleId);
@@ -7744,11 +7748,11 @@ internal sealed class SimpleRuleParseTreeEmitter : RuleParseTreeEmitter
       }
     ]>);
 
-    _baseTb.DefineConditional(<[ decl:
+    _baseTb.:DefineConditional(<[ decl:
       [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
       public static CreateParseTree(startPos : int, endPos : int, parseResult : Nitra.Runtime.ParseResult, grammar : Nitra.Runtime.CompositeGrammar) : $(_baseTb.GetMemType() : typed)
       {
-        def ruleParser = grammar.GetSimpleRuleParser($(this.RuleSymbol.GetRuleDescriptorRef()));
+        def ruleParser = grammar.GetSimpleRuleParser($(this.RuleSymbol.:GetRuleDescriptorRef()));
         if (startPos < endPos || ruleParser.CanParseEmptyString)
         {
           match (parseResult.TryGetRecoveredSequence(startPos, endPos, ruleParser.ParsingSequence))
@@ -7775,7 +7779,7 @@ internal sealed class SimpleRuleParseTreeEmitter : RuleParseTreeEmitter
 
     when (this.RuleSymbol.Options.IsStart)
     {
-      _baseTb.DefineConditional(<[ decl:
+      _baseTb.:DefineConditional(<[ decl:
         [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
         public static CreateParseTree(parseResult : Nitra.Runtime.IParseResult) : $(_baseTb.GetMemType() : typed)
         {
@@ -7811,11 +7815,11 @@ internal sealed class ExtensionRuleParserEmitter : RuleParserEmitter
       <[ Nitra.Internal.PostfixRuleParser ]>;
 
     _parserTb = Owner.GrammarImplTB.DefineNestedType(<[decl:
-      public class $(RuleSymbol.DecorateRuleClassName() : global) : $baseClass
+      public class $(RuleSymbol.:DecorateRuleClassName() : global) : $baseClass
       {
         public this(grammar : Nitra.Runtime.CompositeGrammar, ruleIdBuilder : Nitra.Internal.RuleIdBuilder, parserData : Nitra.Internal.ExtensibleRuleParserData)
         {
-          base(grammar, ruleIdBuilder, parserData, $(RuleSymbol.GetRuleDescriptorRef()));
+          base(grammar, ruleIdBuilder, parserData, $(RuleSymbol.:GetRuleDescriptorRef()));
         }
       }
     ]>);
@@ -7905,7 +7909,7 @@ internal abstract class MethodEmitter : IVariableEmitter
   public static MakeRegularRuleCallFullName(ruleSymbol : RegularRuleSymbol) : PExpr
   {
     def grammarType = PExprUtils.FromQualifiedIdentifier(ruleSymbol.DeclaringModule.Node.FullNameParts);
-    <[ $grammarType.$(AssemblyConstants.GrammarImplName : usesite).$(ruleSymbol.DecorateRuleName() : global) ]>
+    <[ $grammarType.$(AssemblyConstants.GrammarImplName : usesite).$(ruleSymbol.:DecorateRuleName() : global) ]>
   }
 }
 
@@ -7961,10 +7965,10 @@ internal abstract class MethodEmitter : IVariableEmitter
             }
           ]>;
       }
-      TypeBuilder.DefineConditional(function);
+      TypeBuilder.:DefineConditional(function);
       when (IsDynamicSyntaxExtenderHandler(sequence))
       {
-        TypeBuilder.DefineConditional(<[decl:
+        TypeBuilder.:DefineConditional(<[decl:
           public override GrammarChangeHandler(rawTreePtr : int, startPos : int, endPos : int, parseResult : IParseResult, grammar : CompositeGrammar) : CompositeGrammar
           {
             $(DynamicSyntaxExtenderHandler(sequence))(rawTreePtr, startPos, endPos, this, parseResult, grammar);
@@ -7979,7 +7983,7 @@ internal abstract class MethodEmitter : IVariableEmitter
         return <[ IgnoreParams(); assert(false); ]>;
 
       def code = SCG.List();
-      def endLabel = Environment.MakeLabel("EndParse");
+      def endLabel = Environment.:MakeLabel("EndParse");
       def setResultRef = if (sequence is SequenceCompileInfo.Root(Symbol = ExtensionRuleSymbol))
         <[ resultRef = $(RawTreePtr(sequence).Var); ]>
       else
@@ -8007,7 +8011,7 @@ internal abstract class MethodEmitter : IVariableEmitter
       {
         <[
           $CurTextPos = -1;
-          def maxFailPos = $(RawTreePtr(sequence).GetSize(sequence.NonMarkerSubrules.Last()));
+          def maxFailPos = $(RawTreePtr(sequence).GetSize(sequence.NonMarkerSubrules.:Last()));
           when (maxFailPos > parseResult.MaxFailPos)
             parseResult.MaxFailPos = maxFailPos;
           $(endLabel.Goto());
@@ -8081,7 +8085,7 @@ internal abstract class MethodEmitter : IVariableEmitter
       code.Add(<[ when ($(RawTreePtr(sequence).Var) > 0) // АСТ создано
                   {
                     $(RawTreePtr(sequence).Set(sequence.HeaderState, <[ parseState ]>));
-                    $(RawTreePtr(sequence).Set(sequence.NonMarkerSubrules.Last(), <[ parseResult.MaxFailPos ]>));
+                    $(RawTreePtr(sequence).Set(sequence.NonMarkerSubrules.:Last(), <[ parseResult.MaxFailPos ]>));
                     $setResultRef;
                   }
       ]>);
@@ -8090,7 +8094,7 @@ internal abstract class MethodEmitter : IVariableEmitter
       def debugCode = if (sequence is SequenceCompileInfo.Root(Symbol = SyntaxRuleSymbol(LastLocation = Some(loc))) when Owner.Environment.IsDebug)
       {
         def debugCode = <[ () ]>;
-        debugCode.Location = loc.NLocation();
+        debugCode.Location = loc.:NLocation();
         debugCode;
       }
       else
@@ -8098,7 +8102,7 @@ internal abstract class MethodEmitter : IVariableEmitter
 
       code.Add(<[ $(endLabel.Label()); $debugCode; $CurTextPos; ]>);
 
-      code.FlattenPExpr();
+      code.:FlattenPExpr();
     }
   
     // ---- merged from Generation/Parser/ParseMethodEmitter/CompileCall.n ----
@@ -8207,7 +8211,7 @@ internal abstract class MethodEmitter : IVariableEmitter
                 when (parseSession.CurrentGrammar : object != currentGrammar)
                 {
                   currentGrammar = parseSession.CurrentGrammar;
-                  currentParser = currentGrammar.GetExtensibleRuleParser($(callInfo.Symbol.GetRuleDescriptorRef()), "0");
+                  currentParser = currentGrammar.GetExtensibleRuleParser($(callInfo.Symbol.:GetRuleDescriptorRef()), "0");
                 }
               }
               else break;
@@ -8442,14 +8446,14 @@ internal abstract class MethodEmitter : IVariableEmitter
       def tailPredicatesMaxPos   = CreateVariable(Nemerle.Compiler.Utility.Util.tmpname("tailPredicatesMaxPos"));
       def tailPredicatesStartPos = CreateVariable(Nemerle.Compiler.Utility.Util.tmpname("tailPredicatesStartPos"));
 
-      def predicateOkLabel   = Environment.MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("predicateOk"));
-      def predicateFailLabel = Environment.MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("predicateFail"));
+      def predicateOkLabel   = Environment.:MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("predicateOk"));
+      def predicateFailLabel = Environment.:MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("predicateFail"));
 
       def continueLabels = array(predicates.Length);
       def startCode      = array(predicates.Length);
       for (mutable i = 0; i < predicates.Length - 1; ++i)
       {
-        def predicateStart = Environment.MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("predicateStart"));
+        def predicateStart = Environment.:MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("predicateStart"));
         continueLabels[i] = predicateStart;
         startCode[i + 1] = <[ $(predicateStart.Label()); $CurTextPos = $(tailPredicatesStartPos : global); ]>;
       }
@@ -8490,7 +8494,7 @@ internal abstract class MethodEmitter : IVariableEmitter
       code.Add(predicateOkLabel.Label());
       code.Add(<[ $CurTextPos = $(tailPredicatesStartPos : global); parseResult.MaxFailPos = $(tailPredicatesMaxPos : global); ]>);
 
-      code.FlattenPExpr()
+      code.:FlattenPExpr()
     }
 
     public CompilePredicate(predicates : array[SequenceCompileInfo.Predicate]) : PExpr * PExpr
@@ -8498,7 +8502,7 @@ internal abstract class MethodEmitter : IVariableEmitter
       when (predicates.Length == 0)
         return (<[ {} ]>, <[ {} ]>);
 
-      def failLabel = Environment.MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("failLabel"));
+      def failLabel = Environment.:MakeLabel(Nemerle.Compiler.Utility.Util.tmpname("failLabel"));
       (CompilePredicate(predicates, failLabel.Goto()), failLabel.Label())
     }
   
@@ -8518,8 +8522,8 @@ internal abstract class MethodEmitter : IVariableEmitter
           def index = if (i <= 0) <[ $textPos ]> else <[ $textPos + $(i : int) ]>;
           <[ $text[$index] == $(ch : char) ]>
         }
-        def exprs = str.Select(makeCharCheckCode);
-        def condExpr = exprs.Aggregate((e1, e2) => <[ $e1 && $e2 ]>);
+        def exprs = str.:Select(makeCharCheckCode);
+        def condExpr = exprs.:Aggregate((e1, e2) => <[ $e1 && $e2 ]>);
         <[ $check < $text.Length && $condExpr ]>
       }
     }
@@ -8621,8 +8625,8 @@ internal abstract class MethodEmitter : IVariableEmitter
         match (Sequence)
         {
           | SequenceCompileInfo.Root as seq =>
-            OkLabel   = Emitter.Environment.MakeLabel("Root_Ok");
-            FailLabel = Emitter.Environment.MakeLabel("Root_Fail");
+            OkLabel   = Emitter.Environment.:MakeLabel("Root_Ok");
+            FailLabel = Emitter.Environment.:MakeLabel("Root_Fail");
 
             when (seq.Symbol is ExtensionRuleSymbol as symbol)
             when (symbol.Options.IsDynamicSyntaxExtender)
@@ -8633,12 +8637,12 @@ internal abstract class MethodEmitter : IVariableEmitter
 
           | SequenceCompileInfo.Predicate =>
             def id = ManagerClass.Instance.GetNewId();
-            OkLabel   = Emitter.Environment.MakeLabel($"$(Sequence.GetType().Name)_$(id)_Predicate_Ok");
-            FailLabel = Emitter.Environment.MakeLabel($"$(Sequence.GetType().Name)_$(id)_Predicate_Fail");
+            OkLabel   = Emitter.Environment.:MakeLabel($"$(Sequence.GetType().Name)_$(id)_Predicate_Ok");
+            FailLabel = Emitter.Environment.:MakeLabel($"$(Sequence.GetType().Name)_$(id)_Predicate_Fail");
 
           | _ =>
-            OkLabel   = Emitter.Environment.MakeLabel($"$(Sequence.GetType().Name)_$(Sequence.Owner.State)_Ok");
-            FailLabel = Emitter.Environment.MakeLabel($"$(Sequence.GetType().Name)_$(Sequence.Owner.State)_Fail");
+            OkLabel   = Emitter.Environment.:MakeLabel($"$(Sequence.GetType().Name)_$(Sequence.Owner.State)_Ok");
+            FailLabel = Emitter.Environment.:MakeLabel($"$(Sequence.GetType().Name)_$(Sequence.Owner.State)_Fail");
         }
       }
     }
@@ -8669,7 +8673,7 @@ internal abstract class MethodEmitter : IVariableEmitter
 
       public override Init() : void
       {
-        ParseLabel    = Emitter.Environment.MakeLabel($"Parse_$LabelSuffix");
+        ParseLabel    = Emitter.Environment.:MakeLabel($"Parse_$LabelSuffix");
         ParsedSize    = RawTreePointer.New(this.Subrule.Owner, Emitter.ConstantEmitter, Emitter, "ParsedSize");
       }
     }
@@ -8726,7 +8730,7 @@ internal sealed class RegularRuleParserEmitter : RuleParserEmitter
     Fsm = ruleSymbol.Fsm;
   }
 
-  public MethodName : string { get { this.RuleSymbol.DecorateRuleName() } }
+  public MethodName : string { get { this.RuleSymbol.:DecorateRuleName() } }
 
   public override DefineParser() : void
   {
@@ -8810,7 +8814,7 @@ internal abstract class RuleParserEmitter : IConstantEmitter
   protected DefineImplementation(member : ClassMember) : void
   {
     if (Owner.Environment.IsDebug)
-      Owner.GrammarImplTB.DefineConditional(member)
+      Owner.GrammarImplTB.:DefineConditional(member)
     else
       Owner.GrammarImplTB.Define(member)
   }
@@ -8843,7 +8847,7 @@ internal abstract class RuleParserEmitter : IConstantEmitter
             | SubruleCompileInfo.Option                                           as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.Option            ]>, [reflectSequence(x.Rule), <[ this.$(x.Rule.ParseFunctionName : global)]>])
             | SubruleCompileInfo.SimpleCall                                       as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.SimpleCall        ]>, [<[ $(MakeParserName(x.Symbol) : global) ]>])
             | SubruleCompileInfo.ExtensibleCall                                   as x => (<[ Nitra.Runtime.Reflection.SubruleInfo.ExtensibleCall    ]>, [<[ $(MakeParserName(x.Symbol, x.BindingPower) : global) ]>])
-            | SubruleCompileInfo.RegularCall as x with rule = x.SrcRule :> Rule.Call   => (<[ Nitra.Runtime.Reflection.SubruleInfo.RegularCall       ]>, [x.Symbol.GetRuleDescriptorRef(), if (rule.SpanClass != null) Environment.MakeSpanClassRef(rule.SpanClass) else <[ null ]>, <[ $(x.Symbol.FirstCharUpperBound) ]>, <[ $(x.Symbol.FirstCharLowerBound) ]>, <[ $(x.Symbol.CanParseEmptyString) ]>, CalcLiterals(x.Symbol)])
+            | SubruleCompileInfo.RegularCall as x with rule = x.SrcRule :> Rule.Call   => (<[ Nitra.Runtime.Reflection.SubruleInfo.RegularCall       ]>, [x.Symbol.:GetRuleDescriptorRef(), if (rule.SpanClass != null) Environment.MakeSpanClassRef(rule.SpanClass) else <[ null ]>, <[ $(x.Symbol.FirstCharUpperBound) ]>, <[ $(x.Symbol.FirstCharLowerBound) ]>, <[ $(x.Symbol.CanParseEmptyString) ]>, CalcLiterals(x.Symbol)])
             | SubruleCompileInfo.TokenString as x with rule = x.SrcRule :> Rule.String => (<[ Nitra.Runtime.Reflection.SubruleInfo.TokenString       ]>, [<[ $(x.String) ]>, <[ $(rule.IsKeyToken) ]>, if (rule.SpanClass != null) Environment.MakeSpanClassRef(rule.SpanClass) else <[ null ]>])
             | SubruleCompileInfo.Marker(sym)                                           => (<[ Nitra.Runtime.Reflection.SubruleInfo.Marker            ]>, [<[ $(sym.FullName : string) ]>])
           };
@@ -8855,7 +8859,7 @@ internal abstract class RuleParserEmitter : IConstantEmitter
             def name              = Nemerle.Compiler.Utility.Util.tmpname("HeadPredicate");
             def fail              = PExprLabel(this.Environment.Manager, "childFail");
             def headPredicateCode = ParseMethodEmitter(this, tb, rootSequence).CompilePredicate(subrule.HeadPredicates, fail.Goto());
-            tb.DefineConditional(<[decl:
+            tb.:DefineConditional(<[decl:
               [Nemerle.Diagnostics.CompileStatistic("Reflection:HeadPredicate")]
               private $(name : global)(mutable curTextPos : int, text : string, parseResult : ParseResult) : bool
               {
@@ -8872,7 +8876,7 @@ internal abstract class RuleParserEmitter : IConstantEmitter
               }]>);
             <[ $(name : global) ]>
           };
-        def headPredicates = <[ array[..$(subrule.HeadPredicates.Map(p => reflectSequence(p)))] ]>;
+        def headPredicates = <[ array[..$(subrule.HeadPredicates.:Map(p => reflectSequence(p)))] ]>;
         def isVoid = subrule.SrcRule.Type is RuleType.Void;
         def args =
           <[ $(subrule.Offset) ]>              :: //Offset
@@ -8903,9 +8907,9 @@ internal abstract class RuleParserEmitter : IConstantEmitter
     sequenceFieldCases.Add(<[case: | _ => assert(false) ]>);
 
     foreach ((subruleInfoName, type) in sequenceFields)
-      tb.DefineConditional(<[decl: private mutable $(subruleInfoName : global) : $type ]>);
+      tb.:DefineConditional(<[decl: private mutable $(subruleInfoName : global) : $type ]>);
 
-    tb.DefineConditional(<[decl:
+    tb.:DefineConditional(<[decl:
       [Nemerle.Diagnostics.CompileStatistic("Reflection:Reflection")]
       public override Reflection(ruleId : int) : Nitra.Runtime.Reflection.SequenceInfo
       {
@@ -8926,12 +8930,12 @@ internal abstract class RuleParserEmitter : IConstantEmitter
     {
       | RegularRule.Choice as choice                                       => foreach (r in choice.rules) loop(r);
       | RegularRule.Call(Some(symbol))                                     => loop(symbol.Rule);
-      | RegularRule.Chars(StringOpt=Some(str)) when str.All(char.IsLetter) => result.Add(str);
+      | RegularRule.Chars(StringOpt=Some(str)) when str.:All(char.IsLetter) => result.Add(str);
       | _ => ()
     }
     
     loop(symbol.Rule);
-    def ordered = result.OrderBy(x => x).Select(x => <[ $(x : string) ]>).NToList();
+    def ordered = result.:OrderBy(x => x).:Select(x => <[ $(x : string) ]>).:NToList();
     <[ [..$ordered] ]>
   }
   
@@ -8941,22 +8945,22 @@ internal abstract class RuleParserEmitter : IConstantEmitter
     inits.Add(<[ _ = ruleIdBuilder ]>);
     foreach (sequence in sequence.NestedSequencies)
     {
-      tb.DefineConditional(<[decl: public mutable $(sequence.RuleIdFieldName : global) : int; ]>);
+      tb.:DefineConditional(<[decl: public mutable $(sequence.RuleIdFieldName : global) : int; ]>);
       inits.Add(<[ $(sequence.RuleIdFieldName : global) = ruleIdBuilder.NewRuleId(this); ]>);
     }
 
     foreach ((ruleSymbol, name) in _simpleCalls)
     {
-      tb.DefineConditional(<[decl: private mutable $(name : global) : Nitra.Internal.SimpleRuleParser; ]>);
-      inits.Add(<[ $(name : global) = Grammar.GetSimpleRuleParser($(ruleSymbol.GetRuleDescriptorRef())); ]>);
+      tb.:DefineConditional(<[decl: private mutable $(name : global) : Nitra.Internal.SimpleRuleParser; ]>);
+      inits.Add(<[ $(name : global) = Grammar.GetSimpleRuleParser($(ruleSymbol.:GetRuleDescriptorRef())); ]>);
     }
     foreach ((ruleSymbol, bp, name) in _extensibleCalls)
     {
-      tb.DefineConditional(<[decl: private mutable $(name : global) : Nitra.Internal.ExtensibleRuleParser; ]>);
-      inits.Add(<[ $(name : global) = Grammar.GetExtensibleRuleParser($(ruleSymbol.GetRuleDescriptorRef()), $(bp.Name)); ]>);
+      tb.:DefineConditional(<[decl: private mutable $(name : global) : Nitra.Internal.ExtensibleRuleParser; ]>);
+      inits.Add(<[ $(name : global) = Grammar.GetExtensibleRuleParser($(ruleSymbol.:GetRuleDescriptorRef()), $(bp.Name)); ]>);
     }
 
-    tb.DefineConditional(<[decl:
+    tb.:DefineConditional(<[decl:
       [Nemerle.Diagnostics.CompileStatistic("Reflection:Init")]
       public override Init(ruleIdBuilder : Nitra.Internal.RuleIdBuilder) : void
       {
@@ -8973,8 +8977,8 @@ internal abstract class RuleParserEmitter : IConstantEmitter
   protected DefineIsVoid(tb : TypeBuilder, sequence : SequenceCompileInfo.Root) : void
   {
     def startState = sequence.Symbol.Type is RuleType.Void;
-    tb.DefineConditional(<[ decl: public override IsVoid      : bool { get $(startState : bool) } ]>);
-    tb.DefineConditional(<[ decl: public override IsTokenRule : bool { get { $(sequence.Symbol.Options.IsTokenRule) } } ]>);
+    tb.:DefineConditional(<[ decl: public override IsVoid      : bool { get $(startState : bool) } ]>);
+    tb.:DefineConditional(<[ decl: public override IsTokenRule : bool { get { $(sequence.Symbol.Options.IsTokenRule) } } ]>);
   }
 
   public abstract CreateConstant(name : string, value : int) : string;
@@ -9068,11 +9072,11 @@ internal sealed class SimpleRuleParserEmitter : RuleParserEmitter
   {
     assert(_parserTb == null);
     _parserTb = Owner.GrammarImplTB.DefineNestedType(<[decl:
-      public class $(RuleSymbol.DecorateRuleClassName() : global) : Nitra.Internal.SimpleRuleParser
+      public class $(RuleSymbol.:DecorateRuleClassName() : global) : Nitra.Internal.SimpleRuleParser
       {
         public this(grammar : Nitra.Runtime.CompositeGrammar, ruleIdBuilder : Nitra.Internal.RuleIdBuilder)
         {
-          base(grammar, ruleIdBuilder, $(RuleSymbol.GetRuleDescriptorRef()));
+          base(grammar, ruleIdBuilder, $(RuleSymbol.:GetRuleDescriptorRef()));
         }
       }
     ]>);
@@ -9123,7 +9127,7 @@ internal sealed class SimpleRuleParserEmitter : RuleParserEmitter
 
     public Define() : list[PExpr]
     {
-      _variables.Map(var => <[ mutable $(var : global) : int ]>)
+      _variables.:Map(var => <[ mutable $(var : global) : int ]>)
     }
   }
 
@@ -9145,12 +9149,12 @@ internal sealed class SimpleRuleParserEmitter : RuleParserEmitter
 
     public static New(sequence : SequenceCompileInfo, constantEmitter : IConstantEmitter, variableEmitter : IVariableEmitter, prefix : string) : RawTreePointer
     {
-      RawTreePointer(sequence, constantEmitter, () => variableEmitter.CreateVariable(sequence.MakeVariableName(prefix)));
+      RawTreePointer(sequence, constantEmitter, () => variableEmitter.CreateVariable(sequence.:MakeVariableName(prefix)));
     }
 
     public static Temporary(sequence : SequenceCompileInfo, constantEmitter : IConstantEmitter, prefix : string) : RawTreePointer
     {
-      RawTreePointer(sequence, constantEmitter, () => sequence.MakeVariableName(prefix));
+      RawTreePointer(sequence, constantEmitter, () => sequence.:MakeVariableName(prefix));
     }
 
     public static Existing(sequence : SequenceCompileInfo, constantEmitter : IConstantEmitter, name : string) : RawTreePointer
@@ -9318,7 +9322,7 @@ internal sealed class ChemicalSymbolEmitter
 
   private DefineSymbolProperty(property : SymbolProperty) : void
   {
-    def hasValueBit = ChemicalSymbolType.GetBitFieldManager().Allocate();
+    def hasValueBit = ChemicalSymbolType.:GetBitFieldManager().Allocate();
 
     def backingFieldName = Nemerle.Compiler.Utility.Util.tmpname(property.Property.Name);
     ChemicalSymbolType.Define(<[ decl:
@@ -9391,7 +9395,7 @@ internal sealed class ExternalSymbolEmitter
 
   public DefineMembers() : void
   {
-    TargetSymbolType.DefineConditional(<[ decl:
+    TargetSymbolType.:DefineConditional(<[ decl:
       SymbolTypeId : string implements Nitra.Serialization.ISymbol.SymbolTypeId
       {
         get { $(TargetSymbolType.FullName : string) }
@@ -9415,7 +9419,7 @@ internal sealed class ExternalSymbolEmitter
 
       _serializationEmitter.Formatter.WriteRecordMembers(serializeCode, members, () => <[ this ]>, (expr, _) => expr);
 
-      TargetSymbolType.DefineConditional(<[ decl:
+      TargetSymbolType.:DefineConditional(<[ decl:
         Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization.IMetadataWriter) : void implements Nitra.Serialization.IExportableSymbol.Serialize
         {
           ..$serializeCode
@@ -9430,7 +9434,7 @@ internal sealed class ExternalSymbolEmitter
       public override Description : string { get { $(SymbolEmitterUtils.MakeDescriptionText(ExternalSymbolType.Name) : string) } }
     ]>);
 
-    ExternalSymbolType.DefineConditional(<[ decl:
+    ExternalSymbolType.:DefineConditional(<[ decl:
       public static CreateSymbols(metadataReader : Nitra.Serialization.IMetadataReader, reader : System.IO.BinaryReader) : void
       {
         def location   = metadataReader.SymbolLocation;
@@ -9478,13 +9482,13 @@ internal sealed class ExternalSymbolEmitter
       def readExternal = symbolProperties.MapFiltered(_.IsExternal,
         p => <[ this.$(p.Property.Name : usesite) = reader.ReadPropertyValue(project, this, $(p.Property.Name : string)) ]>);
 
-      ExternalSymbolType.DefineConditional(<[ decl:
+      ExternalSymbolType.:DefineConditional(<[ decl:
         Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization.IMetadataReader) : void implements Nitra.Serialization.IImportableSymbol.Deserialize
         {
           ..$deserializeCode;
         }
       ]>);
-      ExternalSymbolType.DefineConditional(<[ decl:
+      ExternalSymbolType.:DefineConditional(<[ decl:
         ReadExternalProperties(project : Nitra.ProjectSystem.Project, reader : Nitra.Serialization.IExternalSymbolPropertyReader) : void implements Nitra.Serialization.IImportableSymbol.ReadExternalProperties
         {
           IgnoreParams();
@@ -9639,8 +9643,8 @@ internal class SyntaxModuleEmitter
         public override Namespace   : string { get { $(syntaxModule.Node.Parent.FullName : string) } }
       }
     ]>);
-    GrammarTB.DefineConditional(<[ decl: private static _staticDescriptor : Nitra.Runtime.GrammarDescriptor = $(GrammarDescriptorImplTB.GetMemType() : typed)() ]>);
-    GrammarTB.DefineConditional(<[ decl: public static StaticDescriptor : Nitra.Runtime.GrammarDescriptor { get { _staticDescriptor } } ]>);
+    GrammarTB.:DefineConditional(<[ decl: private static _staticDescriptor : Nitra.Runtime.GrammarDescriptor = $(GrammarDescriptorImplTB.GetMemType() : typed)() ]>);
+    GrammarTB.:DefineConditional(<[ decl: public static StaticDescriptor : Nitra.Runtime.GrammarDescriptor { get { _staticDescriptor } } ]>);
 
     SyntaxModuleParseTreeTb = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "ParseTree" : usesite) {} ]>);
 
@@ -9743,12 +9747,12 @@ internal class SyntaxModuleEmitter
     {
       | extendSymbol is ExtendSyntaxSymbol =>
         if (extendSymbol.Extend is Some(symbol))
-          symbol.GetRuleDescriptorRef();
+          symbol.:GetRuleDescriptorRef();
         else
           PExpr.Error("ICE: Unresolved symbol in DefineBindingPowerRelations.");
 
       | extensibleRuleSymbol is ExtensibleRuleSymbol =>
-        extensibleRuleSymbol.GetRuleDescriptorRef();
+        extensibleRuleSymbol.:GetRuleDescriptorRef();
 
       | _ =>
           PExpr.Error("ICE: Unknown symbol in DefineBindingPowerRelations.");
@@ -9760,11 +9764,11 @@ internal class SyntaxModuleEmitter
     def convert(symbol : IPrecedenceSymbolOwner, relations : List[string * string]) : PExpr
     {
       def symbol = GetPrecedenceSymbolOwnerReference(symbol);
-      def relations = relations.Map((lo, hi) => <[($lo, $hi)]>);
+      def relations = relations.:Map((lo, hi) => <[($lo, $hi)]>);
       (<[ ($symbol, array[..$relations]) ]>);
     }
-    def relations = syntaxModule.PrecedenceRelations.Grouping(r => (r.Symbol, (r.Low, r.Hi))).KeyValuePairs.Map(convert);
-    GrammarDescriptorImplTB.DefineConditional(<[ decl: public override BindingPowerRelations : array[ExtensibleRuleDescriptor * array[string * string]] { get { array[..$relations] } } ]> );
+    def relations = syntaxModule.PrecedenceRelations.:Grouping(r => (r.Symbol, (r.Low, r.Hi))).KeyValuePairs.:Map(convert);
+    GrammarDescriptorImplTB.:DefineConditional(<[ decl: public override BindingPowerRelations : array[ExtensibleRuleDescriptor * array[string * string]] { get { array[..$relations] } } ]> );
   }
 
   private DefineAllPrecedences(syntaxModule : SyntaxModuleSymbol) : void
@@ -9772,11 +9776,11 @@ internal class SyntaxModuleEmitter
     def convert(symbol : IPrecedenceSymbolOwner, allPrecedences : List[string]) : PExpr
     {
       def symbol = GetPrecedenceSymbolOwnerReference(symbol);
-      def allPrecedences = allPrecedences.Map((name) => <[$name]>);
+      def allPrecedences = allPrecedences.:Map((name) => <[$name]>);
       (<[ ($symbol, array[..$allPrecedences]) ]>);
     }
-    def relations = syntaxModule.AllPrecedences.Grouping(p => (p.Symbol, p.Name)).KeyValuePairs.Map(convert);
-    GrammarDescriptorImplTB.DefineConditional(<[ decl: public override AllPrecedences : array[ExtensibleRuleDescriptor * array[string]] { get { array[..$relations] } } ]> );
+    def relations = syntaxModule.AllPrecedences.:Grouping(p => (p.Symbol, p.Name)).KeyValuePairs.:Map(convert);
+    GrammarDescriptorImplTB.:DefineConditional(<[ decl: public override AllPrecedences : array[ExtensibleRuleDescriptor * array[string]] { get { array[..$relations] } } ]> );
   }
 
   public DefineSimpleParseTreeTypes() : void
@@ -9827,17 +9831,17 @@ internal class SyntaxModuleEmitter
         }
       ]>);
 
-    GrammarDescriptorImplTB.DefineConditional(<[decl:
+    GrammarDescriptorImplTB.:DefineConditional(<[decl:
       public override Rules : array[Nitra.Runtime.RuleDescriptor]
       {
-        get { array[..$(_ruleDescriptorEmitters.SelectMany(_.RuleSymbols).Select(_.GetRuleDescriptorRef())) ] }
+        get { array[..$(_ruleDescriptorEmitters.:SelectMany(_.RuleSymbols).:Select(_.:GetRuleDescriptorRef())) ] }
       }
     ]>);
 
-    GrammarDescriptorImplTB.DefineConditional(<[decl:
+    GrammarDescriptorImplTB.:DefineConditional(<[decl:
       public override Dependencies : array[Nitra.Runtime.GrammarDescriptor]
       {
-        get { array[..$(_externalGrammars.Map(_.GetGrammarDescriptorRef()))] }
+        get { array[..$(_externalGrammars.:Map(_.:GetGrammarDescriptorRef()))] }
       }
     ]>);
   }
@@ -9977,7 +9981,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       // a source grammar may extend a continued one: compile against, and later bind to, the very image already loaded
       foreach((assembly,path) in continued) { _=shared.Add(assembly); _=refs.Add(path); }
       options.SharedAssemblies=SCG.List(shared).ToArray();
-      options.ReferencedLibraries=refs.NToList();
+      options.ReferencedLibraries=refs.:NToList();
       options.MacrosToLoad=[typeof(NativeSourceHost).Assembly.Location];
       options.Sources=[StringSource(Nemerle.Compiler.AST.Location.GetFileIndex(Path.Combine(directory,name+".n")),"[assembly: NitraMacros.InvokeNitraCompiler]") : ISource];
       def compiler=ManagerClass(options); def messages=StringWriter(); compiler.InitOutput(messages);
@@ -9993,7 +9997,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
         // debugging aid: keep a copy of the compiled grammar image
         def dump=Environment.GetEnvironmentVariable("NEMERLE_DUMP_GRAMMAR_IMAGE");
         unless(String.IsNullOrEmpty(dump)) File.WriteAllBytes(dump,Image);
-        GrammarAssembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(Image,options.SharedAssemblies,refs.NToList().ToArray());
+        GrammarAssembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(Image,options.SharedAssemblies,refs.:NToList().ToArray());
       }
       else
       {
@@ -10026,7 +10030,7 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       _=refs.Add(Path.Combine(directory,name));
       _=shared.Add(Assembly.LoadFrom(Path.Combine(directory,name)));
     }
-    def assembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(image,SCG.List(shared).ToArray(),refs.NToList().ToArray());
+    def assembly=Nemerle.Compiler.continuation.ContinuationStore.LoadImage(image,SCG.List(shared).ToArray(),refs.:NToList().ToArray());
     def copy=Path.Combine(Path.GetTempPath(),"NativeGrammarRef_"+Guid.NewGuid().ToString("N"));
     _=Directory.CreateDirectory(copy);
     def file=Path.Combine(copy,assembly.GetName().Name+".dll");
@@ -10219,7 +10223,7 @@ internal module RecognitionEmitter
         r.StartRule = $(symbol.Options.IsStart : bool); ..$variants; ..$orders; m.Rules.Add(r);
       ]>);
     }
-    tb.DefineConditional(<[ decl:
+    tb.:DefineConditional(<[ decl:
       public static GetRecognitionGrammar() : Nemerle.Compiler.NitraSyntaxModel.NitraDocument
       {
         def d=Nemerle.Compiler.NitraSyntaxModel.NitraDocument(); def m=Nemerle.Compiler.NitraSyntaxModel.NitraModule();
@@ -10297,19 +10301,19 @@ internal sealed class NemerleCompilerMessages : ICompilerMessages
     {
       | FatalError =>
         ErrorCount++;
-        Nemerle.Compiler.MessageMacros.FatalError(loc.NLocation(), msg)
+        Nemerle.Compiler.MessageMacros.FatalError(loc.:NLocation(), msg)
 
       | Error =>
         ErrorCount++;
-        Message.Error(loc.NLocation(), msg)
+        Message.Error(loc.:NLocation(), msg)
 
       | Warning =>
         if (num > 0)
-          Message.Warning(num, loc.NLocation(), msg)
+          Message.Warning(num, loc.:NLocation(), msg)
         else
-          Message.Warning(loc.NLocation(), msg)
+          Message.Warning(loc.:NLocation(), msg)
 
-      | Hint => Message.Hint(loc.NLocation(), msg)
+      | Hint => Message.Hint(loc.:NLocation(), msg)
     }
   }
 
@@ -10430,13 +10434,13 @@ public mask PatternMatching
       match (access)
       {
         | Obj                 => buffer.Append('.')
-        | Sel(_, index, next) => buffer.AppendAccess(next).Append('#').Append(index)
+        | Sel(_, index, next) => buffer.:AppendAccess(next).Append('#').Append(index)
       }
     }
  
     public override ToString() : string
     {
-      StringBuilder().AppendAccess(this).ToString()
+      StringBuilder().:AppendAccess(this).ToString()
     }
   }
 
@@ -10466,20 +10470,20 @@ public mask PatternMatching
         | Failure        => buffer.Append(' ', tab).Append("FAIL")
         | Success(value) => buffer.Append(' ', tab).Append("return ").Append(value)
         | IfEq(access, con, t, f) =>
-          buffer.Append(' ', tab).Append("If ").AppendAccess(access).Append(" is ").AppendCtor(con).AppendLine()
-            .AppendDecision(tab + 2, t).AppendLine()
+          buffer.Append(' ', tab).Append("If ").:AppendAccess(access).Append(" is ").:AppendCtor(con).AppendLine()
+            .:AppendDecision(tab + 2, t).AppendLine()
             .Append(' ', tab).Append("Else").AppendLine()
-            .AppendDecision(tab + 2, f)
+            .:AppendDecision(tab + 2, f)
 
         | Variable(name, access, continuation) =>
-          buffer.Append(' ', tab).Append("var ").Append(name.Value).Append(" = ").AppendAccess(access).AppendLine()
-            .AppendDecision(tab, continuation)
+          buffer.Append(' ', tab).Append("var ").Append(name.Value).Append(" = ").:AppendAccess(access).AppendLine()
+            .:AppendDecision(tab, continuation)
       }
     }
  
     public override ToString() : string
     {
-      StringBuilder().AppendDecision(0, this).ToString()
+      StringBuilder().:AppendDecision(0, this).ToString()
     }
   }
 
@@ -10633,15 +10637,15 @@ public mask PatternMatching
     {
       match (termd)
       {
-        | Pos(con, args) => buffer.Append(con.Name).Append('(').AppendList(args, AppendTermd, ", ").Append(')')
+        | Pos(con, args) => buffer.Append(con.Name).Append('(').:AppendList(args, AppendTermd, ", ").Append(')')
         | Neg([])        => buffer.Append('*')
-        | Neg(nonset)    => buffer.Append('!').Append('{').AppendList(nonset, ParseTreeCtor.AppendCtor, ", ").Append('}')
+        | Neg(nonset)    => buffer.Append('!').Append('{').:AppendList(nonset, ParseTreeCtor.AppendCtor, ", ").Append('}')
       }
     }
  
     public override ToString() : string
     {
-      StringBuilder().AppendTermd(this).ToString()
+      StringBuilder().:AppendTermd(this).ToString()
     }
   }
 }
@@ -11146,7 +11150,7 @@ public mask Serialization
 
       def typeInfo  = Type.TypeInfo;
       def members   = typeInfo.GetMembers(BindingFlags.Public | BindingFlags.Instance).Filter(m => m is IField || m is IProperty);
-      def memberMap = members.ToDictionary(m => m.Name);
+      def memberMap = members.:ToDictionary(m => m.Name);
       def ctors     = typeInfo.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
 
       mutable result = null;

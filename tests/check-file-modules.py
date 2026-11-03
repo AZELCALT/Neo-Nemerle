@@ -370,7 +370,7 @@ print('PASS: top-level values are inferred in import order, not command-line ord
 
 # a file in a folder is a module in a namespace: `using geo.shapes;' brings its extension methods, as a root file's
 source('ext/geo/shapes.n', 'public Doubled(this s : string) : string { s + s }\npublic module Inner { public Tripled(this s : string) : string { s + s + s } }')
-source('ext/main.n', 'using geo.shapes;\nusing geo.shapes.Inner;\nSystem.Console.WriteLine("ab".Doubled() + " " + "c".Tripled());')
+source('ext/main.n', 'using geo.shapes;\nusing geo.shapes.Inner;\nSystem.Console.WriteLine("ab".:Doubled() + " " + "c".:Tripled());')
 run([runtime, compiler, work / 'ext/main.n', work / 'ext/geo/shapes.n', '-source-root:' + str(work / 'ext'), '-out:' + str(work / 'ext.exe'), '-no-color', *modern_references])
 if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'ext.runtimeconfig.json')
 if run([runtime, work / 'ext.exe']).stdout.strip() != 'abab ccc':
@@ -396,8 +396,8 @@ if runtime != 'mono':   # (Span[T] is .NET's; the Mono run checks .NET Framework
       def data = array[1, 2, 3, 4];
       def s = Span.[int](data);
       s[0] = 10;
-      def words = "hello world".AsSpan();
-      def at = words.IndexOf(" ".AsSpan());
+      def words = "hello world".:AsSpan();
+      def at = words.:IndexOf(" ".:AsSpan());
       def bytes = Memory.[byte](array[1b, 2b, 3b]);
       $"$(data[0]) $(s[1]) $(Sum(s.Slice(1, 2))) $(words.Slice(at + 1).ToString()) $(bytes.Span.Slice(1).ToArray().Length)"
     }
@@ -407,11 +407,11 @@ if runtime != 'mono':   # (Span[T] is .NET's; the Mono run checks .NET Framework
     if run([runtime, work / 'spans.exe']).stdout.strip() != '10 2 5 world 2':
         raise RuntimeError('spans')
     for name, text, diagnostic in (
-            ('top-level', 'using System;\ndef s = "abc".AsSpan();\nConsole.WriteLine(s.Length);', 'would be a top-level value holding'),
-            ('captured', 'using System;\nF() : int { def s = "abc".AsSpan(); def g = () => s.Length; g() }', 'a lambda or local function cannot use it'),
-            ('boxed', 'using System;\nF() : object { def s = "abc".AsSpan(); s }', 'cannot be boxed'),
-            ('interpolated', 'using System;\nF() : string { def s = "abc".AsSpan(); $"$s" }', 'cannot be boxed'),
-            ('in a tuple', 'using System;\nF() : int { def s = "abc".AsSpan(); def t = (s, 1); t[1] }', 'cannot be inside')):
+            ('top-level', 'using System;\ndef s = "abc".:AsSpan();\nConsole.WriteLine(s.Length);', 'would be a top-level value holding'),
+            ('captured', 'using System;\nF() : int { def s = "abc".:AsSpan(); def g = () => s.Length; g() }', 'a lambda or local function cannot use it'),
+            ('boxed', 'using System;\nF() : object { def s = "abc".:AsSpan(); s }', 'cannot be boxed'),
+            ('interpolated', 'using System;\nF() : string { def s = "abc".:AsSpan(); $"$s" }', 'cannot be boxed'),
+            ('in a tuple', 'using System;\nF() : int { def s = "abc".:AsSpan(); def t = (s, 1); t[1] }', 'cannot be inside')):
         source('spans/rule.n', text)
         run([runtime, compiler, work / 'spans/rule.n', '-source-root:' + str(work / 'spans'), '-target:library', '-out:' + str(work / ('spans-' + name.replace(' ', '-') + '.dll')),
              '-no-color', *modern_references], False, diagnostic)
@@ -520,7 +520,7 @@ fired True, canceled True
     for name, text, diagnostic in (
             ('lock', 'using System.Threading.Tasks;\nasync F() : Task { def o = object(); lock (o) { await Task.Delay(1) } }', "`await' in a `lock'"),
             ('lambda', 'using System.Threading.Tasks;\nasync F() : Task[int] { def f = () => await Task.FromResult(1); f() }', "`await' in a lambda"),
-            ('span', 'using System;\nusing System.Threading.Tasks;\nasync F() : Task[int] { def s = "abc".AsSpan(); await Task.Delay(1); s.Length }', 'keeps its locals between its steps'),
+            ('span', 'using System;\nusing System.Threading.Tasks;\nasync F() : Task[int] { def s = "abc".:AsSpan(); await Task.Delay(1); s.Length }', 'keeps its locals between its steps'),
             ('return type', 'using System.Threading.Tasks;\nasync F() : int { await Task.Delay(1); 1 }', 'an async function returns Task'),
             ('yield', 'using System.Threading.Tasks;\nasync F() : Task { await Task.Delay(1); yield 1 }', "`yield' in an async function that returns a task")):
         source('async/rule.n', text)
@@ -750,7 +750,7 @@ await foreach (x in s) total += x;
 await foreach (x in s) total += x;
 def cts = CancellationTokenSource();
 mutable seen = 0;
-try { await foreach (x in Ticks().WithCancellation(cts.Token)) { seen = x; when (x == 3) cts.Cancel() } }
+try { await foreach (x in Ticks().:WithCancellation(cts.Token)) { seen = x; when (x == 3) cts.Cancel() } }
 catch { | _ is OperationCanceledException => log ::= $"cancelled at $seen" }
 await Loops();
 Console.WriteLine($"$total $(await Early(4)) $(await Early(0))");
@@ -949,14 +949,14 @@ Evens(limit : int) : list[int]
     for (mutable i = from; i <= limit; i += 2) yield i   // `limit' is the enclosing function's
   }
   def squares = fun (xs : list[int]) : IEnumerable[int] { foreach (x in xs) yield x * x };
-  $[x | x in evens(0).Concat(squares([3, 4]))]
+  $[x | x in evens(0).:Concat(squares([3, 4]))]
 }
 
 // lazily: nothing runs until it is enumerated, and each enumeration runs afresh
 mutable started = 0;
 def counter = fun () : IEnumerable[int] { started++; yield 1; yield 2 };
 def c = counter();
-Console.WriteLine($"$started $(c.Count()) $(c.Count()) $started");
+Console.WriteLine($"$started $(c.:Count()) $(c.:Count()) $started");
 Console.WriteLine(Evens(6));
 // an iterator in an iterator method
 Pairs() : IEnumerable[string]

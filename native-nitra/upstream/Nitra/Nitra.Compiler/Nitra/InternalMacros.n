@@ -63,14 +63,14 @@ internal module SequenceParseTreeGeneratorImpl
 
     def baseTb = env.Define(<[ decl:
       [Record]
-      public abstract class $(name : usesite)[..$(baseTypeVariables.ToNList())] : Nitra.Runtime.ParseTree where ..$(baseConstraints.ToNList())
+      public abstract class $(name : usesite)[..$(baseTypeVariables.:ToNList())] : Nitra.Runtime.ParseTree where ..$(baseConstraints.:ToNList())
       {
       }
     ]>);
 
     def concreteTb = env.Define(<[ decl:
       [Record]
-      public sealed class $("Concrete" + name : usesite)[..$(concreteTypeVariables.ToNList())] : $(name : usesite)[..$(concreteBaseTypeParameters.ToNList())] where ..$(concreteConstraints.ToNList())
+      public sealed class $("Concrete" + name : usesite)[..$(concreteTypeVariables.:ToNList())] : $(name : usesite)[..$(concreteBaseTypeParameters.:ToNList())] where ..$(concreteConstraints.:ToNList())
       {
         private static applyItem : int;
         static this() { unchecked { ..$applyItemExprs } }
@@ -80,10 +80,10 @@ internal module SequenceParseTreeGeneratorImpl
 
     def ambiguousTb = env.Define(<[ decl:
       [Record]
-      public sealed class $("Ambiguous" + name : usesite)[..$(ambiguousTypeVariables.ToNList())] : $(name : usesite)[..$(ambiguousBaseTypeParameters.ToNList())], Nitra.Runtime.IAmbiguousParseTree where ..$(ambiguousConstraints.ToNList())
+      public sealed class $("Ambiguous" + name : usesite)[..$(ambiguousTypeVariables.:ToNList())] : $(name : usesite)[..$(ambiguousBaseTypeParameters.:ToNList())], Nitra.Runtime.IAmbiguousParseTree where ..$(ambiguousConstraints.:ToNList())
       {
         public override IsAmbiguous   : bool                                                                 { get true }
-        public          Ambiguities   : array[$(name : usesite)[..$(ambiguousBaseTypeParameters.ToNList())]] { get; }
+        public          Ambiguities   : array[$(name : usesite)[..$(ambiguousBaseTypeParameters.:ToNList())]] { get; }
         public          AmbiguityType : Nitra.Runtime.ParseTreeAmbiguityType                                         { get Nitra.Runtime.ParseTreeAmbiguityType.Recovery }
         public override Location      : Nitra.Runtime.Location                                                       { get Ambiguities[0].Location }
       }

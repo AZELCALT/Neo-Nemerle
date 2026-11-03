@@ -53,9 +53,9 @@ public sealed class SymbolIndex
     def found = SCG.Dictionary(StringComparer.Ordinal);
     try
       foreach (path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                         .Where(p => (p.EndsWith(".n", StringComparison.Ordinal) || p.EndsWith(".ns", StringComparison.Ordinal))
-                                     && !Skipped.Any(s => p.Substring(root.Length).Split(Path.DirectorySeparatorChar).Contains(s)))
-                         .Take(5000))
+                         .:Where(p => (p.EndsWith(".n", StringComparison.Ordinal) || p.EndsWith(".ns", StringComparison.Ordinal))
+                                     && !Skipped.:Any(s => p.Substring(root.Length).Split(Path.DirectorySeparatorChar).:Contains(s)))
+                         .:Take(5000))
         try { found[Path.GetFullPath(path)] = IO.File.ReadAllText(path) } catch { | _ => () }
     catch { | _ => () }
     found
@@ -79,8 +79,8 @@ public sealed class SymbolIndex
   {
     lock (entries)
     {
-      foreach (gone in entries.Keys.Where(p => !current.ContainsKey(p)).ToList()) _ = entries.Remove(gone);
-      def changed = SCG.HashSet(current.Keys.Where(p => !entries.ContainsKey(p) || entries[p].Hash != HashOf(current[p])), StringComparer.Ordinal);
+      foreach (gone in entries.Keys.:Where(p => !current.ContainsKey(p)).:ToList()) _ = entries.Remove(gone);
+      def changed = SCG.HashSet(current.Keys.:Where(p => !entries.ContainsKey(p) || entries[p].Hash != HashOf(current[p])), StringComparer.Ordinal);
       // who imports whom, as the files are now
       def importers = SCG.Dictionary.[string, SCG.List[string]](StringComparer.Ordinal);
       foreach (pair in current)
@@ -96,7 +96,7 @@ public sealed class SymbolIndex
         when (importers.ContainsKey(path))
           foreach (user in importers[path]) when (changed.Add(user)) queue.Enqueue(user);
       }
-      changed.ToList()
+      changed.:ToList()
     }
   }
 
@@ -119,7 +119,7 @@ public sealed class SymbolIndex
       foreach (pair in entries)
         unless (except.Contains(pair.Key))
           foreach (f in pair.Value.Facts)
-            when (f["id"] != null && f.Field("id").GetValue.[string]() == id) found.Add(f);
+            when (f["id"] != null && f.:Field("id").GetValue.[string]() == id) found.Add(f);
     found
   }
 
@@ -129,14 +129,14 @@ public sealed class SymbolIndex
       when (IO.File.Exists(store))
       {
         def saved = (JsonNode.Parse(IO.File.ReadAllText(store)) :> JsonNode).AsObject();
-        when (saved["version"] != null && saved.Field("version").GetValue.[string]() == Version && saved.Field("root").GetValue.[string]() == root)
+        when (saved["version"] != null && saved.:Field("version").GetValue.[string]() == Version && saved.:Field("root").GetValue.[string]() == root)
           lock (entries)
-            foreach (pair in saved.Field("files").AsObject())
+            foreach (pair in saved.:Field("files").AsObject())
             {
               def e = Entry(); def node = pair.Value.AsObject();
-              e.Hash = node.Field("hash").GetValue.[string]();
-              foreach (i in node.Field("imports").AsArray()) e.Imports.Add(i.GetValue.[string]());
-              foreach (f in node.Field("facts").AsArray()) e.Facts.Add(f.DeepClone().AsObject());
+              e.Hash = node.:Field("hash").GetValue.[string]();
+              foreach (i in node.:Field("imports").AsArray()) e.Imports.Add(i.GetValue.[string]());
+              foreach (f in node.:Field("facts").AsArray()) e.Facts.Add(f.DeepClone().AsObject());
               entries[pair.Key] = e;
             }
       }
@@ -156,8 +156,8 @@ public sealed class SymbolIndex
         {
           def node = JsonObject();
           node["hash"] = JsonValue.Create(pair.Value.Hash);
-          node["imports"] = JsonArray(pair.Value.Imports.Select(i => JsonValue.Create(i) : JsonNode).ToArray());
-          node["facts"] = JsonArray(pair.Value.Facts.Select(f => f.DeepClone()).ToArray());
+          node["imports"] = JsonArray(pair.Value.Imports.:Select(i => JsonValue.Create(i) : JsonNode).:ToArray());
+          node["facts"] = JsonArray(pair.Value.Facts.:Select(f => f.DeepClone()).:ToArray());
           files[pair.Key] = node;
         }
       saved["files"] = files;

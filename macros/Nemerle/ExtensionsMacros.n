@@ -1010,7 +1010,7 @@ internal module StructuralEqualityImpl
   {
     def baseEqualsImpl = typeInfoToLookup
       .LookupMember("EqualsImpl")
-      .NOfTypeRev.[_, IMethod]()
+      .:NOfTypeRev.[_, IMethod]()
       .Find(m => m.Header.Parameters.Length == 1 && m.Header.Parameters.Head.Type.Equals(paramType));
         
     baseEqualsImpl
@@ -1026,7 +1026,7 @@ internal module StructuralEqualityImpl
     | Class(ti, _) =>
       def result = ti
         .LookupMember("Equals")
-        .NOfTypeRev.[_, IMethod]()
+        .:NOfTypeRev.[_, IMethod]()
         .Find(m => m.Header.Parameters.Length == 1 && m.Header.Parameters.Head.Type.Equals(type));
     
       result.IsSome
@@ -1078,7 +1078,7 @@ internal module StructuralEqualityImpl
         <[ true ]>;
         
     // core comparison code (type checker + comparison for each field)
-    def body = fields.Fold(baseCall, (f, acc) => <[ $(invokeEquals(f)) && $acc ]> );
+    def body = fields.:Fold(baseCall, (f, acc) => <[ $(invokeEquals(f)) && $acc ]> );
 
     // no null-check for structs
     def fun_body =  if (tb.GetMemType().CanBeNull) <[ match (other) { | null => false | _ => $body } ]> else body;
@@ -1136,7 +1136,7 @@ internal module StructuralEqualityImpl
   {
     def callBase = IsParentImplement_EqualsImpl(tb);
     
-    def hash_body = fields.Map(
+    def hash_body = fields.:Map(
       fun (f)
       {
         def type = f.GetMemType();
@@ -1168,7 +1168,7 @@ internal module StructuralEqualityImpl
     def variantOptionHash =
       if (tb.IsVariantOption)
       {
-        def optionNumber = tb.GetVariantOptionParent().GetVariantOptions().IndexOf(tb) + 1;
+        def optionNumber = tb.GetVariantOptionParent().GetVariantOptions().:IndexOf(tb) + 1;
         assert(optionNumber > 0);
         <[ hash ^= $(optionNumber : int); ]>
       }

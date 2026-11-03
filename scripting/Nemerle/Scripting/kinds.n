@@ -54,7 +54,7 @@ public module ScriptKinds
       using (pe = PEReader(File.OpenRead(path)))
         when (pe.HasMetadata)
         {
-          def md = pe.GetMetadataReader();
+          def md = pe.:GetMetadataReader();
           def attributeName(handle : CustomAttributeHandle) : string
           {
             def attribute = md.GetCustomAttribute(handle);
