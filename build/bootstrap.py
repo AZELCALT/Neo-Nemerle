@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the whole toolchain from the pinned compiler in boot/coreclr and verify it.
 
-    build/bootstrap.py [--quick] [--no-comparison] [--update-boot] [--output DIR] [--boot DIR] [--references DIR]
+    build/bootstrap.py [--quick] [--no-comparison] [--update-boot] [--no-cache] [--output DIR] [--boot DIR] [--references DIR]
 
 Steps (each logs to <output>/logs/<step>.log):
   1. platform: the C# platform adapter (platform/) from source, into a copy of boot
@@ -10,8 +10,11 @@ Steps (each logs to <output>/logs/<step>.log):
   4. tools:    scripting (nscript) and the language server
   5. tests:    every suite under tests/ (--quick: the fast ones only; --no-comparison: skip the 72-case differential)
 With --update-boot, boot/coreclr is replaced by the result, but only when every step passed.
+A compile whose inputs did not change is reused from ~/.cache/nemerle/build (build/buildcache.py); --no-cache
+compiles everything again.
 """
-import argparse, os, pathlib, re, shutil, subprocess, sys, time
+import argparse
+import os, pathlib, re, shutil, subprocess, sys, time
 from tooling import artifact_path
 
 repo = pathlib.Path(__file__).resolve().parents[1]
@@ -35,8 +38,10 @@ p.add_argument('--output', type=pathlib.Path, default=repo / 'out/bootstrap', he
 p.add_argument('--quick', action='store_true', help='fast suites only (no Nitra suites, no differential)')
 p.add_argument('--no-comparison', action='store_true', help='skip the Nitra differential (the slowest suite)')
 p.add_argument('--update-boot', action='store_true', help='replace boot/coreclr with the result when everything passed')
+p.add_argument('--no-cache', action='store_true', help='compile everything again (no reuse of unchanged compiles)')
 p.add_argument('--build-only', action='store_true', help='build the toolchain and tools without running the test suites (installer performs smoke checks)')
 a = p.parse_args()
+if a.no_cache: os.environ['NEMERLE_BUILD_CACHE'] = 'off'   # (read by every build step it starts)
 if a.build_only and a.update_boot:
     p.error('--build-only cannot be combined with --update-boot; replacing the bootstrap requires the test suites')
 boot = a.boot.resolve()

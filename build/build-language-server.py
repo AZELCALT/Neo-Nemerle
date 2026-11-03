@@ -3,7 +3,9 @@
 
 The directory holds the toolchain (compiler + Integrated.* Nitra dlls, needed at run time to index grammar/space
 blocks and to compile their grammars) and nemerle-lsp.exe; start it with `<out>/nemerle-lsp` (stdio LSP)."""
-import argparse, pathlib, shutil, subprocess, sys
+import argparse, pathlib, shutil, subprocess, sys, tempfile
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import buildcache
 
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True, help='stage dir with ncc.exe, Nemerle.Compiler.dll and Integrated.* dlls')
@@ -26,9 +28,10 @@ refs = ['Nemerle.Compiler.dll', 'Integrated.Nitra.Runtime.dll', 'Integrated.Nitr
 # The server is written as file modules (server.n is module server) rooted at its directory.
 command = ['dotnet', str(out / 'ncc.exe'), '-source-root:' + str(repo / 'tools/language-server'), *map(str, sources), '-target:exe', '-out:' + str(out / 'nemerle-lsp.exe'), '-launcher-',
            '-target-references:' + str(a.references.resolve()), '-no-color'] + ['-r:' + str(out / r) for r in refs]
-result = subprocess.run(command, capture_output=True, text=True)
-sys.stdout.write(result.stdout + result.stderr)
-if result.returncode: raise SystemExit(result.returncode)
+log = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-lsp-build-')) / 'build.log'   # (not in out: that is the output)
+code = buildcache.run(command, log)   # (an unchanged compile is reused)
+sys.stdout.write(log.read_text())
+if code: raise SystemExit(code)
 shutil.copy2(out / 'ncc.runtimeconfig.json', out / 'nemerle-lsp.runtimeconfig.json')
 launcher = out / 'nemerle-lsp'
 launcher.write_text('#!/bin/sh\nexec dotnet "$(dirname "$0")/nemerle-lsp.exe" "$@"\n')

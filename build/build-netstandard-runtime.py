@@ -9,8 +9,9 @@ Nemerle.dll's, so code compiled against one runs with the other. The .NET Standa
 nuget.org (NETStandard.Library 2.0.3), downloaded once into the same cache `ncc build` uses. Without the network and
 without the cache, the step is skipped: the toolchain then builds for its own .NET only, and says so.
 """
-import argparse, io, os, pathlib, re, shutil, subprocess, sys, urllib.request, zipfile
+import argparse, io, os, pathlib, re, shutil, subprocess, sys, tempfile, urllib.request, zipfile
 from tooling import net10_runtime
+import buildcache
 
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
@@ -53,7 +54,7 @@ command = ['dotnet', str(tc / 'ncc.exe'), *map(str, sorted((repo / 'lib/Nemerle'
            '-source-root:' + str(repo / 'lib'), '-assembly-version:' + match.group(1),
            '-no-stdmacros', '-macros:' + str(tc / 'Nemerle.Macros.dll'), '-nowarn:618',
            *['-r:' + str(runtime / n) for n in ('System.Xml.ReaderWriter.dll', 'System.Xml.XmlDocument.dll', 'System.Console.dll')]]
-result = subprocess.run(command, capture_output=True, text=True)
-if result.returncode: sys.exit(result.stdout + result.stderr)
+log = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-netstandard-build-')) / 'build.log'
+if buildcache.run(command, log): sys.exit(log.read_text())   # (an unchanged compile is reused)
 for leftover in out.glob('_N_*'): leftover.unlink()
 print('PASS: Nemerle.dll for .NET Standard 2.0 (%s), version %s' % (out / 'Nemerle.dll', match.group(1)))

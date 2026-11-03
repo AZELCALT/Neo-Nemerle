@@ -159,10 +159,18 @@ Building needs the .NET 10 SDK, Python 3 and `sn` (Mono's strong-name tool, whic
 ./bootstrap                  # boot/coreclr -> stage 1 -> stage 2, Nitra, scripting, LSP, then every test suite
 ./bootstrap --quick          # fast suites only
 ./bootstrap --update-boot    # also replace boot/coreclr with the result when everything passed
+./dev                        # one quick pass into out/dev/toolchain, for iterating (not a bootstrap)
+./dev compiler cli           # only those parts: macros runtime compiler cli nitra scripting lsp
 ```
 
 The new toolchain lands in `out/bootstrap/toolchain`, with one log per step in `out/bootstrap/logs`. `boot/coreclr` is
 the pinned compiler that every build starts from; update it only when a bootstrap passes.
+
+A compile whose inputs did not change is not run again: `build/buildcache.py` keys each one by everything it reads
+(the compiler, its sources, its references) and keeps the result in `~/.cache/nemerle/build`, so a second
+`./bootstrap` rebuilds only what a change reaches (a whole warm build is under a minute, against about five cold).
+`./bootstrap --no-cache` (or `NEMERLE_BUILD_CACHE=off`) compiles everything; `./dev` builds each part once with the
+last bootstrapped toolchain and is seconds for an unchanged part, but run `./bootstrap` before committing.
 
 | Directory | Contents |
 |---|---|

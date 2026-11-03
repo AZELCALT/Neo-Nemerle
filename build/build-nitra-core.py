@@ -11,6 +11,7 @@ import pathlib
 import shutil
 import subprocess
 from tooling import net10_csc, net10_runtime
+import buildcache
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -142,7 +143,7 @@ for label, name, dependencies in stages:
         csc = net10_csc()
         support = output / (prefix + name + '.Support.dll')
         response = work / (label + '-support.rsp')
-        options = ['-nologo', '-nostdlib+', '-target:library', '-out:"' + str(support) + '"']
+        options = ['-nologo', '-deterministic', '-nostdlib+', '-target:library', '-out:"' + str(support) + '"']
         options += ['-r:"' + str(path) + '"' for path in sorted(a.references.resolve().glob('*.dll'))]
         options += ['"' + path + '"' for path in csharp]
         for item in ET.parse(project).getroot().findall('.//{http://schemas.microsoft.com/developer/msbuild/2003}EmbeddedResource'):
@@ -155,13 +156,15 @@ for label, name, dependencies in stages:
     log = work / (label + '.log')
     print('Building upstream bootstrap:', label, flush=True)
     (work / (label + '-command.json')).write_text(json.dumps(command, indent=2))
-    with log.open('w') as stream:
-        result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT)
-    report['stages'].append({'name': label, 'exit_code': result.returncode, 'log': str(log)})
+    code = buildcache.run(command, log)   # (an unchanged compile is reused)
+    report['stages'].append({'name': label, 'exit_code': code, 'log': str(log)})
     (work / 'report.json').write_text(json.dumps(report, indent=2))
-    if result.returncode:
-        print(log.read_text()[-16000:], flush=True)
-        raise SystemExit(result.returncode)
+    if code:
+        # the errors first (the log is long, and its tail is mostly warnings), then the tail
+        text = log.read_text()
+        errors = [line for line in text.splitlines() if ': error' in line]
+        print('\n'.join(errors[:400]) + '\n...\n' + text[-8000:], flush=True)
+        raise SystemExit(code)
     print('PASS:', label, flush=True)
     if label == a.through:
         break

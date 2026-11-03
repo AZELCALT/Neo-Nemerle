@@ -36,7 +36,9 @@ Nothing lands without `./bootstrap` passing. It rebuilds the toolchain from the 
 compiler rebuilds itself, and runs every suite under `tests/`: file modules and top-level state, projects and
 packages, target frameworks (run on Mono), the debugger, the installers, the language server, the editor extension,
 scripting, the Nitra suites with a differential against the reference implementation, and every example in the book
-compiled and run. A bug found while building something else gets its own fix and its own test.
+compiled and run. A bug found while building something else gets its own fix and its own test. A compile whose inputs
+did not change is reused from the build cache (`build/buildcache.py`), so a second run pays only for what a change
+reaches; `./bootstrap --no-cache` compiles everything again.
 
 Commits made with the AI carry a `Co-Authored-By` trailer, so the history shows which ones they are.
 

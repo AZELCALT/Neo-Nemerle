@@ -13,7 +13,7 @@ repo=pathlib.Path(__file__).resolve().parents[1]
 csc=net10_csc()
 with tempfile.TemporaryDirectory(prefix='nemerle-platform-build-') as work:
  rsp=pathlib.Path(work)/'platform.rsp'
- rsp.write_text('\n'.join(['-nologo','-nostdlib+','-define:MODERN_CLR','-target:library',
+ rsp.write_text('\n'.join(['-nologo','-deterministic','-nostdlib+','-define:MODERN_CLR','-target:library',
   '-keyfile:"'+str(repo/'misc/keys/Nemerle.Compiler.snk')+'"',
   '-out:"'+str(a.toolchain.resolve()/'Nemerle.Platform.dll')+'"']+
   ['-r:"'+str(x.resolve())+'"' for x in sorted(a.references.glob('*.dll'))]+

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Rebuild the toolchain once into out/dev, reusing every compile whose inputs did not change (see build/dev.py --help).
+exec python3 "$(dirname -- "$0")/build/dev.py" "$@"

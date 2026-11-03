@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from tooling import net10_runtime, verify_strong_name
+import buildcache
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--bootstrap', type=pathlib.Path, required=True)
@@ -36,10 +37,9 @@ def build(label, compiler, source_files, output, references, key, extra=()):
     command.extend('-r:' + str(reference) for reference in references)
     log = work / (label + '.log')
     print('Building:', label, flush=True)
-    with log.open('w') as stream:
-        result = subprocess.run(command, cwd=repo, stdout=stream, stderr=subprocess.STDOUT)
-    if result.returncode:
-        print(log.read_text(), flush=True); raise SystemExit(result.returncode)
+    code = buildcache.run(command, log, cwd=repo)   # (an unchanged compile is reused)
+    if code:
+        print(log.read_text(), flush=True); raise SystemExit(code)
     verify_strong_name(output)
     print('PASS:', label, flush=True)
 
