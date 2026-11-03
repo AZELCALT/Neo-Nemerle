@@ -226,7 +226,7 @@ public class XmlDoc {
       | _ => false
     }
 
-    def tokens = tokenize (comment).NToList ().GetEnumerator ();
+    def tokens = tokenize (comment).:NToList ().GetEnumerator ();
     // stack of currently active tags, along with information if
     // they were user-supplied
     mutable tags = [];
@@ -444,7 +444,7 @@ public class XmlDoc {
         // multidimension arrays are 0 based, while unidimension arrays are -1 based.
         // Since all xml doc tools are aware of this bug, we must be compatible with it too.
         //
-        .AppendWhen(rank > 1, sb => sb.AppendNTimes (rank, "0:", ","))
+        .:AppendWhen(rank > 1, sb => sb.AppendNTimes (rank, "0:", ","))
         .Append ("]");
     }
 
@@ -498,7 +498,7 @@ public class XmlDoc {
 
         appendTypeName (sb.Append ("M:"), method.DeclaringType)
           .Append (".").Append (m.Name.Replace ('.', '#'))
-          .AppendUnless (tyParmsCount == 0,
+          .:AppendUnless (tyParmsCount == 0,
             sb => sb.Append ("``").Append (tyParmsCount))
           .AppendUnless (parms.IsEmpty,
             sb => sb.Append ("(").AppendList (parms, (sb, p) => AppendParmTypeName (sb, p.ty, method), ",").Append (")"))

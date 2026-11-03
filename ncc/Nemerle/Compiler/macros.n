@@ -185,7 +185,7 @@ public module Macros
       }
       code.Add(<[ $(lifted : name).NToList() ]>);
 
-      return <[ {..$(code.NToList()) } ]>;
+      return <[ {..$(code.:NToList()) } ]>;
     }
 
     <[ [..$(NList.Map(@list, f))] ]>
@@ -228,7 +228,7 @@ public module Macros
   //public QuotationChoose(expr : Typedtree.TExpr)  : PExpr                         { PExpr.Typed(expr) }
   public QuotationChoose[T](expr : T)               : T       where T : Located     { expr }
   public QuotationChoose[T](expr : list[T])         : list[T] where T : Located     { expr }
-  public QuotationChoose[T](seq : Seq[T])           : list[T] where T : Located     { seq.NToList() }
+  public QuotationChoose[T](seq : Seq[T])           : list[T] where T : Located     { seq.:NToList() }
 
   // literals:
   public QuotationChoose(expr : string)             : PExpr                         { PExpr.Literal(Literal.String    (expr)) }
@@ -1081,12 +1081,12 @@ public module Macros
         {
           | ClassMember.Function as f => trav_func(f)
           | Field as f => trav_field(f)
-          | EnumOption(name = n, modifiers = m, value = v) => EnumOption(trav_splicable(n), m, v.Map(traverse))
+          | EnumOption(name = n, modifiers = m, value = v) => EnumOption(trav_splicable(n), m, v.:Map(traverse))
           | Event(name = n, modifiers = m, ty = t, field = f, add = a, remove = r) => 
               Event(trav_splicable(n), m, traverse(t), trav_field(f), trav_func(a), trav_func(r))
           | TypeDeclaration(name = n, modifiers = m, td = t) => TypeDeclaration(trav_splicable(n), m, trav_top_decl(t))
           | Property(name = n, modifiers = m, returnType = rt, parameters = pars, getter = get, setter = set) =>
-              Property(trav_splicable(n), m, traverse(rt), trav_funparms(pars), get.Map(trav_func), set.Map(trav_func))
+              Property(trav_splicable(n), m, traverse(rt), trav_funparms(pars), get.:Map(trav_func), set.:Map(trav_func))
         }
         
         _ = call (in_pattern, false, expr);
@@ -1396,12 +1396,12 @@ public module Macros
                        {
                          | ClassMember.Function as f => trav_func(f)
                          | Field as f => trav_field(f)
-                         | EnumOption(name = n, modifiers = m, value = v) => EnumOption(trav_splicable(n), m, v.Map(traverse))
+                         | EnumOption(name = n, modifiers = m, value = v) => EnumOption(trav_splicable(n), m, v.:Map(traverse))
                          | Event(name = n, modifiers = m, ty = t, field = f, add = a, remove = r) =>
                              Event(trav_splicable(n), m, traverse(t), trav_field(f), trav_func(a), trav_func(r))
                          | TypeDeclaration(name = n, modifiers = m, td = t) => TypeDeclaration(trav_splicable(n), m, trav_top_decl(t))
                          | Property(name = n, modifiers = m, returnType = rt, parameters = pars, getter = get, setter = set) =>
-                             Property(trav_splicable(n), m, traverse(rt), trav_funparms(pars), get.Map(trav_func), set.Map(trav_func))
+                             Property(trav_splicable(n), m, traverse(rt), trav_funparms(pars), get.:Map(trav_func), set.:Map(trav_func))
                        }
 
                        if (context.IsBreaked) expr else 
@@ -1519,7 +1519,7 @@ public module Macros
 
                                                 | PExpr.Typed | PExpr.TypedPattern | PExpr.TypedType => expr
                                                 | PExpr.Lambda (decl) => PExpr.Lambda (expr.Location, Function_decl (decl.Location, decl.header, traverse (decl.body)))
-                                                | PExpr.Base(ty) => PExpr.Base(ty.Map(traverse))
+                                                | PExpr.Base(ty) => PExpr.Base(ty.:Map(traverse))
                                               }
                                if (context.IsBreaked) recursed else call(context, true, recursed);
                              

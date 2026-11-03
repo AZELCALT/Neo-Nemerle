@@ -500,7 +500,7 @@ public Check(body : TExpr, owner : string, inConstructor : bool, manager : Nemer
             match (m.GetHandle())
             {
               | ctor is SR.ConstructorInfo when LeavesRequired(ctor) =>
-                def set = if (madeBy.ContainsKey(call)) initialized[madeBy[call]].NToList() else [];
+                def set = if (madeBy.ContainsKey(call)) initialized[madeBy[call]].:NToList() else [];
                 def missing = RequiredMembers(ctor.DeclaringType).Filter(r => !set.Contains(r));
                 unless (missing.IsEmpty)
                 {

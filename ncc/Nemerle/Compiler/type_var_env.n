@@ -314,7 +314,7 @@ public class TypeVarEnv
   {
     def loop (acc = [name], ti = ti) {
       if (ti.DeclaringType == null)
-        ti.FullName.Split ('.').NToList () + acc
+        ti.FullName.Split ('.').:NToList () + acc
       else loop (ti.Name :: acc, ti.DeclaringType)
     }
     match (Manager.NameTree.LookupExactType (loop ())) {

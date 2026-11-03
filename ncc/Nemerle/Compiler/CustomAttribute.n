@@ -635,7 +635,7 @@ using Nemerle.Compiler.Utility;
         prop_values.Reverse().ToArray(),
         field_infos.Reverse().ToArray(),
         field_values.Reverse().ToArray());
-      def shouldEmit = if(attr.IsConditional) attr.EvalConditions(env) else true;
+      def shouldEmit = if(attr.IsConditional) attr.:EvalConditions(env) else true;
       when (shouldEmit && ti != null)
         Manager.Hierarchy.ClrEmitter.RegisterAttribute(ti.GetTypeBuilder(), ctor_info);
       (attrBuilder, shouldEmit)

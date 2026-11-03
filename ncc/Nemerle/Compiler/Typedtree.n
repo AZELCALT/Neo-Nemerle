@@ -187,7 +187,7 @@ using Nemerle.Compiler.Utility;
      
     internal GetLocalDefaultValueFromExpr (par : Typer, expr : option[PExpr]) : void
     {
-      default_value = expr.Map(x => par.TypeExpr(x, Typer.AtLeast(ty)));
+      default_value = expr.:Map(x => par.TypeExpr(x, Typer.AtLeast(ty)));
     }
 
     internal GetDefaultValueFromModifiers(par : TypeBuilder, tenv : TypeVarEnv) : void

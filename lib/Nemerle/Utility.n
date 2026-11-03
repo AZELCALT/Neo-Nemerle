@@ -339,7 +339,7 @@ public module NString
 
   public EndsWith(this str : string, params values : array[string]) : bool
   {
-    str.EndsWith(StringComparison.InvariantCulture, values);
+    str.:EndsWith(StringComparison.InvariantCulture, values);
   }
 
   public EndsWith(this str : string, comparisonType : StringComparison, params values : array[string]) : bool
@@ -352,7 +352,7 @@ public module NString
   
   public StartsWith(this str : string, params values : array[string]) : bool
   {
-    str.StartsWith(StringComparison.InvariantCulture, values);
+    str.:StartsWith(StringComparison.InvariantCulture, values);
   }
 
   public StartsWith(this str : string, comparisonType : StringComparison, params values : array[string]) : bool

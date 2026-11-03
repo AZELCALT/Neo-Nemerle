@@ -4,7 +4,8 @@ Nemerle compiles to ordinary .NET assemblies. It uses any .NET library, and C# u
 
 ## Using .NET libraries
 
-Classes, structs, interfaces, events, generics and extension methods from .NET work as they do in C#:
+Classes, structs, interfaces, events, generics and extension methods from .NET work as they do in C#. One spelling
+differs: an extension is reached with the extension dot `.:`, not `.` (see [Extension members](#extension-members)):
 
 ```nemerle
 using System.Console;
@@ -15,7 +16,7 @@ def builder = StringBuilder();
 _ = builder.Append("Ne").Append("merle");
 WriteLine(builder.ToString());
 
-def evens = Enumerable.Range(1, 10).Where(n => n % 2 == 0).Select(n => n * n);
+def evens = Enumerable.Range(1, 10).:Where(n => n % 2 == 0).:Select(n => n * n);
 WriteLine(string.Join(", ", evens));
 
 def now = System.DateTime(2026, 10, 15);
@@ -88,9 +89,11 @@ The rest of what C#'s metadata says beyond the types is kept too:
 
 ### Extension members
 
-A C# extension method is called as a member: `text.Shout()` is the static `Ext.Shout(text)`. C# 14 extension
-properties and static extension members work the same way — a C# `extension` block adds instance members *and* static
-members to a type, and Nemerle reaches all of them:
+An extension is not a member of the type it extends, so Nemerle reaches it with the extension dot `.:` — `text.:Shout()`
+is the static `Ext.Shout(text)`, and LINQ is `xs.:Where(...)`. A plain `.` reaches only real members: `text.Shout()` is
+an error that points to `.:`, and `.:` to a real member is an error that points to `.`. So a dot never changes meaning
+with the `using`s in force. C# 14 extension properties and static extension members work the same way — a C#
+`extension` block adds instance members *and* static members to a type, and `.:` reaches all of them:
 
 ```nemerle,ignore
 // C#
@@ -107,16 +110,15 @@ public static class Ext {
 
 // Nemerle
 def s = "hi";
-WriteLine(s.Twice);          // 4   -- instance property, through its getter
-WriteLine(s.Shout());        // HI  -- instance method
-WriteLine(string.Blank);     //     -- a static member, reached through the type `string'
-WriteLine(string.Of(3))      // *** -- a static method, same way
+WriteLine(s.:Twice);         // 4   -- instance property, through its getter
+WriteLine(s.:Shout());       // HI  -- instance method
+WriteLine(string.:Blank);    //     -- a static member, reached through the type `string'
+WriteLine(string.:Of(3))     // *** -- a static method, same way
 ```
 
-A property write goes through its setter (`s.Tag = 7`, `string.Slot = 3`). Every one of these also has an
-extension-dot spelling, `.:`, which says "this is an extension" where a plain `.` would read as a real member:
-`s.:Twice`, `s.:Shout()`, `string.:Blank`, `string.:Of(3)`. The plain static call is always available too:
-`Ext.Shout(s)`, `Ext.Of(3)` are ordinary static methods.
+A property write goes through its setter (`s.:Tag = 7`, `string.:Slot = 3`). The plain static call is always
+available too: `Ext.Shout(s)`, `Ext.Of(3)` are ordinary static methods. (Code a macro generates keeps reaching
+extensions through `.`, so macros need no change.)
 
 ## Delegates and events
 

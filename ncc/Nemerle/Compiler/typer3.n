@@ -1323,7 +1323,7 @@ using Nemerle.Compiler.Utility;
         {
           | TExpr.Try(inner, cases) as t when entries.ContainsKey(t) =>
             def inner = inner.Walk(enter);
-            def inside = chains.Keys.Filter(id => (chains[id] : list[TExpr]).Exists(c => same.Equals(c, t)));
+            def inside = chains.Keys.:Filter(id => (chains[id] : list[TExpr]).Exists(c => same.Equals(c, t)));
             def dispatch_cases = inside.Map(fun (id) {
               def go = next(id, t);
               if (go.target == id)

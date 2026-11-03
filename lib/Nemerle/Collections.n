@@ -1076,7 +1076,7 @@ public module NList
                 
           loop(tail1, tail2, result)
 
-        | ([], []) => result.NToList()
+        | ([], []) => result.:NToList()
         | (null, null) => []
         | _ => throw ArgumentException("The list1 and list2 has different Length")
       }
@@ -1164,7 +1164,7 @@ public module NList
       match (first, second)
       {
         | (f is array[First], s is array[Second]) => Map2ToArray(f, s, func)
-        | (f is SCG.ICollection[First], s is SCG.ICollection[Second]) => Map2ToArray(f.NToArray(), s.NToArray(), func)
+        | (f is SCG.ICollection[First], s is SCG.ICollection[Second]) => Map2ToArray(f.:NToArray(), s.:NToArray(), func)
         | (f is list[First], s is list[Second]) =>
            def foldFunc(left, right, (arr, index))
            {
@@ -1172,7 +1172,7 @@ public module NList
              (arr, index + 1)
            }
 
-           def (result, _) = f.FoldLeft2(s, (array(f.Length), 0), foldFunc);
+           def (result, _) = f.:FoldLeft2(s, (array(f.Length), 0), foldFunc);
            result
 
         | _ =>
@@ -1183,13 +1183,13 @@ public module NList
               match (e1.MoveNext(), e2.MoveNext())
               {
                 | (true,   true) => result.Add(func(e1.Current, e2.Current)); loop(result)
-                | (false, false) => result.NToArray()
+                | (false, false) => result.:NToArray()
                 | (true,  false)
                 | (false,  true) => throw ArgumentException("Collections must have the same length", "first, second");
               }
             }
 
-            loop(SCG.List()).NToArray();
+            loop(SCG.List()).:NToArray();
           }
       }
     }
@@ -1240,8 +1240,8 @@ public module NList
     {
       match (first, second)
       {
-        | (f is array[T1],     s is array[T2])     => f.ForAll2(s, comparator)
-        | (f is SCG.IList[T1], s is SCG.IList[T2]) => f.ForAll2(s, comparator)
+        | (f is array[T1],     s is array[T2])     => f.:ForAll2(s, comparator)
+        | (f is SCG.IList[T1], s is SCG.IList[T2]) => f.:ForAll2(s, comparator)
         | _ =>
           if (first == null)
             second == null
@@ -1279,7 +1279,7 @@ public module NList
     {
       match (first, second)
       {
-        | (f is array[T1], s is array[T2]) => f.ForAll2(s, comparator)
+        | (f is array[T1], s is array[T2]) => f.:ForAll2(s, comparator)
         | _ =>
           def loop(i)
           {
@@ -1532,7 +1532,7 @@ public module NList
     )
       : TAccumulator
     {
-      def ary = source.NToArray();
+      def ary = source.:NToArray();
       for (mutable i = ary.Length - 1; i >= 0; i--)
         ini = convert(ary[i], ini);
 
@@ -1654,7 +1654,7 @@ public module NList
     {
       match (source)
       {
-        | coll is SCG.ICollection[T] => coll.NToArray();
+        | coll is SCG.ICollection[T] => coll.:NToArray();
         | null => array (0);
         | _ =>
           def dest = SCG.List();
@@ -1662,7 +1662,7 @@ public module NList
           foreach (elem in source)
             dest.Add(elem);
 
-          dest.NToArray()
+          dest.:NToArray()
       }
     }
 
@@ -1675,7 +1675,7 @@ public module NList
       match (source)
       {
         | null                => array (0);
-        | ary is array[From]  => ary.Map(_ :> To)
+        | ary is array[From]  => ary.:Map(_ :> To)
         | x when x.Count == 0 => array (0);
         | _                   =>
           def ary : array[To] = array(source.Count);
@@ -1714,11 +1714,11 @@ public module NList
       match (source)
       {
         | null                          => array(0);
-        | ary is array[From]            => ary.Map(convert);
+        | ary is array[From]            => ary.:Map(convert);
         | coll is SCG.ICollection[From] => 
           def tmp = array(coll.Count);
           coll.CopyTo(tmp, 0);
-          tmp.Map(convert)
+          tmp.:Map(convert)
         
         | _ =>
           def dest = SCG.List();
@@ -1726,7 +1726,7 @@ public module NList
           foreach (elem in source)
             dest.Add(convert (elem));
 
-          dest.NToArray()
+          dest.:NToArray()
       }
     }
 
@@ -1753,7 +1753,7 @@ public module NList
           foreach (elem when isMatch(elem) in source)
             dest.Add (elem);
 
-          dest.NToArray()
+          dest.:NToArray()
       }
     }
 
@@ -1769,7 +1769,7 @@ public module NList
       foreach (elem when isMatch(elem) in source)
         dest.Add (convert (elem));
 
-      dest.NToArray()
+      dest.:NToArray()
     }
 
     /// Convert sequence to array with filtration.
@@ -1807,7 +1807,7 @@ public module NList
           foreach (elem when isMatch(elem) in source)
             dest.Add (convert (elem));
 
-          dest.NToArray()
+          dest.:NToArray()
       }
     }
 
@@ -1840,7 +1840,7 @@ public module NList
       match (source)
       {
         | null                => [];
-        | ary is array[From] => ary.MapToList(convert);
+        | ary is array[From] => ary.:MapToList(convert);
         | _ =>
           mutable dest = [];
 
@@ -1856,21 +1856,21 @@ public module NList
       match (source)
       {
         | null                      => [];
-        | ary is array[From]       => ary.MapToList(convert);
-        | iList is SCG.IList[From] => iList.MapToList(convert);
+        | ary is array[From]       => ary.:MapToList(convert);
+        | iList is SCG.IList[From] => iList.:MapToList(convert);
         | _ =>
           def dest = SCG.List();
 
           foreach (elem in source)
             dest.Add (convert (elem));
 
-          dest.NToList ()
+          dest.:NToList ()
       }
     }
 
     public Map[From, To](this source : SCG.IEnumerable[From], convert : From -> To) : list[To]
     {
-      source.MapToList (convert)
+      source.:MapToList (convert)
     }
 
 
@@ -1908,7 +1908,7 @@ public module NList
           foreach (elem when isMatch(elem) in source)
             dest.Add (elem);
 
-          dest.NToArray()
+          dest.:NToArray()
       }
     }
 
@@ -1919,7 +1919,7 @@ public module NList
       foreach (elem when isMatch(elem) in source)
         dest.Add (elem);
 
-      dest.NToArray()
+      dest.:NToArray()
     }
 
     /// Convert sequence to string.
@@ -2094,7 +2094,7 @@ public module NList
     /// Convert array of one type to other. (This is a alias for Map().)
     public ConvertAll[From, To](this source : array[From], f : From -> To) : array[To]
     {
-      source.Map (f);
+      source.:Map (f);
     }
 
     public Map[From, To](res_type : Type, ar : array[From], f : From -> To) : array[To]
@@ -2180,7 +2180,7 @@ public module NList
     public FromList[T](t : Type, x : list[T]) : array[T]
     {
       assert(t.Equals(typeof (T)));
-      x.NToArray ()
+      x.:NToArray ()
     }
 
     public ToNList[T](this arr : array[T]) : list[T]
@@ -2488,7 +2488,7 @@ public module NList
     /// Convert array to string.
     public ToString[T](this source : array[T], separator : string) : string
     {
-      string.Join(separator, source.Map(value => value.ToString()));
+      string.Join(separator, source.:Map(value => value.ToString()));
     }
   } // end of module NCollectionsExtensions
 
@@ -3449,7 +3449,7 @@ public struct LightList[T]
   public ToNList() : list[T]
   {
     if (_data != null)
-      _data.ToNList()
+      _data.:ToNList()
     else if (_hasFirstItem)
       [_firstItem]
     else
@@ -3932,7 +3932,7 @@ public class Map[TKey, TValue] : SCG.IEnumerable[TKey * TValue]
   private this(mutable size : int, tree : TwoThreeTree.Node[Node], cmp : Node * Node -> int, coll : SCG.IEnumerable[TKey * TValue])
   {
     _cmp = cmp;
-    _tree = coll.Fold(tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size) });
+    _tree = coll.:Fold(tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size) });
     _size = size;
   }
 
@@ -3993,14 +3993,14 @@ public class Map[TKey, TValue] : SCG.IEnumerable[TKey * TValue]
   public RemoveRange(elems : SCG.IEnumerable[TKey]) : Map[TKey, TValue]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, fun(key : TKey, tree) { tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size) });
+    def tree = elems.:Fold(_tree, fun(key : TKey, tree) { tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size) });
     Map(size, tree, _cmp);
   }
 
   public RemoveList(elems : list[TKey]) : Map[TKey, TValue]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, fun(key : TKey, tree) { tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size) });
+    def tree = elems.:Fold(_tree, fun(key : TKey, tree) { tree.Delete(Node(key), _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size) });
     Map(size, tree, _cmp);
   }
 
@@ -4018,14 +4018,14 @@ public class Map[TKey, TValue] : SCG.IEnumerable[TKey * TValue]
   public ReplaceRange(elems : SCG.IEnumerable[TKey * TValue]) : Map[TKey, TValue]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size) });
+    def tree = elems.:Fold(_tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size) });
     Map(size, tree, _cmp);
   }
 
   public ReplaceList(elems : list[TKey * TValue]) : Map[TKey, TValue]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size) });
+    def tree = elems.:Fold(_tree, fun((key, value), tree) { tree.Insert(Node(key, value), _cmp, TwoThreeTree.InsertOptions.Replace, ref size) });
     Map(size, tree, _cmp);
   }
 
@@ -5450,7 +5450,7 @@ public class Set[T] : SCG.ICollection[T], IComparable[Set[T]]
   private this(mutable size : int, tree : TwoThreeTree.Node[T], cmp : T * T -> int, coll : SCG.IEnumerable[T])
   {
     _cmp = cmp;
-    _tree = coll.Fold(tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size));
+    _tree = coll.:Fold(tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.ThrowIfDuplicate, ref size));
     _size = size;
   }
 
@@ -5501,14 +5501,14 @@ public class Set[T] : SCG.ICollection[T], IComparable[Set[T]]
   public RemoveRange(elems : SCG.IEnumerable[T]) : Set[T]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, (value, tree) => tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size));
+    def tree = elems.:Fold(_tree, (value, tree) => tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size));
     Set(size, tree, _cmp);
   }
 
   public RemoveList(elems : list[T]) : Set[T]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, (value, tree) => tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size));
+    def tree = elems.:Fold(_tree, (value, tree) => tree.Delete(value, _cmp, TwoThreeTree.DeleteOptions.IgnoreMissed, ref size));
     Set(size, tree, _cmp);
   }
 
@@ -5526,14 +5526,14 @@ public class Set[T] : SCG.ICollection[T], IComparable[Set[T]]
   public ReplaceRange(elems : SCG.IEnumerable[T]) : Set[T]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size));
+    def tree = elems.:Fold(_tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size));
     Set(size, tree, _cmp);
   }
 
   public ReplaceList(elems : list[T]) : Set[T]
   {
     mutable size = _size;
-    def tree = elems.Fold(_tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size));
+    def tree = elems.:Fold(_tree, (value, tree) => tree.Insert(value, _cmp, TwoThreeTree.InsertOptions.Replace, ref size));
     Set(size, tree, _cmp);
   }
 
@@ -5786,12 +5786,12 @@ public class Set[T] : SCG.ICollection[T], IComparable[Set[T]]
 
   public static Sum(this sets : list[Set[T]]) : Set[T]
   {
-    sets.Fold(Set(), (e, s) => s.Sum(e))
+    sets.:Fold(Set(), (e, s) => s.Sum(e))
   }
 
   public static Sum(this sets : list[Set[T]], cmp : T * T -> int) : Set[T]
   {
-    sets.Fold(Set(cmp), (e, s) => s.Sum(e))
+    sets.:Fold(Set(cmp), (e, s) => s.Sum(e))
   }
 }
 

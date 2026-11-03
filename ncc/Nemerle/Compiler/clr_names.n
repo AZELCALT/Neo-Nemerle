@@ -40,7 +40,7 @@ public module ClrNames
         // A generic type nested in a file module's class: the class is part of the name (Nemerle.Core.ValueOption).
         def ns = if (t.IsNested && !(t.DeclaringType :> System.Type).IsGenericType) TypeFullName(t.DeclaringType) + "."
                  else if (string.IsNullOrEmpty(t.Namespace)) "" else t.Namespace + ".";
-        $"$ns$(t.Name)[..$(genericArgs.Map(_.Name))]"
+        $"$ns$(t.Name)[..$(genericArgs.:Map(_.Name))]"
       }
     }
     else

@@ -222,7 +222,7 @@ public module Completion
       def scanStaticMembers (ti)
       {
         foreach (member in ti.GetMembers (BindingFlags.Public | BindingFlags.Static))
-          when (isAll || MatchName(member.GetName(), pattern))
+          when (isAll || MatchName(member.:GetName(), pattern))
             elems.Add(Elem.Member (member));
       }
 

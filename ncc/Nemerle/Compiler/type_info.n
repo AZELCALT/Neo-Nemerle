@@ -424,7 +424,7 @@ public abstract class TypeInfo : MemberInfo, IMember,
           when (constrain_member(t, attr))
             result.Add(t);
 
-    result.NToList()
+    result.:NToList()
   }
 
   public GetNestedTypes () : list[TypeInfo]

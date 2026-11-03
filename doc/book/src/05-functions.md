@@ -98,7 +98,8 @@ zebra
 
 ## Extension methods
 
-A function whose first parameter is marked `this` can be called as if it were a method of that type:
+A function whose first parameter is marked `this` is an extension method: it is called on a value with the extension
+dot `.:`, which says plainly that it is not a member of that type:
 
 ```nemerle
 using System.Console;
@@ -106,8 +107,8 @@ using System.Console;
 Doubled(this n : int) : int { n * 2 }
 Shout(this s : string) : string { s.ToUpper() + "!" }
 
-WriteLine(21.Doubled());
-WriteLine("hello".Shout())
+WriteLine(21.:Doubled());
+WriteLine("hello".:Shout())
 ```
 
 ```text
@@ -126,8 +127,8 @@ public Second[T](this items : list[T]) : T { items.Tail.Head }
 using System.Console;
 using util.text;
 
-WriteLine("hello".Shout());
-WriteLine([1, 2, 3].Second())
+WriteLine("hello".:Shout());
+WriteLine([1, 2, 3].:Second())
 ```
 
 ```text
@@ -137,7 +138,8 @@ HELLO!
 
 An extension method is a function: it reads the object through its public members and adds nothing to it. To give a
 type of your program new fields, properties or interfaces, `extend` it (chapter 7). For C#, an extension method is a
-static method of its file's class, `util.text.Shout`, and C# calls it as an extension too.
+static method of its file's class, `util.text.Shout`, and C# calls it as an extension too. A plain `.` does not reach
+it (`"hello".Shout()` is an error that points to `.:`); the plain call `Shout("hello")` does.
 
 ### Extension blocks
 
@@ -164,7 +166,7 @@ HELLO!
 
 `Shout(x)`, never `x.Shout()`: the call says plainly that `Shout` is a function taking `x`, so its meaning never
 depends on which files happen to be imported. (The `this`-parameter form above is the C#-compatible extension method,
-called with a dot for interop.)
+reached with `.:` for interop.)
 
 ## Default and named arguments
 

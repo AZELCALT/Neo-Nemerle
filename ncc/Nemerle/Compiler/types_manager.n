@@ -901,7 +901,7 @@ using Nemerle.Compiler.Utility;
               {
                 def distinct = System.Collections.Generic.List.[FixedType]();
                 foreach (t in types) unless (distinct.Exists(d => d.Equals(t))) distinct.Add(t);
-                def typeofs = distinct.ConvertAll(t => <[ typeof($(t : typed)) ]>).ToArray().NToList();
+                def typeofs = distinct.ConvertAll(t => <[ typeof($(t : typed)) ]>).ToArray().:NToList();
                 field.GetModifiers().AddCustomAttribute(<[ Nemerle.Scopes.ContentTypes(..$typeofs) ]>)
               }
               _ = Manager.ModuleBindings.Remove(key);
@@ -1451,7 +1451,7 @@ using Nemerle.Compiler.Utility;
         SRE.CustomAttributeBuilder(ctor, ctorArgs) |> attributeList.Add;
         
       }
-      attributeList.NToList();
+      attributeList.:NToList();
 
     }
 

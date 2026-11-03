@@ -208,7 +208,7 @@ public sealed class FileModuleRegistry
   {
     def prefix = folder.ToString(".") + ".";
     def names = System.Collections.Generic.SortedSet.[string](StringComparer.Ordinal);
-    foreach (name in owners.Keys.NToList() + External.Keys.NToList())
+    foreach (name in owners.Keys.:NToList() + External.Keys.:NToList())
       when (name.StartsWith(prefix, StringComparison.Ordinal) && name.IndexOf('.', prefix.Length) < 0)
         _ = names.Add(name);
     NList.FromArray(System.Linq.Enumerable.ToArray(names))
@@ -302,7 +302,7 @@ public sealed class FileModuleRegistry
     else if (options.MainClass != null) Name(fileIndex) == options.MainClass
       || (Path.ChangeExtension(Path.GetRelativePath(Root, Location.GetFileName(fileIndex)), null) :> string).Replace(Path.DirectorySeparatorChar, '.') == options.MainClass
     else if (standaloneStart != 0) fileIndex == standaloneStart
-    else if (paths.Keys.NToList().Exists(i => Path.GetFullPath(Location.GetFileName(i)) == Path.Combine(Root, "main.n")))
+    else if (paths.Keys.:NToList().Exists(i => Path.GetFullPath(Location.GetFileName(i)) == Path.Combine(Root, "main.n")))
       Path.GetFullPath(Location.GetFileName(fileIndex)) == Path.Combine(Root, "main.n")
     else paths.Count == 1
   }
@@ -493,7 +493,7 @@ public sealed class FileModuleRegistry
       def blockName = "_N_" + part.Name + "_extension_" + owner.Replace('.', '_');
       def all = <[ decl: private mutable $("_N_self" : dyn) : $targetType; ]>
                 :: <[ decl: public Attach(owner : object) : void { $self = owner :> $targetType } ]>
-                :: members + forwarded.NToList();
+                :: members + forwarded.:NToList();
       def block = match (<[ decl: public sealed class Block : Nemerle.Extend.IExtension { ..$all } ]>) { | ClassMember.TypeDeclaration(td = d) => d | _ => null };
       block.name = Splicable.Name(Name.NameInCurrentColor(blockName, part.Location, manager.CoreEnv));
       unless (LateMembers.Contains(target.FullName)) LateMembers[target.FullName] = Hashtable();
@@ -525,7 +525,7 @@ public sealed class FileModuleRegistry
         {
           def file = parent.Location.FileIndex;
           def here = if (IsModule(file)) Name(file) else null;
-          def imports = if (here != null) (if (Usings.Contains(here)) Usings[here] else []) else ScriptUsings.NToList();
+          def imports = if (here != null) (if (Usings.Contains(here)) Usings[here] else []) else ScriptUsings.:NToList();
           here == owner || qualified && imports.Contains(owner)
         }
       | _ => true
@@ -571,7 +571,7 @@ public sealed class FileModuleRegistry
   public ReportImportCycles() : void
   {
     def reported = System.Collections.Generic.HashSet.[string]();
-    foreach (start in TopLevel.Keys.NToList())
+    foreach (start in TopLevel.Keys.:NToList())
     {
       // a path from `start` back to itself through this compilation's files
       def stack = System.Collections.Generic.List.[string]();
@@ -617,7 +617,7 @@ public sealed class FileModuleRegistry
       }
     }
     foreach (name in modules) visit(name);
-    result.NToList()
+    result.:NToList()
   }
 
   /// Whether `method' runs a file's top-level code: the static constructor, the start file's Main, or an async file's
@@ -760,7 +760,7 @@ public sealed class FileModuleRegistry
   public IsDirectory(name : list[string]) : bool
   {
     def prefix = name.ToString(".") + ".";
-    ModulePrefix(name) == null && (owners.Keys.NToList() + External.Keys.NToList()).Exists(_.StartsWith(prefix, StringComparison.Ordinal))
+    ModulePrefix(name) == null && (owners.Keys.:NToList() + External.Keys.:NToList()).Exists(_.StartsWith(prefix, StringComparison.Ordinal))
   }
 
   public HasClrNamespace(name : list[string]) : bool
@@ -778,7 +778,7 @@ public sealed class FileModuleRegistry
         | NamespaceTree.TypeInfoCache.CachedAmbiguous(types) when types.Exists(t => !(t is TypeBuilder)) => return true;
         | _ => ()
       }
-      current.Children != null && current.Children.Values.NToList().Exists(containsExternal)
+      current.Children != null && current.Children.Values.:NToList().Exists(containsExternal)
     }
     containsExternal(node)
   }

@@ -146,6 +146,21 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
   /** A class responsible for typing a single (global or local) function.  */
   public class Typer : TyperBase
   {
+    /// How a member access reaches an extension: plain `.' only members, the extension dot `.:' only extensions,
+    /// and code a macro writes (or a bare name through `this') either, as before.
+    public enum MemberDot { | Any | Plain | Extension }
+
+    /// The dot `expr' (a member access) is written with: `.:', plain `.' in source, or `Any' for generated code.
+    public static DotOf (expr : PExpr) : MemberDot
+    {
+      match (expr)
+      {
+        | PExpr.Member as m when m.IsExtensionDot => MemberDot.Extension
+        | PExpr.Member as m when !m.Location.IsGenerated && m.member != null && !m.member.Location.IsGenerated => MemberDot.Plain
+        | _ => MemberDot.Any
+      }
+    }
+
     is_instance_ctor : bool;
     mutable field_inits_typed : bool = false;
     is_method : bool;
@@ -640,7 +655,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 && Nemerle.Compiler.file_module_registry.FileModuleRegistry.IsTopLevelCode(CurrentMethodBuilder))
           {
             def prefix = CurrentType.FullName + ".";
-            foreach (key when key.StartsWith(prefix, System.StringComparison.Ordinal) in Manager.ModuleTypedBindings.Keys.NToList())
+            foreach (key when key.StartsWith(prefix, System.StringComparison.Ordinal) in Manager.ModuleTypedBindings.Keys.:NToList())
               _ = Manager.ModuleTypedBindings.Remove(key);
           }
         
@@ -839,7 +854,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         else if (seen_unresolved)
         {
           def error_dts = solver.dt_store.Filter((dt : DelayedTyping, _) => !dt.IsResolved)
-                                .Map((dt, _) => dt);
+                                .:Map((dt, _) => dt);
           assert(!error_dts.IsEmpty);
 
           foreach (error_dt in error_dts)
@@ -1206,7 +1221,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           | PExpr.Ref | PExpr.TypeEnforcement(PExpr.Ref, _) | PExpr.Wildcard => if (isMutable) PExpr.DefMutable(at, pattern, value) else PExpr.Define(at, pattern, value)
           | _ =>
             // a pattern: matched once into fresh locals, its names then made state from them
-            def names = Nemerle.Compiler.main_parser.MainParser.PatternNames(pattern).Filter(r => free((r :> PExpr.Ref).name));
+            def names = Nemerle.Compiler.main_parser.MainParser.PatternNames(pattern).:Filter(r => free((r :> PExpr.Ref).name));
             if (names.IsEmpty) PExpr.Define(at, pattern, value)
             else
             {
@@ -1230,7 +1245,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                     }
                     i++
                   }
-                  <[ { def $(tuple : name) = $(typed : typed); ..$(assigns.NToList()) } ]>
+                  <[ { def $(tuple : name) = $(typed : typed); ..$(assigns.:NToList()) } ]>
                 | other => other
               }
             }
@@ -1337,7 +1352,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       else when (ti.SuperClass() is Some(superType))
         res.AddRange(LookupStaticMethod(superType, name));
         
-      res.NToList()
+      res.:NToList()
     }
 
 
@@ -1969,7 +1984,62 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         | TExpr.Literal(Literal.Integer(0, _, _)) when target.IsFixed && target.FixedValue.IsEnum =>
           TExpr.TypeConversion (target, expr, target, ConversionKind.IL (local_context.IsChecked))
 
-        | _ => NonLiteralCast(expr, target, out isAllNestedDelayedTypingResolved, speculative)
+        | _ =>
+          def normal = NonLiteralCast(expr, target, out isAllNestedDelayedTypingResolved, speculative);
+          // Structural `[...]`: a `list` takes the shape a context asks for. A list never satisfies an array,
+          // a span, or another concrete collection directly, so the normal cast has already failed; build that
+          // shape from the list's elements (so `F([1,2,3])` reaches `params array[int]`, `([...],1)` reaches
+          // `(array[string], int)`, `def a : array[int] = [...]`). Anything a list already fits (`object`, the
+          // interfaces it carries, `list` itself) took the normal path above and never reaches here.
+          if (normal != null) normal else StructuralListCast(expr, target)
+      }
+    }
+
+    /// A `list` value coerced to the array / span / concrete-collection a context asks for (the structural side of
+    /// a `[...]` literal). Returns null when `expr` is not a list or `target` is not such a shape, leaving the
+    /// ordinary "cannot cast" outcome in place.
+    StructuralListCast(expr : TExpr, target : TypeVar) : TExpr
+    {
+      def list_tc = InternalType.Nemerle_list_tc;
+      def inListFamily(ti : TypeInfo) { ti.Equals(list_tc) || { def dt = ti.DeclaringType; dt != null && dt.Equals(list_tc) } }
+      // A real collection: a span (ref struct, built from an array) or a type that itself implements
+      // IEnumerable (so it is a sequence, and takes one through a constructor) — not a `list` (handled by the
+      // normal cast) and not some unrelated type with an array constructor. IsDerivedFrom needs its super types
+      // computed; guarded, since a target reached mid-inference may not have them yet.
+      def isCollection(ti : TypeInfo, ft : FixedType)
+      {
+        !inListFamily(ti) && !ti.Equals(InternalType.Object_tc)
+        && (Typer.IsSpanType(ft)
+            || try { ti.IsDerivedFrom(InternalType.Generic_IEnumerable_tc) || ti.IsDerivedFrom(InternalType.IEnumerable_tc) }
+               catch { | _ => false })
+      }
+      def isListValue =
+        !Manager.NoListCoercion
+        && match (expr.Type.Hint) { | Some(FixedType.Class(ti, _)) => inListFamily(ti) | _ => false };
+      // Wrapped as an implicit conversion so, among viable overloads, one that takes the list directly (no
+      // conversion) is preferred over one reached by building a collection — overload resolution keeps the
+      // candidate with the fewest conversions. So `NString.Split(s, [','])`, which has both a `list[char]` and a
+      // `params array[char]` overload, stays the `list` one; only where nothing takes the list (a lone
+      // `array`/collection parameter) does the built shape win.
+      def coerced(e) { ImplicitCast(e, target) }
+      if (!isListValue) null
+      else match (target.Hint)
+      {
+        | Some(FixedType.Array(_, 1)) =>
+          def built = TypeExpr(<[ Nemerle.Collections.NCollectionsExtensions.NToArray($(expr : typed)) ]>, target);
+          if (IsError(built)) null else coerced(built)
+
+        | Some(FixedType.Class(ti, _) as ft)
+          when !ti.IsInterface && isCollection(ti, ft) =>
+          // A concrete collection built from the elements through its own constructor: an array is an
+          // `IEnumerable[T]` (so `List[T]`, `HashSet[T]`, ... take it) and is exactly what a
+          // `Span[T]`/`ReadOnlySpan[T]` ctor wants. Only real collections qualify (see `isCollection`),
+          // never an unrelated struct that merely happens to have an array constructor (e.g. `Decimal`).
+          def arr = <[ Nemerle.Collections.NCollectionsExtensions.NToArray($(expr : typed)) ]>;
+          def built = TypeExpr(PExpr.Call(expr.Location, PExpr.TypedType(expr.Location, ft), [arr]), target);
+          if (IsError(built)) null else coerced(built)
+
+        | _ => null
       }
     }
     #endregion
@@ -2006,8 +2076,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 return false;
             }
 
-            def newUnresolvedDelayeds = unresolvedDelayeds.FilterToArray(ud => !ud.IsResolved);
-            def newCount              = newUnresolvedDelayeds.NCount();
+            def newUnresolvedDelayeds = unresolvedDelayeds.:FilterToArray(ud => !ud.IsResolved);
+            def newCount              = newUnresolvedDelayeds.:NCount();
 
             isAllNestedResolved = newCount == 0;
 
@@ -2029,7 +2099,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
           // Try to resolve nested delayed typing. It can fail and this call
       // typing action will be also failed (in this case we return false).
-        def result = resolve(unresolvedDelayeds, unresolvedDelayeds.NCount(), speculative);
+        def result = resolve(unresolvedDelayeds, unresolvedDelayeds.:NCount(), speculative);
         isAllNestedDelayedTypingResolved = isAllNestedResolved;
         result  
       }
@@ -2749,17 +2819,35 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
           res
 
+        // `x.:M' / `string.:Blank': the extension dot reaches only an extension -- a static one through the type it
+        // is on (C# 14, `string.:Of(5)'), else one whose receiver is the value
+        | PExpr.Member (obj, PT.Splicable.Name as name) when (expression :> PExpr.Member).IsExtensionDot =>
+          match (if (CanBeTypeName(obj) && !IsLocalName(obj)) StaticExtensionMember(obj, name, expected) else null)
+          {
+            | result when result != null => result
+            | _ =>
+              def tobj = if (CanBeTypeName(obj)) TryTyping(() => TypeExpr(obj)) else TypeExpr(obj);
+              if (IsError(tobj))
+              {
+                ReportError(messenger, $"there is no extension `$(name.body.Id)' on `$obj'");
+                TExpr.Error()
+              }
+              else TypeMemberExpr(expression, tobj, name, expected)
+          }
+
         | PExpr.Member (obj, PT.Splicable.Name as name) =>
           if (CanBeTypeName(obj))
           {
             match (TryTyping(() => TypeName(expression, expected)))
             {
               | TExpr.Error =>
-                // `string.Blank'/`string.Of(5)': a C# 14 static extension member reached through its on-type, found
-                // when the type has no such member of its own (it lives in another static class).
+                // `string.Blank' naming a C# 14 static extension member: in source that is `string.:Blank'
                 match (StaticExtensionMember(obj, name, expected))
                 {
-                  | result when result != null => result
+                  | result when result != null && DotOf(expression) == MemberDot.Any => result
+                  | result when result != null =>
+                    ReportError(messenger, ExtensionDotHint(name.body.Id, obj.ToString(), obj.ToString()));
+                    TExpr.Error()
                   | _ =>
                 // XXX this is a proper place to employ some heuristic
                 // for example see if obj is uppercase identifier
@@ -2973,14 +3061,27 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           // a C# extension property write (`obj.X = v' -> `set_X(obj, v)') when there is no settable member; else the
           // ordinary assignment. A static extension write (`string.Slot = v') is tried first, since it binds the
           // target as a type -- ExtensionSetter would type `string' as a value and report an ambiguity.
-          match (match (e1) { | PExpr.Member(objP, PT.Splicable.Name as sn) => StaticExtensionSetter(objP, sn, e2, expected) | _ => null })
+          // In source, both are written with the extension dot (`s.:Tag = 7', `string.:Slot = 3').
+          def dot = DotOf(e1);
+          def plainHint (res : TExpr) : TExpr
           {
-            | res when res != null => res
+            if (dot != MemberDot.Plain) res
+            else match (e1)
+            {
+              | PExpr.Member(objP, PT.Splicable.Name(mn)) =>
+                ReportError(messenger, ExtensionDotHint(mn.Id, objP.ToString(), objP.ToString()));
+                TExpr.Error()
+              | _ => res
+            }
+          }
+          match (match (e1) { | PExpr.Member(objP, PT.Splicable.Name as sn) when !IsLocalName(objP) => StaticExtensionSetter(objP, sn, e2, expected) | _ => null })
+          {
+            | res when res != null => plainHint(res)
             | _ =>
           // ExtensionSetter types the receiver only when such a setter exists.
           match (ExtensionSetter(e1, e2, expected))
           {
-            | Some(res) => res
+            | Some(res) => plainHint(res)
             | None =>
               if (Expect(expected, InternalType.Void, "assignment ``result''"))
               {
@@ -3487,7 +3588,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       def facts = FlowFacts;
       when (facts != null) facts.Publish ();
       when (facts != null)
-        foreach (local in flow.Keys.NToList ())
+        foreach (local in flow.Keys.:NToList ())
           when (local.Flow != null && local.Flow.Storage)
             flow [local] = Nemerle.Compiler.typer_flow.FlowPoint.Join (flow [local],
               Nemerle.Compiler.typer_flow.FlowPoint (facts.AssignedTo (local.Flow.Key).Map (t => t : TypeVar), false))
@@ -3969,7 +4070,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         | Some (LocalValue where (ValKind = LocalValue.Kind.Function (hd, _))) =>
           mutable ends;
           when (GetTopTyper ().flow_ends.TryGetValue (hd, out ends))
-            foreach (local in flow.Keys.NToList ())
+            foreach (local in flow.Keys.:NToList ())
             {
               mutable after;
               when (flow [local].Unassigned && ends.TryGetValue (local, out after) && !after.Unassigned)
@@ -4638,7 +4739,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               {
                 | [index] => 
                   def typedIndex = TypeExpr(index, InternalType.Int32);
-                  Some(TExpr.PointerIndexer(pExpr.Location, ti.GetElementTypeInfo().UnSome().GetMemType(), tExpr, typedIndex))
+                  Some(TExpr.PointerIndexer(pExpr.Location, ti.GetElementTypeInfo().:UnSome().GetMemType(), tExpr, typedIndex))
                   
                 | _ => ReportError(messenger, "A pointer must be indexed by only one value"); None()
               }
@@ -4994,14 +5095,18 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     TypeMemberExpr(expr : PExpr, obj : TExpr, name : PT.Splicable.Name, expected : TypeVar) : TExpr
     {
       def mem_name = name.body;
+      def dot = DotOf (expr);
 
-      match (TypeMember (obj, mem_name, expected))
+      match (TypeMember (obj, mem_name, expected, dot = dot))
       {
         // (what an `extend' of this compilation adds to a compiled type)
         | Some ([]) when LateExtension (obj, mem_name) != null => TypeExpr (LateExtension (obj, mem_name), expected)
 
-        // a C# extension property read: `x.Twice' with no instance member is the getter `get_Twice(x)' (C# 14)
-        | Some ([]) when ExtensionGetter (obj, name, expected) != null => ExtensionGetter (obj, name, expected)
+        // a C# extension property read: `x.:Twice' is the getter `get_Twice(x)' (C# 14)
+        | Some ([]) when dot != MemberDot.Plain && ExtensionGetter (obj, name, expected) != null => ExtensionGetter (obj, name, expected)
+        | Some ([]) when dot == MemberDot.Plain && !Manager.IsIntelliSenseMode && ExtensionGetter (obj, name, expected) != null =>
+          ReportError (messenger, ExtensionDotHint (mem_name.Id, TypeOf (obj).ToString (), "x"));
+          TExpr.Error ()
 
         | Some ([]) =>
           if (Manager.IsIntelliSenseMode)
@@ -5018,12 +5123,28 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           //name.TypedObject = mem; // VladD2: Поже на херню. Объект к имени дожен подключаться еще в TypeMember. Вот это и надо проверить. Внимание! Ломающее изменение.
           result
 
-        | None => Delay(expr, DelayedTyping.Kind.MemberAccess(obj, mem_name), expected)
+        | None =>
+          def kind = DelayedTyping.Kind.MemberAccess(obj, mem_name);
+          kind.dot = dot;
+          Delay(expr, kind, expected)
       }
     }
 
+    /// The error for a plain `.' that names an extension (`what' is how the receiver is written in the hint).
+    internal static ExtensionDotHint (name : string, on : string, what : string) : string
+    {
+      $"`$name' is an extension, not a member of $on: reach it with the extension dot, `$what.:$name', or call it"
+       " plainly with the receiver as its first argument"
+    }
 
-    public TypeMember(obj : TExpr, name : PT.Name, expected : TypeVar, for_completion = false) : option[list[OverloadPossibility]]
+    /// The error for `.:' that names a member, not an extension.
+    internal static MemberDotHint (name : string, on : string) : string
+    {
+      $"`$name' is a member of $on, not an extension: reach it with a plain `.'"
+    }
+
+
+    public TypeMember(obj : TExpr, name : PT.Name, expected : TypeVar, for_completion = false, dot : MemberDot = MemberDot.Any) : option[list[OverloadPossibility]]
     {
       mutable mem_name = name.Id;
 
@@ -5140,6 +5261,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         }
 
         lookup (possible_type);
+        def members = res;
+        res = [];
 
         foreach (meth in Manager.LibrariesManager.GetExtensionMethods(name.Id, name.GetEnv(env)))
         {
@@ -5160,6 +5283,35 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             }
           }
         }
+
+        // plain `.' reaches members, `.:' extensions; a miss that the other dot would reach says so
+        def fits (o : OverloadPossibility)
+        {
+          match (o.Member)
+          {
+            | m is IMethod =>
+              match (m.GetFreshType ())
+              {
+                | (FixedType.Fun (FixedType.Tuple (first :: _), _), _) => possible_type.TryRequire (first)
+                | (FixedType.Fun (first, _), _) => possible_type.TryRequire (first)
+                | _ => false
+              }
+            | _ => false
+          }
+        }
+        res =
+          match (dot)
+          {
+            | MemberDot.Any => res + members
+            | MemberDot.Plain =>
+              when (members.IsEmpty && !for_completion && !Manager.IsIntelliSenseMode && res.Exists (fits))
+                ReportError (messenger, ExtensionDotHint (name.Id, possible_type.ToString (), "x"));
+              members
+            | MemberDot.Extension =>
+              when (res.IsEmpty && !members.IsEmpty && !for_completion && !Manager.IsIntelliSenseMode)
+                ReportError (messenger, MemberDotHint (name.Id, possible_type.ToString ()));
+              res
+          };
 
         if (res.IsEmpty)
         {
@@ -5300,6 +5452,13 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           | _ => null
         }
       }
+    }
+
+    /// `e' is a bare name of a local value (so not a type name).
+    IsLocalName (e : PExpr) : bool
+    {
+      | PExpr.Ref (n) => local_context.FindLocal (n).IsSome
+      | _ => false
     }
 
     IsBlockReturn (name : PT.Name) : bool
@@ -6407,14 +6566,14 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       flow = if (joined == null) before else joined;
       flow_case_ends = if (flow.Count > 0) NList.FromArray(ends.ToArray()) else null;
 
-      if (cases.IsEmpty())
+      if (cases.:IsEmpty())
       {
         ReportError(messenger, "cannot have an empty match construct");
         TExpr.Error() //!!!
       }
       else
       {
-        def cases2 = cases.NToList();
+        def cases2 = cases.:NToList();
         
         def checkMatch()
         {
@@ -7531,7 +7690,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       [Record]
       public variant Kind
       {
-        | MemberAccess { expr : TExpr; name : PT.Name; }
+        | MemberAccess { expr : TExpr; name : PT.Name; [RecordIgnore] public mutable dot : Typer.MemberDot; }
         | Overloaded   { overloads : list[OverloadPossibility]; }
         | OverloadedOperator
           {
@@ -8059,7 +8218,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             else if (types.Length == 0)
               FixedType.Void()
             else
-              FixedType.Tuple(types.MapToList(t => FixedType.Class(nullable, [t])))
+              FixedType.Tuple(types.:MapToList(t => FixedType.Class(nullable, [t])))
           }
           def unwrappedType   = overload.Type :> FixedType.Fun;
           def retType         = FixedType.Class(nullable, [unwrappedType.to]);
@@ -8160,12 +8319,12 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         def solver = typer.solver;
         def messenger = solver.CurrentMessenger;
         match (DtKind) {
-          | Kind.MemberAccess (e, name) =>
+          | Kind.MemberAccess (e, name) as access =>
             // We should not check "expected" in this time.
             // Instead we should try to add implicit type conversion 
             // in the end of delayed overload resolution process.
             // see [End of overload resoluton process] in this file.
-            match (typer.TypeMember (e, name, typer.FreshTypeVar())) {
+            match (typer.TypeMember (e, name, typer.FreshTypeVar(), dot = access.dot)) {
               | Some ([]) when typer.LateExtension (e, name) != null =>
                 SetKind (Kind.Resolved (typer.TypeExpr (typer.LateExtension (e, name), expected), []))
 
@@ -8203,7 +8362,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                       | _ => 0
                     });
 
-                  def argsCnt = cntArgsForEachOverload.Tail.Fold (
+                  def argsCnt = cntArgsForEachOverload.Tail.:Fold (
                     cntArgsForEachOverload.Head, (arg, prev) => if (arg == prev) arg else -1);
 
                   argsCnt >= 0
@@ -8445,7 +8604,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
   
     // ---- merged from typing/Typer-OverloadSelection.n ----
     internal ResolveOverload(
-      overloads                 : list[OverloadPossibility], 
+      overloads                 : list[OverloadPossibility],
       parms                     : list[Parm],
       expected                  : TypeVar,
       speculative               : bool,
@@ -8491,7 +8650,22 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         }
       }
 
-      match (OverloadPossibility.OnlyPossible(overloads, null, this)) 
+      def candidates = OverloadPossibility.OnlyPossible(overloads, null, this);
+      // Structural `[...]`: when more than one distinct method is in play, do not turn a list argument into an
+      // array/collection, so an overload that takes the list directly wins (e.g. `NString.Split(s, [','])` stays
+      // the `list[char]` overload, never ties the `params array[char]` one). A single method may still build the
+      // shape it wants (`f([1, 2, 3])` into `array[int]`, including a `params array` method, whose var-args and
+      // direct forms are the one method). Restored afterwards so nested resolutions decide for themselves.
+      def manyMethods =
+        match (candidates)
+        {
+          | [] | [_] => false
+          | c :: rest => rest.Exists(o => !object.ReferenceEquals(o.Member, c.Member))
+        };
+      def savedNoCoerce = Manager.NoListCoercion;
+      Manager.NoListCoercion = savedNoCoerce || manyMethods;
+      try
+      match (candidates)
       {
         | [] => []
         | overloads =>
@@ -8687,6 +8861,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               ok
           }
       }
+      finally Manager.NoListCoercion = savedNoCoerce;
     }
 
     static PreferLessGenericMethods(overload : list[OverloadPossibility]) : list[OverloadPossibility]
@@ -8719,7 +8894,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           | (FixedType.StaticTypeVarRef, _)                          => -1
           | (FixedType.Class(ti1, args1), 
              FixedType.Class(ti2, args2)) when ti1.Equals(ti2) && args1.Length == args2.Length => 
-            def result = args1.FoldLeft2(args2, 0, cmpTypesArgs);
+            def result = args1.:FoldLeft2(args2, 0, cmpTypesArgs);
             result
           
           | _ => 0
@@ -8728,7 +8903,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     
       def result = 
         if (params1.Length == params2.Length)
-          params1.FoldLeft2(params2, 0, (p1, p2, acc) => cmpTypesArgs(p1.ty, p2.ty, acc))
+          params1.:FoldLeft2(params2, 0, (p1, p2, acc) => cmpTypesArgs(p1.ty, p2.ty, acc))
         else
           0;
         
@@ -8903,7 +9078,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       {
         surroundwith(speculatitveTyping)
         {
-          def tyCmps = f1.Map2ToArray(f2, (t1, t2) => IsBetterType(t1, t2));
+          def tyCmps = f1.:Map2ToArray(f2, (t1, t2) => IsBetterType(t1, t2));
           tyCmps
         }
       }
@@ -8968,8 +9143,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       }
       def formalTypes1 = o1.FormalTypes;
       def formalTypes2 = o2.FormalTypes;
-      def matchs1 = formalTypes1.Map2ToArray(makeArgsTypes(o1), matchType);
-      def matchs2 = formalTypes2.Map2ToArray(makeArgsTypes(o2), matchType);
+      def matchs1 = formalTypes1.:Map2ToArray(makeArgsTypes(o1), matchType);
+      def matchs2 = formalTypes2.:Map2ToArray(makeArgsTypes(o2), matchType);
       assert(matchs1.Length == matchs2.Length);
       def differPairs = matchs1.ZipToArray(matchs2).Filter(_ != _);
 
@@ -8982,7 +9157,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         assert(extArg1 == null && o2.ExtensionMethodObject == null
              || extArg1 != null && o2.ExtensionMethodObject != null);
 
-        def argTypes = (if (extArg1 == null) argsTypes else extArg1.Type :: argsTypes).NToArray();
+        def argTypes = (if (extArg1 == null) argsTypes else extArg1.Type :: argsTypes).:NToArray();
         mutable overload1Wins = false;
         mutable overload2Wins = false;
 
@@ -9066,7 +9241,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           def res0 = RemoveOverloadsWithTupleConvertion(parms);
           def res1 = RemoveExtensionMethods(res0);
           def res2 = GetMinimal(res1, IsBetterOverload);
-          def res3 = res2.FilterIfExists(AintVarArgs);
+          def res3 = res2.:FilterIfExists(AintVarArgs);
           def res4 = res3.FilterIfExists(DidntMamboJumbo);
           def res5 = res4.FilterIfExists(AintGeneric);
           // (as in C#: a candidate that needs no default arguments filled in beats one that does, so IndexOf(span,
@@ -9160,7 +9335,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             };
 
           // remove generic methods if a non generic exists in list
-          def res2 = res1.FilterIfExists(m => NList.IsEmpty(m.Header.TypeParameters));
+          def res2 = res1.:FilterIfExists(m => NList.IsEmpty(m.Header.TypeParameters));
           res2
       }
     }
@@ -9188,7 +9363,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             };
 
         // remove generic methods if a non generic exists in list
-        def res2 = res1.FilterIfExists((_, m) => NList.IsEmpty(m.Header.TypeParameters));
+        def res2 = res1.:FilterIfExists((_, m) => NList.IsEmpty(m.Header.TypeParameters));
         res2
       }
     }

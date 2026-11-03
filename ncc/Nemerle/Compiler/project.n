@@ -140,7 +140,7 @@ public sealed class Project
       {
         | 0 => null
         | 1 => files[0]
-        | _ => throw ProjectException(full, 1, 1, "more than one project file in this folder: " + string.Join(", ", files.Map(Path.GetFileName)))
+        | _ => throw ProjectException(full, 1, 1, "more than one project file in this folder: " + string.Join(", ", files.:Map(Path.GetFileName)))
       }
     }
     else null
@@ -474,7 +474,7 @@ public sealed class TomlReader
           else unless (Peek == ']') throw Fail("expected `,' or `]' in the list");
         }
         pos++;
-        TomlValue.Array(items.NToList())
+        TomlValue.Array(items.:NToList())
       | '{' =>
         pos++;
         def entries = SCG.List();
@@ -490,7 +490,7 @@ public sealed class TomlReader
           else unless (Peek == '}') throw Fail("expected `,' or `}' in the table");
         }
         pos++;
-        TomlValue.Table(entries.NToList())
+        TomlValue.Table(entries.:NToList())
       | ch when char.IsDigit(ch) || ch == '-' || ch == '+' =>
         def start = pos; pos++;
         while (pos < text.Length && (char.IsLetterOrDigit(text[pos]) || text[pos] == '_' || text[pos] == '.' || text[pos] == '-')) pos++;

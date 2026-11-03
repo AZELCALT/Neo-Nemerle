@@ -849,7 +849,7 @@ public class TypeBuilder : TypeInfo
     when (includeManuallyDefined && additional_decls != null)
       result.AddRange(additional_decls);
 
-    result.NToList()
+    result.:NToList()
   }
 
   public override GetFields (bindingAttr : BindingFlags) : list[IField]
@@ -1268,7 +1268,7 @@ public class TypeBuilder : TypeInfo
               itfs.Add(bindItf);
           }
 
-          this.t_implements = itfs.NToList();
+          this.t_implements = itfs.:NToList();
 
         | _ => this.parent_type = null
       }
@@ -1428,7 +1428,7 @@ public class TypeBuilder : TypeInfo
     }
 
     def subst = FreshSubst();
-    def subtypesGroupedByTypeInfo = GetDirectSuperTypes().Grouping(ty => (ty.tycon, (ty, subst.Apply(ty).Fix())));
+    def subtypesGroupedByTypeInfo = GetDirectSuperTypes().:Grouping(ty => (ty.tycon, (ty, subst.Apply(ty).Fix())));
 
     foreach (types when types.Count > 1 in subtypesGroupedByTypeInfo.Values)
     {
@@ -2699,7 +2699,7 @@ public class TypeBuilder : TypeInfo
 
     def interfacesOnly = _.IsInterface;
 
-    def implementedByThis = GetSuperTypes().FilterLazy(interfacesOnly)
+    def implementedByThis = GetSuperTypes().:FilterLazy(interfacesOnly)
                                            .MapLazy(ty => ty.DeepFix() :> FixedType.Class).NToArray();
     //print(implementedByThis, "implementedByThis");
 
@@ -2710,7 +2710,7 @@ public class TypeBuilder : TypeInfo
         | _ =>
           def subst = parent_type.tycon.MakeSubst(parent_type.args);
           parent_type.tycon.GetSuperTypes()
-                     .FilterLazy(interfacesOnly)
+                     .:FilterLazy(interfacesOnly)
                      .MapLazy(ty => subst.MonoApply(ty).DeepFix() :> FixedType.Class).NToArray();
       };
     //print(implementedByParent, "implementedByParent");
@@ -3112,7 +3112,7 @@ public class TypeBuilder : TypeInfo
 
     getDirectSubTypes(this);
 
-    subTypes.Keys.NToList()
+    subTypes.Keys.:NToList()
   }
 
   private AddToAdditionalDecls(mem : PT.ClassMember) : void
@@ -3396,7 +3396,7 @@ public class TypeBuilder : TypeInfo
       {
         | TypeDeclaration.Enum => (SystemTypeCache.Enum, array[])
         | _ =>
-          def interfaces = InterfacesToImplement().MapToArray(i => i.GetSystemType());
+          def interfaces = InterfacesToImplement().:MapToArray(i => i.GetSystemType());
 
           if (parent_type != null)
             (parent_type.GetSystemType(), interfaces)

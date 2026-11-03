@@ -230,12 +230,12 @@ using Nemerle.Compiler.Utility;
           | _ => p
         }
       }
-      def locals = bound.Map(r => PExpr.Ref(r.Location, fresh[(r :> PExpr.Ref).name.Id]) : PExpr);
+      def locals = bound.:Map(r => PExpr.Ref(r.Location, fresh[(r :> PExpr.Ref).name.Id]) : PExpr);
       def inner = match (locals) { | [] => <[ () ]> | [one] => one | _ => PExpr.Tuple(pattern.Location, locals) };
       def matched = if (orElse == null) PExpr.Sequence(value.Location, [PExpr.Define(loc, renamed(pattern), value), inner])
                     else <[ match ($value) { | $(renamed(pattern)) => $inner | _ => $orElse } ]>;
       matched.Location = value.Location;
-      def target = match (bound.NToList()) { | [] => PExpr.Wildcard(pattern.Location) | [one] => one | many => PExpr.Tuple(pattern.Location, many) };
+      def target = match (bound.:NToList()) { | [] => PExpr.Wildcard(pattern.Location) | [one] => one | many => PExpr.Tuple(pattern.Location, many) };
       PExpr.Define(loc, target, matched)
     }
 
@@ -503,7 +503,7 @@ using Nemerle.Compiler.Utility;
         def written : SCG.HashSet[string] = SCG.HashSet();
         def flowDecl : SCG.Dictionary[string, Location] = SCG.Dictionary();
         // the field itself, `module.name`, built directly (a name may be a keyword written `@def`)
-        def moduleExpr = moduleName.Split('.').FoldLeft(null, (part, acc : PExpr) => if (acc == null) <[ $(part : dyn) ]> else <[ $acc.$(part : dyn) ]>);
+        def moduleExpr = moduleName.Split('.').:FoldLeft(null, (part, acc : PExpr) => if (acc == null) <[ $(part : dyn) ]> else <[ $acc.$(part : dyn) ]>);
         def fieldRef(name : Name) : PExpr { <[ $moduleExpr.$(name : name) ]> }
         def state(expression : PExpr, isPublic : bool) : void
         {
@@ -652,7 +652,7 @@ using Nemerle.Compiler.Utility;
           // (the types a flowing value has anywhere in the top-level code: its storage is of one, or a Content)
           foreach (name in untyped)
             body.Add(<[ Nemerle.Compiler.__state_type($(moduleName + "." + name : string), 0, $(stateName(name, bindings[name]) : dyn)) ]>);
-          body.NToList()
+          body.:NToList()
         }
         while (topstream != null)
         {
@@ -1004,20 +1004,20 @@ using Nemerle.Compiler.Utility;
         when (written.Count > 0)
           for (mutable i = 0; i < statements.Count; i++) statements[i] = checkedReads(statements[i], false, written);
         foreach (name in flowing) _ = registry.Flowing.Add(moduleName + "." + name);
-        registry.Usings[moduleName] = usings.NToList();
+        registry.Usings[moduleName] = usings.:NToList();
         when (statements.Count > 0)
         {
           def start = registry.IsStart(fileIndex);
           def record = TopLevelRecord();
           record.Module = moduleName; record.Kind = if (start) "start" else "initializer";
-          record.File = Location.GetFileName(fileIndex); record.Usings = usings.NToList();
+          record.File = Location.GetFileName(fileIndex); record.Usings = usings.:NToList();
           record.Start = statementsLocation.Line; record.End = statementsEnd.EndLine;
           record.Hash = ModuleInitMacro.Fingerprint(statements);
           registry.TopLevel[moduleName] = record;
           ModuleInitMacro.Register(lex.Manager);
           // the imported modules' top-level code runs first, at the `using`s
-          def imports = <[ Nemerle.Compiler.__module_init($(moduleName : string), ..$(usings.NToList().Map(u => <[ $(u : string) ]>))) ]>;
-          def body = imports :: statements.NToList();
+          def imports = <[ Nemerle.Compiler.__module_init($(moduleName : string), ..$(usings.:NToList().Map(u => <[ $(u : string) ]>))) ]>;
+          def body = imports :: statements.:NToList();
           // a program's top-level code has its command-line arguments, `args' (as a script has, and C#'s top-level
           // statements), unless the file binds a value of that name itself
           def withArgs = !bindings.ContainsKey("args") && !members.Exists(m => m.Name == "args");
@@ -1044,9 +1044,9 @@ using Nemerle.Compiler.Utility;
         foreach (member when member._env == null && !(member is ClassMember.TypeDeclaration) in members) member._env = fileParser.env;
         registry.MemberEnvironments[fileIndex] = fileParser.env;
         // (null for a module of a folder that is itself a module's name: it is added nested in that module's class)
-        def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.NToList());
-        registry.Exports[moduleName] = exports.NToList().Map(td => td.Name);
-        return (if (declaration == null) [] else [declaration]) + exports.NToList();
+        def declaration = lex.Manager.FileModuleRegistry.Declaration(lex.Location.FileIndex, members.:NToList());
+        registry.Exports[moduleName] = exports.:NToList().Map(td => td.Name);
+        return (if (declaration == null) [] else [declaration]) + exports.:NToList();
       }
 
       def parser = MainParser (lex.Manager.CoreEnv);
@@ -1464,7 +1464,7 @@ using Nemerle.Compiler.Utility;
             | ClassMember.TypeDeclaration => result.Add(m);
             | _ => ();
           }
-        result.NToList()
+        result.:NToList()
       }
       def add(ms : list[ClassMember], prefix : string, visible : bool) : void
       {
@@ -1540,7 +1540,7 @@ using Nemerle.Compiler.Utility;
         // (the local functions written so far, an `async def' too: a binding's value may call them)
         def functions() : list[PExpr]
         {
-          expressions.NToList().Filter(e =>
+          expressions.:NToList().Filter(e =>
             match (e)
             {
               | PExpr.DefFunctions => true
@@ -1611,8 +1611,8 @@ using Nemerle.Compiler.Utility;
                 }
               }
               collect(tuple);
-              expressions.Add(if (mutableBinding) <[ { mutable $pattern = $value; ..$(assignments.NToList()) } ]>
-                else <[ { def $pattern = $value; ..$(assignments.NToList()) } ]>);
+              expressions.Add(if (mutableBinding) <[ { mutable $pattern = $value; ..$(assignments.:NToList()) } ]>
+                else <[ { def $pattern = $value; ..$(assignments.:NToList()) } ]>);
             | PExpr.Wildcard => expressions.Add(expression);
             // any other pattern: taken apart as a module's is (DeclarePattern), its names then declared as above
             | _ when !(identifier is PExpr.Ref) =>
@@ -1647,11 +1647,11 @@ using Nemerle.Compiler.Utility;
             | null => ();
             | token when ExtensionStart(token) => ParseExtension(parser, groups, data.TypeName)
             | token when ExtensionBlockStart(token) =>
-              def declared = ParseExtensionBlock(parser, groups).NToList();
+              def declared = ParseExtensionBlock(parser, groups).:NToList();
               parsedMembers.AddRange(declared);
               ordered.Add(() => add(declared, "", true));
             | token when IsMemberStart(token, true) =>
-              def declared = parser.ParseClassMembers(groups, "class").NToList();
+              def declared = parser.ParseClassMembers(groups, "class").:NToList();
               parsedMembers.AddRange(declared);
               ordered.Add(() => add(declared, "", true));
             // (`await' waits in a script's top-level code, as in a file's: the script's statements then wait, below)
@@ -1741,7 +1741,7 @@ using Nemerle.Compiler.Utility;
           }
         // the inference pass: the statements, each store a record of the types there (a typed-only copy)
         mutable index = 0;
-        def inferred = expressions.NToList().Map(e => Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+        def inferred = expressions.:NToList().Map(e => Macros.TraverseExpr(None(), e, false, (_, after, node) =>
           match (node)
           {
             | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [key, _, value]) when after && called.Id == "__state_store" =>
@@ -1760,7 +1760,7 @@ using Nemerle.Compiler.Utility;
       when (scriptUsings.Count > 0)
       {
         ModuleInitMacro.Register(manager);
-        expressions.Insert(0, <[ Nemerle.Compiler.__module_init($(data.TypeName : string), ..$(scriptUsings.NToList().Map(u => <[ $(u : string) ]>))) ]>);
+        expressions.Insert(0, <[ Nemerle.Compiler.__module_init($(data.TypeName : string), ..$(scriptUsings.:NToList().Map(u => <[ $(u : string) ]>))) ]>);
       }
       // Only compiler-generated scaffolding is parsed from text. User source is
       // parsed once above and retained as AST nodes with its original locations.
@@ -1800,7 +1800,7 @@ using Nemerle.Compiler.Utility;
           | ClassMember.Property as property =>
             def accessor(fn : option[ClassMember.Function], prefix : string) : option[ClassMember.Function]
             {
-              fn.Map(f =>
+              fn.:Map(f =>
               {
                 def n = Splicable.Name(Name.NameInCurrentColor(prefix + names[key], f.Location, parser.env));
                 def h = PFunHeader(f.header.Location, f.header.TypeParameters, n, f.header.ReturnType, f.header.Parameters);
@@ -1819,7 +1819,7 @@ using Nemerle.Compiler.Utility;
           | _ => finalMembers.Add(member);
         }
       }
-      def body = PExpr.Sequence(lex.Location, expressions.NToList());
+      def body = PExpr.Sequence(lex.Location, expressions.:NToList());
       def capture = <[ Nemerle.Compiler.__capture_script_result($body) ]>;
       def resultName = data.Prefix + "result";
       def resultField = <[ decl: private mutable $(resultName : usesite) : array[object]; ]>;
@@ -1850,7 +1850,7 @@ using Nemerle.Compiler.Utility;
                 | _ => node
               })
           }
-          def statements = expressions.NToList().Map(inlined);
+          def statements = expressions.:NToList().Map(inlined);
           def captured = match (statements.Rev())
             {
               | last :: before => PExpr.Sequence(location, before.Rev() + [<[ Nemerle.Compiler.__capture_script_result($last) ]>])
@@ -1887,7 +1887,7 @@ using Nemerle.Compiler.Utility;
       foreach (member when member._env == null && !(member is ClassMember.TypeDeclaration) in finalMembers)
         member._env = parser.env;
       manager.FileModuleRegistry.MemberEnvironments[td.Location.FileIndex] = parser.env;
-      def result = TopDeclaration.Class(td.Location, td.name, td.modifiers, td.typarms, td.t_extends, finalMembers.NToList());
+      def result = TopDeclaration.Class(td.Location, td.name, td.modifiers, td.typarms, td.t_extends, finalMembers.:NToList());
       foreach (member in finalMembers) member._definedIn = result;
       [result]
     }
@@ -2465,7 +2465,7 @@ using Nemerle.Compiler.Utility;
           }
         }
 
-        def members2 = members.NToList();
+        def members2 = members.:NToList();
         def locAll   = startLocation + end_loc;
 
         def td =
@@ -2857,7 +2857,7 @@ using Nemerle.Compiler.Utility;
         if (in_variant)
         {
           def members =
-            if (children != null) ParseClassMembers(children, "variant option").NToList()
+            if (children != null) ParseClassMembers(children, "variant option").:NToList()
             else [];
 
           def td = TopDeclaration.VariantOption (name      = id, loc = loc,
@@ -3983,13 +3983,18 @@ using Nemerle.Compiler.Utility;
             | _ => PExpr.Member (loc, e1, make_splicable (e2))
           }
 
-        // the extension dot-call `a.:M()' / `a.:P': the same access as `.', spelled to say "extension" (the plain
-        // call `Ext.M(a)' is the other way). Resolution is `.'s: a member, else the extension fallback.
+        // the extension dot `a.:M()' / `a.:P': reaches only an extension (the plain call `Ext.M(a)' is the other
+        // way); plain `.' reaches only members
         | ".:" =>
           match (e2)
           {
-            | PExpr.ListLiteral (args) => PExpr.GenericSpecifier (loc, e1, args)
-            | _ => PExpr.Member (loc, e1, make_splicable (e2))
+            | PExpr.ListLiteral (args) =>
+              match (e1) { | PExpr.Member as m => m.IsExtensionDot = true | _ => () }
+              PExpr.GenericSpecifier (loc, e1, args)
+            | _ =>
+              def m = PExpr.Member (loc, e1, make_splicable (e2));
+              m.IsExtensionDot = true;
+              m
           }
 
         | "=" => PExpr.Assign (loc, e1, e2)

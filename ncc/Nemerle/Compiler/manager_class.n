@@ -127,6 +127,9 @@ using Nemerle.Compiler.XmlDump;
     public DelayedTypingsInProgress : bool { get; internal set; }
     public DelayedTypingsSecondPass : bool { get; internal set; }
     public IsSpeculativeTyping      : bool { get; internal set; }
+    /// While set, a `[...]`/list argument is not turned into an array/collection to make an overload fit
+    /// (overload resolution first tries the list taken directly; see Typer.StructuralListCast / ResolveOverload).
+    public NoListCoercion           : bool { get; internal set; }
     internal mutable NotResolvedNestedDelayedTypings : Hashtable[object, bool];
     public MethodsStatistics : Hashtable[string, int * TimeSpan] { get; default Hashtable(); }
 
@@ -149,7 +152,7 @@ using Nemerle.Compiler.XmlDump;
     
     private mutable IdToNameMap : Hashtable[int, string];
     
-    public ReferencedAssemblies : list[LibraryReference] { get { LibrariesManager.ReferencedAssemblies.NToList() } }
+    public ReferencedAssemblies : list[LibraryReference] { get { LibrariesManager.ReferencedAssemblies.:NToList() } }
     
     protected OnTypeTreeBuildFinish() : void
     {
@@ -174,7 +177,7 @@ using Nemerle.Compiler.XmlDump;
     ShowStatistics() : void
     {
       when (Options.ShowCompilerStatistics && MethodsStatistics.Count > 1)
-        foreach ((key, (count, timeSpan)) in MethodsStatistics.KeyValuePairs.OrderBy((_, (_, timeSpan)) => timeSpan))
+        foreach ((key, (count, timeSpan)) in MethodsStatistics.KeyValuePairs.:OrderBy((_, (_, timeSpan)) => timeSpan))
         {
           def msg = $"$key: $timeSpan  $count";
           Message.Hint(msg);

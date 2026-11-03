@@ -477,8 +477,8 @@ public class LibraryReferenceManager
             _ = contexts.Append($" [$(context.Name): $(loaded.GetName().Name) $(loaded.GetName().Version) $(loaded.Location)]");
         def owner = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(assembly);
         throw System.TypeLoadException($"$(e.Message) (reading attributes of macro assembly $(assembly.FullName) from $(getAssemblyLocation(assembly)) in context $(owner?.Name); loaded:$contexts)", e) };
-    def macroDefs = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.ContainsMacroAttribute");
-    def operDefs  = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.OperatorAttribute");
+    def macroDefs = assemblyAttributes.:Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.ContainsMacroAttribute");
+    def operDefs  = assemblyAttributes.:Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.OperatorAttribute");
 
     try
     {
@@ -510,7 +510,7 @@ public class LibraryReferenceManager
     try
     {
       def assemblyAttributes = assembly.GetCustomAttributes(false);
-      def parserDefs = assemblyAttributes.Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.RegisterParserAttribute");
+      def parserDefs = assemblyAttributes.:Filter(t => ClrNames.Of(t.GetType()) == "Nemerle.Internal.RegisterParserAttribute");
 
       foreach(definition in parserDefs)
       {
@@ -597,7 +597,7 @@ public class LibraryReferenceManager
     try
     {
       def types = if (lib.IsFriend)
-        assembly.GetTypes().Filter(t => t.IsPublic || t.IsNotPublic
+        assembly.GetTypes().:Filter(t => t.IsPublic || t.IsNotPublic
           || t.IsNestedPublic ||t.IsNestedFamORAssem || t.IsNestedAssembly).ToArray()
       else
         assembly.GetExportedTypes();

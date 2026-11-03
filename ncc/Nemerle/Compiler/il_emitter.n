@@ -2658,7 +2658,7 @@ using Nemerle.Compiler.Utility;
       }
       public Emit (opcode : OpCode, labels    : array[Label])    : void {
         Emited (opcode);
-        labels.Iter (l => jumped[l] = null);
+        labels.:Iter (l => jumped[l] = null);
         _ilg.Emit (opcode, labels)
       }
       public Emit (opcode : OpCode, local     : LocalBuilder)    : void { Emited(opcode); _ilg.Emit(opcode, local)     }

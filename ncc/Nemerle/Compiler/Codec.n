@@ -161,7 +161,7 @@ internal module TyCodec
             NList.MapFromArray (constraints, 
               t => if (t.Equals(sys_type)) self_type else _lib.TypeOfType (tenv, t)))
     }
-    vars.Iter2(tyvars, set_constraints);
+    vars.:Iter2(tyvars, set_constraints);
   }
 
   
@@ -183,7 +183,7 @@ internal module TyCodec
       def tc = lib.TypeInfoOfType (framework_type);
       if (framework_type.IsGenericType)
       {
-        def parms = framework_type.GetGenericArguments().MapToList(x => lib.TypeOfType(tenv, x) : TypeVar);
+        def parms = framework_type.GetGenericArguments().:MapToList(x => lib.TypeOfType(tenv, x) : TypeVar);
         FixedType.Class (tc, parms)
       }
       else FixedType.Class (tc, [])
@@ -258,7 +258,7 @@ internal module TyCodec
         tv.SetConstraints (t.GenericParameterAttributes, constraints.Map(t => lib.TypeOfType(tenv, t)))
       }
 
-      vars.Iter2(tyvars, set_constraints);
+      vars.:Iter2(tyvars, set_constraints);
 
       (tyvars, tenv)
     }

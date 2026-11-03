@@ -59,7 +59,7 @@ public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
       else { _ = token.Append(c); started = true; }
     when (quote != '\0') throw ArgumentException("Unterminated quote", "CompilerOptions");
     when (started) result.Add(token.ToString());
-    result.NToList()
+    result.:NToList()
   }
 
   public CompileAssemblyFromDom (options : CompilerParameters,
@@ -198,7 +198,7 @@ public class NemerleCodeCompiler : NemerleCodeGenerator, ICodeCompiler
     {
       foreach(fileName in fileNames)
         sources.Add(FileSource(fileName, cOptions.Warnings));
-      cOptions.Sources = sources.ToNList();
+      cOptions.Sources = sources.:ToNList();
       def compilerThreadProc()
       {
         try

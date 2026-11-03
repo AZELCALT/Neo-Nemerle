@@ -146,21 +146,26 @@ run('outs', 'mutable v;\n_ = Api.TryGet(3, out v);\nF() : string { v }\nmutable 
             'System.Console.WriteLine($"$v $(F()) $x $(G())")\n', ['v3 v3 8 8'],
     'an `out\'/`ref\' argument writes a top-level value (a function reads what it wrote)')
 
-# C# 14 extension members: an extension method already works; an extension property reads through its getter
-run('ext14', 'def s = "hi";\nSystem.Console.WriteLine($"$(s.Shout()) $(s.Twice)")\n', ['HI 4'],
-    'a C# 14 extension method and extension property (`s.Shout()`, `s.Twice`)')
-
-# an extension property write goes through its setter, read through its getter
-run('ext14_set', 'def s = "k";\ns.Tag = 7;\nAfter() : int { s.Tag }\nSystem.Console.WriteLine($"$(s.Tag) $(After())")\n', ['7 7'],
-    'a C# 14 extension property write (`s.Tag = 7` -> set_Tag) and read (`s.Tag` -> get_Tag)')
+# an extension is reached with the extension dot `.:` (or called plainly, receiver first); a plain `.` reaches members
+run('ext14_set', 'def s = "k";\ns.:Tag = 7;\nAfter() : int { s.:Tag }\nSystem.Console.WriteLine($"$(s.:Tag) $(After())")\n', ['7 7'],
+    'a C# 14 extension property write (`s.:Tag = 7` -> set_Tag) and read (`s.:Tag` -> get_Tag)')
+run('plaincall', 'def s = "ab";\nSystem.Console.WriteLine($"$(Ext.Shout(s))")\n', ['AB'],
+    'an extension called plainly with its receiver first (`Ext.Shout(s)`)')
+hint = "is an extension, not a member of"
+rejected('dot_method', 'def s = "hi";\n_ = s.Shout();\n', hint, 1, 'a plain `.` to a C# extension method is an error')
+rejected('dot_linq', 'using System.Linq;\ndef a = array[1, 2];\n_ = a.Sum();\n', hint, 1,
+         'a plain `.` to a LINQ extension method is an error')
+rejected('dot_prop', 'def s = "hi";\n_ = s.Twice;\n', hint, 1, 'a plain `.` to a C# extension property read is an error')
+rejected('dot_set', 'def s = "hi";\ns.Tag = 1;\n', hint, 1, 'a plain `.` to a C# extension property write is an error')
+rejected('dot_static', '_ = string.Blank;\n', hint, 1, 'a plain `.` to a C# 14 static extension member is an error')
+rejected('dotcolon_member', 'def s = "hi";\n_ = s.:Length;\n', "is a member of", 1,
+         'the extension dot `.:` to a real member is an error')
 
 # the `.:` dot-call: C#'s `x.M()` form, spelled as an extension; method, property read, and property write
 run('dotcolon', 'def s = "hey";\ns.:Tag = 9;\nSystem.Console.WriteLine($"$(s.:Shout()) $(s.:Twice) $(s.:Tag)")\n', ['HEY 6 9'],
     'the `.:` extension dot-call (`s.:Shout()`, `s.:Twice`, `s.:Tag = 9`)')
 
-# C# 14 *static* extension members reached through the type: a property read, a method, and a property write, through
-# both `.` and the extension `.:`. The on-type is read from the grouping type's receiver at import.
-run('ext14_static', 'string.Slot = 3;\nSystem.Console.WriteLine($"$(string.Blank) $(string.Of(2)) $(string.Slot)")\n', ['<blank> ** 3'],
-    'a C# 14 static extension member through the type (`string.Blank`, `string.Of(2)`, `string.Slot = 3`)')
+# C# 14 *static* extension members reached through the type with `.:`: a property read, a method, and a property
+# write. The on-type is read from the grouping type's receiver at import.
 run('ext14_static_dotcolon', 'string.:Slot = 5;\nSystem.Console.WriteLine($"$(string.:Blank) $(string.:Of(4)) $(string.:Slot)")\n', ['<blank> **** 5'],
     'a C# 14 static extension member through the extension dot (`string.:Blank`, `string.:Of(4)`, `string.:Slot = 5`)')

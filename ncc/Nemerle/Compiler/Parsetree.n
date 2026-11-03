@@ -986,6 +986,8 @@ using Nemerle.Compiler.Utility;
     | Member
       {
         obj : PExpr; member : Splicable;
+        /// written `obj.:member': the extension dot, which reaches only an extension (plain `.' reaches only members)
+        [RecordIgnore] public mutable IsExtensionDot : bool;
 
         public new this(obj : PExpr, member : PExpr.Ref)
         {
@@ -1054,7 +1056,7 @@ using Nemerle.Compiler.Utility;
                         }
                         public static Create(args : list[PExpr]) : PExpr.Tuple
                         {
-                          PExpr.Tuple(args.EnclosingLocation(), args, args.Length);
+                          PExpr.Tuple(args.:EnclosingLocation(), args, args.Length);
                         }
                         public this(args : list[PExpr], argsCount : int)
                         { this(args); this.argsCount = argsCount; }

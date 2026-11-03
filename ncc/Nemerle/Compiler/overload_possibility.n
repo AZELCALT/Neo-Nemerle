@@ -349,8 +349,8 @@ public class OverloadPossibility : TypedBase, System.IEquatable[OverloadPossibil
               pos++;
             }
 
-            if (UsedDefaultParms && res.Exists (_ == null))
-              formal_types = res.ToArrayFiltered (_ != null);
+            if (UsedDefaultParms && res.:Exists (_ == null))
+              formal_types = res.:ToArrayFiltered (_ != null);
             else
               formal_types = res;
           | _ => formal_types = array(0)

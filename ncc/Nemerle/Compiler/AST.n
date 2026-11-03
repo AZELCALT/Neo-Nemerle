@@ -426,7 +426,7 @@ public struct Location : System.IComparable[Location], System.IEquatable[Locatio
   /// The 'lst' must be ordered. This function test only first and last elements.
   public static EnclosingLocation(this lst : list[Location]) : Location
   {
-    Debug.Assert(lst.IsOrdered((x, y) => x.CompareTo(y) > 0), null, null);
+    Debug.Assert(lst.:IsOrdered((x, y) => x.CompareTo(y) > 0), null, null);
     Debug.Assert(!lst.IsEmpty, null, null);
     
     lst.Head + lst.Last
@@ -435,7 +435,7 @@ public struct Location : System.IComparable[Location], System.IEquatable[Locatio
   public static EnclosingLocation[T](this lst : list[T]) : Location
     where T: Located
   {
-    Debug.Assert(lst.IsOrdered((x, y) => x.Location.CompareTo(y.Location) > 0), null, null);
+    Debug.Assert(lst.:IsOrdered((x, y) => x.Location.CompareTo(y.Location) > 0), null, null);
     Debug.Assert(!lst.IsEmpty, null, null);
     
     lst.Head.Location + lst.Last.Location
@@ -600,7 +600,7 @@ public struct Location : System.IComparable[Location], System.IEquatable[Locatio
   )
     : int
   {
-    def (_, resIndex, _) = seq.Fold((0, -1, Location.Default), 
+    def (_, resIndex, _) = seq.:Fold((0, -1, Location.Default), 
       fun(elem, (i, resIndex, curr))
       {
         def loc = convert(elem);

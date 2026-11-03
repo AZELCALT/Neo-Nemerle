@@ -886,7 +886,7 @@ internal class Typer4
 
           def parms = if (inArguments.Count == 0) parms else parms.Map(p => if (inArguments.ContainsKey(p)) inArguments[p] else p);
           def call =
-            if(meth.IsConditional && !meth.EvalConditions(the_method.GlobalEnv))
+            if(meth.IsConditional && !meth.:EvalConditions(the_method.GlobalEnv))
               TExpr.DefaultValue(expr.Type)
             else
               if (meth.ReturnType.Fix () is FixedType.StaticTypeVarRef

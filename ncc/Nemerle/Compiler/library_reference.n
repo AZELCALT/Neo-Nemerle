@@ -174,7 +174,7 @@ using Nemerle.Compiler.Utility;
       def checkFriend(att : InternalsVisibleToAttribute) : bool
       {
         def assemblyName = att.AssemblyName;
-        def parts = assemblyName.Replace(" ", "").SplitToList(array[',']);
+        def parts = assemblyName.Replace(" ", "").:SplitToList(array[',']);
         match (parts)
         {
           | [asmName] when currentAssemblyName == asmName => true;
@@ -194,7 +194,7 @@ using Nemerle.Compiler.Utility;
         }
       }
 
-      customAttributes.Exists(a => checkFriend(a :> InternalsVisibleToAttribute))
+      customAttributes.:Exists(a => checkFriend(a :> InternalsVisibleToAttribute))
     }
 
     internal LoadContents () : void
@@ -240,7 +240,7 @@ using Nemerle.Compiler.Utility;
 //            Message.Debug($"tinfo $tc contains generic framework_type.ToString());
         def parms =
           if (framework_type.IsGenericType)
-            framework_type.GetGenericArguments().MapToList(t => TypeOfType(_tenv, t));
+            framework_type.GetGenericArguments().:MapToList(t => TypeOfType(_tenv, t));
           else [];
 
         if (ClrNames.NamespaceOf(framework_type) == "Nemerle.Builtins")
@@ -355,17 +355,17 @@ using Nemerle.Compiler.Utility;
             | value is char           => <[ $(value :  char   ) ]> 
             | value is System.Guid    => <[ System.Guid($(value.ToString() : string)) ]>
             | value is System.Type    => <[ typeof($(library.TypeOfType(null, value) : typed)) ]>
-            | col is ReadOnlyCollection[SR.CustomAttributeTypedArgument] => <[ array[..$(col.MapToList(e => lift(e.Value)))] ]>
+            | col is ReadOnlyCollection[SR.CustomAttributeTypedArgument] => <[ array[..$(col.:MapToList(e => lift(e.Value)))] ]>
             | value => Nemerle.Compiler.MessageMacros.FatalError($"Custom atribute value ($value) of type $(value.GetType()) not suported yet.")
           }
 
           lift(a.Value)
         }
-        def args = attr.ConstructorArguments.MapToList(makeArg);
+        def args = attr.ConstructorArguments.:MapToList(makeArg);
         result.Add((name, args));
       }
       
-      result.NToList()
+      result.:NToList()
     }
   
     // ---- merged from external/ExternalMemberInfo/ExternalEventInfo.n ----
@@ -1762,7 +1762,7 @@ using Nemerle.Compiler.Utility;
         {
           def prop = m :> SR.PropertyInfo;
           def accessors = prop.GetAccessors (true);
-          def propMeth = accessors.Fold(null, (x : SR.MethodInfo, acc) =>
+          def propMeth = accessors.:Fold(null, (x : SR.MethodInfo, acc) =>
                 if (x == null || x.IsPrivate || x.IsAssembly || x.IsFamilyAndAssembly) acc
                 else x);
           propMeth == null

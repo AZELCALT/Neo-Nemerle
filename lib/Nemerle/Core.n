@@ -740,7 +740,7 @@ public variant list[T] :
     foreach (elem in this)
       selector(elem, result);
 
-    result.NToList()
+    result.:NToList()
   }
 
   public Flatten[TOut](selector : T -> SCG.IEnumerable[TOut]) : list[TOut]
@@ -750,7 +750,7 @@ public variant list[T] :
     foreach (elem in this)
       result.AddRange(selector(elem));
 
-    result.NToList()
+    result.:NToList()
   }
 
   public Filter2[T2, Result](list2 : list[T2], convert : T * T2 -> bool * Result) : list[Result]
@@ -775,7 +775,7 @@ public variant list[T] :
     foreach (x is TResult in this)
       res.Add(x);
       
-    res.NToList();
+    res.:NToList();
   }
 }
 
