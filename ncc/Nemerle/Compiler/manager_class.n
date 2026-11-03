@@ -97,8 +97,46 @@ using Nemerle.Compiler.XmlDump;
     internal AttributeCompiler : AttributeCompilerClass { get; private set; }
     internal Stats             : StatsClass             { get; private set; }
 
-    [Accessor] mutable _solver : Solver;
-    public SetSolver(solver : Solver) : void  { _solver = solver; }
+    /// What typing a method changes as it goes: its solver, its delayed-typing and message-holding state. A thread that types methods of this compilation in parallel sets one of its own (UseTypingState); the
+    /// compiling thread uses the manager's own, so typing on one thread is as it always was.
+    public class TypingState
+    {
+      public Manager : ManagerClass;
+      public this(manager : ManagerClass) { Manager = manager }
+      public mutable Solver : Solver;
+      public mutable DelayedTypingsInProgress : bool;
+      public mutable DelayedTypingsSecondPass : bool;
+      public mutable IsSpeculativeTyping : bool;
+      public mutable NoListCoercion : bool;
+      public mutable NotResolvedNestedDelayedTypings : Hashtable[object, bool];
+      public mutable QuietMessages : int;
+      public mutable QuietErrors : int;
+      public mutable StateInference : int;
+      public mutable TyVar_reuse_queue : TypeVar;
+      public mutable Macros_in_pattern : bool;
+      public HeldMessages : System.Collections.Generic.Stack[System.Collections.Generic.List[(void -> void) * int]] = System.Collections.Generic.Stack();
+    }
+    [System.ThreadStatic] static mutable _threadTyping : TypingState;
+    mutable _ownTyping : TypingState;
+    /// The typing state of the current thread: its own when it set one for this manager, else the manager's.
+    public Typing : TypingState
+    {
+      get
+      {
+        def state = _threadTyping;
+        if (state != null && state.Manager : object == this) state
+        else
+        {
+          when (_ownTyping == null) _ownTyping = TypingState(this);
+          _ownTyping
+        }
+      }
+    }
+    /// Makes `state' the current thread's typing state (null: the manager's own again).
+    public UseTypingState(state : TypingState) : void { _threadTyping = state }
+
+    public Solver : Solver { get { Typing.Solver } }
+    public SetSolver(solver : Solver) : void  { Typing.Solver = solver; }
     public CheckSolver() : void
     {
       unless (this.Solver.IsTopLevel)
@@ -111,6 +149,7 @@ using Nemerle.Compiler.XmlDump;
     public mutable CoreEnv : GlobalEnv;
     public mutable MacrosRegistry : MacroRegistry;
     public mutable Options : CompilationOptions;
+    // (a field, not in TypingState: prebuilt macros and boot's Nitra read it as one)
     public mutable MacroColors : MacroColorizator;
     internal mutable emptyTEnv : TypeVarEnv;
     [Accessor]
@@ -124,13 +163,13 @@ using Nemerle.Compiler.XmlDump;
     mutable current_pb_stage : int;
 
     mutable pb_killed : bool;
-    public DelayedTypingsInProgress : bool { get; internal set; }
-    public DelayedTypingsSecondPass : bool { get; internal set; }
-    public IsSpeculativeTyping      : bool { get; internal set; }
+    public DelayedTypingsInProgress : bool { get { Typing.DelayedTypingsInProgress } internal set { Typing.DelayedTypingsInProgress = value } }
+    public DelayedTypingsSecondPass : bool { get { Typing.DelayedTypingsSecondPass } internal set { Typing.DelayedTypingsSecondPass = value } }
+    public IsSpeculativeTyping      : bool { get { Typing.IsSpeculativeTyping } internal set { Typing.IsSpeculativeTyping = value } }
     /// While set, a `[...]`/list argument is not turned into an array/collection to make an overload fit
     /// (overload resolution first tries the list taken directly; see Typer.StructuralListCast / ResolveOverload).
-    public NoListCoercion           : bool { get; internal set; }
-    internal mutable NotResolvedNestedDelayedTypings : Hashtable[object, bool];
+    public NoListCoercion           : bool { get { Typing.NoListCoercion } internal set { Typing.NoListCoercion = value } }
+    internal NotResolvedNestedDelayedTypings : Hashtable[object, bool] { get { Typing.NotResolvedNestedDelayedTypings } set { Typing.NotResolvedNestedDelayedTypings = value } }
     public MethodsStatistics : Hashtable[string, int * TimeSpan] { get; default Hashtable(); }
 
     public delegate MessageEventHandler(loc : Location, msg : string) : void;
@@ -245,8 +284,8 @@ using Nemerle.Compiler.XmlDump;
     public ModuleBindings : System.Collections.Generic.Dictionary[string, Nemerle.Compiler.Parsetree.PExpr] = System.Collections.Generic.Dictionary();
     public ModuleTypedBindings : System.Collections.Generic.Dictionary[string, Nemerle.Compiler.Typedtree.TExpr] = System.Collections.Generic.Dictionary();
     /// While above zero, messages are not reported, only errors counted (a pass that only learns types).
-    public mutable QuietMessages : int;
-    public mutable QuietErrors : int;
+    public QuietMessages : int { get { Typing.QuietMessages } set { Typing.QuietMessages = value } }
+    public QuietErrors : int { get { Typing.QuietErrors } set { Typing.QuietErrors = value } }
     /// The labels a `yield' resumes at (Typer.HandleYield): an async state machine's are its resume points, which the
     /// debug information lists (ILEmitter, AsyncStepping).
     public YieldLabels : System.Collections.Generic.HashSet[int] = System.Collections.Generic.HashSet();
@@ -267,7 +306,7 @@ using Nemerle.Compiler.XmlDump;
     public mutable TargetContracts : Nemerle.Platform.ClrTargetContracts;
     public TargetReported : System.Collections.Generic.HashSet[string] = System.Collections.Generic.HashSet();
     /// Above 0 while the quiet copy of a file's top-level code is typed to infer its values' types.
-    public mutable StateInference : int;
+    public StateInference : int { get { Typing.StateInference } set { Typing.StateInference = value } }
     /// The calls written as statements of a file's top-level code (where they are), and the files that have them: a
     /// macro's expansion there is top-level code too, so what it declares is the file's state (Typer.LiftDeclarations),
     /// and such a file's top-level code is typed before its fields are emitted.
@@ -413,11 +452,11 @@ using Nemerle.Compiler.XmlDump;
     internal mutable Typer_checked_macro : NamespaceTree.Node;
     internal mutable Typer_unchecked_macro : NamespaceTree.Node;
     internal mutable Typer_yield_macro : NamespaceTree.Node;
-    internal mutable TyVar_reuse_queue : TypeVar;
+    internal TyVar_reuse_queue : TypeVar { get { Typing.TyVar_reuse_queue } set { Typing.TyVar_reuse_queue = value } }
     internal mutable TyVar_Id : int;
     private  mutable Util_Id : int;
     internal mutable AttributeMacroExpansion_global_nr : int;
-    internal mutable Macros_in_pattern : bool;
+    internal Macros_in_pattern : bool { get { Typing.Macros_in_pattern } set { Typing.Macros_in_pattern = value } }
 
     internal mutable Message_ErrorCount : int;
     internal mutable Message_WarningCount : int;
@@ -425,7 +464,7 @@ using Nemerle.Compiler.XmlDump;
     /// The messages typing attempts hold until each is known to be the last (one level per attempt): the flow of values
     /// can start an attempt again (see typer_flow), and what the one it forgets reported is reported by the next. Each
     /// is its report, and its kind (2 an error, 1 a warning, 0 a hint), counted when it is held.
-    internal HeldMessages : System.Collections.Generic.Stack[System.Collections.Generic.List[(void -> void) * int]] = System.Collections.Generic.Stack();
+    internal HeldMessages : System.Collections.Generic.Stack[System.Collections.Generic.List[(void -> void) * int]] { get { Typing.HeldMessages } }
 
     /// Holds the messages from here, for a typing attempt.
     internal HoldMessages () : System.Collections.Generic.List[(void -> void) * int]
@@ -801,7 +840,7 @@ using Nemerle.Compiler.XmlDump;
 
       Options.Validate ();
 
-      this._solver   = Nemerle.Compiler.solver.Solver (this);
+      Typing.Solver  = Nemerle.Compiler.solver.Solver (this);
       this.emptyTEnv = TypeVarEnv (this);
 
       if (Options.LexerStoreComments)

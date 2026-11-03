@@ -3,8 +3,9 @@
 
     ./dev [part ...] [--base DIR] [--output DIR]
 
-Parts, in build order: macros runtime compiler cli nitra scripting lsp (default: all). Each is compiled once by the
-base toolchain (out/bootstrap/toolchain when there is one, else boot/coreclr), not in the two verified stages of
+Parts, in build order: runtime compiler macros cli nitra scripting lsp (default: all; a rebuilt compiler rebuilds the
+macros, which are bound to it). Each is compiled once by the
+base toolchain (out/bootstrap/toolchain when it is newer than boot/coreclr, else boot/coreclr), not in the two verified stages of
 ./bootstrap, and every compile goes through the build cache, so asking for all of them only costs the parts whose
 inputs changed. The result runs as a toolchain (out/dev/toolchain/ncc, nscript; out/dev/lsp/nemerle-lsp). It is for
 iterating, not a bootstrap: run ./bootstrap before committing a compiler change.
@@ -15,7 +16,7 @@ from tooling import artifact_path, net10_runtime, tune_compiler_runtime, verify_
 import buildcache
 
 repo = pathlib.Path(__file__).resolve().parents[1]
-PARTS = ['macros', 'runtime', 'compiler', 'cli', 'nitra', 'scripting', 'lsp']
+PARTS = ['runtime', 'compiler', 'macros', 'cli', 'nitra', 'scripting', 'lsp']
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('parts', nargs='*', help='what to rebuild, from: ' + ' '.join(PARTS) + ' (default: all)')
 p.add_argument('--base', type=pathlib.Path, help='toolchain that compiles (default: out/bootstrap/toolchain, else boot/coreclr)')
@@ -24,7 +25,12 @@ p.add_argument('--output', type=pathlib.Path, default=repo / 'out/dev')
 a = p.parse_args()
 parts = set(a.parts or PARTS)
 if parts - set(PARTS): p.error('unknown part: ' + ' '.join(sorted(parts - set(PARTS))) + ' (parts: ' + ' '.join(PARTS) + ')')
-base = (a.base or next((d for d in (repo / 'out/bootstrap/toolchain', repo / 'boot/coreclr') if (d / 'ncc.exe').is_file()))).resolve()
+def newest_base():
+    # the last ./bootstrap result, unless boot/coreclr is newer (a stale out/bootstrap would build with an old compiler)
+    built, boot = repo / 'out/bootstrap/toolchain', repo / 'boot/coreclr'
+    if (built / 'ncc.exe').is_file() and (built / 'ncc.exe').stat().st_mtime >= (boot / 'ncc.exe').stat().st_mtime: return built
+    return boot
+base = (a.base or newest_base()).resolve()
 refs = (a.references or base / 'references').resolve()
 out = a.output.resolve()
 runtime = net10_runtime()
@@ -61,13 +67,6 @@ def step(label, command):
     print('%-9s done' % label, flush=True)
     return result.stdout
 
-# The standard macros come first (operators and their priorities live here): T's ncc parses with them.
-if 'macros' in parts:
-    build('macros', T / 'Nemerle.Macros.dll', sorted((repo / 'macros').rglob('*.n')),
-          [base / 'Nemerle.Compiler.dll', base / 'Nemerle.Platform.dll',
-           runtime / 'System.Data.Common.dll', runtime / 'System.Xml.ReaderWriter.dll',
-           runtime / 'System.Xml.XmlSerializer.dll', runtime / 'System.Xml.XDocument.dll', runtime / 'System.Linq.dll'],
-          ['-target:library', '-source-root:' + str(repo / 'macros')])
 if 'runtime' in parts:
     # the base runtime's version: the base compiler and front end, which stay, are bound to it
     reported = subprocess.run(['dotnet', str(base / 'ncc.exe'), '-version'], capture_output=True, text=True).stderr
@@ -82,6 +81,15 @@ if 'compiler' in parts:
     build('compiler', T / 'Nemerle.Compiler.dll', sorted(repo.glob('ncc/Nemerle/Compiler/*.n')),
           [base / 'Nemerle.Platform.dll', base / 'System.CodeDom.dll'] + [runtime / (n + '.dll') for n in names],
           ['-target:library', '-no-stdlib', '-r:' + str(base / 'Nemerle.dll'), '-source-root:' + str(repo / 'ncc')])
+# The standard macros run inside T's compiler, so they are built against it (after it): a macro library is bound to
+# the compiler it was built against, and a rebuilt compiler needs its macros rebuilt.
+if 'compiler' in parts: parts.add('macros')
+if 'macros' in parts:
+    build('macros', T / 'Nemerle.Macros.dll', sorted((repo / 'macros').rglob('*.n')),
+          [T / 'Nemerle.Compiler.dll', T / 'Nemerle.Platform.dll',
+           runtime / 'System.Data.Common.dll', runtime / 'System.Xml.ReaderWriter.dll',
+           runtime / 'System.Xml.XmlSerializer.dll', runtime / 'System.Xml.XDocument.dll', runtime / 'System.Linq.dll'],
+          ['-target:library', '-source-root:' + str(repo / 'macros')])
 if 'cli' in parts:
     cli_refs = [T / 'Nemerle.Compiler.dll', T / 'Nemerle.Platform.dll', runtime / 'System.Console.dll',
         runtime / 'System.Linq.dll', runtime / 'System.Net.Http.dll', runtime / 'System.IO.Compression.dll',
