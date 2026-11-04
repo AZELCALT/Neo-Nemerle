@@ -1,0 +1,18 @@
+// mod, if/else chains, while
+space Pascal
+{
+  program FizzBuzz;
+  var
+    n : integer;
+  begin
+    n := 1;
+    while n <= 15 do
+    begin
+      if n mod 15 = 0 then writeln('FizzBuzz')
+      else if n mod 3 = 0 then writeln('Fizz')
+      else if n mod 5 = 0 then writeln('Buzz')
+      else writeln(n);
+      n := n + 1
+    end
+  end.
+}

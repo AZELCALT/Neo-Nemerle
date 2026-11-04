@@ -1,0 +1,15 @@
+// Pascal in a Nemerle program: it calls the program's functions and reads its values (a name Pascal does not declare
+// is the Nemerle program's, as written)
+Twice(n : int) : int { n * 2 }
+def start = 20;
+
+space Pascal
+{
+  program Interop;
+  var
+    r : integer;
+  begin
+    r := Twice(start) + 2;
+    writeln(r)
+  end.
+}

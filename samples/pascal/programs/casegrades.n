@@ -1,0 +1,25 @@
+// case with several labels and else, char literals, write widths and decimals, real division
+space Pascal
+{
+  program Grades;
+  var
+    score : integer;
+    average : real;
+  begin
+    score := 7;
+    while score <= 10 do
+    begin
+      case score of
+        10: writeln(score:3, ' excellent');
+        8, 9: writeln(score:3, ' good');
+        7: writeln(score:3, ' fair')
+      else
+        writeln(score:3, ' ?')
+      end;
+      score := score + 1
+    end;
+    average := (7 + 8 + 9 + 10) / 4;
+    writeln('average', average:8:2);
+    writeln(odd(3), ' ', sqr(9), ' ', abs(-4), ' ', trunc(2.75), ' ', round(2.5), ' ', chr(ord('A') + 1))
+  end.
+}

@@ -1,0 +1,12 @@
+// Pascal is case-insensitive: keywords and the program's own names in any case. Comments are (* ... *) and { ... }.
+space Pascal
+{
+  PROGRAM Casing;
+  VAR
+    Count, ending : Integer;   { ending starts with a keyword, and is a name }
+  BEGIN
+    count := 40;
+    ENDING := 2;
+    WriteLn(COUNT + Ending)
+  END.
+}

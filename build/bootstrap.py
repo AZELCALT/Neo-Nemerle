@@ -139,6 +139,7 @@ suites = [
     ('extend', ['check-extend.py', '--toolchain', T]),
     ('extensions', ['check-extensions.py', '--toolchain', T]),
     ('casts', ['check-casts.py', '--toolchain', T, '--references', R]),
+    ('pascal', ['check-pascal.py', '--toolchain', T, '--references', R]),
     ('index-range', ['check-index-range.py', '--toolchain', T]),
     ('dynamic', ['check-dynamic.py', '--toolchain', T, '--references', R]),
     ('csharp-interop', ['check-csharp-interop.py', '--toolchain', T, '--references', R]),

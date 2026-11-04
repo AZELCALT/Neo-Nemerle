@@ -1,0 +1,35 @@
+// Arrays with their own bounds, constants, nested loops, repeat until
+space Pascal
+{
+  program Sieve;
+  const
+    Limit = 30;
+  var
+    prime : array [2..Limit] of boolean;
+    i, j, count : integer;
+  begin
+    for i := 2 to Limit do prime[i] := true;
+    for i := 2 to Limit do
+      if prime[i] then
+      begin
+        j := i * i;
+        while j <= Limit do
+        begin
+          prime[j] := false;
+          j := j + i
+        end
+      end;
+    count := 0;
+    i := 1;
+    repeat
+      i := i + 1;
+      if prime[i] then
+      begin
+        write(i, ' ');
+        count := count + 1
+      end
+    until i = Limit;
+    writeln;
+    writeln(count, ' primes')
+  end.
+}

@@ -1,0 +1,36 @@
+// A type of an array, var parameters, procedures, downto
+space Pascal
+{
+  program BubbleSort;
+  type
+    Numbers = array [1..8] of integer;
+  var
+    data : Numbers;
+    i : integer;
+
+  procedure Swap(var a, b : integer);
+  var
+    t : integer;
+  begin
+    t := a;
+    a := b;
+    b := t
+  end;
+
+  procedure Sort(var items : Numbers);
+  var
+    i, j : integer;
+  begin
+    for i := 8 downto 2 do
+      for j := 1 to i - 1 do
+        if items[j] > items[j + 1] then Swap(items[j], items[j + 1])
+  end;
+
+  begin
+    data[1] := 42; data[2] := 7; data[3] := 19; data[4] := 3;
+    data[5] := 25; data[6] := 11; data[7] := 38; data[8] := 1;
+    Sort(data);
+    for i := 1 to 8 do write(data[i], ' ');
+    writeln
+  end.
+}

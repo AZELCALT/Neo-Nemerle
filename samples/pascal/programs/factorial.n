@@ -1,0 +1,18 @@
+// Recursion, a function's result (`Factorial := ...'), for loops
+space Pascal
+{
+  program Factorials;
+  var
+    i : integer;
+
+  function Factorial(n : integer) : integer;
+  begin
+    if n <= 1 then Factorial := 1
+    else Factorial := n * Factorial(n - 1)
+  end;
+
+  begin
+    for i := 1 to 6 do
+      writeln(i, '! = ', Factorial(i))
+  end.
+}

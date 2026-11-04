@@ -1,0 +1,30 @@
+// Routines inside routines: an inner procedure changes the outer program's variable and reads its parameter
+space Pascal
+{
+  program Nested(input, output);
+  var
+    total : integer;
+
+  procedure Add(n : integer);
+    procedure Once;
+    begin
+      total := total + n
+    end;
+  begin
+    Once;
+    Once
+  end;
+
+  function Gcd(a, b : integer) : integer;
+  begin
+    if b = 0 then Gcd := a else Gcd := Gcd(b, a mod b)
+  end;
+
+  begin
+    total := 0;
+    Add(5);
+    Add(10);
+    writeln(total);
+    writeln(Gcd(84, 36))
+  end.
+}

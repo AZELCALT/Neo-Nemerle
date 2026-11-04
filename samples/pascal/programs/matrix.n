@@ -1,0 +1,19 @@
+// A two-dimensional array (`m[i, j]' is `m[i][j]'), and Pascal's range check
+space Pascal
+{
+  program Matrix;
+  const
+    Size = 3;
+  var
+    m : array [1..Size, 1..Size] of integer;
+    i, j, trace : integer;
+  begin
+    for i := 1 to Size do
+      for j := 1 to Size do
+        m[i, j] := i * 10 + j;
+    trace := 0;
+    for i := 1 to Size do trace := trace + m[i][i];
+    writeln(trace);
+    m[Size + 1, 1] := 0
+  end.
+}

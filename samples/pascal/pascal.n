@@ -1,0 +1,522 @@
+// Pascal (ISO 7185, its core) as a grammar library: in a program that references pascal.dll,
+// `space Pascal { program Name; ... begin ... end. }` is a Pascal program, translated to Nemerle code when the file is
+// compiled. A demo and a test of the grammar machinery, built on the toolchain as it is (README.md says what is in).
+
+/// A Pascal array, `array [low..high] of T`: indexed from its own low bound, and checked as Pascal checks it.
+public class PascalArray[T]
+{
+  low : int;
+  items : array[T];
+  public this(low : int, high : int, element : void -> T)
+  {
+    this.low = low;
+    items = array(high - low + 1);
+    for (mutable i = 0; i < items.Length; i++) items[i] = element()
+  }
+  public Low : int { get { low } }
+  public High : int { get { low + items.Length - 1 } }
+  public Item[index : int] : T
+  {
+    get { items[Check(index)] }
+    set { items[Check(index)] = value }
+  }
+  Check(index : int) : int
+  {
+    when (index < low || index > High)
+      throw System.IndexOutOfRangeException("index " + index.ToString() + " is out of the array's range " + low.ToString() + ".." + High.ToString());
+    index - low
+  }
+  /// (a copy, as Pascal assigns arrays by value)
+  public Copy() : PascalArray[T] { def copy = PascalArray(low, High, () => default(T)); System.Array.Copy(items, copy.items, items.Length); copy }
+}
+
+/// A `var' parameter's variable: the argument is copied in, and copied back when the routine returns.
+public class PascalVar[T]
+{
+  public mutable Value : T;
+  public this(value : T) { Value = value }
+}
+
+/// What write and writeln print: a value in a field of a width (right-aligned), a real with a number of decimals.
+public module PascalText
+{
+  public Field(value : object, width : int) : string { Show(value).PadLeft(width) }
+  public Fixed(value : double, width : int, decimals : int) : string
+  {
+    value.ToString("F" + decimals.ToString(), System.Globalization.CultureInfo.InvariantCulture).PadLeft(width)
+  }
+  public Show(value : object) : string
+  {
+    match (value)
+    {
+      | b is bool => if (b) "TRUE" else "FALSE"
+      | d is double => d.ToString("0.0#########E+000", System.Globalization.CultureInfo.InvariantCulture)
+      | null => ""
+      | v => v.ToString()
+    }
+  }
+  public ReadInteger() : int { int.Parse((System.Console.ReadLine() ?? "").Trim()) }
+  public ReadReal() : double { double.Parse((System.Console.ReadLine() ?? "").Trim(), System.Globalization.CultureInfo.InvariantCulture) }
+}
+
+grammar Pascal
+{
+  using Nemerle.Compiler;
+  using Nemerle.Compiler.Parsetree;
+  using SCG = System.Collections.Generic;
+  syntax module Program
+  {
+    using Nitra.Core;
+
+    // Pascal is case-insensitive: each keyword in any case (`begin', `BEGIN', `Begin'), not a prefix of a longer name
+    regex KProgramText = ['p', 'P'] ['r', 'R'] ['o', 'O'] ['g', 'G'] ['r', 'R'] ['a', 'A'] ['m', 'M'];
+    regex KConstText = ['c', 'C'] ['o', 'O'] ['n', 'N'] ['s', 'S'] ['t', 'T'];
+    regex KTypeText = ['t', 'T'] ['y', 'Y'] ['p', 'P'] ['e', 'E'];
+    regex KVarText = ['v', 'V'] ['a', 'A'] ['r', 'R'];
+    regex KProcedureText = ['p', 'P'] ['r', 'R'] ['o', 'O'] ['c', 'C'] ['e', 'E'] ['d', 'D'] ['u', 'U'] ['r', 'R'] ['e', 'E'];
+    regex KFunctionText = ['f', 'F'] ['u', 'U'] ['n', 'N'] ['c', 'C'] ['t', 'T'] ['i', 'I'] ['o', 'O'] ['n', 'N'];
+    regex KBeginText = ['b', 'B'] ['e', 'E'] ['g', 'G'] ['i', 'I'] ['n', 'N'];
+    regex KEndText = ['e', 'E'] ['n', 'N'] ['d', 'D'];
+    regex KIfText = ['i', 'I'] ['f', 'F'];
+    regex KThenText = ['t', 'T'] ['h', 'H'] ['e', 'E'] ['n', 'N'];
+    regex KElseText = ['e', 'E'] ['l', 'L'] ['s', 'S'] ['e', 'E'];
+    regex KWhileText = ['w', 'W'] ['h', 'H'] ['i', 'I'] ['l', 'L'] ['e', 'E'];
+    regex KDoText = ['d', 'D'] ['o', 'O'];
+    regex KRepeatText = ['r', 'R'] ['e', 'E'] ['p', 'P'] ['e', 'E'] ['a', 'A'] ['t', 'T'];
+    regex KUntilText = ['u', 'U'] ['n', 'N'] ['t', 'T'] ['i', 'I'] ['l', 'L'];
+    regex KForText = ['f', 'F'] ['o', 'O'] ['r', 'R'];
+    regex KToText = ['t', 'T'] ['o', 'O'];
+    regex KDowntoText = ['d', 'D'] ['o', 'O'] ['w', 'W'] ['n', 'N'] ['t', 'T'] ['o', 'O'];
+    regex KCaseText = ['c', 'C'] ['a', 'A'] ['s', 'S'] ['e', 'E'];
+    regex KOfText = ['o', 'O'] ['f', 'F'];
+    regex KArrayText = ['a', 'A'] ['r', 'R'] ['r', 'R'] ['a', 'A'] ['y', 'Y'];
+    regex KPackedText = ['p', 'P'] ['a', 'A'] ['c', 'C'] ['k', 'K'] ['e', 'E'] ['d', 'D'];
+    regex KDivText = ['d', 'D'] ['i', 'I'] ['v', 'V'];
+    regex KModText = ['m', 'M'] ['o', 'O'] ['d', 'D'];
+    regex KAndText = ['a', 'A'] ['n', 'N'] ['d', 'D'];
+    regex KOrText = ['o', 'O'] ['r', 'R'];
+    regex KNotText = ['n', 'N'] ['o', 'O'] ['t', 'T'];
+    token KProgram = KProgramText !IdentifierPartCharacters;
+    token KConst = KConstText !IdentifierPartCharacters;
+    token KType = KTypeText !IdentifierPartCharacters;
+    token KVar = KVarText !IdentifierPartCharacters;
+    token KProcedure = KProcedureText !IdentifierPartCharacters;
+    token KFunction = KFunctionText !IdentifierPartCharacters;
+    token KBegin = KBeginText !IdentifierPartCharacters;
+    token KEnd = KEndText !IdentifierPartCharacters;
+    token KIf = KIfText !IdentifierPartCharacters;
+    token KThen = KThenText !IdentifierPartCharacters;
+    token KElse = KElseText !IdentifierPartCharacters;
+    token KWhile = KWhileText !IdentifierPartCharacters;
+    token KDo = KDoText !IdentifierPartCharacters;
+    token KRepeat = KRepeatText !IdentifierPartCharacters;
+    token KUntil = KUntilText !IdentifierPartCharacters;
+    token KFor = KForText !IdentifierPartCharacters;
+    token KTo = KToText !IdentifierPartCharacters;
+    token KDownto = KDowntoText !IdentifierPartCharacters;
+    token KCase = KCaseText !IdentifierPartCharacters;
+    token KOf = KOfText !IdentifierPartCharacters;
+    token KArray = KArrayText !IdentifierPartCharacters;
+    token KPacked = KPackedText !IdentifierPartCharacters;
+    token KDiv = KDivText !IdentifierPartCharacters;
+    token KMod = KModText !IdentifierPartCharacters;
+    token KAnd = KAndText !IdentifierPartCharacters;
+    token KOr = KOrText !IdentifierPartCharacters;
+    token KNot = KNotText !IdentifierPartCharacters;
+    regex Reserved = KProgramText | KConstText | KTypeText | KVarText | KProcedureText | KFunctionText | KBeginText | KEndText | KIfText | KThenText | KElseText | KWhileText | KDoText | KRepeatText | KUntilText | KForText | KToText | KDowntoText | KCaseText | KOfText | KArrayText | KPackedText | KDivText | KModText | KAndText | KOrText | KNotText;
+    // a name, never a reserved word
+    syntax Ident = !(Reserved !IdentifierPartCharacters) Body=IdentifierBody;
+
+    // Pascal's comments, `(* ... *)' and `{ ... }'
+    extend token IgnoreToken
+    {
+      | ParenComment = "(*" Body=(!"*)" Any)* "*)";
+      | BraceComment = "{" Body=(!"}" Any)* "}";
+    }
+
+    // The mapping's tables, kept while a program is mapped (Pascal declares before use, so a declaration is mapped
+    // before the code that uses it): the types declared (their Nemerle type and initial value), the routines (which
+    // parameters are `var'), the function being mapped (its result), and the `var' parameters in reach.
+    [StartRule] syntax Start = KProgram Name=Ident Files=ProgramFiles? ";" Block "."
+    {
+      map PExpr = {
+        def domain = System.AppDomain.CurrentDomain;
+        domain.SetData("pascal.types", SCG.Dictionary.[string, PExpr * PExpr]());
+        domain.SetData("pascal.routines", SCG.Dictionary.[string, list[bool]]());
+        domain.SetData("pascal.results", SCG.Stack.[string * string]());
+        domain.SetData("pascal.vars", SCG.HashSet.[string]());
+        // the names the program declares: Pascal names are case-insensitive (kept lower-case); any other name is the
+        // Nemerle program's, as written
+        domain.SetData("pascal.names", SCG.HashSet.[string]());
+        this.Block.GetAst()
+      };
+    }
+    syntax ProgramFiles = "(" Names=(Ident; ",")* ")";
+
+    syntax Block = Declarations=Declaration* KBegin Body=Statements KEnd
+    {
+      map PExpr = {
+        // (a section's declarations are spliced in, so they stay in scope for the rest of the block)
+        mutable code = [];
+        def add(e : PExpr) { | PExpr.Sequence(items) => foreach (i in items) add(i) | e => code ::= e }
+        foreach (d in this.Declarations) add(d.GetAst());
+        <[ { ..$(code.Rev()); $(this.Body.GetAst()) } ]>
+      };
+    }
+
+    syntax Declaration
+    {
+      map PExpr;
+      | Constants = KConst Items=ConstantDeclaration+
+        {
+          map PExpr = { mutable code = []; foreach (c in this.Items) code ::= c.GetAst(); <[ { ..$(code.Rev()) } ]> };
+        }
+      | Types = KType Items=TypeDeclaration+
+        {
+          map PExpr = { foreach (t in this.Items) _ = t.GetAst(); <[ () ]> };
+        }
+      | Variables = KVar Items=VariableDeclaration+
+        {
+          map PExpr = { mutable code = []; foreach (v in this.Items) code ::= v.GetAst(); <[ { ..$(code.Rev()) } ]> };
+        }
+      | Routine = Header=RoutineHeader ";" Body=Block ";"
+        {
+          map PExpr = {
+            def domain = System.AppDomain.CurrentDomain;
+            def routines = domain.GetData("pascal.routines") :> SCG.Dictionary[string, list[bool]];
+            def results = domain.GetData("pascal.results") :> SCG.Stack[string * string];
+            def vars = domain.GetData("pascal.vars") :> SCG.HashSet[string];
+            def header = this.Header;
+            def name = GetText(header.Name.Body).ToLowerInvariant();
+            _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(name);
+            // the parameters: (name, its Nemerle type, var or not), in order
+            mutable parameters = [];
+            when (header.Parameters.HasValue)
+              foreach (group in header.Parameters.Value.Groups.Item1)
+              {
+                def isVar = group.Var.HasValue;
+                def (type, _) = match (group.Type.GetAst()) { | PExpr.Tuple([t, i]) => (t, i) | e => (e, e) };
+                foreach (n in group.Names.Item1)
+                  parameters ::= ({ def low = GetText(n.Body).ToLowerInvariant(); _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(low); low }, if (isVar) <[ pascal.PascalVar[$type] ]> else type, isVar)
+              }
+            parameters = parameters.Rev();
+            routines[name] = parameters.Map((_, _, v) => v);
+            def result = if (header.Result.HasValue) match (header.Result.Value.Item2.GetAst()) { | PExpr.Tuple([type, _]) => Some(type) | e => Some(e) } else None();
+            def resultName = "result_" + name;
+            def added = parameters.Filter((n, _, v) => v && vars.Add(n)).Map((n, _, _) => n);
+            results.Push((name, if (result.IsSome) resultName else null));
+            def body = this.Body.GetAst();
+            _ = results.Pop();
+            foreach (n in added) _ = vars.Remove(n);
+            def fparams = parameters.Map((n, t, _) => <[ parameter: $(n : usesite) : $t ]>);
+            match (result)
+            {
+              | Some(type) =>
+                <[ def $(name : usesite)(..$fparams) : $type
+                   {
+                     mutable $(resultName : usesite) : $type = default($type);
+                     $body;
+                     $(resultName : usesite)
+                   } ]>
+              | None => <[ def $(name : usesite)(..$fparams) : void { $body } ]>
+            }
+          };
+        }
+    }
+
+    // (a procedure has no result, a function has one: `function F(...) : T')
+    syntax RoutineHeader = Kind=RoutineKind Name=Ident Parameters=ParameterList? Result=(":" TypeSpec)?;
+    syntax RoutineKind { | Procedure = KProcedure | Function = KFunction }
+    syntax ParameterList = "(" Groups=(ParameterGroup; ";")* ")";
+    syntax ParameterGroup = Var=KVar? Names=(Ident; ",")+ ":" Type=TypeSpec;
+
+    syntax ConstantDeclaration = Name=Ident "=" Value=Expr ";"
+    {
+      map PExpr = { def name = GetText(this.Name.Body).ToLowerInvariant(); _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(name); <[ def $(name : usesite) = $(this.Value.GetAst()) ]> };
+    }
+
+    syntax TypeDeclaration = Name=Ident "=" Type=TypeSpec ";"
+    {
+      map PExpr = {
+        def types = System.AppDomain.CurrentDomain.GetData("pascal.types") :> SCG.Dictionary[string, PExpr * PExpr];
+        match (this.Type.GetAst()) { | PExpr.Tuple([t, i]) => types[GetText(this.Name.Body).ToLowerInvariant()] = (t, i) | _ => () }
+        <[ () ]>
+      };
+    }
+
+    syntax VariableDeclaration = Names=(Ident; ",")+ ":" Type=TypeSpec ";"
+    {
+      map PExpr = {
+        def (type, initial) = match (this.Type.GetAst()) { | PExpr.Tuple([t, i]) => (t, i) | e => (e, e) };
+        mutable code = [];
+        foreach (n in this.Names.Item1) { def name = GetText(n.Body).ToLowerInvariant(); _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(name); code ::= <[ mutable $(name : usesite) : $type = $initial ]> }
+        <[ { ..$(code.Rev()) } ]>
+      };
+    }
+
+    // A type maps to (its Nemerle type, the initial value of a variable of it)
+    syntax TypeSpec
+    {
+      map PExpr;
+      | Subrange = Low=Expr ".." High=Expr { map PExpr = <[ (int, $(this.Low.GetAst())) ]>; }
+      | Array = Packed=KPacked? KArray "[" Ranges=(Range; ",")+ "]" KOf Element=TypeSpec
+        {
+          map PExpr = {
+            def element = match (this.Element.GetAst()) { | PExpr.Tuple([t, i]) => (t, i) | e => (e, e) };
+            mutable type = element[0];
+            mutable initial = element[1];
+            // `array [a..b, c..d] of T' is `array [a..b] of array [c..d] of T'
+            mutable ranges = [];
+            foreach (r in this.Ranges.Item1) ranges ::= r;
+            foreach (r in ranges)
+            {
+              def element = initial;
+              initial = <[ pascal.PascalArray.[$type]($(r.Low.GetAst()), $(r.High.GetAst()), () => $element) ]>;
+              type = <[ pascal.PascalArray[$type] ]>
+            }
+            <[ ($type, $initial) ]>
+          };
+        }
+      | Named = Name=Ident
+        {
+          map PExpr = {
+            def types = System.AppDomain.CurrentDomain.GetData("pascal.types") :> SCG.Dictionary[string, PExpr * PExpr];
+            def name = GetText(this.Name.Body).ToLowerInvariant();
+            // (the predeclared types are names, as in Pascal: a program may declare its own of those names)
+            if (types.ContainsKey(name)) { def (t, i) = types[name]; <[ ($t, $i) ]> }
+            else if (name == "integer") <[ (int, 0) ]>
+            else if (name == "real") <[ (double, 0.0) ]>
+            else if (name == "boolean") <[ (bool, false) ]>
+            else if (name == "char") <[ (char, ' ') ]>
+            else if (name == "string") <[ (string, "") ]>
+            else throw System.ArgumentException($"unknown Pascal type `$name'")
+          };
+        }
+    }
+    syntax Range = Low=Expr ".." High=Expr;
+
+    // (`;` separates statements; one before `end` is Pascal's empty statement)
+    syntax Statements = Items=(Statement; ";"; ?)*
+    {
+      map PExpr = {
+        mutable code = [];
+        foreach (s in this.Items.Item1) code ::= s.GetAst();
+        <[ { ..$(code.Rev()); () } ]>
+      };
+    }
+
+    syntax Statement
+    {
+      map PExpr;
+      | Assign = Target=Designator ":=" Value=Expr
+        {
+          map PExpr = {
+            def results = System.AppDomain.CurrentDomain.GetData("pascal.results") :> SCG.Stack[string * string];
+            def target = this.Target.GetAst();
+            // `F := e' in function F gives its result
+            def resultOf(name) { mutable found = null; foreach ((f, r) in results) when (found == null && f == name) found = r; found }
+            match (target)
+            {
+              | PExpr.Ref(n) when resultOf(n.Id) != null => <[ $(resultOf(n.Id) : usesite) = $(this.Value.GetAst()) ]>
+              | _ => <[ $target = $(this.Value.GetAst()) ]>
+            }
+          };
+        }
+      | Compound = KBegin Body=Statements KEnd { map PExpr = this.Body.GetAst(); }
+      | If = KIf Condition=Expr KThen Then=Statement Else=(KElse Statement)?
+        {
+          map PExpr = {
+            def other = if (this.Else.HasValue) this.Else.Value.Item2.GetAst() else <[ () ]>;
+            <[ if ($(this.Condition.GetAst())) $(this.Then.GetAst()) else $other ]>
+          };
+        }
+      | While = KWhile Condition=Expr KDo Body=Statement { map PExpr = <[ while ($(this.Condition.GetAst())) $(this.Body.GetAst()) ]>; }
+      | Repeat = KRepeat Body=Statements KUntil Condition=Expr
+        {
+          map PExpr = <[ do { $(this.Body.GetAst()) } while (!($(this.Condition.GetAst()))) ]>;
+        }
+      | For = KFor Variable=Ident ":=" From=Expr Direction=ForDirection To=Expr KDo Body=Statement
+        {
+          map PExpr = {
+            def v = <[ $({ def text = GetText(this.Variable.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text } : usesite) ]>;
+            def up = this.Direction is ForDirection.Up;
+            // (the bounds are evaluated once, before the loop, as Pascal says)
+            def last = Nemerle.Compiler.macros.Macros.NewSymbol("last");
+            def step = if (up) <[ $v = $v + 1 ]> else <[ $v = $v - 1 ]>;
+            def within = if (up) <[ $v <= $(last : name) ]> else <[ $v >= $(last : name) ]>;
+            <[ { def $(last : name) = $(this.To.GetAst()); $v = $(this.From.GetAst()); while ($within) { $(this.Body.GetAst()); $step } } ]>
+          };
+        }
+      | Case = KCase Selector=Expr KOf Arms=(CaseArm; ";")+ Otherwise=CaseElse? KEnd
+        {
+          map PExpr = {
+            mutable cases = [];
+            foreach (arm in this.Arms.Item1)
+            {
+              mutable labels = [];
+              foreach (l in arm.Labels.Item1) labels ::= l.GetAst();
+              cases ::= MatchCase(labels.Rev(), arm.Body.GetAst())
+            }
+            def other = if (this.Otherwise.HasValue) this.Otherwise.Value.Body.GetAst() else <[ () ]>;
+            cases ::= MatchCase([<[ _ ]>], other);
+            PExpr.Match(this.Selector.GetAst(), cases.Rev())
+          };
+        }
+      // a procedure call; write, writeln, read and readln are the predeclared ones (their arguments may say a width)
+      | Call = Name=Ident Args=WriteArguments?
+        {
+          map PExpr = {
+            def routines = System.AppDomain.CurrentDomain.GetData("pascal.routines") :> SCG.Dictionary[string, list[bool]];
+            def name = GetText(this.Name.Body).ToLowerInvariant();
+            def called = { def text = GetText(this.Name.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text };
+            mutable args = [];
+            when (this.Args.HasValue) foreach (a in this.Args.Value.Items.Item1) args ::= a.Value.GetAst();
+            args = args.Rev();
+            def written() { if (this.Args.HasValue) this.Args.Value.GetAst() else <[ () ]> }
+            if (name == "write" && !routines.ContainsKey(name)) written()
+            else if (name == "writeln" && !routines.ContainsKey(name)) <[ { $(written()); System.Console.WriteLine() } ]>
+            else if ((name == "readln" || name == "read") && !routines.ContainsKey(name))
+              match (args)
+              {
+                | [] => <[ _ = System.Console.ReadLine() ]>
+                | targets => <[ { ..$(targets.Map(target => <[ $target = pascal.PascalText.ReadInteger() ]>)) } ]>
+              }
+            else {
+            // a `var' argument: its variable is copied into a cell, and back after the call
+            def flags = if (routines.ContainsKey(name)) routines[name] else args.Map(_ => false);
+            if (flags.Exists(f => f) && flags.Length == args.Length)
+            {
+              mutable before = []; mutable passed = []; mutable after = [];
+              foreach ((a, isVar) in args.Zip(flags))
+                if (isVar)
+                {
+                  def cell = Nemerle.Compiler.macros.Macros.NewSymbol("cell");
+                  before ::= <[ def $(cell : name) = pascal.PascalVar($a) ]>;
+                  passed ::= <[ $(cell : name) ]>;
+                  after ::= <[ $a = $(cell : name).Value ]>
+                }
+                else passed ::= a;
+              <[ { ..$(before.Rev()); $(called : usesite)(..$(passed.Rev())); ..$(after.Rev()) } ]>
+            }
+            else <[ $(called : usesite)(..$args) ]>
+            }
+          };
+        }
+    }
+    syntax ForDirection { | Up = KTo | Down = KDownto }
+    syntax CaseArm = Labels=(Expr; ",")+ ":" Body=Statement;
+    syntax CaseElse = ";"? KElse Body=Statement;
+
+    syntax WriteArguments = "(" Items=(WriteArgument; ",")* ")"
+    {
+      map PExpr = {
+        mutable code = [];
+        foreach (a in this.Items.Item1) code ::= <[ System.Console.Write($(a.GetAst())) ]>;
+        <[ { ..$(code.Rev()) } ]>
+      };
+    }
+    // `e', `e:width', `e:width:decimals'
+    syntax WriteArgument = Value=Expr Width=(":" Expr)? Decimals=(":" Expr)?
+    {
+      map PExpr = {
+        def v = this.Value.GetAst();
+        if (this.Decimals.HasValue && this.Width.HasValue)
+          <[ pascal.PascalText.Fixed($v, $(this.Width.Value.Item2.GetAst()), $(this.Decimals.Value.Item2.GetAst())) ]>
+        else if (this.Width.HasValue) <[ pascal.PascalText.Field($v, $(this.Width.Value.Item2.GetAst())) ]>
+        else <[ pascal.PascalText.Show($v) ]>
+      };
+    }
+
+    // A variable, an element of an array (`a[i, j]' is `a[i][j]')
+    syntax Designator = Name=Ident Indexes=IndexPart*
+    {
+      map PExpr = {
+        def vars = System.AppDomain.CurrentDomain.GetData("pascal.vars") :> SCG.HashSet[string];
+        def name = { def text = GetText(this.Name.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text };
+        mutable e = if (vars.Contains(name)) <[ $(name : usesite).Value ]>
+                    else if (name.ToLowerInvariant() == "true") <[ true ]> else if (name.ToLowerInvariant() == "false") <[ false ]>
+                    else <[ $(name : usesite) ]>;
+        foreach (part in this.Indexes) foreach (i in part.Items.Item1) e = <[ $e[$(i.GetAst())] ]>;
+        e
+      };
+    }
+    syntax IndexPart = "[" Items=(Expr; ",")+ "]";
+
+    regex Digits = ['0'..'9']+;
+    // (one token, so the spaces inside are the string's)
+    regex StringLiteral = "'" ("''" | (Any - '\''))* "'";
+
+    syntax Expr
+    {
+      map PExpr;
+      precedence Relational:
+      | Equal = Left=Expr "=" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) == $(this.Right.GetAst()) ]>; }
+      | NotEqual = Left=Expr "<>" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) != $(this.Right.GetAst()) ]>; }
+      | Less = Left=Expr "<" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) < $(this.Right.GetAst()) ]>; }
+      | LessEqual = Left=Expr "<=" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) <= $(this.Right.GetAst()) ]>; }
+      | Greater = Left=Expr ">" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) > $(this.Right.GetAst()) ]>; }
+      | GreaterEqual = Left=Expr ">=" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) >= $(this.Right.GetAst()) ]>; }
+      precedence Additive:
+      | Add = Left=Expr "+" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) + $(this.Right.GetAst()) ]>; }
+      | Sub = Left=Expr "-" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) - $(this.Right.GetAst()) ]>; }
+      | Or = Left=Expr KOr Right=Expr { map PExpr = <[ $(this.Left.GetAst()) || $(this.Right.GetAst()) ]>; }
+      precedence Multiplicative:
+      | Mul = Left=Expr "*" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) * $(this.Right.GetAst()) ]>; }
+      | Divide = Left=Expr "/" Right=Expr { map PExpr = <[ ($(this.Left.GetAst()) : double) / $(this.Right.GetAst()) ]>; }
+      | Div = Left=Expr KDiv Right=Expr { map PExpr = <[ $(this.Left.GetAst()) / $(this.Right.GetAst()) ]>; }
+      | Mod = Left=Expr KMod Right=Expr { map PExpr = <[ $(this.Left.GetAst()) % $(this.Right.GetAst()) ]>; }
+      | And = Left=Expr KAnd Right=Expr { map PExpr = <[ $(this.Left.GetAst()) && $(this.Right.GetAst()) ]>; }
+      precedence Unary:
+      | Not = KNot Operand=Expr { map PExpr = <[ ! $(this.Operand.GetAst()) ]>; }
+      | Negate = "-" Operand=Expr { map PExpr = <[ - $(this.Operand.GetAst()) ]>; }
+      | Plus = "+" Operand=Expr { map PExpr = this.Operand.GetAst(); }
+      precedence 0:
+      | Number = Value=Digits { map PExpr = <[ $(int.Parse(GetText(this.Value)) : int) ]>; }
+      | RealNumber = Whole=Digits "." Fraction=Digits
+        {
+          map PExpr = <[ $(double.Parse(GetText(this.Whole) + "." + GetText(this.Fraction), System.Globalization.CultureInfo.InvariantCulture) : double) ]>;
+        }
+      | Text = Value=StringLiteral
+        {
+          map PExpr = {
+            def quoted = GetText(this.Value);
+            def text = quoted.Substring(1, quoted.Length - 2).Replace("''", "'");
+            // a one-character literal is a char, as in Pascal
+            if (text.Length == 1) <[ $(text[0] : char) ]> else <[ $(text : string) ]>
+          };
+        }
+      | Call = Name=Ident "(" Args=(Expr; ",")* ")"
+        {
+          map PExpr = {
+            def name = GetText(this.Name.Body).ToLowerInvariant();
+            def called = { def text = GetText(this.Name.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text };
+            mutable args = [];
+            foreach (a in this.Args.Item1) args ::= a.GetAst();
+            match ((name, args.Rev()))
+            {
+              // the standard functions
+              | ("abs", [x]) => <[ System.Math.Abs($x) ]>
+              | ("sqr", [x]) => <[ $x * $x ]>
+              | ("sqrt", [x]) => <[ System.Math.Sqrt($x) ]>
+              | ("sin", [x]) => <[ System.Math.Sin($x) ]>
+              | ("cos", [x]) => <[ System.Math.Cos($x) ]>
+              | ("arctan", [x]) => <[ System.Math.Atan($x) ]>
+              | ("exp", [x]) => <[ System.Math.Exp($x) ]>
+              | ("ln", [x]) => <[ System.Math.Log($x) ]>
+              | ("trunc", [x]) => <[ (System.Math.Truncate($x : double) :> int) ]>
+              | ("round", [x]) => <[ (System.Math.Round($x : double, System.MidpointRounding.AwayFromZero) :> int) ]>
+              | ("odd", [x]) => <[ $x % 2 != 0 ]>
+              | ("ord", [x]) => <[ ($x :> int) ]>
+              | ("chr", [x]) => <[ ($x :> char) ]>
+              | ("succ", [x]) => <[ $x + 1 ]>
+              | ("pred", [x]) => <[ $x - 1 ]>
+              | ("length", [x]) => <[ $x.Length ]>
+              | (_, args) => <[ $(called : usesite)(..$args) ]>
+            }
+          };
+        }
+      | Variable = Target=Designator { map PExpr = this.Target.GetAst(); }
+      | Group = "(" Expr ")" { map PExpr { Expr } }
+    }
+  }
+}
