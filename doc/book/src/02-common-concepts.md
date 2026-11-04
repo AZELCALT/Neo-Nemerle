@@ -347,7 +347,7 @@ System.Console.WriteLine(Twice(4))
 
 ## Control flow is made of expressions
 
-`if` is an expression with a value. Both branches must be present and have the same type:
+`if` with an `else` is an expression with a value. Both branches then have the same type:
 
 ```nemerle
 using System.Console;
@@ -361,19 +361,21 @@ WriteLine(feeling)
 hot
 ```
 
-For a branch without an `else`, Nemerle has `when` (do it when the condition holds) and `unless` (do it when it
-doesn't):
+Without an `else`, `if` is a statement: it does something when the condition holds, and has no value (so it cannot
+be the value of a `def`). `when` says the same, and `unless` does it when the condition does *not* hold:
 
 ```nemerle
 using System.Console;
 
 def n = 7;
-when (n > 5) WriteLine("more than five");
+if (n > 5) WriteLine("more than five");
+when (n > 6) WriteLine("more than six");
 unless (n % 2 == 0) WriteLine("odd")
 ```
 
 ```text
 more than five
+more than six
 odd
 ```
 

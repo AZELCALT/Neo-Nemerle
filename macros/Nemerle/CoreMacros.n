@@ -189,10 +189,13 @@ macro @yield (expr = null)
     it performs typing of given expressions to check their type
     correctness
  */
-macro @if (cond, e1, e2)
-syntax ("if", "(", cond, ")", e1, Optional (";"), "else", e2)
+macro @if (cond, e1, e2 = null)
+syntax ("if", "(", cond, ")", e1, Optional (";"), Optional ("else", e2))
 {
-  Internal.IfImpl.Impl(cond, e1, e2)
+  // without `else' it is a statement, as `when' is: the body is void and the other branch empty (an empty case that
+  // the match compiler and the optimizer drop)
+  if (e2 == null) Internal.IfImpl.Impl(cond, <[ $e1 : void ]>, <[ () ]>)
+  else Internal.IfImpl.Impl(cond, e1, e2)
 }
 
 /** shortcut for [if (cond) body else ()] */

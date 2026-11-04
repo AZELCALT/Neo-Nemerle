@@ -79,7 +79,7 @@ increase in indentation without a colon remains supported for existing code.
 | Syntax | Meaning |
 |---|---|
 | `if (c) a else b` | conditional expression |
-| `when (c) e` / `unless (c) e` | one-armed conditionals |
+| `if (c) e` / `when (c) e` / `unless (c) e` | one-armed conditionals (statements, no value) |
 | `match (e) { \| p => ... }` | pattern matching |
 | `{ e1; e2 }` | block; its value is `e2` |
 | `while`, `do ... while`, `for`, `foreach (x in xs)`, `repeat (n)` | loops |
