@@ -4273,7 +4273,22 @@ using Nemerle.Compiler.Utility;
             | _ => false
           }
         }
-        tok is Token.Identifier && rest (tok.Next)
+        // (`array' is a keyword, not a name: `array[int]', and `array.[2][int]' for more dimensions, are types too)
+        def array_rest (t : Token) : bool
+        {
+          match (t)
+          {
+            | Token.SquareGroup (child, _, _) => t.Next == null && child != null && arguments (child)
+            | Token.Operator (".") =>
+              match (t.Next)
+              {
+                | Token.SquareGroup as rank => rank.Next is Token.SquareGroup && array_rest (rank.Next)
+                | _ => false
+              }
+            | _ => false
+          }
+        }
+        tok is Token.Identifier && rest (tok.Next) || tok is Token.Keyword ("array") && array_rest (tok.Next)
       }
       and arguments (child : Token) : bool
       {
