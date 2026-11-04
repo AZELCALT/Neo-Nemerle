@@ -166,6 +166,7 @@ if not a.quick:
         ('script-kinds', ['check-script-kinds.py', '--toolchain', T, '--references', R]),
         ('continuation', ['check-continuation.py', '--toolchain', T, '--references', R]),
         ('book', ['check-book.py', '--toolchain', T, '--references', R]),
+        ('book-variants', ['check-book-variants.py', '--toolchain', T, '--references', R]),
         ('script-book-usage', ['check-script-book-usage.py', '--toolchain', T]),
     ]
     if not a.no_comparison:
