@@ -1275,7 +1275,7 @@ public sealed class Server
             {
               | "local" => Legend.Variable | "parameter" => Legend.Parameter | "function" => Legend.Function
               | "method" => Legend.Method | "field" | "property" => Legend.Property | "event" => Legend.Event
-              | "constructor" => Legend.Type | _ => -1
+              | "constructor" => Legend.Type | "macro" => Legend.Macro | _ => -1
             };
             def t = f["target"];
             def declaration = t != null && t["nameLine"] != null && Str(t["path"]) == path

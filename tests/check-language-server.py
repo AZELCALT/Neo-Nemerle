@@ -540,6 +540,19 @@ try:
           'tokens by what the names are: %s %s %s %s %s' % (kinds(muri, code, 'start'), kinds(muri, code, 'n * 2'), kinds(muri, code, 'Compute(4'),
                                                             kinds(muri, code, 'Width;'), kinds(muri, code, 'Pen()')))
     check(kinds(guri, gram, 'Expr;') == ['type'] and kinds(guri, gram, 'Arith') == ['type'], 'a grammar\'s rule and module names: %s %s' % (kinds(guri, gram, 'Expr;'), kinds(guri, gram, 'Arith')))
+    # macros have a colour of their own, so code built from them does not pass for built-in syntax: the keywords a
+    # macro's syntax adds (`if`, `else`, `foreach`) and a macro called by its name (`printf`, `default`); the
+    # language's own keywords (`def`, `match`) stay keywords
+    mac = ('using Nemerle.IOMacros;\ndef n = default(int);\nif (n > 2) printf("big\\n") else printf("small\\n");\n'
+           'foreach (i in [1, 2]) printf("%d\\n", i);\nmatch (n) { | _ => () }\n')
+    (more / 'macros.n').write_text(mac)
+    macuri = (more / 'macros.n').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': macuri, 'languageId': 'nemerle', 'version': 1, 'text': mac}})
+    deadline = time.time() + a.timeout
+    while kinds(macuri, mac, 'printf') != ['macro'] and time.time() < deadline: time.sleep(0.5)   # (names come with the typed facts)
+    got = {w: kinds(macuri, mac, w) for w in ('if', 'else', 'foreach', 'printf', 'default', 'def', 'match')}
+    check(all(got[w] == ['macro'] for w in ('if', 'else', 'foreach', 'printf', 'default')) and got['def'] == ['keyword'] and got['match'] == ['keyword'],
+          'macros coloured as macros, keywords as keywords: %s' % got)
     c.request('shutdown', None); c.notify('exit', None)
     print('PASS: signature help, document highlight, workspace symbols, inlay hints and tokens by meaning (Nemerle and Nitra)')
 finally:

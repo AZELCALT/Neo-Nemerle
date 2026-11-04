@@ -225,7 +225,11 @@ public sealed class Analyzer
         ++guard;
         def kind = match (token)
         {
-          | Token.Keyword => Legend.Keyword
+          // a keyword a macro's syntax adds (`if`, `else`, `foreach`, `while`, a user macro's own) is a macro, coloured as
+          // one, so code built from macros does not pass for built-in syntax; the language's own keywords stay keywords
+          // (the language's keywords: the lexer's base ones, and `mask', which file modules and scripts add, as their
+          // environments are made with GlobalEnv(..., ["mask"]); every other keyword comes from a macro's syntax)
+          | Token.Keyword(name) => if (LexerBase.BaseKeywords.Contains(name) || name == "mask") Legend.Keyword else Legend.Macro
           | Token.Operator => Legend.Operator
           | Token.StringLiteral | Token.CharLiteral => Legend.String
           | Token.IntegerLiteral | Token.FloatLiteral | Token.DoubleLiteral | Token.DecimalLiteral => Legend.Number

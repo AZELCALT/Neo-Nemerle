@@ -482,6 +482,11 @@ public module Checker
           | TExpr.PropertyMember(_, p) as e => member(e.Location, p, e.Type)
           | TExpr.MethodRef(_, m, _, _) as e => member(e.Location, m, e.Type)
           | TExpr.EventMember(_, ev) as e => member(e.Location, ev, e.Type)
+          // a macro called by its name, as a function is (`assert(x)', a user's macro): its name is a macro (its own
+          // colour, hover), so it is not mistaken for a function; a macro's syntax keywords are coloured by the lexer
+          | TExpr.MacroEnvelope(PExpr.Call(PExpr.Ref(n), _), m, _, _) when m != null && n.Id == m.GetName() =>
+            fact(n.Location, "macro " + m.GetNamespace() + (if (m.GetNamespace() == "") "" else ".") + m.GetName(), m.Location, n.Id,
+                 "macro", "macro:" + m.GetNamespace() + "." + m.GetName())
           | _ => ()
         });
     }
