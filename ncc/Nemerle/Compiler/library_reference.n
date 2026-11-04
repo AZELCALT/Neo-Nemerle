@@ -1898,7 +1898,11 @@ using Nemerle.Compiler.Utility;
         if (this.Equals (InternalType.String_tc) && name == "op_Addition") //FixMe: ValdD2: Convert this to buildin fanction
         {
           assert(InternalType.String_Concat != null);
-          lock (NamespaceTree.LoadLock) AddBuiltin ("op_Addition", InternalType.String_Concat);
+          // (made once: AddBuiltin makes a new member each time, and two -parallel workers that both missed would each
+          // see their own, so a call found "two" op_Addition and was ambiguous; the table is also filled before the
+          // workers start, TypesManager, as they read it without the lock)
+          lock (NamespaceTree.LoadLock)
+            unless (special_members.Contains ("op_Addition")) AddBuiltin ("op_Addition", InternalType.String_Concat);
           LookupMember (name)
         }
         else

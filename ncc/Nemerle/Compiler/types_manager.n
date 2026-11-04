@@ -1279,6 +1279,8 @@ using Nemerle.Compiler.Utility;
         foreach (t in [it.SByte_tc, it.Int16_tc, it.Int32_tc, it.Int64_tc, it.Byte_tc, it.UInt16_tc, it.UInt32_tc,
                        it.UInt64_tc, it.Char_tc, it.Single_tc, it.Double_tc])
           when (t != null) _ = t.LookupMember("op_Implicit");
+        // (and string's `+', made on first use as well)
+        when (it.String_tc != null) _ = it.String_tc.LookupMember("op_Addition");
         PreTypeInParallel(methods);
       }
 
