@@ -5,9 +5,10 @@
 
 The .vsix is unpacked as an editor installs it. Its extension.js is loaded under node with a minimal stand-in for
 the `vscode` API: it must choose the server it carries (server/nemerle-lsp.exe on dotnet), and that server must
-answer the language server protocol's initialize request with its capabilities. When a VSCodium or VS Code command
-line is found, the .vsix is also installed into a scratch profile."""
-import argparse, json, pathlib, shutil, subprocess, tempfile, zipfile
+answer the language server protocol's initialize request with its capabilities. When a Theia IDE is found ($NEMERLE_THEIA,
+`theia` on PATH, or ~/Downloads/TheiaIDE.AppImage) and there is a display, the .vsix is also installed into a scratch
+Theia profile (skipped otherwise)."""
+import argparse, json, os, pathlib, shutil, signal, socket, subprocess, tempfile, time, zipfile
 p = argparse.ArgumentParser()
 p.add_argument('--vsix', type=pathlib.Path, required=True)
 p.add_argument('--no-editor-install', action='store_true', help='validate the package/server without invoking an installed editor CLI')
@@ -91,13 +92,73 @@ if r.returncode != 0 or '"semanticTokens":true' not in r.stdout:
     raise SystemExit('FAILED: the extension does not start its server\n' + r.stdout + r.stderr)
 print('PASS: the extension starts the server it carries, which answers initialize with ' + r.stdout.strip(), flush=True)
 
-for cli in (() if a.no_editor_install else (pathlib.Path.home() / '.local/opt/bin/codium', shutil.which('codium'), shutil.which('code'))):
-    if cli and pathlib.Path(cli).exists() and pathlib.Path(cli).read_bytes()[:2] == b'#!':
-        profile = w / 'profile'
-        r = subprocess.run([str(cli), '--user-data-dir', str(profile / 'data'), '--extensions-dir', str(profile / 'extensions'),
-                            '--install-extension', str(a.vsix)], capture_output=True, text=True, timeout=180)
-        if 'successfully installed' not in r.stdout:
-            raise SystemExit('FAILED: %s does not install the .vsix\n%s%s' % (cli, r.stdout, r.stderr))
-        print('PASS: %s installs the .vsix' % pathlib.Path(cli).name, flush=True)
-        break
+def theia():
+    """The Theia IDE to install into: $NEMERLE_THEIA, the AppImage in ~/Downloads, or `theia` on PATH. Only a real
+    executable (the AppImage) counts: a launcher script may detach the IDE (`setsid -f ...`) and return at once, which
+    would leave it running outside this check's reach."""
+    for candidate in (os.environ.get('NEMERLE_THEIA'), pathlib.Path.home() / 'Downloads/TheiaIDE.AppImage', shutil.which('theia')):
+        if candidate and pathlib.Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            path = pathlib.Path(candidate).resolve()
+            if path.read_bytes()[:2] != b'#!':
+                return path
+    return None
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+ide = None if a.no_editor_install else theia()
+if a.no_editor_install:
+    pass
+elif ide is None:
+    print('SKIP: no Theia IDE found (set NEMERLE_THEIA); the .vsix is not installed into an editor', flush=True)
+elif not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+    print('SKIP: no display for Theia; the .vsix is not installed into an editor', flush=True)
+else:
+    # Theia installs a .vsix with --install-plugin and deploys it under its config folder; a scratch profile keeps the
+    # user's own Theia untouched. Theia keeps running as an IDE afterwards, so it is stopped once the plugin is there.
+    profile = w / 'theia'
+    for d in ('config', 'electron', 'workspace', 'xdg-data', 'xdg-config'):
+        (profile / d).mkdir(parents=True)
+    deployed = profile / 'config/deployedPlugins' / ('%s.%s@%s' % (manifest['publisher'], manifest['name'], manifest['version']))
+    # every Theia setting under the scratch profile (its XDG folders too, or it reads and writes the user's own);
+    # extract-and-run instead of a FUSE mount, as the AppImage is run elsewhere here
+    env = dict(os.environ, THEIA_CONFIG_DIR=str(profile / 'config'), XDG_DATA_HOME=str(profile / 'xdg-data'),
+               XDG_CONFIG_HOME=str(profile / 'xdg-config'), APPIMAGE_EXTRACT_AND_RUN='1')
+
+    def ours():
+        """The processes this check started: Theia's helpers (its plugin host) leave the process group, but each
+        carries the scratch profile in its environment."""
+        mark = ('THEIA_CONFIG_DIR=' + str(profile / 'config')).encode()
+        found = []
+        for proc in pathlib.Path('/proc').iterdir():
+            if proc.name.isdigit():
+                try:
+                    if mark in (proc / 'environ').read_bytes().split(b'\0'): found.append(int(proc.name))
+                except OSError: pass
+        return found
+
+    process = subprocess.Popen([str(ide), '--electronUserData=' + str(profile / 'electron'), '--hostname=127.0.0.1',
+                                '--port=%d' % free_port(), '--install-plugin', str(a.vsix), str(profile / 'workspace')],
+                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        deadline = time.time() + 180
+        while not (deployed / 'extension/package.json').exists() and process.poll() is None and time.time() < deadline:
+            time.sleep(1)
+        installed = (deployed / 'extension/package.json').exists()
+    finally:
+        try: os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError: pass
+        try: process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL); process.wait()
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in ours():
+                try: os.kill(pid, sig)
+                except OSError: pass
+            time.sleep(2)
+    if not installed:
+        raise SystemExit('FAILED: %s does not install the .vsix (no %s)' % (ide.name, deployed))
+    print('PASS: Theia installs the .vsix (%s)' % deployed.name, flush=True)
 shutil.rmtree(w, ignore_errors=True)
