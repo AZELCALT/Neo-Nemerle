@@ -402,10 +402,49 @@ public module Checker
         facts.Add(f);
       }
     }
+    // A value that follows the flow is kept in a container (object, or a Content for a file's top-level value) when it
+    // holds several types: it is shown as what it holds, worded as the compiler words it ("int or double"), not as
+    // its container, which no code of the user's names.
+    def worded(types : list[string]) : string
+    {
+      match (types.Rev())
+      {
+        | last :: (_ :: _ as before) => string.Join(", ", before.Rev().ToArray()) + " or " + last
+        | _ => string.Join("", types.ToArray())
+      }
+    }
+    def distinct(types : SCG.IEnumerable[string]) : list[string]
+    {
+      mutable found = [];
+      foreach (t in types) unless (found.Contains(t)) found ::= t;
+      found.Rev()
+    }
+    def container(shown : string) : bool { shown == "object" || shown == "System.Object" || shown == "Nemerle.Scopes.Content" }
+    def localType(decl : LocalValue, shown : TypeVar) : string
+    {
+      def text = if (shown != null) shown.ToString() else "";
+      if (decl.Flow != null && decl.Flow.Types != null && container(text))
+        match (distinct(decl.Flow.Types.Map(t => t.ToString())))
+        {
+          | _ :: _ :: _ as several => worded(several)
+          | _ => text
+        }
+      else text
+    }
     def member(at : Location, m : IMember, ty : object) : void
     {
       def owner = if (m.DeclaringType != null) m.DeclaringType.FullName else "";
-      def shown = if (ty != null) ty.ToString() else m.GetMemType().ToString();
+      def plain = if (ty != null) ty.ToString() else m.GetMemType().ToString();
+      // (a file's or a script's top-level value of several types: the types its statements give it)
+      mutable state;
+      def shown =
+        if (m.MemberKind == MemberKinds.Field && container(plain) && manager.StateTypes.TryGetValue(owner + "." + m.Name, out state))
+          match (distinct(state.Values.:Select(t => t.Fix().ToString())))
+          {
+            | _ :: _ :: _ as several => worded(several)
+            | _ => plain
+          }
+        else plain;
       if (m.Name == ".ctor")
       {
         // a constructor without source of its own (the default one) leads to its type
@@ -432,11 +471,11 @@ public module Checker
         {
           // (a parameter's kind is its own: the editor colours it as one)
           | TExpr.LocalRef(decl) as e =>
-            fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name,
+            fact(e.Location, decl.Name + " : " + localType(decl, e.Type), decl.Location, decl.Name,
                  if (decl.ValKind is LocalValue.Kind.FunParm) "parameter" else "local", LocalId(decl))
           // where a local is declared: its name there is the local too (hover, rename)
           | TExpr.DefValIn(decl, _, _) when decl.NameLocation.Line > 0 && decl.Type != null =>
-            fact(decl.NameLocation, decl.Name + " : " + decl.Type.ToString(), decl.Location, decl.Name, "local", LocalId(decl))
+            fact(decl.NameLocation, decl.Name + " : " + localType(decl, decl.Type), decl.Location, decl.Name, "local", LocalId(decl))
           | TExpr.LocalFunRef(decl, _) as e => fact(e.Location, decl.Name + " : " + e.Type.ToString(), decl.Location, decl.Name, "function", LocalId(decl))
           | TExpr.StaticRef(_, m, _) as e => member(e.Location, m, e.Type)
           | TExpr.FieldMember(_, f) as e => member(e.Location, f, e.Type)

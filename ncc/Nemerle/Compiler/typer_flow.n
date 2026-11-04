@@ -93,6 +93,9 @@ public sealed class LocalFlow
   /// A file's top-level value, as the top-level code's local: nested code (a lambda) reads it whenever it runs, so it
   /// checks it first when it is of several types, as the file's functions do.
   public mutable TopLevel : bool;
+  /// The types it holds over its whole scope, once the scope is typed (Typer2.PrepareFlowStorage): one, or several
+  /// for a local kept in an object container. Tools show these instead of the container's own type.
+  public mutable Types : list[TypeVar];
   public this(key : string, storage : bool, valueless : bool, owner : object, depth : int)
   { Key = key; Storage = storage; Valueless = valueless; Owner = owner; Depth = depth }
 }

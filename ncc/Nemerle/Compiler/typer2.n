@@ -199,11 +199,14 @@ public class Typer2
             | _ => ()
           });
         foreach (entry in types)
+        {
+          entry.Key.Flow.Types = entry.Value.Rev();   // (in the order the scope gives them)
           match (entry.Value)
           {
             | [one] => entry.Key.SetType(one); entry.Key.Flow.Storage = false
             | _ => entry.Key.SetType(InternalType.Object)
           }
+        }
         foreach ((local, value) in byrefs)
           when (local.Flow.Storage)
             Message.Error(value.Location,

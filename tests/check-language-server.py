@@ -517,6 +517,21 @@ try:
              'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 40, 'character': 0}}})}
     check({(6, ': int'), (13, ': int'), (14, ': double'), (16, ': string')} <= hints and not any(l == 12 for l, _ in hints),
           'inlay hints of inferred types (none where a type is written): %s' % hints)
+    # a value of several types (a top-level one, and a function's local) is shown as the types it holds, as the
+    # compiler words them, not as its container (object, Nemerle.Scopes.Content)
+    flow = ('mutable x = 4;\nwhen (System.Environment.GetCommandLineArgs().Length > 0) x = 0.5;\nSystem.Console.WriteLine(x);\n'
+            'Run(n : int) : void\n{\n  mutable v = n;\n  when (n > 2) v = "big";\n  System.Console.WriteLine(v)\n}\nRun(3)\n')
+    (more / 'flow.n').write_text(flow)
+    furi = (more / 'flow.n').as_uri()
+    c.notify('textDocument/didOpen', {'textDocument': {'uri': furi, 'languageId': 'nemerle', 'version': 1, 'text': flow}})
+    deadline = time.time() + a.timeout
+    while True:
+        fh = {(x['position']['line'], x['label']) for x in c.request('textDocument/inlayHint', {'textDocument': {'uri': furi},
+              'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 20, 'character': 0}}}) or []}
+        if fh or time.time() > deadline: break
+        time.sleep(0.5)
+    check({(0, ': int or double'), (5, ': int or string')} <= fh and not any('Content' in l or 'object' in l for _, l in fh),
+          'inlay hints of values of several types: %s' % fh)
     # tokens by meaning
     def kinds(u, text, needle, nth=0):
         return [t[3] for t in covered(decode(c.request('textDocument/semanticTokens/full', {'textDocument': {'uri': u}}), legend), text, offset_of(text, needle, nth))]
