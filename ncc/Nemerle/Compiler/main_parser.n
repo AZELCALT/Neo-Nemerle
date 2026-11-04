@@ -1631,10 +1631,21 @@ using Nemerle.Compiler.Utility;
           | _ => expressions.Add(expression);
         }
       }
+      // (a group that goes on the run of statements before it: not a member, a using or an extension, as in a file's
+      // top-level code)
+      def continues(group : Token.LooseGroup) : bool
+      {
+        match (group.Child)
+        {
+          | null | Token.Using | Token.Namespace => false
+          | token => !IsMemberStart(token, true) && !ExtensionStart(token) && !ExtensionBlockStart(token)
+        }
+      }
       while (groups != null)
       {
         parser.eat_assembly_attributes(groups);
         def next = groups.Next :> Token.LooseGroup;
+        mutable resume = next;
         groups.Next = null;
         try
         {
@@ -1656,15 +1667,25 @@ using Nemerle.Compiler.Utility;
               ordered.Add(() => add(declared, "", true));
             // (`await' waits in a script's top-level code, as in a file's: the script's statements then wait, below)
             | _ =>
+              // consecutive statements are one sequence, as in a file's top-level code, so a construct goes on in the
+              // next group (`try { }` then `catch`, on the same line or the next; `if (...)` then `else`); the run ends
+              // at a member, a using or an extension
+              groups.Next = next;
+              mutable last = groups;
+              while (last.Next is Token.LooseGroup && continues(last.Next :> Token.LooseGroup))
+                last = last.Next :> Token.LooseGroup;
+              def after = last.Next :> Token.LooseGroup;
+              last.Next = null;
               def wasAsync = parser.in_async;
               parser.in_async = true;
-              def parsed = try { parser.parse_expr_sequence(groups) } finally { parser.in_async = wasAsync };
+              def parsed = try { parser.parse_expr_sequence(groups) } finally { parser.in_async = wasAsync; last.Next = after };
               pending.AddRange(parsed);
               foreach (e in parsed) ordered.Add(() => addExpression(e));
+              resume = after;
           }
         }
         finally { groups.Next = next; }
-        groups = next;
+        groups = resume;
       }
       // (the statements, once what is the script's state is known: its untyped `mutable's and the `def's bound again)
       def counts = SCG.Dictionary.[string, int]();
