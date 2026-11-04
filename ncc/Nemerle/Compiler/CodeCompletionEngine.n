@@ -283,6 +283,7 @@ public module Completion
     | "System.Object"          => "object"
     | "System.Boolean"         => "bool"
     | "System.Char"            => "char"
+    | "Nemerle.Scopes.Content" => "content"
     | _                        => name
   }
 }

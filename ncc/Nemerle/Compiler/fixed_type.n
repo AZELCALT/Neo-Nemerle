@@ -519,6 +519,7 @@ using Nemerle.Compiler.Utility;
               | "System.Object"   => "object"
               | "System.Boolean"  => "bool"
               | "System.Char"     => "char"
+              | "Nemerle.Scopes.Content" => "content"
               | _                 => trim
             }
 

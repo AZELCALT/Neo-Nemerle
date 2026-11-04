@@ -1998,7 +1998,26 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           // shape from the list's elements (so `F([1,2,3])` reaches `params array[int]`, `([...],1)` reaches
           // `(array[string], int)`, `def a : array[int] = [...]`). Anything a list already fits (`object`, the
           // interfaces it carries, `list` itself) took the normal path above and never reaches here.
-          if (normal != null) normal else StructuralListCast(expr, target)
+          if (normal != null) normal
+          else match (StructuralListCast(expr, target)) { | null => ContentHold(expr, target) | built => built }
+      }
+    }
+
+    /// Whether `t' is `content' (Nemerle.Scopes.Content): what a value of several types is held in.
+    internal static IsContentType(t : TypeVar) : bool
+    {
+      match (t.Hint) { | Some(FixedType.Class(ti, [])) => ti.FullName == "Nemerle.Scopes.Content" | _ => false }
+    }
+
+    /// A value given where a `content' is declared (a parameter, a result, a binding): held in one, as the compiler
+    /// holds a value of several types. Never by a cast (`x :> content' is an error): a content is made only here.
+    ContentHold(expr : TExpr, target : TypeVar) : TExpr
+    {
+      if (!IsContentType(target) || expr.Type.Hint.IsNone || IsContentType(expr.Type)) null
+      else
+      {
+        def held = TypeExpr(<[ Nemerle.Scopes.Content.Of($(expr : typed)) ]>, target);
+        if (IsError(held)) null else ImplicitCast(held, target)
       }
     }
 
@@ -2763,6 +2782,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           def expected2 = FreshTypeVar();
           //expected2.ImplicitCastHint = fixedType;
           def tExpr     = TypeExpr(expr, expected2);
+          when (IsContentType(fixedType) && !IsContentType(tExpr.Type))
+            ReportError(messenger, $"a value is not cast to `content': a content holds a value of several types, and a "
+                                   "value gets into one only where a `content' parameter, result or binding is given it");
           def tExprDbg  = tExpr;
           _ = tExprDbg;
           def do_type_conversion()
@@ -6462,6 +6484,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         return TypeExpr(Nemerle.Compiler.UtilMacros.locate(mtch.Location,
           <[ { def $(bound : name) = $(matched_value : typed); $(PExpr.Match(mtch.Location, <[ $(bound : name) ]>, mtch.cases)) } ]>), expected)
       }
+      // (a `content': the value it holds is matched, `| s is string => ...')
+      when (subject == null && IsContentType(matched_value.Type))
+        return TypeExpr(Nemerle.Compiler.UtilMacros.locate(mtch.Location,
+          PExpr.Match(mtch.Location, <[ $(matched_value : typed).Value ]>, mtch.cases)), expected);
       mutable disable_warnings = false;
       def cases = SCG.List();
       // (each case starts from the flow before the match, and the flow after it is all of theirs; a condition's

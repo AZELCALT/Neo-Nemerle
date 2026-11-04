@@ -112,6 +112,8 @@ public type string = System.String;
 public type object = System.Object;
 public type bool = System.Boolean;
 public type char = System.Char;
+/// What a value of several types is held in (see Nemerle.Scopes.Content).
+public type content = Nemerle.Scopes.Content;
 
 // ---- list.n (Nemerle.Core) ----
 /** The core datastructure allowing easy manipulating of small

@@ -419,7 +419,7 @@ public module Checker
       foreach (t in types) unless (found.Contains(t)) found ::= t;
       found.Rev()
     }
-    def container(shown : string) : bool { shown == "object" || shown == "System.Object" || shown == "Nemerle.Scopes.Content" }
+    def container(shown : string) : bool { shown == "object" || shown == "System.Object" || shown == "Nemerle.Scopes.Content" || shown == "content" }
     def localType(decl : LocalValue, shown : TypeVar) : string
     {
       def text = if (shown != null) shown.ToString() else "";

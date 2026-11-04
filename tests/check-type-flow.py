@@ -105,6 +105,13 @@ cases = [
     # an error in the last statement is its own (a script's result waits for the call's type, it asks nothing of it)
     ('last-call-error', f'{W}(1 + "x" * 2)\n', None, 'got string'),
     ('async-lambda-checked', f'mutable x = 1;\n{AWAIT}x = "one";\ndef show = () => match (x) {{ | s is string => {W}(s) | n is int => {W}(n) }};\nx = 2;\nshow()\n', '2', None),
+    # `content': what a value of several types is held in, named in a declaration; a value gets into one where a
+    # `content' parameter, result or binding is given it (never by a cast); a check of one checks what it holds
+    ('content-parameter', f'Show(x : content) : string {{ match (x) {{ | s is string => s + "!" | i is int => (i + 1).ToString() | _ => "?" }} }}\nmutable v = 1;\nwhen ({YES}) v = "two";\n{W}(Show(v));\n{W}(Show(41))\n', 'two!\n42', None),
+    ('content-result', f'Pick(b : bool) : content {{ if (b) 1 else "one" }}\n{W}(Pick(false));\n{W}(Pick(true) is int);\nmatch (Pick(true)) {{ | i is int => {W}(i + 1) | _ => () }}\n', 'one\nTrue\n2', None),
+    ('content-binding', f'mutable v = 1;\nwhen ({YES}) v = "two";\ndef c : content = v;\n{W}(c.Type.Name)\n', 'String', None),
+    ('content-no-cast', f'def o : object = 1;\ndef c = o :> content;\n{W}(c)\n', None, 'a value is not cast to `content\''),
+    ('content-no-cast-c', f'def o : object = 1;\ndef c = (content)o;\n{W}(c)\n', None, 'a value is not cast to `content\''),
 ]
 
 def compile_file(name, text):

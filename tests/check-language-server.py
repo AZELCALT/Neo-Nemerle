@@ -520,7 +520,8 @@ try:
     # a value of several types (a top-level one, and a function's local) is shown as the types it holds, as the
     # compiler words them, not as its container (object, Nemerle.Scopes.Content)
     flow = ('mutable x = 4;\nwhen (System.Environment.GetCommandLineArgs().Length > 0) x = 0.5;\nSystem.Console.WriteLine(x);\n'
-            'Run(n : int) : void\n{\n  mutable v = n;\n  when (n > 2) v = "big";\n  System.Console.WriteLine(v)\n}\nRun(3)\n')
+            'Run(n : int) : void\n{\n  mutable v = n;\n  when (n > 2) v = "big";\n  System.Console.WriteLine(v)\n}\nRun(3);\n'
+            'Pick(b : bool) : content { if (b) 1 else "one" }\ndef held = Pick(true);\nSystem.Console.WriteLine(held)\n')
     (more / 'flow.n').write_text(flow)
     furi = (more / 'flow.n').as_uri()
     c.notify('textDocument/didOpen', {'textDocument': {'uri': furi, 'languageId': 'nemerle', 'version': 1, 'text': flow}})
@@ -530,7 +531,8 @@ try:
               'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 20, 'character': 0}}}) or []}
         if fh or time.time() > deadline: break
         time.sleep(0.5)
-    check({(0, ': int or double'), (5, ': int or string')} <= fh and not any('Content' in l or 'object' in l for _, l in fh),
+    # (a binding of a declared `content' shows that short name)
+    check({(0, ': int or double'), (5, ': int or string'), (11, ': content')} <= fh and not any('Content' in l or 'object' in l for _, l in fh),
           'inlay hints of values of several types: %s' % fh)
     # tokens by meaning
     def kinds(u, text, needle, nth=0):

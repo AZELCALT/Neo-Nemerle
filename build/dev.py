@@ -100,7 +100,9 @@ if 'macros' in parts:
           [T / 'Nemerle.Compiler.dll', T / 'Nemerle.Platform.dll',
            runtime / 'System.Data.Common.dll', runtime / 'System.Xml.ReaderWriter.dll',
            runtime / 'System.Xml.XmlSerializer.dll', runtime / 'System.Xml.XDocument.dll', runtime / 'System.Linq.dll'],
-          ['-target:library', '-source-root:' + str(repo / 'macros')])
+          # (against the runtime beside them, as ./bootstrap's stage 2: else the compiler's own Nemerle.dll and this
+          # one, of the same identity, both load once lib/ changed)
+          ['-target:library', '-source-root:' + str(repo / 'macros'), '-no-stdlib', '-r:' + str(T / 'Nemerle.dll')])
 if 'cli' in parts:
     cli_refs = [T / 'Nemerle.Compiler.dll', T / 'Nemerle.Platform.dll', runtime / 'System.Console.dll',
         runtime / 'System.Linq.dll', runtime / 'System.Net.Http.dll', runtime / 'System.IO.Compression.dll',

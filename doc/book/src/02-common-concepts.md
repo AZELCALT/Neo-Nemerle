@@ -298,6 +298,30 @@ Other .NET languages see the result as a `Nemerle.Scopes.Content` when it has se
 which: `[return: Nemerle.Scopes.ContentTypes(typeof(string), typeof(int))]`. Compiling with `-flow-log` adds a hint at
 each return point saying the type it gives, for when a set's types are not the ones expected.
 
+To write that type yourself, in a parameter or a result, name it `content`. A `content` parameter takes a value of
+several types (or of one), a `content` result holds whichever value its return point gives, and a `match` or `is` on
+one checks the value it holds:
+
+```nemerle
+Describe(x : content) : string { match (x) { | s is string => "text " + s | n is int => "number " + n.ToString() | _ => "other" } }
+Pick(first : bool) : content { if (first) "one" else 1 }
+
+mutable v = 1;
+when (System.Environment.GetCommandLineArgs().Length > 0) v = "two";
+System.Console.WriteLine(Describe(v));
+System.Console.WriteLine(Describe(Pick(false)));
+System.Console.WriteLine(Pick(true) is string)
+```
+
+```text
+text two
+number 1
+True
+```
+
+A value gets into a `content` only that way, so it is not a type to cast to: `x :> content` and `(content)x` are
+errors.
+
 Inside a block, `def` declares a *local* function. Its parameter and return types may be left out; they are inferred:
 
 ```nemerle
