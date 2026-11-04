@@ -114,8 +114,48 @@ using Nemerle.Compiler.XmlDump;
       public mutable StateInference : int;
       public mutable TyVar_reuse_queue : TypeVar;
       public mutable Macros_in_pattern : bool;
+      public mutable AsyncVoidAdaptations : int;
       public HeldMessages : System.Collections.Generic.Stack[System.Collections.Generic.List[(void -> void) * int]] = System.Collections.Generic.Stack();
+      /// The errors and warnings reported (on a worker: by its method, added to the compilation's at its commit).
+      public mutable ErrorCount : int;
+      public mutable WarningCount : int;
+      /// Set on a thread typing in parallel (-parallel): what the method reports is held for its commit (Commit), and
+      /// what must run in source order on the compiling thread is deferred to it (OnCommit).
+      public mutable IsWorker : bool;
+      public Commit : System.Collections.Generic.List[(void -> void) * int] = System.Collections.Generic.List();
+      /// Where in Commit the last typing attempt's held messages start (what the attempt reported itself, after what was
+      /// reported at once, as a hint said once): the commit reports what its deferred second pass reports at once
+      /// before them, and what it holds after, as without -parallel, where that pass runs inside the attempt.
+      public mutable AttemptHeld : int = -1;
+      public Deferred : System.Collections.Generic.List[void -> void] = System.Collections.Generic.List();
+      /// Why the method could not be typed on a worker (it is then typed in order, as without -parallel).
+      public mutable Conflict : string;
     }
+
+    /// A worker reached what only the compiling thread may do (it changes what other methods' typing reads).
+    public class ParallelConflict : System.Exception
+    {
+      public this(what : string) { base(what) }
+    }
+
+    /// On a worker (-parallel), `what' cannot be done: the method is typed again in order. Elsewhere, nothing.
+    public CheckShared(what : string) : void
+    {
+      when (Typing.IsWorker) throw ParallelConflict(what)
+    }
+
+    /// `action' now, or (on a worker) at the method's commit, in source order on the compiling thread.
+    public OnCommit(action : void -> void) : void
+    {
+      def state = Typing;
+      if (state.IsWorker) state.Deferred.Add(action) else action()
+    }
+
+    /// The last serial of a speculative solver state, over all the solvers of this compilation (Solver.PushState).
+    internal mutable SolverSerials : int = 1;
+
+    /// Held while a worker types (until shared state is made safe for workers one part at a time).
+    public ParallelLock : object = object();
     [System.ThreadStatic] static mutable _threadTyping : TypingState;
     mutable _ownTyping : TypingState;
     /// The typing state of the current thread: its own when it set one for this manager, else the manager's.
@@ -136,6 +176,8 @@ using Nemerle.Compiler.XmlDump;
     public UseTypingState(state : TypingState) : void { _threadTyping = state }
 
     public Solver : Solver { get { Typing.Solver } }
+    /// The compilation's own solver (the compiling thread's), whatever solver the current thread types with.
+    public MainSolver : Solver { get { if (_ownTyping == null) null else _ownTyping.Solver } }
     public SetSolver(solver : Solver) : void  { Typing.Solver = solver; }
     public CheckSolver() : void
     {
@@ -205,12 +247,15 @@ using Nemerle.Compiler.XmlDump;
 
     internal UpdateMethodsStatistics(currentMethodKey : string, timeSpan : TimeSpan) : void
     {
-      mutable value;
-      MethodsStatistics[currentMethodKey] =
-        if (MethodsStatistics.TryGetValue(currentMethodKey, out value))
-          (value[0] + 1, value[1] + timeSpan)
-        else
-          (1, timeSpan);
+      lock (MethodsStatistics)   // (-parallel's workers too)
+      {
+        mutable value;
+        MethodsStatistics[currentMethodKey] =
+          if (MethodsStatistics.TryGetValue(currentMethodKey, out value))
+            (value[0] + 1, value[1] + timeSpan)
+          else
+            (1, timeSpan);
+      }
     }
 
     ShowStatistics() : void
@@ -226,8 +271,8 @@ using Nemerle.Compiler.XmlDump;
     private WrapWithCurrentContext(fn : void -> void) : void -> void
     {
       def location = LocationStack.Top();
-      def color    = MacroColors.Color;
-      def context  = MacroColors.UseContext;
+      def color    = MacroColors.CurrentColor;
+      def context  = MacroColors.CurrentUseContext;
 
       fun ()
       {
@@ -298,7 +343,7 @@ using Nemerle.Compiler.XmlDump;
     /// an `await' with them.
     public AsyncStepping : System.Collections.Generic.Dictionary[Nemerle.Compiler.ClassMembers.MethodBuilder, System.Collections.Generic.List[int]] = System.Collections.Generic.Dictionary();
     /// How many async lambdas were taken as `void' delegates (Typer.NonLiteralCast), for overload resolution.
-    public mutable AsyncVoidAdaptations : int;
+    public AsyncVoidAdaptations : int { get { Typing.AsyncVoidAdaptations } set { Typing.AsyncVoidAdaptations = value } }
     /// Per top-level value (`module.name`): the type of each of its bindings, learned by the inference pass.
     public StateTypes : System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[int, Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
     /// The target's reference assemblies, when the target is not the compiler's own .NET: what the typed code uses
@@ -353,7 +398,7 @@ using Nemerle.Compiler.XmlDump;
       get
       {
         when (_userData == null)
-          _userData = ListDictionary();
+          _userData = SC.Hashtable.Synchronized(SC.Hashtable());   // (macros keep caches in it, -parallel's workers too)
 
         _userData
       }
@@ -458,8 +503,8 @@ using Nemerle.Compiler.XmlDump;
     internal mutable AttributeMacroExpansion_global_nr : int;
     internal Macros_in_pattern : bool { get { Typing.Macros_in_pattern } set { Typing.Macros_in_pattern = value } }
 
-    internal mutable Message_ErrorCount : int;
-    internal mutable Message_WarningCount : int;
+    internal Message_ErrorCount : int { get { Typing.ErrorCount } set { Typing.ErrorCount = value } }
+    internal Message_WarningCount : int { get { Typing.WarningCount } set { Typing.WarningCount = value } }
 
     /// The messages typing attempts hold until each is known to be the last (one level per attempt): the flow of values
     /// can start an attempt again (see typer_flow), and what the one it forgets reported is reported by the next. Each
@@ -485,13 +530,19 @@ using Nemerle.Compiler.XmlDump;
       }
     }
 
-    /// The attempt stands: its messages are reported, in order (when it was not forgotten).
+    /// The attempt stands: its messages are reported, in order (when it was not forgotten). On a worker, reported is
+    /// added to what its method reports at its commit (TypingState.Commit, the output in the order it would be printed).
     internal ReleaseMessages (held : System.Collections.Generic.List[(void -> void) * int]) : void
     {
       when (HeldMessages.Count > 0 && HeldMessages.Peek () : object == held)
       {
         _ = HeldMessages.Pop ();
-        foreach ((report, _) in held) report ()
+        if (Typing.IsWorker)
+        {
+          when (HeldMessages.Count == 1) Typing.AttemptHeld = Typing.Commit.Count;   // (the attempt's own hold)
+          Typing.Commit.AddRange (held)
+        }
+        else foreach ((report, _) in held) report ()
       }
     }
     internal Message_emitted_hints : Hashtable [string, int]               { get; private set; }
@@ -533,19 +584,19 @@ using Nemerle.Compiler.XmlDump;
 
     public GetNewId() : int
     {
-      Util_Id++;
-      Util_Id
+      System.Threading.Interlocked.Increment(ref Util_Id)   // (atomically: -parallel's workers make names too)
     }
 
     public GetNewId([NotNull] name : string) : int
     {
-      Util_Id++;
-      
-      when (IdToNameMap == null)
-        IdToNameMap = Hashtable();
-      
-      IdToNameMap[Util_Id] = name;
-      Util_Id
+      def id = System.Threading.Interlocked.Increment(ref Util_Id);
+      lock (this)
+      {
+        when (IdToNameMap == null)
+          IdToNameMap = Hashtable();
+        IdToNameMap[id] = name;
+      }
+      id
     }
     
     public GetIdName(id : int) : string
@@ -840,6 +891,7 @@ using Nemerle.Compiler.XmlDump;
 
       Options.Validate ();
 
+      SolverSerials  = 1;
       Typing.Solver  = Nemerle.Compiler.solver.Solver (this);
       this.emptyTEnv = TypeVarEnv (this);
 

@@ -448,6 +448,8 @@ public abstract class TypeInfo : MemberInfo, IMember,
 
   #region Builtins
   protected mutable special_members : Hashtable [string, list [IMember]];
+  /// Set once special_members is complete (made under NamespaceTree.LoadLock): -parallel's workers read it at once.
+  protected mutable builtins_ready : bool;
   protected MakeSingleParm (name : string) : void
   {
     match (special_members [name]) {
@@ -790,8 +792,9 @@ public abstract class TypeInfo : MemberInfo, IMember,
    */
   public LookupMember (name : string, for_completion = false) : list [IMember]
   {
-    when (special_members == null)
-      InitBuiltinMembers ();
+    unless (builtins_ready)
+      lock (NamespaceTree.LoadLock)
+        unless (builtins_ready) { InitBuiltinMembers (); builtins_ready = true }
 
     if (for_completion)
       GetMembers().Filter(mem => Completion.MatchName(mem.Name, name))

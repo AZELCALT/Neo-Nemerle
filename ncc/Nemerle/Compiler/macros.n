@@ -88,9 +88,9 @@ public module Macros
     // passing global context here makes little sense, but as name is unique here,
     // we can pass any to do not introduce nulls into Name
     def ctx = 
-      if (Manager.MacroColors.UseContext == null) Manager.CoreEnv
-      else Manager.MacroColors.UseContext;
-    Name (Util.tmpname (root), Manager.MacroColors.Color, ctx)
+      if (Manager.MacroColors.CurrentUseContext == null) Manager.CoreEnv
+      else Manager.MacroColors.CurrentUseContext;
+    Name (Util.tmpname (root), Manager.MacroColors.CurrentColor, ctx)
   }
 
   /** controlled hygiene breaking - generates symbol, which
@@ -99,7 +99,7 @@ public module Macros
    */
   public UseSiteSymbol (id : string) : Name
   {
-    Name (id, Manager.MacroColors.UseColor, Manager.MacroColors.UseContext)
+    Name (id, Manager.MacroColors.CurrentUseColor, Manager.MacroColors.CurrentUseContext)
   }
 
   /** Checks if given expression describes name of a type, like
@@ -262,9 +262,9 @@ public module Macros
         {
           | "name"    => <[ Splicable.Name ($e) ]>
           | "global"  => <[ Splicable.Name (Name.Global (Nemerle.Macros.Manager(), $e)) ]>
-          | "dyn"     => <[ Splicable.Name (Name ($e, -1, ManagerClass.Instance.MacroColors.UseContext)) ]>
-          | "usesite" => <[ Splicable.Name (Name ($e, ManagerClass.Instance.MacroColors.UseColor,
-                                                         ManagerClass.Instance.MacroColors.UseContext)) ]>
+          | "dyn"     => <[ Splicable.Name (Name ($e, -1, ManagerClass.Instance.MacroColors.CurrentUseContext)) ]>
+          | "usesite" => <[ Splicable.Name (Name ($e, ManagerClass.Instance.MacroColors.CurrentUseColor,
+                                                         ManagerClass.Instance.MacroColors.CurrentUseContext)) ]>
           | x => Nemerle.Compiler.MessageMacros.FatalError ("unsupported splicing type `" + x + "' in splicable expression")
         }
 
@@ -843,7 +843,7 @@ public module Macros
         match (ty.Id)
         {
           | "name"    => <[ PExpr.Ref($val) ]>
-          | "usesite" => <[ PExpr.Ref(Name($val, ManagerClass.Instance.MacroColors.UseColor, ManagerClass.Instance.MacroColors.UseContext)) ]>
+          | "usesite" => <[ PExpr.Ref(Name($val, ManagerClass.Instance.MacroColors.CurrentUseColor, ManagerClass.Instance.MacroColors.CurrentUseContext)) ]>
           | "dyn"     => <[ PExpr.Ref(Name($val, -1, null)) ]>
           | "global"  => <[ PExpr.Ref(Name.Global(Nemerle.Macros.Manager(), $val)) ]>
           | "byte"    => <[ PExpr.Literal(Literal.FromByte      ($val)) ]>

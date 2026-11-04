@@ -117,7 +117,7 @@ internal class BuiltinMethod : IMethod
     def fp (name, ty) {
       TParameter(name      = name,
                  ty        = ty,
-                 color     = declaring.Manager.MacroColors.Color,
+                 color     = declaring.Manager.MacroColors.CurrentColor,
                  modifiers = AttributesAndModifiers(),
                  kind      = ParmKind.Normal)
     }
@@ -145,7 +145,7 @@ internal class BuiltinMethod : IMethod
     {
       TParameter(name      = name,
                  ty        = ty,
-                 color     = declaring.Manager.MacroColors.Color,
+                 color     = declaring.Manager.MacroColors.CurrentColor,
                  modifiers = AttributesAndModifiers(),
                  kind      = ParmKind.Normal)
     }
@@ -174,7 +174,7 @@ internal class BuiltinMethod : IMethod
     {
       TParameter(name      = name,
                  ty        = ty,
-                 color     = declaring.Manager.MacroColors.Color,
+                 color     = declaring.Manager.MacroColors.CurrentColor,
                  modifiers = AttributesAndModifiers(),
                  kind      = ParmKind.Normal)
     }

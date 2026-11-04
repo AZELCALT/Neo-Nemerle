@@ -48,7 +48,7 @@ macro Hygienic(_ : TypeBuilder, m : ParsedMethod)
   def newBody = Nemerle.Compiler.UtilMacros.locate(m.Body.Location,
     <[
       def colors = Nemerle.Compiler.manager_class.ManagerClass.Instance.MacroColors;
-      colors.PushNewColor(colors.UseColor, colors.UseContext);
+      colors.PushNewColor(colors.CurrentUseColor, colors.CurrentUseContext);
       def result = $(m.Body);
       colors.PopColor();
       result

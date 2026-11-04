@@ -981,6 +981,7 @@ public class GlobalEnv
   public GetMacroContext () : int
   {
     when (macro_ctx_cache == -1)
+    lock (NamespaceTree.LoadLock)   // (it may define the contexts' class, and adds to the tree's table: -parallel too)
     {
       nameTree.prepare_macro_context_class ();
 

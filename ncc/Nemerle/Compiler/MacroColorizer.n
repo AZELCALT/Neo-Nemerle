@@ -33,6 +33,7 @@ using Nemerle.Compiler.manager_class;
 /** A class responsible for assigning new colors to macro contexts. */
 public class MacroColorizator
 {
+  // The compiling thread's colors. (Fields: prebuilt macros read them; they run on that thread only.)
   public mutable Color : int;
   public mutable UseColor : int;
   public mutable UseContext : GlobalEnv;
@@ -40,6 +41,44 @@ public class MacroColorizator
   mutable max_macro_color : int;
   mutable colors_stack : list [int * int * GlobalEnv]; // FIXME: use Stack
 
+  /// A thread typing in parallel (-parallel) has colors of its own, from the same counter.
+  class WorkerColors
+  {
+    public Owner : MacroColorizator;
+    public mutable Color : int;
+    public mutable UseColor : int;
+    public mutable UseContext : GlobalEnv;
+    public mutable Stack : list [int * int * GlobalEnv] = [];
+    public this(owner : MacroColorizator) { Owner = owner; Color = owner.Color; UseColor = owner.UseColor; UseContext = owner.UseContext }
+  }
+  [System.ThreadStatic] static mutable worker : WorkerColors;
+  Worker : WorkerColors { get { def w = worker; if (w != null && w.Owner : object == this) w else null } }
+
+  /// Gives the current thread colors of its own (-parallel's workers), starting from the compiling thread's; false
+  /// gives it this colorizer's again.
+  public UseWorkerColors(own : bool) : void { worker = if (own) WorkerColors(this) else null }
+
+  /// The colors of the current thread (its own on a worker, else the fields): what the compiler's own code reads.
+  public CurrentColor : int
+  {
+    get { def w = Worker; if (w != null) w.Color else Color }
+    set { def w = Worker; if (w != null) w.Color = value else Color = value }
+  }
+  public CurrentUseColor : int
+  {
+    get { def w = Worker; if (w != null) w.UseColor else UseColor }
+    set { def w = Worker; if (w != null) w.UseColor = value else UseColor = value }
+  }
+  public CurrentUseContext : GlobalEnv
+  {
+    get { def w = Worker; if (w != null) w.UseContext else UseContext }
+    set { def w = Worker; if (w != null) w.UseContext = value else UseContext = value }
+  }
+  Stack : list [int * int * GlobalEnv]
+  {
+    get { def w = Worker; if (w != null) w.Stack else colors_stack }
+    set { def w = Worker; if (w != null) w.Stack = value else colors_stack = value }
+  }
 
   public this () 
   { 
@@ -52,8 +91,7 @@ public class MacroColorizator
                          
   public NewColor () : int
   {
-    max_macro_color = max_macro_color + 1;
-    max_macro_color
+    System.Threading.Interlocked.Increment(ref max_macro_color)   // (atomically: one counter for all threads)
   }
 
 
@@ -61,10 +99,10 @@ public class MacroColorizator
   {
     try
     {
-      colors_stack = (Color, UseColor, UseContext) :: colors_stack;
-      Color = 1;
-      UseColor = 1;
-      UseContext = ManagerClass.Instance.CoreEnv;
+      Stack = (CurrentColor, CurrentUseColor, CurrentUseContext) :: Stack;
+      CurrentColor = 1;
+      CurrentUseColor = 1;
+      CurrentUseContext = ManagerClass.Instance.CoreEnv;
       fn()
     }
     finally { PopColor (); }
@@ -74,10 +112,10 @@ public class MacroColorizator
   {
     try
     {
-      colors_stack = (Color, UseColor, UseContext) :: colors_stack;
-      Color = 1;
-      UseColor = 1;
-      UseContext = ManagerClass.Instance.CoreEnv;
+      Stack = (CurrentColor, CurrentUseColor, CurrentUseContext) :: Stack;
+      CurrentColor = 1;
+      CurrentUseColor = 1;
+      CurrentUseContext = ManagerClass.Instance.CoreEnv;
       fn();
     }
     finally { PopColor(); }
@@ -89,17 +127,17 @@ public class MacroColorizator
    */   
   public PushNewColor (use_color : int, use_context : GlobalEnv) : void
   {
-    colors_stack = (Color, UseColor, UseContext) :: colors_stack;
-    Color = NewColor ();
-    UseColor = use_color;
-    UseContext = use_context;
+    Stack = (CurrentColor, CurrentUseColor, CurrentUseContext) :: Stack;
+    CurrentColor = NewColor ();
+    CurrentUseColor = use_color;
+    CurrentUseContext = use_context;
   }
 
 
   public PushUseSiteColor () : void
   {
-    colors_stack = (Color, UseColor, UseContext) :: colors_stack;
-    Color = UseColor;
+    Stack = (CurrentColor, CurrentUseColor, CurrentUseContext) :: Stack;
+    CurrentColor = CurrentUseColor;
   }
   
 
@@ -110,12 +148,12 @@ public class MacroColorizator
    */    
   public PopColor () : void
   {
-    match (colors_stack) {
+    match (Stack) {
       | (col, use_col, use_ctx) :: rest =>
-        colors_stack = rest;
-        Color = col;
-        UseColor = use_col;
-        UseContext = use_ctx;
+        Stack = rest;
+        CurrentColor = col;
+        CurrentUseColor = use_col;
+        CurrentUseContext = use_ctx;
       | [] =>
         Nemerle.Compiler.UtilMacros.ice ("pop from empty stack of macro colors...")
     }

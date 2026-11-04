@@ -80,6 +80,9 @@ using Nemerle.Compiler.Utility;
     public mutable TargetIsWinexe : bool;
     public mutable IgnoreConfusion : bool;
     public mutable ThrowOnError : bool;
+    /// Type method bodies on several threads (-parallel): each method's main typing pass runs on a worker, and what
+    /// comes after it (and what it could not do on a worker) in source order on the compiling thread.
+    public mutable ParallelTyping : bool;
     public mutable GeneralTailCallOpt : bool;
     public mutable ProgressBar : bool;
     public mutable ColorMessages : bool;
@@ -171,6 +174,7 @@ using Nemerle.Compiler.Utility;
       TargetIsWinexe = false;
       IgnoreConfusion = false;
       ThrowOnError = false;
+      ParallelTyping = false;
       GeneralTailCallOpt = false;
       ProgressBar = false;
       ColorMessages = true;
@@ -748,6 +752,10 @@ using Nemerle.Compiler.Utility;
         Getopt.CliOption.Flag (name = "-nologo",
                                help = "Suppress compiler copyright message",
                                handler = fun () { this.ProgressBar = false; }),
+
+        Getopt.CliOption.Flag (name = "-parallel",
+                               help = "Type method bodies on several threads (the result is the same as without it)",
+                               handler = fun () { this.ParallelTyping = true }),
 
         Getopt.CliOption.Flag (name = "-no-color",
                                help = "Disable ANSI coloring of error/warning/hint messages",

@@ -49,6 +49,10 @@ using Nemerle.Compiler.Utility;
 [ManagerAccess]
 public class NamespaceTree
 {
+  /// Held while the tree changes (a node added, a type loaded from a library), so that -parallel's workers, which look
+  /// names up at once, see each node and type made once. Readers take no lock: a node's children are replaced, never
+  /// changed in place, and a node's Value is one reference, set once the type it names is made.
+  public static LoadLock : object = object();
   public variant TypeInfoCache
   {
     | No
@@ -209,7 +213,7 @@ public class NamespaceTree
     
     public Clear () : void
     {
-      unless (children == null) children.Clear ();
+      unless (children == null) lock (NamespaceTree.LoadLock) children = Hashtable (16);
     }
 
     /// Walks down the tree begining at current node, spliting given
@@ -244,10 +248,8 @@ public class NamespaceTree
       def loop (l, cur_node : Node) {
         match (l) {
           | [x] =>
-            when (cur_node.children == null)
-              cur_node.children = Hashtable (10);
-              
-            match (cur_node.children.Get (x)) {
+            def children = cur_node.children;   // (null is no children: reading does not change the tree)
+            match (if (children == null) None () else children.Get (x)) {
               | Some (nd) => nd.Value
               | _ =>
                 if (x.Length == 0)
@@ -257,7 +259,7 @@ public class NamespaceTree
                   | '*' | '&' =>
                     def bare_name = x.TrimEnd (array ['*', '&']);
                     def (st, lib) =
-                      match (cur_node.children.Get (bare_name)) {
+                      match (children?.Get (bare_name) ?? None ()) {
                         | Some (nd) =>
                           match (nd.Value) {
                             | TypeInfoCache.Cached (tc) =>
@@ -277,10 +279,18 @@ public class NamespaceTree
                       assert(nst != null);
 
                       //def node = namespace_tree.Path (correct_name);
-                      def node = cur_node.Child (x);
-                      def res = TypeInfoCache.Cached (lib.ConstructTypeInfo (nst, node));
-                      node.Value = res;
-                      res
+                      lock (NamespaceTree.LoadLock)
+                      {
+                        def node = cur_node.Child (x);
+                        match (node.Value)
+                        {
+                          | TypeInfoCache.Cached as made => made   // (made meanwhile, by another thread)
+                          | _ =>
+                            def res = TypeInfoCache.Cached (lib.ConstructTypeInfo (nst, node));
+                            node.Value = res;
+                            res
+                        }
+                      }
                     }
                     else
                       TypeInfoCache.No()
@@ -290,10 +300,8 @@ public class NamespaceTree
               }
 
           | x :: xs =>
-            when (cur_node.children == null)
-              cur_node.children = Hashtable (10);
-              
-            match (cur_node.children.Get (x)) {
+            def children = cur_node.children;
+            match (if (children == null) None () else children.Get (x)) {
               | Some (nd) => loop (xs, nd)
               | _ => TypeInfoCache.No ()
             }
@@ -344,6 +352,16 @@ public class NamespaceTree
     }
 
     internal LoadValue (val : TypeInfoCache.NotLoadedList) : list [TypeInfo]
+    {
+      lock (NamespaceTree.LoadLock)
+        match (Value)
+        {
+          | TypeInfoCache.CachedAmbiguous (made) => made   // (loaded meanwhile, by another thread)
+          | _ => LoadValueLocked (val)
+        }
+    }
+
+    LoadValueLocked (val : TypeInfoCache.NotLoadedList) : list [TypeInfo]
     {
       def by_parms_amount = Hashtable ();
       // Explicitly referenced assemblies come first: when a dependency brings another build of the same assembly
@@ -480,8 +498,13 @@ public class NamespaceTree
     }
 
     internal AddChild (name : string, node : Node) : void {
-      when (children == null) children = Hashtable (16);
-      children.Add (name, node);
+      lock (NamespaceTree.LoadLock)
+      {
+        // (a new table: a reader holding the old one goes on reading it whole)
+        def copy = if (children == null) Hashtable (16) else Hashtable (children);
+        copy.Add (name, node);
+        children = copy
+      }
     }
     
     internal CleanUp () : void
@@ -496,17 +519,25 @@ public class NamespaceTree
     /// In case there is no such child in current node, it is created.
     Child (name : string) : Node
     {
-      when (children == null)
-        children = Hashtable(16);
-
-      match (children.Get (name))
+      def known = children;
+      match (if (known == null) None () else known.Get (name))
       {
-        | None =>
-          def result = Node (this, name, TypeInfoCache.No ());
-          children.Add (name, result);
-          result
-
         | Some (r) => r
+        | None =>
+          lock (NamespaceTree.LoadLock)
+          {
+            def current = children;   // (again: another thread may have added it)
+            match (if (current == null) None () else current.Get (name))
+            {
+              | Some (r) => r
+              | None =>
+                def result = Node (this, name, TypeInfoCache.No ());
+                def copy = if (current == null) Hashtable (16) else Hashtable (current);
+                copy.Add (name, result);
+                children = copy;
+                result
+            }
+          }
       }
     }
 

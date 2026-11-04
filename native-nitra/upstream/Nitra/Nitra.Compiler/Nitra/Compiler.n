@@ -5189,7 +5189,7 @@ public sealed class DefaultNTypeCompiler : NTypeCompiler
           def makeName(part : TypeNamePart) : Nemerle.Compiler.Parsetree.Name
           {
             def env = part.NemerleEnv ?? Environment.Manager.CoreEnv;
-            Nemerle.Compiler.Parsetree.Name(part.Name, Environment.Manager.MacroColors.Color, env)
+            Nemerle.Compiler.Parsetree.Name(part.Name, Environment.Manager.MacroColors.CurrentColor, env)
           }
 
           if (parts is first :: other)

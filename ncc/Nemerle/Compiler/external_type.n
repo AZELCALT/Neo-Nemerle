@@ -52,9 +52,12 @@ public class ExternalType
 
   internal ConstructTypeInfo (node : NamespaceTree.Node, fix_node : bool) : void
   {
-    when (tycon == null)
-      tycon = library.ConstructTypeInfo (system_type, node);
-    when (fix_node)
-      node.Value = NamespaceTree.TypeInfoCache.Cached (tycon);
+    lock (NamespaceTree.LoadLock)   // (made once, whichever of -parallel's workers asks first)
+    {
+      when (tycon == null)
+        tycon = library.ConstructTypeInfo (system_type, node);
+      when (fix_node)
+        node.Value = NamespaceTree.TypeInfoCache.Cached (tycon);
+    }
   }
 }

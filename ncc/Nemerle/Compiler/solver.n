@@ -52,7 +52,9 @@ public class Solver
   public PushState() : void
   {
     ++serial_stack_top;
-    ++last_serial;
+    // (from the compilation's counter, shared by its solvers: a type variable a state of another solver saved must
+    // not look saved in this one's, see TypeVar.SaveState)
+    last_serial = System.Threading.Interlocked.Increment(ref Manager.SolverSerials);
     top_serial = last_serial;
 
     dt_stack.Push(dt_store);
@@ -148,7 +150,12 @@ public class Solver
   #region Anti dead lock queue
   public Enqueue(action : void -> void) : void
   {
-    if (locked)
+    // (the queue is the compilation's: a solver of its own a method is typed with, -parallel, hands the action to the
+    // compilation's solver, which runs it in order when what holds it is done -- as it would without -parallel)
+    def main = Manager.MainSolver;
+    if (main != null && main : object != this)
+      lock (main.comp_queue) main.Enqueue(action)
+    else if (locked)
       comp_queue.Push (action);
     else
     {

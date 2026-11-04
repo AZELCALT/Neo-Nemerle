@@ -632,6 +632,7 @@ public class LibraryReferenceManager
 
   internal static CacheTypeInfo (t : System.Type, tc : Nemerle.Compiler.type_info.TypeInfo, node : NamespaceTree.Node) : void
   {
+    lock (NamespaceTree.LoadLock)
     match (node.Value)
     {
       | NamespaceTree.TypeInfoCache.NotLoaded (e) =>
@@ -662,6 +663,7 @@ public class LibraryReferenceManager
   internal static GetInternalType (lib : LibraryReference, t : System.Type,
                                    node : NamespaceTree.Node) : Nemerle.Compiler.type_info.TypeInfo
   {
+    lock (NamespaceTree.LoadLock)
     match (node.Value)
     {
       | NamespaceTree.TypeInfoCache.Cached(tc) => tc
@@ -686,7 +688,13 @@ public class LibraryReferenceManager
     nd
   }
 
+  /// (under NamespaceTree.LoadLock: it may load an assembly and adds namespace nodes, see there)
   internal framework_nesting (t : System.Type) : NamespaceTree.Node * list [string]
+  {
+    lock (NamespaceTree.LoadLock) framework_nesting_locked (t)
+  }
+
+  framework_nesting_locked (t : System.Type) : NamespaceTree.Node * list [string]
   {
     unless(IsAssemblyLoaded(t.Assembly.FullName))
     {

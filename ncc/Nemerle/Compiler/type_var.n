@@ -613,7 +613,7 @@ public class TypeVar : TypedBase, System.IComparable[TypeVar], System.IEquatable
     }
   }
 
-  mutable static level : int;
+  [System.ThreadStatic] mutable static level : int;   // (each thread's own depth: -parallel's workers print types too)
 
   public override ToString() : string
   {
@@ -1415,8 +1415,7 @@ public class TypeVar : TypedBase, System.IComparable[TypeVar], System.IEquatable
   internal this(man : ManagerClass)
   {
     Manager = man;
-    id = Manager.TyVar_Id;
-    ++Manager.TyVar_Id;
+    id = System.Threading.Interlocked.Increment(ref Manager.TyVar_Id) - 1;   // (atomically, for -parallel)
     serial = Manager.Solver.top_serial;
     flags = Flags.IsFresh; assert(stop_serial != serial || this is FixedType);
   }

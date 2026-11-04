@@ -149,8 +149,7 @@ public mask GoTo
     {
       _manager = manager;
       _name    = name;
-      _nextId++;
-      _id      = _nextId;
+      _id      = System.Threading.Interlocked.Increment(ref _nextId);   // (atomically: -parallel's workers expand it too)
     }
 
     public Goto()  : PExpr

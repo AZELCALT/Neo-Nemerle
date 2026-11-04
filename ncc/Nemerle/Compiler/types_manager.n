@@ -1246,6 +1246,14 @@ using Nemerle.Compiler.Utility;
       when (!aux_phase)
         _cgil_phase = 3;
 
+      // (-parallel: the methods' typing starts on workers; each one commits as it is reached below, in source order)
+      when (!aux_phase && Manager.Options.ParallelTyping && !Manager.IsIntelliSenseMode)
+      {
+        def methods = System.Collections.Generic.List();
+        Iter(ti => when (allow_it(ti)) foreach (m is MethodBuilder in ti.GetDirectMembers()) when (m.CanPreType) methods.Add(m));
+        PreTypeInParallel(methods);
+      }
+
       // we first finalize value types, because MS.NET runtime requires so
       IterConditionally(emit_impl,
         (x : TypeBuilder) => x.IsEnum || (x.IsValueType && x.DeclaringType == null));
@@ -1259,6 +1267,33 @@ using Nemerle.Compiler.Utility;
 
       when (!aux_phase)
         _cgil_phase = 4;
+    }
+
+    /// Types `methods' on worker threads (as many as processors, up to 8; NEMERLE_PARALLEL_THREADS), each with a stack
+    /// as large as the compiling thread's (typing recurses deeply).
+    PreTypeInParallel (methods : System.Collections.Generic.List[MethodBuilder]) : void
+    {
+      mutable next = -1;
+      def setting = System.Environment.GetEnvironmentVariable("NEMERLE_PARALLEL_THREADS");
+      mutable count;
+      unless (setting != null && int.TryParse(setting, out count) && count > 0)
+        count = System.Math.Min(System.Environment.ProcessorCount, 8);
+      def work ()
+      {
+        mutable i = System.Threading.Interlocked.Increment(ref next);
+        while (i < methods.Count)
+        {
+          methods[i].PreType();
+          i = System.Threading.Interlocked.Increment(ref next);
+        }
+      }
+      def threads = array(count);
+      for (mutable t = 0; t < count; t++)
+      {
+        threads[t] = System.Threading.Thread(work, 160 * 1024 * 1024);
+        threads[t].Start();
+      }
+      foreach (thread in threads) thread.Join();
     }
 
     internal EnsureEmitProgress (ti : TypeBuilder) : void

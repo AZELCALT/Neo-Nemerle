@@ -134,8 +134,7 @@ using Nemerle.Compiler.Utility;
     {
       Manager = man;
       this.name = name;
-      id = Manager.StaticTyVarId;
-      ++Manager.StaticTyVarId;
+      id = System.Threading.Interlocked.Increment(ref Manager.StaticTyVarId) - 1;
     }
 
     private this (other : StaticTypeVar)
@@ -144,8 +143,7 @@ using Nemerle.Compiler.Utility;
       this.special = other.special;
       this.Manager = other.Manager;
       
-      id = Manager.StaticTyVarId;
-      ++Manager.StaticTyVarId;
+      id = System.Threading.Interlocked.Increment(ref Manager.StaticTyVarId) - 1;
     }
       
     public this (man : ManagerClass, name : string, gtype : System.Type)

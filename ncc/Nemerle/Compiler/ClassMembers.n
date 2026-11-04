@@ -1323,10 +1323,87 @@ public class MethodBuilder : MemberBuilder, IMethod
     get { (fun_header.body is FunBody.Abstract) }
   }
 
+  /// -parallel: the typing state this method's typing on a worker left, for its commit (RunBodyTyper).
+  internal mutable pretyped : ManagerClass.TypingState;
+
+  /// Whether the method's typing may start on a worker (-parallel): a body to type, not one whose type others wait for
+  /// (an inferred result) and not a type's or file's initialization (its typing is the state others read).
+  internal CanPreType : bool
+  {
+    get
+    {
+      // (and not a constructor: a type's constructors share its field initializers, which typing one of them changes)
+      !SkipEmiting && !IsTypedOnly && !InferredResult && MemberKind != MemberKinds.Constructor && fun_header.body is FunBody.Parsed
+    }
+  }
+
+  /// -parallel: types the method on the current (worker) thread, with a typing state of its own: what it reports is
+  /// held and what must happen in order is deferred, both for its commit in RunBodyTyper. When it reaches what only
+  /// the compiling thread may do (a ParallelConflict, or any failure), the method is left as it was, for typing in order.
+  internal PreType () : void
+  {
+    def header = fun_header;
+    def (body, yieldType, closureVars, allLocals, firstClassChild, cannotInline, usage) =
+      (header.body, header.yield_type, header.closure_vars, header.all_locals, header.has_1st_class_child, header.cannot_inline, header.usage);
+    def state = ManagerClass.TypingState(Manager);
+    state.Solver = Solver(Manager);
+    state.IsWorker = true;
+    state.HeldMessages.Push(state.Commit);
+    ManagerClass.Instance = Manager;
+    Manager.UseTypingState(state);
+    Manager.MacroColors.UseWorkerColors(true);
+    try RunBodyTyper()
+    catch
+    {
+      | e =>
+        state.Conflict = if (e is ManagerClass.ParallelConflict) e.Message else e.GetType().Name + ": " + e.Message;
+        when (System.Environment.GetEnvironmentVariable("NEMERLE_PARALLEL_DEBUG") != null)
+          System.Console.Error.WriteLine($"parallel: $(declaring_type.FullName).$Name typed in order: $(state.Conflict)");
+        header.body = body; header.yield_type = yieldType; header.closure_vars = closureVars; header.all_locals = allLocals;
+        header.has_1st_class_child = firstClassChild; header.cannot_inline = cannotInline; header.usage = usage;
+    }
+    finally { Manager.MacroColors.UseWorkerColors(false); Manager.UseTypingState(null) }
+    pretyped = state;
+  }
+
+  /// -parallel: what a worker typed stands, in source order: its messages are reported and counted, then what it
+  /// deferred runs here, with its typing state (its solver is the one its types were made with).
+  Commit(state : ManagerClass.TypingState) : void
+  {
+    state.IsWorker = false;
+    _ = state.HeldMessages.Pop();
+    // (in the order they would be printed without -parallel: what was reported at once, what the deferred second pass
+    // reports at once, the attempt's held messages, then the second pass's, which that attempt would have held too)
+    def split = if (state.AttemptHeld < 0) state.Commit.Count else state.AttemptHeld;
+    for (mutable i = 0; i < split; i++) state.Commit[i][0]();
+    Manager.UseTypingState(state);
+    try
+    {
+      def held = Manager.HoldMessages();
+      try foreach (action in state.Deferred) action()
+      finally
+      {
+        for (mutable i = split; i < state.Commit.Count; i++) state.Commit[i][0]();
+        Manager.ReleaseMessages(held)
+      }
+    }
+    finally Manager.UseTypingState(null);
+    Manager.Message_ErrorCount += state.ErrorCount;
+    Manager.Message_WarningCount += state.WarningCount;
+  }
+
   public RunBodyTyper() : void
   {
       when (SkipEmiting)
         return;
+
+    // (typed on a worker: committed now, unless it reached what only this thread may do, then typed as usual)
+    when (pretyped != null)
+    {
+      def state = pretyped;
+      pretyped = null;
+      when (state.Conflict == null) { Commit(state); return }
+    }
 
     def oldSolver = Manager.Solver;
     ManagerClass.Instance = Manager;

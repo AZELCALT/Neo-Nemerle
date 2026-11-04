@@ -861,7 +861,7 @@ using Nemerle.Compiler.Utility;
 
     public this(id : string, loc : Location, parsedId : string)
     {
-      this(id, loc, ManagerClass.Instance.MacroColors.Color, null, // no global context
+      this(id, loc, ManagerClass.Instance.MacroColors.CurrentColor, null, // no global context
         parsedId);
     }
 
@@ -877,17 +877,17 @@ using Nemerle.Compiler.Utility;
 
     static public NameInCurrentColor (id : string, context : GlobalEnv) : Name
     {
-      Name (id, context.Manager.MacroColors.Color, context)
+      Name (id, context.Manager.MacroColors.CurrentColor, context)
     }
 
     static public NameInCurrentColor (id : string, loc : Location, context : GlobalEnv) : Name
     {
-      Name (id, loc, context.Manager.MacroColors.Color, context)
+      Name (id, loc, context.Manager.MacroColors.CurrentColor, context)
     }
 
     static public NameInCurrentColor (id : string, parsedId : string, loc : Location, context : GlobalEnv) : Name
     {
-      Name (id, loc, context.Manager.MacroColors.Color, context, parsedId)
+      Name (id, loc, context.Manager.MacroColors.CurrentColor, context, parsedId)
     }
 
     static public Global (mgr : ManagerClass, id : string) : Name
@@ -1106,9 +1106,9 @@ using Nemerle.Compiler.Utility;
       if (string.IsNullOrEmpty (qid)) null
       else {
         def split = qid.Split ('.');
-        mutable expr = <[ $(Name (split [0], manager.MacroColors.UseColor, manager.MacroColors.UseContext) : name) ]>;
+        mutable expr = <[ $(Name (split [0], manager.MacroColors.CurrentUseColor, manager.MacroColors.CurrentUseContext) : name) ]>;
         for (mutable i = 1; i < split.Length; i++)
-          expr = <[ $expr . $(Name (split [i], manager.MacroColors.UseColor, manager.MacroColors.UseContext) : name) ]>;
+          expr = <[ $expr . $(Name (split [i], manager.MacroColors.CurrentUseColor, manager.MacroColors.CurrentUseContext) : name) ]>;
         expr
       }
     }

@@ -276,11 +276,13 @@ using Nemerle.Compiler.Utility;
     internal TypeInfoOfType (framework_type : System.Type) : TypeInfo
     {
       mutable known;
-      if (type_infos.TryGetValue (framework_type, out known)) known
+      mutable cached;
+      lock (type_infos) cached = type_infos.TryGetValue (framework_type, out known);   // (-parallel's workers too)
+      if (cached) known
       else
       {
         def found = TypeInfoOfTypeUncached (framework_type);
-        unless (found == null || found is TypeBuilder) type_infos [framework_type] = found;
+        unless (found == null || found is TypeBuilder) lock (type_infos) type_infos [framework_type] = found;
         found
       }
     }
@@ -306,6 +308,11 @@ using Nemerle.Compiler.Utility;
 
     /// Construct TypeInfo object from given type in current assembly.
     internal ConstructTypeInfo (reflected_type : System.Type, ns_node : NamespaceTree.Node) : TypeInfo
+    {
+      lock (NamespaceTree.LoadLock) ConstructTypeInfoLocked (reflected_type, ns_node)
+    }
+
+    ConstructTypeInfoLocked (reflected_type : System.Type, ns_node : NamespaceTree.Node) : TypeInfo
     {
       if (_is_generated_by_nemerle && reflected_type.IsDefined (SystemTypeCache.NemerleAttribute, false))
         ExternalNemerleTypeInfo (this, reflected_type, ns_node)
@@ -622,7 +629,7 @@ using Nemerle.Compiler.Utility;
 
       public override GlobalEnv : GlobalEnv { get { library.Manager.CoreEnv } }
 
-      [Memoize]
+      [Memoize(Synchronized = true)]
       public override GetModifiers () : AttributesAndModifiers
       {
         def attrsData = SR.CustomAttributeData.GetCustomAttributes(GetHandle());
@@ -816,7 +823,7 @@ using Nemerle.Compiler.Utility;
       private _isConditional : bool;
       public override IsConditional : bool { get { _isConditional } }
 
-      [Memoize(Scope = Instance, Synchronized = false)]
+      [Memoize(Scope = Instance, Synchronized = true)]
       public override GetConditions() : list[string]
       {
         def attrs = System.Attribute.GetCustomAttributes(
@@ -1299,9 +1306,9 @@ using Nemerle.Compiler.Utility;
           _isConditional = HasAttribute(InternalType.Conditional_tc);
       }
       
-      public override IsPointer     : bool { [Memoize] get { SystemType?.IsPointer } }
+      public override IsPointer     : bool { [Memoize(Synchronized = true)] get { SystemType?.IsPointer } }
     
-      [Memoize]
+      [Memoize(Synchronized = true)]
       public override GetElementTypeInfo() : option[TypeInfo]
       {
         if (IsPointer)
@@ -1619,7 +1626,7 @@ using Nemerle.Compiler.Utility;
         get { library._location }
       }
 
-      [Memoize]
+      [Memoize(Synchronized = true)]
       public override GetModifiers () : AttributesAndModifiers
       {
         def attrsData = SR.CustomAttributeData.GetCustomAttributes(system_type);
@@ -1813,9 +1820,15 @@ using Nemerle.Compiler.Utility;
         }
       }
 
+      // (made in a table of its own and kept when complete: -parallel's workers read member_map without a lock)
       private collect_members () : void
       {
-        member_map = Hashtable ();
+        def table = Hashtable ();
+        def add_member_by_name (m : IMember)
+        {
+          def n = m.Name;
+          table [n] = if (table.Contains (n)) m :: table [n] else [m];
+        }
 
         def flags = SR.BindingFlags.Public
                   | SR.BindingFlags.NonPublic
@@ -1865,7 +1878,8 @@ using Nemerle.Compiler.Utility;
 
         collected_now = RemoveHiddenMembers (res);
 
-        member_map[""] = collected_now;
+        table[""] = collected_now;
+        member_map = table;
      }
 
       public override LookupMemberImpl (name : string) : list [IMember]
@@ -1873,21 +1887,18 @@ using Nemerle.Compiler.Utility;
         if (this.Equals (InternalType.String_tc) && name == "op_Addition") //FixMe: ValdD2: Convert this to buildin fanction
         {
           assert(InternalType.String_Concat != null);
-          AddBuiltin ("op_Addition", InternalType.String_Concat);
+          lock (NamespaceTree.LoadLock) AddBuiltin ("op_Addition", InternalType.String_Concat);
           LookupMember (name)
         }
         else
         {
           when (member_map == null)
-            collect_members();
+            lock (NamespaceTree.LoadLock)
+              when (member_map == null)
+                collect_members();
 
-          if (member_map.Contains (name))
-            member_map[name]
-          else
-          {
-            member_map[name] = [];
-            []
-          }
+          // (a miss is not kept: -parallel's workers read this table at once, and only reads may happen then)
+          if (member_map.Contains (name)) member_map[name] else []
         }
       }
 
@@ -1972,7 +1983,7 @@ using Nemerle.Compiler.Utility;
       private _isConditional : bool;
       public override IsConditional : bool { get { _isConditional } }
 
-      [Memoize(Scope = Instance, Synchronized = false)]
+      [Memoize(Scope = Instance, Synchronized = true)]
       public override GetConditions() : list[string]
       {
         def attrs = System.Attribute.GetCustomAttributes(

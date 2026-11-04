@@ -264,15 +264,20 @@ public module Message
       Message.Hint (loc, m)
     else
     {
-      unless (Manager.Message_emitted_hints.Contains (m))
+      def once ()
       {
-        if (Manager.Options.ColorMessages)
-          Message.report (loc, "\e[01;32mhint\e[0m: " + m)
-        else
-          Message.report (loc, "hint: " + m);
+        unless (Manager.Message_emitted_hints.Contains (m))
+        {
+          if (Manager.Options.ColorMessages)
+            Message.report (loc, "\e[01;32mhint\e[0m: " + m)
+          else
+            Message.report (loc, "hint: " + m);
 
-        Manager.Message_emitted_hints.Add (m, 0)
+          Manager.Message_emitted_hints.Add (m, 0)
+        }
       }
+      // (on a worker, -parallel: at the method's commit, in order, where the hints said once are known)
+      if (Manager.Typing.IsWorker) Manager.Typing.Commit.Add ((once, 0)) else once ()
     }
   }
 
@@ -299,7 +304,8 @@ public module Message
   public Debug (loc : Location, m : string) : void
   {
     def m = "debug: " + m;
-    Message.report (loc, m);
+    if (Manager.Typing.IsWorker) Manager.Typing.Commit.Add ((() => Message.report (loc, m), 0))
+    else Message.report (loc, m);
     when(ListenDebug)
       System.Diagnostics.Debug.WriteLine(loc.ToString() + m);
   }
@@ -321,6 +327,8 @@ public module Message
     unless (Manager.Options.IgnoreConfusion && fscked_up)
       when (SeenError)
       {
+        // (a worker, -parallel, does not end the compilation: its method is typed again in order, which does)
+        Manager.CheckShared ("bailing out after an error");
         when (fscked_up)
           printf("confused by earlier errors bailing out\n");
         if (Manager.Options.IgnoreConfusion)

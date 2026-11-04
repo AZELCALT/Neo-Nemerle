@@ -445,7 +445,7 @@ using Nemerle.Compiler.Utility;
         }
       }
 
-      [Memoize]
+      [Memoize(Synchronized = true)]
       public override GetHashCode () : int
       {
         match (this)
