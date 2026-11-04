@@ -176,6 +176,16 @@ using Nemerle.Compiler.XmlDump;
     public UseTypingState(state : TypingState) : void { _threadTyping = state }
 
     public Solver : Solver { get { Typing.Solver } }
+    static thread_safe : System.Collections.Concurrent.ConcurrentDictionary[System.Reflection.Assembly, bool] = System.Collections.Concurrent.ConcurrentDictionary();
+    /// Whether `assembly' was compiled by a compiler whose code reads macro colors per thread (it carries
+    /// AssemblyMetadata("Nemerle.ThreadSafeColors")): only such code (a compiler, macros) may run on -parallel's workers.
+    public static ThreadSafe(assembly : System.Reflection.Assembly) : bool
+    {
+      thread_safe.GetOrAdd(assembly, a =>
+        a.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+         .:Exists(o => o is System.Reflection.AssemblyMetadataAttribute where (Key = "Nemerle.ThreadSafeColors")))
+    }
+
     /// The compilation's own solver (the compiling thread's), whatever solver the current thread types with.
     public MainSolver : Solver { get { if (_ownTyping == null) null else _ownTyping.Solver } }
     public SetSolver(solver : Solver) : void  { Typing.Solver = solver; }
@@ -1151,6 +1161,9 @@ using Nemerle.Compiler.XmlDump;
           }
           when (Options.AssemblyVersion != null)
             Hierarchy.AddAssemblyAttribute(CoreEnv, <[ System.Reflection.AssemblyVersion($(Options.AssemblyVersion : string)) ]>);
+          // what this compiler compiles reads macro colors per thread (MacroColorizator.CurrentColor): its code may run on
+          // -parallel's workers (a compiler, or macros, made by an older one reads the compiling thread's, see ThreadSafe)
+          Hierarchy.AddAssemblyAttribute(CoreEnv, <[ System.Reflection.AssemblyMetadata("Nemerle.ThreadSafeColors", "1") ]>);
 
           when (Options.AutoResolveSources) FileModuleRegistry.DiscoverSources();
           when (Options.FileModules) FileModuleRegistry.IndexSources();

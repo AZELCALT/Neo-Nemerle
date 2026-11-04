@@ -169,7 +169,8 @@ the pinned compiler that every build starts from; update it only when a bootstra
 A compile whose inputs did not change is not run again: `build/buildcache.py` keys each one by everything it reads
 (the compiler, its sources, its references) and keeps the result in `~/.cache/nemerle/build`, so a second
 `./bootstrap` rebuilds only what a change reaches (a whole warm build is under a minute, against about five cold).
-`./bootstrap --no-cache` (or `NEMERLE_BUILD_CACHE=off`) compiles everything; `./dev` builds each part once with the
+The build passes `-parallel` to every compiler that can use it (method bodies typed on several threads, the same
+assembly as without it): a cold build is about three minutes. `./bootstrap --no-cache` (or `NEMERLE_BUILD_CACHE=off`) compiles everything; `./dev` builds each part once with the
 last bootstrapped toolchain and is seconds for an unchanged part, but run `./bootstrap` before committing.
 
 | Directory | Contents |

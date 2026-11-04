@@ -6,7 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
-from tooling import net10_runtime, tune_compiler_runtime, verify_strong_name
+from tooling import net10_runtime, parallel_flag, tune_compiler_runtime, verify_strong_name
 import buildcache
 
 parser = argparse.ArgumentParser()
@@ -33,7 +33,7 @@ def build(label, compiler, source_files, output, references, key, extra=()):
     command = ['dotnet', str(compiler / 'ncc.exe'), *map(str, source_files),
         '-out:' + str(output), '-define:NET_4_0', '-define:MODERN_CLR',
         '-target-references:' + str(args.references.resolve()),
-        '-keyfile:' + str(repo / 'misc/keys' / key), '-no-color', *extra]
+        '-keyfile:' + str(repo / 'misc/keys' / key), '-no-color', *parallel_flag(compiler / 'ncc.exe'), *extra]
     command.extend('-r:' + str(reference) for reference in references)
     log = work / (label + '.log')
     print('Building:', label, flush=True)

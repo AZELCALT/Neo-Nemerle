@@ -116,6 +116,14 @@ public class MacroRegistry
     if (ctx.Manager.StateInference > 0 && UserMacro(m)) <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]> else null
   }
 
+  /// On a -parallel worker, a macro may run only when its code reads macro colors per thread (ManagerClass.ThreadSafe):
+  /// one from an older compiler's build (a prebuilt library) has its method typed in order instead.
+  static CheckWorkerMacro (ctx : Typer, m : IMacro) : void
+  {
+    when (ctx.Manager.Typing.IsWorker && !ManagerClass.ThreadSafe (m.GetType ().Assembly))
+      ctx.Manager.CheckShared ("macro `" + m.GetName () + "' of " + m.GetType ().Assembly.GetName ().Name)
+  }
+
   internal static expand_one_macro (ctx : Typer, expr : PExpr) : PExpr * option [IMacro * PExpr] {
     try
     {
@@ -126,6 +134,7 @@ public class MacroRegistry
               match (name.GetEnv (ctx.Env).LookupMacro (namepath)) {
                 | Some (x) when Deferred(ctx, x) != null => (Deferred(ctx, x), Some((x, expr)))
                 | Some (x) =>
+                  CheckWorkerMacro (ctx, x);
                   def expanded =
                     try {
                       ctx.Manager.MacroColors.PushNewColor (name.color, name.GetEnv (ctx.Env));
@@ -144,6 +153,7 @@ public class MacroRegistry
           {
             | NamespaceTree.TypeInfoCache.MacroCall(m) when Deferred(ctx, m) != null => (Deferred(ctx, m), Some((m, expr)))
             | NamespaceTree.TypeInfoCache.MacroCall(m) =>
+              CheckWorkerMacro (ctx, m);
               def expanded = 
                 try
                 {

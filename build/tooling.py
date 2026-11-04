@@ -55,6 +55,17 @@ def tune_compiler_runtime(folder):
     config.write_text(json.dumps(data))
 
 
+_parallel = {}
+def parallel_flag(ncc_exe):
+    """['-parallel'] when the compiler at ncc_exe types method bodies in parallel (any built from this tree; the pinned
+    boot compiler may predate it), else []. Its output is the same as without it, its made-up names aside."""
+    key = str(pathlib.Path(ncc_exe).resolve())
+    if key not in _parallel:
+        shown = subprocess.run(['dotnet', key, '-help'], capture_output=True, text=True).stdout
+        _parallel[key] = ['-parallel'] if '-parallel' in shown else []
+    return _parallel[key]
+
+
 def artifact_path(log, marker):
     """Read an explicit build marker, preserving spaces and Windows drive letters/separators."""
     paths = [line[len(marker):].strip() for line in log.splitlines() if line.startswith(marker)]

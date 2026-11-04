@@ -158,3 +158,4 @@ ell
 | `-keyfile:KEY.snk` | sign the assembly |
 | `-continue:BIN` | continue from a binary that is not referenced |
 | `-no-continuation-section` | write no continuation section |
+| `-parallel` | type method bodies on several threads; the output is the same as without it |

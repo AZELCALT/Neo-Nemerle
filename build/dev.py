@@ -12,7 +12,7 @@ iterating, not a bootstrap: run ./bootstrap before committing a compiler change.
 """
 import argparse, pathlib, re, shutil, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from tooling import artifact_path, net10_runtime, tune_compiler_runtime, verify_strong_name
+from tooling import artifact_path, net10_runtime, parallel_flag, tune_compiler_runtime, verify_strong_name
 import buildcache
 
 repo = pathlib.Path(__file__).resolve().parents[1]
@@ -51,7 +51,7 @@ def build(label, output, source_files, references, extra, keyname='Nemerle.Compi
     macros = ['-no-stdmacros', '-macros:' + str(base / 'Nemerle.Macros.dll')]
     cmd = ['dotnet', str(base / 'ncc.exe'), *map(str, source_files), '-out:' + str(output),
            '-define:NET_4_0', '-define:MODERN_CLR', '-target-references:' + str(refs),
-           '-keyfile:' + str(repo / 'misc/keys' / keyname), '-no-color', *macros, *extra]
+           '-keyfile:' + str(repo / 'misc/keys' / keyname), '-no-color', *macros, *parallel_flag(base / 'ncc.exe'), *extra]
     cmd += ['-r:' + str(r) for r in references]
     log = logs / (label + '.log')
     code = buildcache.run(cmd, log, cwd=repo)

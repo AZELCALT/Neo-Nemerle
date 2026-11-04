@@ -1246,8 +1246,10 @@ using Nemerle.Compiler.Utility;
       when (!aux_phase)
         _cgil_phase = 3;
 
-      // (-parallel: the methods' typing starts on workers; each one commits as it is reached below, in source order)
-      when (!aux_phase && Manager.Options.ParallelTyping && !Manager.IsIntelliSenseMode)
+      // (-parallel: the methods' typing starts on workers; each one commits as it is reached below, in source order --
+      // when this compiler's own code may run on them, see ManagerClass.ThreadSafe; else they are typed in order)
+      when (!aux_phase && Manager.Options.ParallelTyping && !Manager.IsIntelliSenseMode
+            && ManagerClass.ThreadSafe(typeof(ManagerClass).Assembly))
       {
         def methods = System.Collections.Generic.List();
         Iter(ti => when (allow_it(ti)) foreach (m is MethodBuilder in ti.GetDirectMembers()) when (m.CanPreType) methods.Add(m));

@@ -10,7 +10,7 @@ import json
 import pathlib
 import shutil
 import subprocess
-from tooling import net10_csc, net10_runtime
+from tooling import net10_csc, net10_runtime, parallel_flag
 import buildcache
 import tempfile
 import xml.etree.ElementTree as ET
@@ -125,7 +125,7 @@ for label, name, dependencies in stages:
     layout = ['-source-root:' + str(project.parent)] if a.snapshot == 'Nitra' else []
     command = ['dotnet', str(host / 'ncc.exe'), *layout, *sources, '-out:' + str(output / (prefix + name + '.dll')),
                '-target:library', '-define:BOOT', '-target-references:' + str(a.references.resolve()),
-               '-no-color'] + (['-assembly-version:' + a.assembly_version] if a.assembly_version else [])
+               '-no-color', *parallel_flag(host / 'ncc.exe')] + (['-assembly-version:' + a.assembly_version] if a.assembly_version else [])
     if a.target_runtime:
         # Only these two, in a directory of their own: the host must keep loading its own standard macros.
         target = work / 'target-runtime'
