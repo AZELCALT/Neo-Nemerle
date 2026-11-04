@@ -58,6 +58,11 @@ cases = [
     # a `def' bound again: a new value, of its own type
     ('redefined', f'def y = 5;\ndef y = y.ToString() + "0";\n{W}(y.Length)\n', '2', None),
     ('redefined-function', f'def y = 5;\ndef y = y.ToString();\nTwice() : int {{ y * 2 }}\n{W}(Twice())\n', None, "`y' is int or string"),
+    # a top-level `def` has one type, as a local one does: branches of different types are an error, not object
+    ('def-branches-differ', f'def x = 5;\ndef r = match (x) {{ | 1 => "one" | _ => 2.5 }};\n{W}(r)\n', None,
+     "Cannot implicitly convert type 'double'"),
+    ('def-branches-differ-if', f'def x = 5;\ndef r = if (x == 1) "one" else 2.5;\n{W}(r)\n', None,
+     "Cannot implicitly convert type 'double'"),
     # the operators that assign (`+=', `++') assign a value of another type as `=' does
     ('compound', f'mutable v = 0;\nv += 1;\nv++;\nv = "s" + v.ToString();\nv += "!";\n{W}(v)\n', 's2!', None),
     ('compound-local', f'Run() : void\n{{\n  mutable v = 0;\n  v += 1;\n  v = "s";\n  v += "!";\n  {W}(v)\n}}\nRun()\n', 's!', None),
