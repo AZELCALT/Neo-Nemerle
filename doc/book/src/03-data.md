@@ -39,7 +39,8 @@ WriteLine(whole + [4, 5])
 [1, 2, 3, 4, 5]
 ```
 
-Lists come with the usual functional operations. Each takes a function; Chapter 5 shows the ways to write one:
+Lists come with the usual functional operations. Each takes a function: `n => n * n` is a function that takes `n` and
+gives `n * n` (chapter 5 shows the ways to write one):
 
 ```nemerle
 using System.Console;
@@ -62,6 +63,26 @@ True
 True
 [6, 5, 4, 3, 2, 1]
 True
+```
+
+`FoldLeft(start, f)` walks the list from the left, carrying a total that begins as `start`: `f` gets each element
+*first* and the total so far second, and gives the new total.
+
+A list literal can start a statement, as any value can, and `Iter` runs a function on each element:
+
+```nemerle
+using System.Console;
+
+[3, 1, 2].Iter(WriteLine);
+["ten", "eleven"].Iter(word => WriteLine(word.Length))
+```
+
+```text
+3
+1
+2
+3
+6
 ```
 
 ### List comprehensions and ranges
@@ -210,6 +231,10 @@ WriteLine(string.Join("|", colours))
 ```text
 red|green|blue
 ```
+
+`.:` is the *extension dot*. `Map` is not a member of an array, but a function that `Nemerle.Collections` adds to
+it (an extension), and Nemerle reaches those with `.:`, while a plain `.` reaches only a type's own members (`Split`
+is the string's own). Chapter 12 has more on [extension members](12-dotnet.md#extension-members).
 
 ## .NET collections
 

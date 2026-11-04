@@ -1214,7 +1214,8 @@ using Nemerle.Compiler.Utility;
         | Token.Keyword(key) =>
           ["public", "private", "internal", "protected", "static", "mutable", "virtual", "override",
            "class", "variant", "interface", "struct", "enum", "delegate", "mask", "macro", "module", "abstract", "sealed"].Contains(key);
-        | Token.SquareGroup => true;
+        // (attributes, before what they are on; `[1, 2].Iter(...)', `[a, b] |> F', `[x];' are a list's statement)
+        | Token.SquareGroup => !(token.Next is Token.Operator || token.Next is Token.Semicolon);
         | Token.Identifier("type") => true;
         | Token.Identifier("async") when token.Next is Token.Identifier || token.Next is Token.Keyword => IsMemberStart(token.Next, script);
         | Token.Identifier("hidden") when token.Next is Token.Identifier || token.Next is Token.Keyword => IsMemberStart(token.Next, script) || token.Next is Token.Keyword;
