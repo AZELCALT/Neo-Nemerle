@@ -591,32 +591,21 @@ public class FieldBuilder : MemberBuilder, IField
   /// An initializer typed on its own, before its types are fixed: an operator with overloads in it (`field == null')
   /// is a delayed typing until its operands' types settle, resolved here; else its open type is fixed as object, which
   /// the overload it resolves to later does not fit.
-  static ResolveDelayed(typed : TExpr, manager : ManagerClass) : void
+  static ResolveDelayed(typed : TExpr) : void
   {
-    def settle()
+    mutable progress = true;
+    while (progress)
     {
-      mutable progress = true;
-      while (progress)
+      progress = false;
+      ExprWalker().Walk(typed, info =>
       {
-        progress = false;
-        ExprWalker().Walk(typed, info =>
+        match (info.Node)
         {
-          match (info.Node)
-          {
-            | TExpr.Delayed(dt) when !dt.IsResolved => dt.Resolve(); when (dt.IsResolved) progress = true
-            | _ => ()
-          }
-        });
-      }
+          | TExpr.Delayed(dt) when !dt.IsResolved => dt.Resolve(); when (dt.IsResolved) progress = true
+          | _ => ()
+        }
+      });
     }
-    settle();
-    // A binding's value is typed in isolation, so anything still delayed here cannot gain more
-    // information. Settle it the way the end of a typing pass does: a `[...]` whose shape nothing
-    // imposed becomes a list, rather than leaving it unresolved and letting the binding's inferred
-    // type fall back to object.
-    def old = manager.DelayedTypingsSecondPass;
-    manager.DelayedTypingsSecondPass = true;
-    try { settle() } finally { manager.DelayedTypingsSecondPass = old; }
   }
 
   internal InferScriptType(typer : Typer) : void
@@ -631,7 +620,7 @@ public class FieldBuilder : MemberBuilder, IField
       try
       {
         def typed = typer.TypeExpr(manager.ModuleBindings[key]);
-        ResolveDelayed(typed, manager);
+        ResolveDelayed(typed);
         ty = typed.Type.DeepFix();
         ExprWalker().Walk(typed, info =>
         {
@@ -726,7 +715,7 @@ public class FieldBuilder : MemberBuilder, IField
           Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
           return
         }
-        ResolveDelayed(typed, DeclaringType.Manager);
+        ResolveDelayed(typed);
         ty = typed.Type.DeepFix();
         // Cached initializer trees also enter speculative overload checks.
         // Resolve their expression types before those solver states expire.
