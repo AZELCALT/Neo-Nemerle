@@ -1372,7 +1372,24 @@ macro _N_ExtensionMethodOnThisParameter (_tb : TypeBuilder, pm : ParsedMethod, p
 {
   match (pm.header.Parameters)
   {
-    | first :: _ when first : object == p => pm.IsExtension = true;
+    | first :: _ when first : object == p =>
+      pm.IsExtension = true;
+      // A script's functions are its instance's, beside its state, but an extension method is static. As in a file,
+      // it is static (and public unless it says otherwise), so a file compiled with the script, or a script importing
+      // this one, calls it as an extension; its body stays the instance's, as a private method the extension calls on
+      // the running script (set by its constructor), so it reads the script's state as its other functions do.
+      def script = _tb.Manager.Options.Script;
+      when (script != null && _tb.FullName == script.TypeName && pm.modifiers != null)
+      {
+        def body = Macros.NewSymbol(pm.Name);
+        def parameters = pm.header.Parameters.Map(q => <[ parameter: $(q.PName : name) : $(q.Type) ]>);
+        def arguments = pm.header.Parameters.Map(q => <[ $(q.PName : name) ]>);
+        _tb.Define(<[ decl: private $(body : name)(..$parameters) : $(pm.header.ReturnType) { $(pm.Body) } ]>);
+        pm.Body = <[ ($(script.Prefix + "current" : usesite) :> $(PExpr.FromQualifiedIdentifier(_tb.Manager, _tb.FullName))).$(body : name)(..$arguments) ]>;
+        pm.modifiers.mods |= NemerleModifiers.Static;
+        when ((pm.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
+          pm.modifiers.mods |= NemerleModifiers.Public;
+      }
     | _ => Message.Error(p.Location, "'this' modifier (for extension method) can only be used on the first parameter");
   }
 }

@@ -5602,8 +5602,25 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                 for (mutable i = 1; i < target.Length - 1; i++)
                   receiver = <[ $receiver.$(target[i] : usesite) ]>;
                 receiver.Location = expr.Location;
-                return Option.UnSome(TypeMember(TypeExpr(receiver),
-                  PT.Name.NameInCurrentColor(target[target.Length - 1], expr.Location, env), expected, for_completion));
+                def typedReceiver = TypeExpr(receiver);
+                def last = target[target.Length - 1];
+                // a static member of the imported script (an extension method, which is static) is reached through its
+                // type, not the running child: through the child, an extension would take it as its `this' argument.
+                // As a file's `ext.Doubled(5)' is, it is the plain call of the static method.
+                def allStatic(ti : TypeInfo) { def found = ti.LookupMember(last); !found.IsEmpty && found.ForAll(m => m.IsStatic) }
+                def onType = match (typedReceiver.Type.Hint)
+                {
+                  | Some(FixedType.Class(ti, _) as ft) when allStatic(ti) => ft
+                  | _ => null
+                };
+                when (onType != null)
+                {
+                  def at = expr.Location.AsGenerated();   // (the call written as a static method's: not the `.'/`.:' rule's)
+                  def member = PExpr.Member(at, PExpr.TypedType(at, onType), PT.Splicable.Name(at, PT.Name.NameInCurrentColor(last, at, env)));
+                  return TypeNameFull(member, expected, for_completion);
+                }
+                return Option.UnSome(TypeMember(typedReceiver,
+                  PT.Name.NameInCurrentColor(last, expr.Location, env), expected, for_completion));
               }
               when (script.Names.ContainsKey(key) && (script.Names[key] != key || parts.Length > 1))
               {

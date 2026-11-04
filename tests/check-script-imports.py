@@ -44,6 +44,19 @@ child.write_text(child.read_text().replace('count++; count', 'count += 2; count'
 run(main, 'ready\n2\n4')
 print('PASS: short imports open public names, share child state and invalidate cached parents', flush=True)
 
+# a script's extension methods, as a file's: called as an extension, as a plain function, through the child's name;
+# one reads the child's own state (its body is the running child's), and the child's other functions stay its own
+source('scale.ns', 'mutable factor : int = 3;\nSystem.Console.WriteLine("scale ready");\n'
+       'public Doubled(this n : int) : int { n * 2 }\npublic Scaled(this n : int) : int { n * factor }\n'
+       'public Plain(n : int) : int { n + 100 }')
+uses = source('use_scale.ns', 'import scale;\nSystem.Console.WriteLine(21.:Doubled());\nSystem.Console.WriteLine(Doubled(5));\n'
+              'System.Console.WriteLine(scale.Doubled(5));\nSystem.Console.WriteLine(4.:Scaled());\nSystem.Console.WriteLine(scale.Plain(1))')
+run(uses, 'scale ready\n42\n10\n10\n12\n101')
+own = source('own_ext.ns', 'mutable unit : string = "!";\nShout(this s : string) : string { s.ToUpper() + unit }\n'
+             'System.Console.WriteLine("hey".:Shout());\nSystem.Console.WriteLine(Shout("you"))')
+run(own, 'HEY!\nYOU!')
+print('PASS: script extension methods: as an extension, a plain call or through the child, reading the script\'s state', flush=True)
+
 source('local.n', 'public Twice(x : int) : int { x * 2 }')
 source('local.ns', 'public Twice(x : int) : int { 999 }')
 main.write_text('using local;\nimport counter;\nSystem.Console.WriteLine(Twice(21));\nSystem.Console.WriteLine(Next())\n')

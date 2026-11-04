@@ -28,8 +28,6 @@ FENCE = re.compile(r'^```([^\n]*)\n(.*?)^```\s*$', re.S | re.M)
 # (chapter, line, variant) -> why that way of running the example differs. Each is an OPEN bug, listed so the suite can
 # run in ./bootstrap meanwhile; the summary line counts them, and an entry goes once its bug is fixed.
 KNOWN = {
-    ('05-functions.md', 104, 'script'): 'a script function with a `this` parameter is an instance member, not an extension',
-    ('07-files-and-modules.md', 279, 'script'): '`top name` (the file\'s own top-level name) does not parse in a script',
 }
 
 

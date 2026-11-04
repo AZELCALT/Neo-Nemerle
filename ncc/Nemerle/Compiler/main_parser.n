@@ -1889,11 +1889,16 @@ using Nemerle.Compiler.Utility;
           finalMembers.Add(method);
           <[ this.$(topLevel : usesite)().GetAwaiter().GetResult() ]>
         };
+      // the running instance, for the script's extension methods: an extension is static, so it reaches the script's
+      // state through this (see the `this' parameter macro); set once the base is constructed, before the top-level
+      // code can call one
+      def currentName = data.Prefix + "current";
+      finalMembers.Add(<[ decl: internal static mutable $(currentName : usesite) : object; ]>);
       foreach (member in finalMembers)
         match (member)
         {
           | ClassMember.Function as constructor when constructor.name.GetName().Id == ".ctor" =>
-            constructor.Body = <[ $(constructor.Body); $run ]>;
+            constructor.Body = <[ $(constructor.Body); $(currentName : usesite) = this; $run ]>;
             // top-level code without waits runs in the constructor; it needs the using-bearing env for the same reason.
             constructor._env = parser.env;
           | _ => ();
@@ -5103,9 +5108,13 @@ using Nemerle.Compiler.Utility;
 
             // `top name': this file's top-level `name' (its state or function), past a closer one of that name. Two names
             // side by side are no other expression, so `top' stays an ordinary name (`top.x', `top' alone)
-            | Token.Identifier("top") when env.Manager.FileModuleRegistry.IsModule(loc.FileIndex) && peek_token() is Token.Identifier =>
+            | Token.Identifier("top") when (env.Manager.FileModuleRegistry.IsModule(loc.FileIndex) || env.Manager.FileModuleRegistry.IsScriptSource(loc.FileIndex))
+                                          && peek_token() is Token.Identifier =>
               match (get_token())
               {
+                // (a script's top-level values and functions are its instance's: `top name' is `this.name')
+                | Token.Identifier(name) as at when env.Manager.FileModuleRegistry.IsScriptSource(loc.FileIndex) =>
+                  PExpr.Member(loc + at.Location, PExpr.This(loc), Splicable.Name(at.Location, MkName(name, at.Location)))
                 | Token.Identifier(name) as at =>
                   def parts = NString.Split(env.Manager.FileModuleRegistry.Name(loc.FileIndex), '.');
                   def file = parts.Tail.FoldLeft(PExpr.Ref(loc, Name.Global(env.Manager, parts.Head)) : PExpr,
