@@ -48,6 +48,25 @@ public module Checker
   public mutable RenameAtLine : int;
   public mutable RenameAtColumn : int;
 
+  /// `nemerle-lsp --check-serve`: the checker kept running, so a check costs the compilation alone, not a process,
+  /// the JIT and loading the references again: each line read is a request, each line written its answer (`{}` with
+  /// "failed" when it could not be answered). It ends with its input.
+  public Serve(input : TextReader, output : TextWriter) : int
+  {
+    mutable line = input.ReadLine();
+    while (line != null)
+    {
+      Signature = false; RenameAtPath = null; RenameAtLine = 0; RenameAtColumn = 0;
+      def answer = StringWriter();
+      def text = try { _ = Run(StringReader(line), answer); answer.ToString() }
+                 catch { | e => def f = JsonObject(); f["failed"] = JsonValue.Create(e.Message); f.ToJsonString() };
+      output.WriteLine(text.Replace("\n", " ").Replace("\r", " "));
+      output.Flush();
+      line = input.ReadLine()
+    }
+    0
+  }
+
   public Run(input : TextReader, output : TextWriter) : int
   {
     def request = JsonNode.Parse(input.ReadToEnd()) :> JsonNode;

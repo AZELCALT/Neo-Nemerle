@@ -14,8 +14,11 @@ A language server for Nemerle source files, including `grammar` and `space` bloc
   None of Nitra's IDE ecosystem (its client/server, project system or Visual Studio parts) is used, and the
   code a space expands to is not generated. The compiler itself keeps using its own engine (`NitraSyntax.Structure`).
 
-- **Typing** runs in a separate process, `nemerle-lsp --check` (`checker.n`), once edits have paused for 0.6 s; a newer
-  edit kills a check still running. It compiles in memory, with the full compiler, the files the editor needs:
+- **Typing** runs in a separate process, `nemerle-lsp --check-serve` (`checker.n`), once edits have paused for 0.3 s; a
+  newer edit kills a check still running. The checkers are kept running (one request and one answer per line), so a
+  check costs its compilation, not a process start, the JIT and loading the references: one is warmed when the server
+  starts, another starts when all are busy, and each is replaced after 100 checks. `nemerle-lsp --check` still
+  answers one request from stdin. It compiles in memory, with the full compiler, the files the editor needs:
   - the open files (their unsaved text);
   - the files they import (`using a.b` is `<root>/a/b.n`), transitively;
   - every workspace file that exports a type (global types are reached without a `using`).

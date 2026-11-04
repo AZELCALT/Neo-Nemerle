@@ -53,6 +53,7 @@ public sealed class Server
   mutable lastEdit : DateTime = DateTime.MinValue;
   mutable checkGeneration : int;
   mutable checking : Diagnostics.Process;
+  mutable stopped : Diagnostics.Process; // (the last one a newer edit ended)
   typedDiagnostics : SCG.Dictionary[string, SCG.List[JsonObject]] = SCG.Dictionary(); // worker thread only
   typedFacts : SCG.Dictionary[string, SCG.List[JsonObject]] = SCG.Dictionary();       // worker thread only
   // the symbol index (index.n): find-references and rename read it; its own thread keeps it up to date with the
@@ -85,7 +86,7 @@ public sealed class Server
   {
     def worker = Thread(Work, 64 * 1024 * 1024); // the parsers recurse deeply on long inputs
     worker.IsBackground = true; worker.Start();
-    when (typecheck) { def checker = Thread(CheckLoop); checker.IsBackground = true; checker.Start(); }
+    when (typecheck) { def checker = Thread(CheckLoop); checker.IsBackground = true; checker.Start(); def warmer = Thread(WarmUp); warmer.IsBackground = true; warmer.Start(); }
     mutable exitCode = 1;
     mutable running = true;
     while (running)
@@ -344,7 +345,7 @@ public sealed class Server
   {
     when (typecheck && root != null)
     {
-      lock (checkWanted) { lastEdit = DateTime.UtcNow; checkGeneration++; def running = checking; when (running != null) try { running.Kill() } catch { | _ => () } }
+      lock (checkWanted) { lastEdit = DateTime.UtcNow; checkGeneration++; def running = checking; when (running != null) { stopped = running; try { running.Kill() } catch { | _ => () } } }
       _ = checkWanted.Set();
     }
   }
@@ -364,23 +365,81 @@ public sealed class Server
     request
   }
 
-  /// Runs a checker process (`nemerle-lsp --check`) on a request; null when it fails.
-  RunChecker(request : JsonObject, track : bool) : JsonObject
+  /// A checker kept running (`nemerle-lsp --check-serve`), with the uses it has had.
+  [Record] sealed class Warm { public Process : Diagnostics.Process; public mutable Uses : int; }
+  /// The checkers waiting for a request: each is taken by one request at a time, and one more is started when every
+  /// one is busy (the typed check, the index and a completion may run at once).
+  idle : ConcurrentBag[Warm] = ConcurrentBag();
+  /// (a checker is replaced after this many checks, so what a long session's compilations leave does not pile up)
+  static WarmUses = 100;
+
+  StartChecker() : Warm
   {
     def info = Diagnostics.ProcessStartInfo(Environment.ProcessPath);
-    // the same server, as `dotnet nemerle-lsp.exe --check` (or the apphost itself)
+    // the same server, as `dotnet nemerle-lsp.exe --check-serve` (or the apphost itself)
     when (Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "dotnet") info.ArgumentList.Add(typeof(Server).Assembly.Location);
-    info.ArgumentList.Add("--check");
+    info.ArgumentList.Add("--check-serve");
     info.RedirectStandardInput = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true; info.UseShellExecute = false;
     def process = Diagnostics.Process.Start(info) :> Diagnostics.Process;
-    when (track) lock (checkWanted) checking = process;
-    process.StandardInput.Write(request.ToJsonString()); process.StandardInput.Close();
-    def errors = process.StandardError.ReadToEndAsync();
-    def output = process.StandardOutput.ReadToEnd();
-    process.WaitForExit();
+    // (what it says on stderr goes to the log, so a checker that fails says why)
+    process.ErrorDataReceived += fun (_, e) { when (e.Data != null) log.WriteLine("checker: " + e.Data) };
+    process.BeginErrorReadLine();
+    Warm(process, 0)
+  }
+
+  /// A checker started and given a first check, so the editor's first request finds it compiled and loaded.
+  WarmUp() : void
+  {
+    try
+    {
+      def started = Diagnostics.Stopwatch.StartNew();
+      def warm = StartChecker();
+      def request = JsonObject();
+      // (a folder of its own: the checker looks through its root for the files that export)
+      def folder = Directory.CreateTempSubdirectory("nemerle-lsp-warmup-").FullName;
+      request["root"] = JsonValue.Create(folder); request["references"] = JsonValue.Create(references);
+      def file = JsonObject(); file["path"] = JsonValue.Create(Path.Combine(folder, "warmup.n"));
+      file["text"] = JsonValue.Create("Twice(n : int) : int { n * 2 }\nSystem.Console.WriteLine(Twice(1))\n");
+      request["files"] = JsonArray(array[file : JsonNode]);
+      when (Ask(warm, request) != null) { idle.Add(warm); log.WriteLine("checker warmed in " + started.ElapsedMilliseconds.ToString() + " ms") }
+      try { Directory.Delete(folder, true) } catch { | _ => () }
+    }
+    catch { | e is Exception => log.WriteLine("warm-up: " + e.Message) }
+  }
+
+  /// One request to a checker; null when it failed (and then the checker is ended).
+  Ask(warm : Warm, request : JsonObject) : JsonObject
+  {
+    def answer = try
+    {
+      warm.Process.StandardInput.WriteLine(request.ToJsonString()); warm.Process.StandardInput.Flush();
+      warm.Process.StandardOutput.ReadLine()
+    }
+    catch { | _ is Exception => null };
+    warm.Uses++;
+    def parsed = if (answer == null || answer.Length == 0) null else (JsonNode.Parse(answer) :> JsonNode).AsObject();
+    if (parsed == null || parsed["failed"] != null)
+    {
+      unless (parsed == null && lock (checkWanted) stopped == warm.Process)
+        log.WriteLine("check failed: " + (if (parsed == null) "the checker ended" else Str(parsed["failed"])));
+      try { unless (warm.Process.HasExited) warm.Process.Kill() } catch { | _ => () }
+      null
+    }
+    else parsed
+  }
+
+  /// Runs a request on a warm checker; null when it fails. A tracked one (the typed check of the open files) is
+  /// ended by a newer edit, as it is obsolete: that checker is not used again.
+  RunChecker(request : JsonObject, track : bool) : JsonObject
+  {
+    mutable warm;
+    unless (idle.TryTake(out warm) && !warm.Process.HasExited) warm = StartChecker();
+    when (track) lock (checkWanted) checking = warm.Process;
+    def result = Ask(warm, request);
     when (track) lock (checkWanted) checking = null;
-    if (process.ExitCode == 0 && output.Length > 0) (JsonNode.Parse(output) :> JsonNode).AsObject()
-    else { log.WriteLine("check failed (" + process.ExitCode.ToString() + "): " + errors.Result); null }
+    when (result != null && !warm.Process.HasExited)
+      if (warm.Uses < WarmUses) idle.Add(warm) else try { warm.Process.StandardInput.Close() } catch { | _ => () };
+    result
   }
 
   /// Keeps the symbol index up to date: each time it is wanted (the start, a save), the files that changed on disk
@@ -449,7 +508,7 @@ public sealed class Server
       _ = checkWanted.WaitOne();
       // wait until edits have paused
       mutable settled = false;
-      while (!settled) { def wait = 600 - (DateTime.UtcNow - lastEdit).TotalMilliseconds; if (wait > 0) Thread.Sleep(wait :> int) else settled = true; }
+      while (!settled) { def wait = 300 - (DateTime.UtcNow - lastEdit).TotalMilliseconds; if (wait > 0) Thread.Sleep(wait :> int) else settled = true; }
       def generation = lock (checkWanted) checkGeneration;
       def request = CheckRequest();
       try
@@ -1370,6 +1429,7 @@ internal module Program
     mutable typecheck = true;
     def libraries = SCG.List.[string]();
     when (args.:Contains("--check")) return Checker.Run(Console.In, Console.Out);
+    when (args.:Contains("--check-serve")) return Checker.Serve(Console.In, Console.Out);
     for (mutable i = 0; i < args.Length; ++i)
       match (args[i])
       {
