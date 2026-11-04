@@ -369,7 +369,9 @@ public class OverloadPossibility : TypedBase, System.IEquatable[OverloadPossibil
     mutable res = [];
     
     foreach (overload in overloads) {
-      def id = (overload.Member, overload.VarArgs);
+      // (an extension method taken on a receiver and the same method called as itself are two meanings: inside its
+      // class, a plain `Ext(5)' is the static call, `Ext()' the extension on `this'; keyed alike, the second was lost)
+      def id = (overload.Member, overload.VarArgs, overload.ExtensionMethodObject != null);
       if (ht.Contains (id)) {
         assert(overload.Equals (ht [id]))
       } else {

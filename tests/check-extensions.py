@@ -69,3 +69,12 @@ out, log = compile_run('two', 'extension (s : string, n : int) { F() : int { n }
 if out is not None or "`extension' takes one receiver" not in log:
     raise SystemExit('FAILED: more than one receiver is an error\n%s' % log)
 print('PASS: an extension block takes exactly one receiver', flush=True)
+
+# inside its class, an extension method is both a static method (`Ext(5)') and an extension on `this' (`Ext()', as
+# Nitra's contexts call TryGetParent()): both meanings are offered, and the arguments choose
+out, log = compile_run('own-class', 'public class C\n{\n  public static Ext(this n : int) : int { n * 2 }\n'
+    '  public static Name(this c : C) : string { "c" }\n  public M() : string { $"$(Ext(5)) $(Name())" }\n}\n'
+    'System.Console.WriteLine(C().M())\n')
+if out != '10 c':
+    raise SystemExit('FAILED: a class calls its own extension method as a static method and on `this`\n%s\n%s' % (out, log[-800:]))
+print('PASS: inside its class, an extension method is called as a static method or on `this`', flush=True)
