@@ -3,7 +3,8 @@
 ## Variants
 
 A `variant` is a type whose values come in a fixed set of shapes. Rust calls this an enum with data, and ML calls it an
-algebraic data type. Each shape is an *option* with its own fields:
+algebraic data type. Each shape is an *option* with its own fields (a word of variants, unrelated to the `option[T]`
+type later in this chapter):
 
 ```nemerle
 using System.Console;

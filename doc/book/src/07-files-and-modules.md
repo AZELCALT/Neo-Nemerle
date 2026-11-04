@@ -14,7 +14,8 @@ A file's module name is its path relative to the source root, with `/` replaced 
 | `game/physics/body.n` | `game.physics.body` |
 
 Everything declared at the top of a file is a member of its module: functions, values, classes, variants. Other files
-reach them through the module's name, or open it with `using`:
+reach them through the module's name, or open it with `using`. Only what is marked `public` can be reached from
+another file (see [Visibility](#visibility)):
 
 ```nemerle
 // file: util/text.n
@@ -37,8 +38,8 @@ quiet...
 A file's directory is not opened implicitly. `util/other.n` can explicitly open its sibling with `using text;`,
 or use the full name `util.text`. Imports are per file, and nothing leaks from one file into another.
 
-Use `using the_symbol.file_name;` to open a file module: the dotted prefix identifies its containing path, and the
-last component identifies the file without `.n`. For example, `using game.physics.body;` opens the module from
+`using folder.file;` opens a file module: the dotted start is the folder it is in, and the last part is the file's
+name without `.n`. For example, `using game.physics.body;` opens the module from
 `game/physics/body.n`. The same spelling works when that module comes from a referenced Nemerle library.
 
 `using` performs name lookup in the current compilation and its referenced .NET assemblies. It can open a file
@@ -49,7 +50,7 @@ Opening a containing folder, such as `using game.physics;`, makes its immediate 
 
 ## Logical folders: `register`
 
-Write `register the_symbol;` as the first directive of a file, before its `using`s and declarations. It replaces the
+Write `register some.folder;` as the first directive of a file, before its `using`s and declarations. It replaces the
 physical containing path with a logical folder. The filename still supplies the final component:
 
 ```nemerle

@@ -43,8 +43,27 @@ WriteLine(["a", "bb", "ccc"].Map(_.Length))
 [1, 2, 3]
 ```
 
-`_.Length` is a partial application too: "take the argument's `Length`". A method with a single overload can be
-passed by name, like `Console.WriteLine` can't but `Twice` below can.
+`_.Length` is a partial application too: "take the argument's `Length`".
+
+A function can also be passed by its name. One with several overloads, like `WriteLine`, works too: the type of the
+parameter picks the overload:
+
+```nemerle
+using System.Console;
+
+ApplyTwice(f : int -> int, x : int) : int { f(f(x)) }
+Double(x : int) : int { x * 2 }
+
+WriteLine(ApplyTwice(Double, 5));
+def names = ["ada", "alan"];
+names.Iter(WriteLine)
+```
+
+```text
+20
+ada
+alan
+```
 
 ## Closures
 
@@ -69,7 +88,8 @@ WriteLine(next())
 3
 ```
 
-`_ = expression` discards a value on purpose. Nemerle warns when a non-`void` value is silently dropped.
+`void -> int` is the type of a function that takes nothing and gives an `int`. `_ = expression` discards a value on
+purpose. Nemerle warns when a non-`void` value is silently dropped.
 
 ## Generic functions
 

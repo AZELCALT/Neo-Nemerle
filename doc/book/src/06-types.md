@@ -96,7 +96,8 @@ an animal that says woof
 a small dog, an animal that says woof
 ```
 
-`Dog() : Animal` states the element type, so the list is a `list[Animal]` rather than a `list[Dog]`.
+`base.Describe()` calls the version of the class it inherits from (`Dog`'s, which is `Animal`'s). `Dog() : Animal`
+states the element type, so the list is a `list[Animal]` rather than a `list[Dog]`.
 
 ## Interfaces
 

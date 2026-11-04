@@ -23,6 +23,9 @@ WriteLine($"$greeting, the answer is $answer")
 hello, the answer is 42
 ```
 
+`$"..."` is a string with values spliced in: `$greeting` and `$answer` are replaced by their values, and
+`$(a + b)` splices an expression.
+
 Assigning to a `def` is a compile error:
 
 ```nemerle,fail
@@ -31,8 +34,10 @@ answer = 43
 ```
 
 ```text
-answer
+needed a writable location for assignment target
 ```
+
+The message goes on to name `answer` and say it is read-only.
 
 When a value really has to change, say so with `mutable`:
 
@@ -66,96 +71,9 @@ WriteLine(x)
 10
 ```
 
-A name keeps its kind: a `def` is not bound again as a `mutable`, nor the other way round.
-
-### A mutable whose type changes
-
-A `mutable` written without a type can be given a value of another type. That is not dynamic typing: the compiler
-follows the code, and after each assignment it knows the one type the value has.
-
-```nemerle
-using System.Console;
-
-mutable answer = 42;
-WriteLine(answer + 1);
-answer = "forty-two";
-WriteLine(answer.Length)
-```
-
-```text
-43
-9
-```
-
-Where the compiler cannot know which type the value has (after an `if` that changes it on one way only, around a loop,
-inside a lambda, which runs whenever it is called), the value has a *set* of types. A use without a check must fit
-every type in the set (`WriteLine(value)` takes an `int` and a `string` alike); a check picks the types it handles:
-
-```nemerle
-using System.Console;
-
-def describe(n : int) : string
-{
-  mutable value = n;
-  when (n > 10) value = "big";
-  match (value)
-  {
-    | i is int => $"the number $i"
-    | s is string => s
-  }
-}
-
-WriteLine(describe(3));
-WriteLine(describe(30))
-```
-
-```text
-the number 3
-big
-```
-
-`if (value is string)` is a check too: inside it, `value` is a `string`. A use that does not fit one of the types is
-an error, which says which:
-
-```nemerle,fail
-def doubled(n : int) : int
-{
-  mutable value = n;
-  when (n > 10) value = "big";
-  value * 2
-}
-System.Console.WriteLine(doubled(3))
-```
-
-```text
-this does not fit `value' when it is string: `value' is int or string here (int from line 3, string from line 4)
-```
-
-The error names the types the value can be at that point and the lines that give it each, and it goes on with the
-check to write: `match (value) { | v is int => ... | v is string => ... }`.
-
-The value is stored as its one type where its type never changes. Where it does, it is kept as an object, so a value
-type assigned to it (an `int`, a `double`) is boxed. In a loop or a lambda, which may run many times, the compiler
-warns (`N10014`, which `-nowarn:10014` turns off): give the value one type, or write `mutable total : object` to say
-it is meant to be kept as an object.
-
-A `mutable` with a type written down (`mutable count : int = 0`) keeps that type. One written without a value
-(`mutable total;`) is *NotYet* until the code gives it one: reading it where some way to the read has not assigned
-it is an error. An `out` argument assigns it.
-
-```nemerle,fail
-def total(c : bool) : int
-{
-  mutable sum;
-  when (c) sum = 1;
-  sum
-}
-System.Console.WriteLine(total(true))
-```
-
-```text
-`sum' is NotYet here
-```
+A name keeps its kind: a `def` is not bound again as a `mutable`, nor the other way round. A `mutable` written
+without a type can even be given a value of another type later; that comes at the end of this chapter, in
+[Values of several types](#values-of-several-types).
 
 ## Types and inference
 
@@ -252,75 +170,9 @@ Hello, world
 `void` means "no value". Functions declared at the top of a file belong to the file's module. Their order doesn't
 matter, and top-level statements can call functions defined further down.
 
-A function's return type may be left out: its result is the type its body gives. When its return points give
-different types, the result is one of them, as a value whose type follows the flow is (above): a caller has those
-types, and checks it as it would such a value. A use that fits each type is fine, a `match` picks them, and a use
-that does not fit one of them is an error:
-
-```nemerle
-using System.Console;
-
-Twice(n : int) { n * 2 }
-Pick(first : bool) { if (first) "one" else 1 }
-
-def size = Twice(4);
-def picked = Pick(System.Environment.GetCommandLineArgs().Length > 99);
-WriteLine(size + 1);
-WriteLine(picked);
-WriteLine(match (picked) { | s is string => s.Length | n is int => n });
-WriteLine(Pick(true).Length)
-```
-
-```text
-9
-1
-1
-3
-```
-
-`picked` is `string` or `int`: its argument is known only when the program runs. `Pick(true)` is a `string`: a
-call whose constant arguments decide which return point it reaches has that point's type (here its `if` is decided),
-so its `Length` needs no check.
-
-```nemerle,fail
-Pick(first : bool) { if (first) "one" else 1 }
-Show(first : bool) : void { def n : int = Pick(first) * 2; System.Console.WriteLine(n) }
-Show(true)
-```
-
-```text
-this does not fit `Pick(first)' when it is string
-```
-
-A recursive call gives the function's own result, so it adds no type of its own. A top-level value bound to such a
-result has the function's types too, and the file's functions check it before they use it when it has several.
-Other .NET languages see the result as a `Nemerle.Scopes.Content` when it has several types, and its result says
-which: `[return: Nemerle.Scopes.ContentTypes(typeof(string), typeof(int))]`. Compiling with `-flow-log` adds a hint at
-each return point saying the type it gives, for when a set's types are not the ones expected.
-
-To write that type yourself, in a parameter or a result, name it `content`. A `content` parameter takes a value of
-several types (or of one), a `content` result holds whichever value its return point gives, and a `match` or `is` on
-one checks the value it holds:
-
-```nemerle
-Describe(x : content) : string { match (x) { | s is string => "text " + s | n is int => "number " + n.ToString() | _ => "other" } }
-Pick(first : bool) : content { if (first) "one" else 1 }
-
-mutable v = 1;
-when (System.Environment.GetCommandLineArgs().Length > 0) v = "two";
-System.Console.WriteLine(Describe(v));
-System.Console.WriteLine(Describe(Pick(false)));
-System.Console.WriteLine(Pick(true) is string)
-```
-
-```text
-text two
-number 1
-True
-```
-
-A value gets into a `content` only that way, so it is not a type to cast to: `x :> content` and `(content)x` are
-errors.
+A function's return type may be left out: its result is the type its body gives, so `Twice(n : int) { n * 2 }`
+returns an `int`. (One whose return points give different types is in
+[Values of several types](#values-of-several-types).)
 
 Inside a block, `def` declares a *local* function. Its parameter and return types may be left out; they are inferred:
 
@@ -471,3 +323,169 @@ else
 ```text
 big
 ```
+
+## Values of several types
+
+This part uses what came before: `when (c) x` runs `x` when `c` holds, and `match` with `is` patterns checks which type
+a value has (`| s is string => ...` runs when the value is a `string`, naming it `s`; chapter 4 covers `match` in
+full). It can wait until you need it.
+
+### A mutable whose type changes
+
+A `mutable` written without a type can be given a value of another type. That is not dynamic typing: the compiler
+follows the code, and after each assignment it knows the one type the value has.
+
+```nemerle
+using System.Console;
+
+mutable answer = 42;
+WriteLine(answer + 1);
+answer = "forty-two";
+WriteLine(answer.Length)
+```
+
+```text
+43
+9
+```
+
+Where the compiler cannot know which type the value has (after an `if` that changes it on one way only, around a loop,
+inside a lambda, which runs whenever it is called), the value has a *set* of types. A use without a check must fit
+every type in the set (`WriteLine(value)` takes an `int` and a `string` alike); a check picks the types it handles:
+
+```nemerle
+using System.Console;
+
+def describe(n : int) : string
+{
+  mutable value = n;
+  when (n > 10) value = "big";
+  match (value)
+  {
+    | i is int => $"the number $i"
+    | s is string => s
+  }
+}
+
+WriteLine(describe(3));
+WriteLine(describe(30))
+```
+
+```text
+the number 3
+big
+```
+
+`if (value is string)` is a check too: inside it, `value` is a `string`. A use that does not fit one of the types is
+an error, which says which:
+
+```nemerle,fail
+def doubled(n : int) : int
+{
+  mutable value = n;
+  when (n > 10) value = "big";
+  value * 2
+}
+System.Console.WriteLine(doubled(3))
+```
+
+```text
+this does not fit `value' when it is string: `value' is int or string here (int from line 3, string from line 4)
+```
+
+The error names the types the value can be at that point and the lines that give it each, and it goes on with the
+check to write: `match (value) { | v is int => ... | v is string => ... }`.
+
+The value is stored as its one type where its type never changes. Where it does, it is kept as an object, so a value
+type assigned to it (an `int`, a `double`) is boxed. In a loop or a lambda, which may run many times, the compiler
+warns (`N10014`, which `-nowarn:10014` turns off): give the value one type, or write `mutable total : object` to say
+it is meant to be kept as an object.
+
+A `mutable` with a type written down (`mutable count : int = 0`) keeps that type. One written without a value
+(`mutable total;`) is *NotYet* until the code gives it one: reading it where some way to the read has not assigned
+it is an error. An `out` argument assigns it.
+
+```nemerle,fail
+def total(c : bool) : int
+{
+  mutable sum;
+  when (c) sum = 1;
+  sum
+}
+System.Console.WriteLine(total(true))
+```
+
+```text
+`sum' is NotYet here
+```
+
+### Functions that give several types
+
+When a function's return type is left out and its return points give different types, the result is one of them, like
+a mutable whose type changes (above): a caller has those types, and checks it as it would such a value. A use that
+fits each type is fine, a `match` picks them, and a use that does not fit one of them is an error:
+
+```nemerle
+using System.Console;
+
+Twice(n : int) { n * 2 }
+Pick(first : bool) { if (first) "one" else 1 }
+
+def size = Twice(4);
+def picked = Pick(System.Environment.GetCommandLineArgs().Length > 99);
+WriteLine(size + 1);
+WriteLine(picked);
+WriteLine(match (picked) { | s is string => s.Length | n is int => n });
+WriteLine(Pick(true).Length)
+```
+
+```text
+9
+1
+1
+3
+```
+
+`picked` is `string` or `int`: its argument is known only when the program runs. `Pick(true)` is a `string`: a
+call whose constant arguments decide which return point it reaches has that point's type (here its `if` is decided),
+so its `Length` needs no check.
+
+```nemerle,fail
+Pick(first : bool) { if (first) "one" else 1 }
+Show(first : bool) : void { def n : int = Pick(first) * 2; System.Console.WriteLine(n) }
+Show(true)
+```
+
+```text
+this does not fit `Pick(first)' when it is string
+```
+
+A recursive call gives the function's own result, so it adds no type of its own. A top-level value bound to such a
+result has the function's types too, and the file's functions check it before they use it when it has several.
+Other .NET languages see the result as a `Nemerle.Scopes.Content` when it has several types, and its result says
+which: `[return: Nemerle.Scopes.ContentTypes(typeof(string), typeof(int))]`. Compiling with `-flow-log` adds a hint at
+each return point saying the type it gives, for when a set's types are not the ones expected.
+
+To write that type yourself, in a parameter or a result, name it `content`. A `content` parameter takes a value of
+several types (or of one), a `content` result holds whichever value its return point gives, and a `match` or `is` on
+one checks the value it holds:
+
+```nemerle
+Describe(x : content) : string { match (x) { | s is string => "text " + s | n is int => "number " + n.ToString() | _ => "other" } }
+Pick(first : bool) : content { if (first) "one" else 1 }
+
+mutable v = 1;
+when (System.Environment.GetCommandLineArgs().Length > 0) v = "two";
+System.Console.WriteLine(Describe(v));
+System.Console.WriteLine(Describe(Pick(false)));
+System.Console.WriteLine(Pick(true) is string)
+```
+
+```text
+text two
+number 1
+True
+```
+
+A value gets into a `content` only that way, so it is not a type to cast to: `x :> content` and `(content)x` are
+errors.

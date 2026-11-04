@@ -14,18 +14,23 @@ It checks the compiler and script host before replacing an existing installation
 different SDK. Prerequisites are available in the same installer process after installation; Windows may request
 elevation for system packages. `-NoDependencies` opts out of automatic prerequisite installation and online repair.
 
-For a source build on Linux or macOS, install the .NET 10 SDK, Python 3 and Mono's `sn` tool (used to verify signed
-assemblies), then:
+On Linux or macOS, with the .NET 10 runtime installed, the installer puts `ncc`, `nscript` and the language server in
+your home directory, with the commands in `~/.local/bin`:
 
 ```sh
 git clone https://github.com/AZELCALT/Neo-Nemerle.git
 cd Neo-Nemerle
-./bootstrap --quick
+install/install.sh
 ```
 
-`boot/coreclr` already holds a working compiler, so you can use it right away. `./bootstrap` rebuilds everything from
-it and runs the tests; the new toolchain lands in `out/bootstrap/toolchain`. In this book, `ncc` and `nscript` mean
-the ones in either directory.
+If `ncc -version` then says the command is not found, `~/.local/bin` is not on your `PATH`: add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file (`~/.bashrc`, `~/.zshrc`) and open a new terminal.
+
+To build from source instead, install the .NET 10 SDK, Python 3 and Mono's `sn` tool (used to verify signed
+assemblies), then run `./bootstrap --quick` in the clone (`install/install.sh --build` builds and installs). `boot/coreclr`
+already holds a working compiler, so you can use it right away; `./bootstrap` rebuilds everything from it and runs the
+tests, and the new toolchain lands in `out/bootstrap/toolchain`. In this book, `ncc` and `nscript` mean the installed
+commands, or the ones in either directory.
 
 ## Hello, world
 
