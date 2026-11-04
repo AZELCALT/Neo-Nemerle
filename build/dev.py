@@ -3,7 +3,7 @@
 
     ./dev [part ...] [--base DIR] [--output DIR]
 
-Parts, in build order: runtime compiler macros cli nitra scripting lsp (default: all; a rebuilt compiler rebuilds the
+Parts, in build order: platform runtime compiler macros cli nitra scripting lsp (default: all; a rebuilt compiler rebuilds the platform and the
 macros, which are bound to it). Each is compiled once by the
 base toolchain (out/bootstrap/toolchain when it is newer than boot/coreclr, else boot/coreclr), not in the two verified stages of
 ./bootstrap, and every compile goes through the build cache, so asking for all of them only costs the parts whose
@@ -16,7 +16,7 @@ from tooling import artifact_path, net10_runtime, parallel_flag, tune_compiler_r
 import buildcache
 
 repo = pathlib.Path(__file__).resolve().parents[1]
-PARTS = ['runtime', 'compiler', 'macros', 'cli', 'nitra', 'scripting', 'lsp']
+PARTS = ['platform', 'runtime', 'compiler', 'macros', 'cli', 'nitra', 'scripting', 'lsp']
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('parts', nargs='*', help='what to rebuild, from: ' + ' '.join(PARTS) + ' (default: all)')
 p.add_argument('--base', type=pathlib.Path, help='toolchain that compiles (default: out/bootstrap/toolchain, else boot/coreclr)')
@@ -47,11 +47,14 @@ names = ['System.Linq', 'System.Collections.Specialized', 'System.ComponentModel
     'System.Xml.ReaderWriter', 'System.Xml.XmlDocument', 'System.Xml.XmlSerializer',
     'System.Security.Cryptography', 'System.Reflection.Emit', 'System.Reflection.Emit.ILGeneration',
     'System.Reflection.Primitives', 'System.Runtime.InteropServices']
+# The compiler that compiles: the base, or a copy of it with the platform rebuilt (a compiler reads its own
+# Nemerle.Platform.dll, so the one the new compiler is built against must be the one running), as ./bootstrap's seed.
+seed = base
 def build(label, output, source_files, references, extra, keyname='Nemerle.Compiler.snk'):
     macros = ['-no-stdmacros', '-macros:' + str(base / 'Nemerle.Macros.dll')]
-    cmd = ['dotnet', str(base / 'ncc.exe'), *map(str, source_files), '-out:' + str(output),
+    cmd = ['dotnet', str(seed / 'ncc.exe'), *map(str, source_files), '-out:' + str(output),
            '-define:NET_4_0', '-define:MODERN_CLR', '-target-references:' + str(refs),
-           '-keyfile:' + str(repo / 'misc/keys' / keyname), '-no-color', *macros, *parallel_flag(base / 'ncc.exe'), *extra]
+           '-keyfile:' + str(repo / 'misc/keys' / keyname), '-no-color', *macros, *parallel_flag(seed / 'ncc.exe'), *extra]
     cmd += ['-r:' + str(r) for r in references]
     log = logs / (label + '.log')
     code = buildcache.run(cmd, log, cwd=repo)
@@ -76,10 +79,18 @@ if 'runtime' in parts:
           [runtime / 'System.Xml.ReaderWriter.dll', runtime / 'System.Xml.XmlDocument.dll', runtime / 'System.Console.dll'],
           ['-target:library', '-no-stdlib', '-source-root:' + str(repo / 'lib'), '-assembly-version:' + version.group(1)],
           keyname='Nemerle.snk')
+# The C# platform adapter (platform/) comes first when the compiler is rebuilt: the compiler is built against it.
+if 'compiler' in parts: parts.add('platform')
+if 'platform' in parts:
+    seed = out / 'seed'
+    if seed.exists(): shutil.rmtree(seed)
+    shutil.copytree(base, seed)
+    step('platform', [sys.executable, repo / 'build/build-coreclr-platform.py', '--toolchain', seed, '--references', refs])
+    shutil.copy2(seed / 'Nemerle.Platform.dll', T / 'Nemerle.Platform.dll')
 # (one stage: the compiler and its front end are built against the base runtime, which still runs them)
 if 'compiler' in parts:
     build('compiler', T / 'Nemerle.Compiler.dll', sorted(repo.glob('ncc/Nemerle/Compiler/*.n')),
-          [base / 'Nemerle.Platform.dll', base / 'System.CodeDom.dll'] + [runtime / (n + '.dll') for n in names],
+          [T / 'Nemerle.Platform.dll', base / 'System.CodeDom.dll'] + [runtime / (n + '.dll') for n in names],
           ['-target:library', '-no-stdlib', '-r:' + str(base / 'Nemerle.dll'), '-source-root:' + str(repo / 'ncc')])
 # The standard macros run inside T's compiler, so they are built against it (after it): a macro library is bound to
 # the compiler it was built against, and a rebuilt compiler needs its macros rebuilt.

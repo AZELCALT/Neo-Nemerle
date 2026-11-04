@@ -120,6 +120,7 @@ public class MacroRegistry
   /// one from an older compiler's build (a prebuilt library) has its method typed in order instead.
   static CheckWorkerMacro (ctx : Typer, m : IMacro) : void
   {
+    when (UserMacro (m)) ctx.Manager.Incremental?.OnUserMacro ();   // (a user's macro may do anything: -incremental)
     when (ctx.Manager.Typing.IsWorker && !ManagerClass.ThreadSafe (m.GetType ().Assembly))
       ctx.Manager.CheckShared ("macro `" + m.GetName () + "' of " + m.GetType ().Assembly.GetName ().Name)
   }

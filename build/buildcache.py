@@ -9,7 +9,13 @@ result. On a hit the files the compile wrote next to its -out: are restored and 
 The compiler does not write the same bytes twice (a module's id is new each time), so a file a cached compile wrote
 is keyed by the key that wrote it, not by its bytes: a compile reading it is then reused whenever what made it was.
 
+A compile that does run is given -incremental:STATE (when its compiler has it), a folder per compiler and output in
+the cache: the files whose text did not change since that output's last compile are not typed again, their code is
+taken from it (ncc -incremental). The option is not part of the key. Should such a compile fail with an internal
+error, it is run again in full.
+
 NEMERLE_BUILD_CACHE=off disables it; NEMERLE_BUILD_CACHE=DIR moves it (default ~/.cache/nemerle/build).
+NEMERLE_INCREMENTAL=off compiles in full every time.
 """
 import hashlib
 import json
@@ -22,6 +28,7 @@ import time
 LIMIT = 4 << 30   # bytes kept; the oldest entries go first
 _file_hashes = {}
 _env_key = None
+_incremental = {}
 
 
 def root():
@@ -95,6 +102,21 @@ def key(command):
     return digest
 
 
+def incremental_option(cache, command):
+    """['-incremental:STATE'] for a compile whose compiler has the option, else []."""
+    if os.environ.get('NEMERLE_INCREMENTAL', '').lower() in ('off', '0', 'no'): return []
+    compiler = next((arg for arg in command if arg.endswith('ncc.exe')), None)
+    out = next((arg[5:] for arg in command if arg.startswith('-out:')), None)
+    if compiler is None or out is None: return []
+    compiler = str(pathlib.Path(compiler).resolve())
+    if compiler not in _incremental:
+        shown = subprocess.run(['dotnet', compiler, '-help'], capture_output=True, text=True).stdout
+        _incremental[compiler] = '-incremental' in shown
+    if not _incremental[compiler]: return []
+    state = hashlib.sha256((compiler + '\0' + str(pathlib.Path(out).resolve())).encode()).hexdigest()[:24]
+    return ['-incremental:' + str(cache / 'incremental' / state)]
+
+
 def output_folder(command):
     for arg in command:
         if arg.startswith('-out:'): return pathlib.Path(arg[5:]).parent
@@ -127,8 +149,13 @@ def run(command, log, cwd=None):
         os.utime(entry)
         return 0
     before = snapshot(folder)
+    incremental = incremental_option(cache, command)
     with log.open('w') as stream:
-        code = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
+        code = subprocess.run(command + incremental, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
+    if code != 0 and incremental and 'internal compiler error' in log.read_text(errors='replace'):
+        shutil.rmtree(incremental[0].split(':', 1)[1], ignore_errors=True)
+        with log.open('w') as stream:
+            code = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
     if code == 0:
         written = [name for name, state in snapshot(folder).items() if before.get(name) != state]
         staging = cache / (entry.name + '.tmp' + str(os.getpid()))

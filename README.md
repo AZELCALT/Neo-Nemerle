@@ -170,7 +170,10 @@ A compile whose inputs did not change is not run again: `build/buildcache.py` ke
 (the compiler, its sources, its references) and keeps the result in `~/.cache/nemerle/build`, so a second
 `./bootstrap` rebuilds only what a change reaches (a whole warm build is under a minute, against about five cold).
 The build passes `-parallel` to every compiler that can use it (method bodies typed on several threads, the same
-assembly as without it): a cold build is about three minutes. `./bootstrap --no-cache` (or `NEMERLE_BUILD_CACHE=off`) compiles everything; `./dev` builds each part once with the
+assembly as without it): a cold build is about three minutes. A compile that does run gets `-incremental` (a state
+folder per compiler and output in the cache): the files whose text did not change since that output's last compile are
+not typed again and their code is copied from it, so an edit inside a function body recompiles `Nemerle.Compiler.dll`
+in about 8 s instead of 21 (`NEMERLE_INCREMENTAL=off` compiles in full). `./bootstrap --no-cache` (or `NEMERLE_BUILD_CACHE=off`) compiles everything; `./dev` builds each part once with the
 last bootstrapped toolchain and is seconds for an unchanged part, but run `./bootstrap` before committing.
 
 | Directory | Contents |

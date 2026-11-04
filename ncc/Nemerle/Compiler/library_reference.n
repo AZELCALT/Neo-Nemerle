@@ -1128,7 +1128,7 @@ using Nemerle.Compiler.Utility;
       {
         if (implicit_conversion == null)
         {
-          AddConversions ();
+          EnsureConversions ();
           LookupMember (name);
         } 
         else base.LookupMemberImpl (name);
@@ -1141,19 +1141,29 @@ using Nemerle.Compiler.Utility;
         else
         {
           when (implicit_conversion == null)
-            AddConversions ();
+            EnsureConversions ();
           implicit_conversion.Contains (target) 
             || Equals (InternalType.Char_tc) 
                && (InternalType.UInt16_tc :> ExternalPrimitiveTypeInfo).CanOmmitConversionTo (target)
         }
       }
       
+      /// Once, whichever of -parallel's workers asks first: two would each add the conversions (an overload ambiguity
+      /// between a conversion and itself); implicit_conversion is set last, as readers take it to mean they are there.
+      EnsureConversions () : void
+      {
+        when (implicit_conversion == null)
+          lock (NamespaceTree.LoadLock)
+            when (implicit_conversion == null)
+              AddConversions ()
+      }
+
       protected AddConversions () : void
       {
         mutable is_numeric = true;
         def name = system_type.Name;
         
-        implicit_conversion =
+        def implicit_conversion =
           match (name)
           {
             | "SByte"  => [InternalType.Int16_tc, InternalType.Int32_tc, InternalType.Int64_tc, InternalType.Single_tc, InternalType.Double_tc]
@@ -1189,6 +1199,7 @@ using Nemerle.Compiler.Utility;
               AddConversion ("op_Explicit", t);
           }
         }
+        this.implicit_conversion = implicit_conversion;
       }
     }
   

@@ -26,7 +26,7 @@ namespace Nemerle.Platform
 #endif
         private void CompleteSavedMetadataCore(string path, object signingKey, byte[] signingKeyBlob)
         {
-            bool needed = TargetReferenceDirectory != null || signingKeyBlob != null || savedAttributes.Count != 0 || methodAliases.Count != 0 || guardedState.Count != 0 || overrideDefinitions.Exists(item => PersistedOutput || item.Declaration is MethodBuilder);
+            bool needed = Reusing || TargetReferenceDirectory != null || signingKeyBlob != null || savedAttributes.Count != 0 || methodAliases.Count != 0 || guardedState.Count != 0 || overrideDefinitions.Exists(item => PersistedOutput || item.Declaration is MethodBuilder);
             if (!needed) return;
             using (var resolver = new DefaultAssemblyResolver())
             {
@@ -45,6 +45,8 @@ namespace Nemerle.Platform
                         // be removed (a lazily read signature points at reference rows by position)
                         ReadingMode = OtherTarget ? ReadingMode.Immediate : ReadingMode.Deferred }))
             {
+                // (ncc -incremental: the unchanged files' code from the previous build, before the passes below see it)
+                if (Reusing) Splice(assembly.MainModule, resolver, symbols);
                 var replacements = new Dictionary<MethodDefinition, List<MethodReference>>();
                 var localBodies = new HashSet<MethodDefinition>();
                 foreach (var item in overrideDefinitions)
@@ -96,6 +98,7 @@ namespace Nemerle.Platform
                 }
                 foreach (var target in savedAttributes)
                     FindAttributeTarget(assembly, target).CustomAttributes.Add(CreateSavedAttribute(assembly.MainModule, target.Data));
+                if (Reusing) AddReusedAttributes();
                 foreach (var alias in methodAliases)
                 {
                     var method = FindMethod(assembly.MainModule, alias.Method);
@@ -245,7 +248,11 @@ namespace Nemerle.Platform
 
         private static MethodDefinition FindMethod(ModuleDefinition module, MethodBase method)
         {
-            var type = FindType(module.Types, method.DeclaringType.FullName.Replace('+', '/'));
+            return FindMethodIn(FindType(module.Types, method.DeclaringType.FullName.Replace('+', '/')), method);
+        }
+
+        private static MethodDefinition FindMethodIn(TypeDefinition type, MethodBase method)
+        {
             if (type == null) throw new InvalidOperationException("Missing emitted type: " + method.DeclaringType);
             var parameters = method.GetParameters();
             var methodParameters = method.IsGenericMethod ? method.GetGenericArguments() : Type.EmptyTypes;

@@ -1,0 +1,443 @@
+/*
+ * Incremental compilation (-incremental:DIR): what a compile leaves for the next one.
+ *
+ * A file is the unit: a later compile whose declarations are all unchanged retypes only the files whose text changed
+ * and takes the others' compiled code from the previous output. For that, each compile records per file what compiling
+ * its code did beside its IL -- the messages it printed, the members it marked used or assigned, the types and members
+ * its lowering made, and whether it used what is shared across files (a user's macro, a top-level generated type) --
+ * with the hashes of its text and of its declarations, in DIR/manifest.txt, and keeps a copy of the output in DIR.
+ */
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+using System;
+using System.IO;
+using SCG = System.Collections.Generic;
+using PT = Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.manager_class;
+using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.ClassMembers;
+using Nemerle.Compiler.type_info;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.Parser;
+using Nemerle.Compiler.Source;
+using Nemerle.Compiler.Utility;
+
+public class Incremental
+{
+  public Manager : ManagerClass;
+  public Dir : string;
+
+  public this(manager : ManagerClass, dir : string) { Manager = manager; Dir = dir }
+
+  // The file whose code the current thread compiles (a method's typing, its commit, its IL), or null.
+  [System.ThreadStatic] static mutable owner : string;
+  // Set while a hint said once (Message.HintOnce) is reported: a replay says it once too.
+  [System.ThreadStatic] static mutable once : bool;
+
+  /// What `action' compiles belongs to `file' (its messages, marks, generated types and members).
+  public static Own(file : string, action : void -> void) : void
+  {
+    def old = owner;
+    owner = if (string.IsNullOrEmpty(file)) null else file;
+    try action() finally owner = old
+  }
+
+  /// `report' reports a hint said once (see `once').
+  public static Once(report : void -> void) : void
+  {
+    def old = once;
+    once = true;
+    try report() finally once = old
+  }
+
+  /// What compiling one file's code did beside its IL.
+  public class FileRecord
+  {
+    public File : string;
+    public mutable TextHash : string = "";
+    public mutable InterfaceHash : string = "";
+    /// (file, line, column, end line, end column, text as printed, said once)
+    public Messages : SCG.List[string * int * int * int * int * string * bool] = SCG.List();
+    public Used : SCG.HashSet[string] = SCG.HashSet();
+    public Assigned : SCG.HashSet[string] = SCG.HashSet();
+    public Generated : SCG.List[string] = SCG.List();
+    /// What was generated, as it is emitted (named at Save): types by CLR full name, members by (type, name). A
+    /// reused file's are those of the build its code is copied from.
+    public GeneratedObjects : SCG.List[IMember] = SCG.List();
+    public GenTypes : SCG.List[string] = SCG.List();
+    public GenMembers : SCG.List[string * string] = SCG.List();
+    /// It made a type outside its own types (anonymous classes, regexp holders): shared with other files.
+    public mutable TopGenerated : bool;
+    /// It expanded a user's macro (one not of the compiler or the standard macros): it may do anything.
+    public mutable UserMacro : bool;
+    public mutable Errors : bool;
+    /// A source of the compile (the others are code the compiler writes itself, as its generated source).
+    public mutable Source : bool;
+    public this(file : string) { File = file }
+  }
+
+  records : SCG.Dictionary[string, FileRecord] = SCG.Dictionary();
+
+  public Record(file : string) : FileRecord
+  {
+    lock (records)
+    {
+      mutable r;
+      unless (records.TryGetValue(file, out r)) { r = FileRecord(file); records[file] = r }
+      r
+    }
+  }
+
+  /// A key naming a member of this compilation the same way in every compile: its type, name and type.
+  public static Key(m : IMember) : string
+  {
+    match (m)
+    {
+      // (the arity tells Tuple['p0,'p1] from Tuple['p0,'p1,'p2])
+      | t is TypeBuilder => "T:" + t.FullName + "`" + t.TyparmsCount.ToString()
+      | mb is MemberBuilder => "M:" + mb.DeclaringType.FullName + "`" + mb.DeclaringType.TyparmsCount.ToString() + "::" + mb.Name + ":" + mb.GetMemType().ToString()
+      | _ => null
+    }
+  }
+
+  public OnReport(l : Location, text : string) : void
+  {
+    def file = owner;
+    when (file != null)
+    {
+      def r = Record(file);
+      lock (r) r.Messages.Add((l.File, l.Line, l.Column, l.EndLine, l.EndColumn, text, once))
+    }
+  }
+
+  public OnError() : void { def file = owner; when (file != null) Record(file).Errors = true }
+  public OnUserMacro() : void { def file = owner; when (file != null) Record(file).UserMacro = true }
+
+  public OnUsed(m : IMember) : void
+  {
+    def file = owner;
+    when (file != null)
+      match (Key(m)) { | null => () | key => def r = Record(file); lock (r) _ = r.Used.Add(key) }
+  }
+
+  public OnAssigned(m : IMember) : void
+  {
+    def file = owner;
+    when (file != null)
+      match (Key(m)) { | null => () | key => def r = Record(file); lock (r) _ = r.Assigned.Add(key) }
+  }
+
+  /// A type or member made while `owner's code is compiled (closures, state machines, lifted functions, proxies).
+  public OnGenerated(m : IMember, topLevel : bool) : void
+  {
+    def file = owner;
+    when (file != null)
+      match (Key(m))
+      {
+        | null => ()
+        | key =>
+          def r = Record(file);
+          lock (r) { r.Generated.Add(key); r.GeneratedObjects.Add(m); when (topLevel) r.TopGenerated = true }
+      }
+  }
+
+  /// The hashes of each file's text and of its declarations (its text without the bodies of the functions whose
+  /// result's type is written: what other files' code depends on).
+  public Fingerprint(sources : list[ISource], parsed : list[ParseResult]) : void
+  {
+    def spans = SCG.Dictionary.[int, SCG.List[Location]]();
+    def add(l : Location)
+    {
+      when (l.FileIndex > 0 && !l.IsGeneratedOrEmpty && l.EndLine >= l.Line)
+      {
+        mutable list;
+        unless (spans.TryGetValue(l.FileIndex, out list)) { list = SCG.List(); spans[l.FileIndex] = list }
+        list.Add(l)
+      }
+    }
+    def members(td : PT.TopDeclaration) : void
+    {
+      foreach (m in td.GetMembers())
+        match (m)
+        {
+          | PT.ClassMember.Function as fn when !(fn.header.ReturnType is <[ _ ]>) && fn.Name != ".cctor" => add(fn.BodyInnerLocation)
+          | PT.ClassMember.TypeDeclaration(td = inner) => members(inner)
+          | _ => ()
+        }
+    }
+    foreach (result in parsed) foreach (td in result.TopDeclarations) members(td);
+    foreach (source in sources)
+    {
+      def text = source.GetText();
+      def r = Record(Location.GetFileName(source.FileIndex));
+      r.Source = true;
+      r.TextHash = Hash(text);
+      mutable blank;
+      r.InterfaceHash = Hash(if (spans.TryGetValue(source.FileIndex, out blank)) Without(text, blank) else text)
+    }
+  }
+
+  // `text' without the spans (1-based lines and columns, end exclusive)
+  static Without(text : string, spans : SCG.List[Location]) : string
+  {
+    def starts = SCG.List([0]);
+    for (mutable i = 0; i < text.Length; i++) when (text[i] == '\n') starts.Add(i + 1);
+    def offset(line : int, col : int) : int
+    {
+      if (line - 1 < starts.Count) Math.Min(text.Length, starts[line - 1] + col - 1) else text.Length
+    }
+    def cut = SCG.List.[int * int]();
+    foreach (l in spans) cut.Add((offset(l.Line, l.Column), offset(l.EndLine, l.EndColumn)));
+    cut.Sort((a, b) => a[0].CompareTo(b[0]));
+    def sb = Text.StringBuilder();
+    mutable at = 0;
+    foreach ((s, e) in cut)
+      when (s >= at && e >= s) { _ = sb.Append(text, at, s - at); at = e }
+    _ = sb.Append(text, at, text.Length - at);
+    sb.ToString()
+  }
+
+  public static Hash(text : string) : string
+  {
+    using (sha = Security.Cryptography.SHA256.Create())
+      BitConverter.ToString(sha.ComputeHash(Text.Encoding.UTF8.GetBytes(text))).Replace("-", "")
+  }
+
+  // (a field: tab, newline and backslash escaped)
+  static Field(s : string) : string { s.Replace("\\", "\\\\").Replace("\t", "\\t").Replace("\n", "\\n").Replace("\r", "\\r") }
+
+  /// The identity of what decides how every file compiles: the compiler, the options, the references, the files.
+  public Identity() : string
+  {
+    def sb = Text.StringBuilder();
+    _ = sb.Append(typeof(ManagerClass).Assembly.ManifestModule.ModuleVersionId).Append('\n');
+    // (the command line without the sources, whose text is compared file by file, and this option)
+    // (and of the output, its name: where it is written does not change what is in it)
+    foreach (a when !a.StartsWith("-incremental:") && !a.EndsWith(".n") in System.Environment.GetCommandLineArgs())
+      _ = sb.Append(if (a.StartsWith("-out:")) "-out:" + Path.GetFileName(a.Substring(5)) else a).Append('\n');
+    foreach (path in Manager.Options.ReferencedLibraries + Manager.Options.MacrosToLoad)
+    {
+      def info = FileInfo(path);
+      _ = sb.Append(path).Append(' ').Append(if (info.Exists) info.Length + " " + info.LastWriteTimeUtc.Ticks else "-").Append('\n');
+    }
+    Hash(sb.ToString())
+  }
+
+  /// Writes DIR/manifest.txt and keeps a copy of the output (and its .pdb) as DIR/previous.*.
+  public Save(output : string, contexts : SCG.IEnumerable[string * int]) : void
+  {
+    Time("saved");
+    _ = Directory.CreateDirectory(Dir);
+    def lines = SCG.List();
+    lines.Add("NEMERLE-INCREMENTAL 1");
+    lines.Add("identity\t" + Identity());
+    lines.Add("output\t" + Path.GetFileName(output));
+    foreach ((key, index) in contexts) lines.Add("context\t" + index + "\t" + Field(key));
+    foreach (r when r.Source in records.Values)
+    {
+      lines.Add($"file\t$(Field(r.File))\t$(r.TextHash)\t$(r.InterfaceHash)\t$(if (r.TopGenerated) 1 else 0)$(if (r.UserMacro) 1 else 0)$(if (r.Errors) 1 else 0)");
+      foreach ((f, l, c, el, ec, text, o) in r.Messages)
+        lines.Add($"message\t$(Field(r.File))\t$(Field(f))\t$l\t$c\t$el\t$ec\t$(if (o) 1 else 0)\t$(Field(text))");
+      foreach (key in r.Used) lines.Add($"used\t$(Field(r.File))\t$(Field(key))");
+      foreach (key in r.Assigned) lines.Add($"assigned\t$(Field(r.File))\t$(Field(key))");
+      foreach (key in r.Generated) lines.Add($"generated\t$(Field(r.File))\t$(Field(key))");
+      foreach (m in r.GeneratedObjects)
+        match (m)
+        {
+          | t is TypeBuilder when t.SystemType?.FullName != null => r.GenTypes.Add((t.SystemType.FullName :> string).Replace('+', '/'))
+          | mb is MemberBuilder when mb.DeclaringType.SystemType?.FullName != null =>
+            r.GenMembers.Add(((mb.DeclaringType.SystemType.FullName :> string).Replace('+', '/'), mb.Name))
+          | _ => ()
+        }
+      foreach (t in r.GenTypes) lines.Add($"gentype\t$(Field(r.File))\t$(Field(t))");
+      foreach ((t, name) in r.GenMembers) lines.Add($"genmember\t$(Field(r.File))\t$(Field(t))\t$(Field(name))");
+    }
+    File.WriteAllLines(Path.Combine(Dir, "manifest.txt"), lines);
+    def copy(from : string, to : string) { when (File.Exists(from)) File.Copy(from, Path.Combine(Dir, to), true) }
+    copy(output, "previous" + Path.GetExtension(output));
+    copy(Path.ChangeExtension(output, ".pdb"), "previous.pdb");
+  }
+
+  // ---- the next compile: what it takes from this one ----
+
+  static Unfield(s : string) : string
+  {
+    def sb = Text.StringBuilder();
+    mutable i = 0;
+    while (i < s.Length)
+    {
+      if (s[i] == '\\' && i + 1 < s.Length)
+      {
+        _ = sb.Append(match (s[i + 1]) { | 't' => '\t' | 'n' => '\n' | 'r' => '\r' | c => c });
+        i += 2
+      }
+      else { _ = sb.Append(s[i]); i++ }
+    }
+    sb.ToString()
+  }
+
+  /// The previous compile's records (null when there is none), its identity and macro contexts.
+  previous : SCG.Dictionary[string, FileRecord] = SCG.Dictionary();
+  mutable previousIdentity : string;
+  previousContexts : SCG.List[string * int] = SCG.List();
+  /// The files whose code is taken from the previous output.
+  public Reused : SCG.HashSet[string] = SCG.HashSet();
+  /// The stubs emitted for their methods, which the platform fills from the previous output.
+  public Stubs : SCG.List[System.Reflection.MethodBase] = SCG.List();
+  public PreviousOutput : string { get { Path.Combine(Dir, "previous" + Path.GetExtension(Manager.Options.OutputFileName)) } }
+
+  /// NEMERLE_INCREMENTAL_DEBUG: when each step happened, since the process started.
+  public static Time(what : string) : void
+  {
+    when (System.Environment.GetEnvironmentVariable("NEMERLE_INCREMENTAL_DEBUG") != null)
+      System.Console.Error.WriteLine("incremental: {0} at {1:F1} s", what,
+        (System.DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds)
+  }
+
+  public IsReused(file : string) : bool { file != null && Reused.Contains(file) }
+  /// A method declared in a reused file when the reuse was decided (what its typing creates, or a macro's code placed
+  /// there, is compiled as usual).
+  public IsReused(m : MethodBuilder) : bool { reusedMethods.Contains(m) }
+  reusedMethods : SCG.HashSet[MethodBuilder] = SCG.HashSet();
+
+  Load() : bool
+  {
+    def manifest = Path.Combine(Dir, "manifest.txt");
+    unless (File.Exists(manifest) && File.Exists(PreviousOutput)) return false;
+    def lines = File.ReadAllLines(manifest);
+    unless (lines.Length > 0 && lines[0] == "NEMERLE-INCREMENTAL 1") return false;
+    def get(file : string) : FileRecord
+    {
+      mutable r;
+      unless (previous.TryGetValue(file, out r)) { r = FileRecord(file); previous[file] = r }
+      r
+    }
+    foreach (line in lines)
+    {
+      def f = line.Split('\t').:MapToArray(Unfield);
+      match (f[0])
+      {
+        | "identity" => previousIdentity = f[1]
+        | "context" => previousContexts.Add((f[2], int.Parse(f[1])))
+        | "file" =>
+          def r = get(f[1]);
+          r.Source = true;
+          r.TextHash = f[2]; r.InterfaceHash = f[3];
+          r.TopGenerated = f[4][0] == '1'; r.UserMacro = f[4][1] == '1'; r.Errors = f[4][2] == '1'
+        | "message" => get(f[1]).Messages.Add((f[2], int.Parse(f[3]), int.Parse(f[4]), int.Parse(f[5]), int.Parse(f[6]), f[8], f[7] == "1"))
+        | "used" => _ = get(f[1]).Used.Add(f[2])
+        | "assigned" => _ = get(f[1]).Assigned.Add(f[2])
+        | "generated" => get(f[1]).Generated.Add(f[2])
+        | "gentype" => get(f[1]).GenTypes.Add(f[2])
+        | "genmember" => get(f[1]).GenMembers.Add((f[2], f[3]))
+        | _ => ()
+      }
+    }
+    true
+  }
+
+  /// Decides which files' code is taken from the previous output (before any method is typed): all of them may be
+  /// when the compiler, options, references, files and every file's declarations are what they were; then each one
+  /// whose text is unchanged, that made nothing shared and used no user's macro, had no errors, and has none of what
+  /// is typed before the rest (top-level state, a function whose result's type is inferred).
+  public Decide() : void
+  {
+    Time("deciding");
+    def debug = System.Environment.GetEnvironmentVariable("NEMERLE_INCREMENTAL_DEBUG") != null;
+    def refuse (why : string) { when (debug) System.Console.Error.WriteLine("incremental: everything is compiled: " + why) }
+    unless (Load()) { refuse("no previous build in " + Dir); return }
+    unless (previousIdentity == Identity()) { refuse("the compiler, options or references changed"); return }
+    def now = SCG.Dictionary();
+    foreach (r when r.Source in records.Values) now[r.File] = r;
+    unless (now.Count == previous.Values.:Filter(_.Source).Length) { refuse("the set of files changed"); return }
+    foreach (r in now.Values)
+    {
+      mutable p;
+      unless (previous.TryGetValue(r.File, out p) && p.InterfaceHash == r.InterfaceHash) { refuse("the declarations of " + r.File + " changed"); return }
+    }
+    def early = SCG.HashSet();
+    Manager.Hierarchy.Iter(fun (tb : TypeBuilder)
+    {
+      def file = tb.Location.File;
+      when (Manager.FileModuleRegistry.TopLevel.Contains(tb.FullName)) _ = early.Add(file);
+      foreach (m is MethodBuilder in tb.GetDirectMembers())
+        when (m.InferredResult || m.IsTypedOnly || m.SkipEmiting) _ = early.Add(m.Location.File)
+    });
+    foreach (r in now.Values)
+    {
+      def p = previous[r.File];
+      if (p.TextHash == r.TextHash && !p.TopGenerated && !p.UserMacro && !p.Errors && !early.Contains(r.File))
+        _ = Reused.Add(r.File)
+      else when (debug)
+        System.Console.Error.WriteLine("incremental: " + r.File + " is compiled: " +
+          if (p.TextHash != r.TextHash) "its text changed" else if (p.TopGenerated) "it made a top-level type"
+          else if (p.UserMacro) "it used a macro of this compile" else if (p.Errors) "it had errors" else "its code is typed early")
+    }
+    when (debug) System.Console.Error.WriteLine($"incremental: $(Reused.Count) of $(now.Count) files reused");
+    when (Reused.Count == 0) return;
+    Manager.Hierarchy.Iter(fun (tb : TypeBuilder)
+    {
+      foreach (m is MethodBuilder in tb.GetDirectMembers())
+        when (IsReused(m.Location.File)) _ = reusedMethods.Add(m)
+    });
+    // the old quotations' macro contexts keep their indices
+    def tree = Manager.NameTree;
+    foreach ((key, index) in previousContexts)
+    {
+      tree.macro_contexts[key] = index;
+      when (index > tree.macro_context) tree.macro_context = index
+    }
+    Replay()
+  }
+
+  /// When the declarations are emitted: the class the old quotations' code reads its contexts from (as typing makes it).
+  public AfterDecls() : void
+  {
+    Time("declarations emitted");
+    when (Reused.Count > 0 && previousContexts.Count > 0) Manager.NameTree.prepare_macro_context_class()
+  }
+
+  // what the reused files' code did: the members it marked, what it reported, what it generated (recorded again)
+  Replay() : void
+  {
+    def members = SCG.Dictionary.[string, IMember]();
+    Manager.Hierarchy.Iter(fun (tb : TypeBuilder)
+    {
+      members[Key(tb)] = tb;
+      foreach (m is MemberBuilder in tb.GetDirectMembers()) members[Key(m)] = m
+    });
+    foreach (file in Reused)
+    {
+      def p = previous[file];
+      def r = Record(file);
+      Own(file, fun ()
+      {
+        foreach (key in p.Used) { mutable m; when (members.TryGetValue(key, out m)) Manager.MarkAsUsed(m, false) }
+        foreach (key in p.Assigned)
+        { mutable m; when (members.TryGetValue(key, out m)) match (m) { | f is IField => Manager.MarkAsAssigned(f, Location.Default, false) | _ => () } }
+        foreach ((f, l, c, el, ec, text, o) in p.Messages)
+        {
+          def at = if (string.IsNullOrEmpty(f)) Location.Default else Location(f, l, c, el, ec);
+          if (o)
+          {
+            def raw = text.Substring(text.IndexOf(':') + 2);
+            unless (Manager.Message_emitted_hints.Contains(raw))
+            {
+              Manager.Message_emitted_hints.Add(raw, 0);
+              Once(() => Message.report(at, text))
+            }
+          }
+          else
+          {
+            when (text.Contains("warning")) Manager.Message_WarningCount++;
+            Message.report(at, text)
+          }
+        }
+      });
+      r.Generated.AddRange(p.Generated);
+      r.GenTypes.AddRange(p.GenTypes);
+      r.GenMembers.AddRange(p.GenMembers)
+    }
+  }
+}

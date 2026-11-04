@@ -159,3 +159,4 @@ ell
 | `-continue:BIN` | continue from a binary that is not referenced |
 | `-no-continuation-section` | write no continuation section |
 | `-parallel` | type method bodies on several threads; the output is the same as without it |
+| `-incremental:DIR` | keep this compile's state in DIR; the next one with the same compiler, options and references, when no file's declarations changed, takes the code of the files whose text did not change from it instead of typing them again (the output is a full compile's, its made-up names aside) |

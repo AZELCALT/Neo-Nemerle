@@ -72,6 +72,7 @@ using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.type_var_env;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Compiler.typer;
+using Nemerle.Compiler.incremental;
 using Nemerle.Compiler.types_manager;
 using Nemerle.Compiler.Utility;
 using Nemerle.Compiler.XmlDump;
@@ -665,18 +666,24 @@ using Nemerle.Compiler.XmlDump;
 
     public virtual MarkAsUsed (member : IMember, _location : Location, trigger_obsolete_warn : bool) : void
     {
+      Incremental?.OnUsed (member);
       member.HasBeenUsed = trigger_obsolete_warn;
     }
 
     public virtual MarkAsAssigned (member : IField) : void
     {
+      Incremental?.OnAssigned (member);
       member.HasBeenAssigned = true;
     }
 
     public virtual MarkAsAssigned (member : IField, _location : Location, trigger_obsolete_warn : bool) : void
     {
+      Incremental?.OnAssigned (member);
       member.HasBeenAssigned = trigger_obsolete_warn;
     }
+
+    /// -incremental:DIR: what this compile records for the next one (null without it).
+    public mutable Incremental : Incremental;
 
     protected virtual CreateComponentsFactory () : CompilerComponentsFactory
     {
@@ -1181,6 +1188,8 @@ using Nemerle.Compiler.XmlDump;
 #endif
           def skipped = SharedModules();
           def parseResults = Options.Sources.Filter(s => !skipped.Contains(s.FileIndex)).Map(Parser.Parse);
+          Incremental = if (Options.IncrementalDir == null) null else Nemerle.Compiler.incremental.Incremental(this, Options.IncrementalDir);
+          Incremental?.Fingerprint(Options.Sources, parseResults);
           ShareContinuedTypes(parseResults.Map(r => r.TopDeclarations).:Flatten());
           when (Options.FileModules)
           {
@@ -1259,7 +1268,12 @@ using Nemerle.Compiler.XmlDump;
         OnBeforeSaveAssembly();
         
         unless (Options.CompileToMemory)
+        {
           Hierarchy.SaveAssembly ();
+          // (what the next compile needs, once this one stands)
+          when (Incremental != null && !Message.SeenError)
+            Incremental.Save(Options.OutputFileName, NameTree.macro_contexts.KeyValuePairs)
+        }
         
         ShowStatistics();
 

@@ -1605,6 +1605,7 @@ public class TypeBuilder : TypeInfo
 
   internal AddMember(mem : IMember) : void
   {
+    Manager.Incremental?.OnGenerated (mem, false);   // (made while a file's code compiles, -incremental)
     when (mem is MemberBuilder as mem)
     {
       mem.ProcessMacroAttributes();

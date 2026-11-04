@@ -1334,6 +1334,7 @@ public class MethodBuilder : MemberBuilder, IMethod
     {
       // (and not a constructor: a type's constructors share its field initializers, which typing one of them changes)
       !SkipEmiting && !IsTypedOnly && !InferredResult && MemberKind != MemberKinds.Constructor && fun_header.body is FunBody.Parsed
+      && !Manager.Incremental?.IsReused(this)
     }
   }
 
@@ -1352,7 +1353,7 @@ public class MethodBuilder : MemberBuilder, IMethod
     ManagerClass.Instance = Manager;
     Manager.UseTypingState(state);
     Manager.MacroColors.UseWorkerColors(true);
-    try RunBodyTyper()
+    try Nemerle.Compiler.incremental.Incremental.Own(Location.File, RunBodyTyper)
     catch
     {
       | e =>
@@ -2089,6 +2090,23 @@ public class MethodBuilder : MemberBuilder, IMethod
       match (fun_header.body)
       {
         | FunBody.ILed => {}
+        | FunBody.Parsed when Reused =>
+          // (-incremental: what the declaration gives, as below, and a stub the previous build's code replaces)
+          CreateImplementsWrapper();
+          emit_parameter_attributes();
+          unless (declaring_type.IsDelegate)   // (a delegate's methods are the runtime's)
+          {
+            unless (MemberKind == MemberKinds.Constructor) setup_method(declaring_type.TyManager);
+            def stub = GetMethodBase();
+            lock (Manager.Incremental.Stubs) Manager.Incremental.Stubs.Add(stub);
+            declaring_type.DoBeforeFinalization2(fun ()
+            {
+              def il = match (stub) { | c is SRE.ConstructorBuilder => c.GetILGenerator() | m => (m :> SRE.MethodBuilder).GetILGenerator() };
+              il.Emit(SRE.OpCodes.Ldnull);
+              il.Emit(SRE.OpCodes.Throw);
+            });
+          }
+          fun_header.body = FunBody.ILed ();
         | _ =>
           // maybe create additional method for implementing interface method
           // (in case of co/contravariant methods)
@@ -2123,7 +2141,7 @@ public class MethodBuilder : MemberBuilder, IMethod
                       when (Manager.Options.EmitDebug)
                         gen.SetDocument(Location);
 
-                      gen.Run ();
+                      Nemerle.Compiler.incremental.Incremental.Own (Location.File, gen.Run);
                     });
                 }
 
@@ -2405,12 +2423,22 @@ public class MethodBuilder : MemberBuilder, IMethod
       name_parms (1, GetParameters ());
     }
 
+    // (what compiling it does belongs to its file, -incremental)
     internal override Compile () : void
+    {
+      Nemerle.Compiler.incremental.Incremental.Own (Location.File, CompileOwned)
+    }
+
+    /// -incremental: the method's file is unchanged; its code is copied from the previous build (into a stub).
+    internal mutable Reused : bool;
+
+    CompileOwned () : void
     {
       try
       {
         base.Compile ();
-        RunBodyTyper ();
+        Reused = fun_header.body is FunBody.Parsed && Manager.Incremental?.IsReused(this);
+        unless (Reused) RunBodyTyper ();
 
         when (SkipEmiting)
           return;

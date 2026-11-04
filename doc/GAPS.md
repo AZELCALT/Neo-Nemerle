@@ -68,6 +68,11 @@ it violates the type system, the same way generic types were "not here yet" befo
 
 - **Renaming a type checks the workspace** (members and locals are renamed from the symbol index), and the names
   it edits are those its files' identifiers mean: a name in a string or a comment is left as it is.
+- **`-incremental` reuses whole files, and only after body edits.** A change to any declaration (a signature, a
+  member added, a function whose result is inferred) compiles everything, as does a change of options, references or
+  compiler. Always compiled again: a file with top-level code or state, one whose typing made a top-level type (an
+  anonymous class, a regex holder) or used a macro defined in the same compile, one that had errors. A reused file's
+  messages are said when the reuse is decided, so they may come before others a full compile says first.
 - **Windows is checked by running it there, not in `./bootstrap`.** `install.ps1` runs whole under PowerShell 7 in
   `./bootstrap`'s installer check, and is written for Windows PowerShell 5.1 (its native calls, its zip and tar
   reading), but 5.1 itself and the launchers' Windows side (`hello.exe` starting `hello.dll`) are run on Windows by

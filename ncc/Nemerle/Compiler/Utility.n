@@ -172,6 +172,7 @@ public module Message
       else loc;
 
     Message.Manager.Message_ErrorCount++;
+    Manager.Incremental?.OnError ();
     Held (2, fun ()
     {
       Manager.RunErrorOccured (loc, m);
@@ -277,7 +278,8 @@ public module Message
         }
       }
       // (on a worker, -parallel: at the method's commit, in order, where the hints said once are known)
-      if (Manager.Typing.IsWorker) Manager.Typing.Commit.Add ((once, 0)) else once ()
+      def said () { Nemerle.Compiler.incremental.Incremental.Once (once) }
+      if (Manager.Typing.IsWorker) Manager.Typing.Commit.Add ((said, 0)) else said ()
     }
   }
 
@@ -360,6 +362,7 @@ public module Message
       else l;
     Manager.KillProgressBar ();
     def msg = l.ToString () + m;
+    Manager.Incremental?.OnReport (l, m);
     Manager.RunMessageOccured (l, msg);
     when (Manager.Message_output == null)
       Manager.Message_output = System.Console.Out;

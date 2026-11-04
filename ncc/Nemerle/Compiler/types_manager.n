@@ -242,6 +242,7 @@ using Nemerle.Compiler.Utility;
     {                          
       def tb = TypeBuilder (this, par, td, ns_node);
       infos ::= tb;
+      Manager.Incremental?.OnGenerated (tb, par == null);   // (made while a file's code compiles, -incremental)
       tb
     }
 
@@ -924,6 +925,8 @@ using Nemerle.Compiler.Utility;
      */
     public EmitDecls () : void
     {
+      // (-incremental: which files' code comes from the previous build, decided before any method is typed)
+      Manager.Incremental?.Decide();
       Manager.Solver.Enqueue (fun () {
         compile_all_tyinfos (false);
         foreach ((attr, shouldEmit) when shouldEmit in Manager.AttributeCompiler.GetCompiledAssemblyAttributes (assembly_attributes))
@@ -1004,6 +1007,21 @@ using Nemerle.Compiler.Utility;
                   ClrEmitter.GuardStateField (type.FullName, field.Name, "_N_state_wait", field.IsMutable)
             | _ => ()
           }
+        // (-incremental: the reused files' code is copied from the previous output into this one)
+        def incremental = Manager.Incremental;
+        when (incremental != null && incremental.Stubs.Count > 0)
+        {
+          def types = System.Collections.Generic.List();
+          def members = System.Collections.Generic.List();
+          foreach (file in incremental.Reused)
+          {
+            def r = incremental.Record(file);
+            types.AddRange(r.GenTypes);
+            foreach ((t, name) in r.GenMembers) members.Add(System.Collections.Generic.KeyValuePair(t, name))
+          }
+          Nemerle.Compiler.incremental.Incremental.Time("typed and emitted");
+          ClrEmitter.ReuseFrom(incremental.PreviousOutput, incremental.Stubs, types, members)
+        }
         _assembly_session.Save(portableExecutableKind, imageFileMachine);
         ClrEmitter.CompleteAssembly(_OutputFileName, _assembly_name);
         // shared scopes go next to the grammars, as their storage layout (slot names and types; the values live in
@@ -1244,7 +1262,10 @@ using Nemerle.Compiler.Utility;
       IterConditionally(emit_decls, (x : TypeBuilder) => !x.IsEnum);
 
       when (!aux_phase)
+      {
         _cgil_phase = 3;
+        Manager.Incremental?.AfterDecls();
+      }
 
       // (-parallel: the methods' typing starts on workers; each one commits as it is reached below, in source order --
       // when this compiler's own code may run on them, see ManagerClass.ThreadSafe; else they are typed in order)
@@ -1253,6 +1274,11 @@ using Nemerle.Compiler.Utility;
       {
         def methods = System.Collections.Generic.List();
         Iter(ti => when (allow_it(ti)) foreach (m is MethodBuilder in ti.GetDirectMembers()) when (m.CanPreType) methods.Add(m));
+        // (the primitives' conversions are added to their member tables on first use: here, before the workers read them)
+        def it = Manager.InternalType;
+        foreach (t in [it.SByte_tc, it.Int16_tc, it.Int32_tc, it.Int64_tc, it.Byte_tc, it.UInt16_tc, it.UInt32_tc,
+                       it.UInt64_tc, it.Char_tc, it.Single_tc, it.Double_tc])
+          when (t != null) _ = t.LookupMember("op_Implicit");
         PreTypeInParallel(methods);
       }
 

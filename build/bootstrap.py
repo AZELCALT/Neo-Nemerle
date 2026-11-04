@@ -154,6 +154,7 @@ suites = [
 if not a.quick:
     suites += [
         ('parallel-typing', ['check-parallel-typing.py', '--toolchain', T, '--references', R]),
+        ('incremental', ['check-incremental.py', '--toolchain', T, '--references', R]),
         ('nitra-syntax', ['check-nitra-syntax.py', '--toolchain', T, '--references', R]),
         ('nitra-structures', ['check-nitra-structures.py', '--toolchain', T, '--references', R]),
         ('nitra-core', ['check-nitra-core.py', '--toolchain', T, '--references', R, '--native-core', T]),

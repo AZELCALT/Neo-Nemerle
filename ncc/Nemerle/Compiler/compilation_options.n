@@ -83,6 +83,8 @@ using Nemerle.Compiler.Utility;
     /// Type method bodies on several threads (-parallel): each method's main typing pass runs on a worker, and what
     /// comes after it (and what it could not do on a worker) in source order on the compiling thread.
     public mutable ParallelTyping : bool;
+    /// Where a compile keeps what the next one needs to retype only the files that changed (-incremental:DIR).
+    public mutable IncrementalDir : string;
     public mutable GeneralTailCallOpt : bool;
     public mutable ProgressBar : bool;
     public mutable ColorMessages : bool;
@@ -752,6 +754,10 @@ using Nemerle.Compiler.Utility;
         Getopt.CliOption.Flag (name = "-nologo",
                                help = "Suppress compiler copyright message",
                                handler = fun () { this.ProgressBar = false; }),
+
+        Getopt.CliOption.String (name = "-incremental",
+                       help = "Keep in DIR what the next compile needs to retype only the files whose text changed",
+                       handler = fun (s) { this.IncrementalDir = s; }),
 
         Getopt.CliOption.Flag (name = "-parallel",
                                help = "Type method bodies on several threads (the result is the same as without it)",
