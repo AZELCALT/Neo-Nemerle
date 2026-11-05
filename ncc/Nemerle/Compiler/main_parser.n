@@ -1241,7 +1241,7 @@ using Nemerle.Compiler.Utility;
     /// (`match (x)', `if (x is T)', which bind `x' as the type checked); a write is `__state_store' (see StateMacro).
     static StateAssignOperators : list[string] = ["+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=", "<<=", ">>=", "::=", "++", "--"];
 
-    /// The functions among `members' that assign values of `flowing' (`x = v', `x += v', `x++'), with those values.
+    /// The functions among `members' that assign values of `flowing' (`x = v', `x += v', `x++', `ref x'), with those values.
     static StateWriters(members : SCG.IEnumerable[ClassMember], flowing : SCG.HashSet[string]) : SCG.Dictionary[string, SCG.List[string]]
     {
       def writers = SCG.Dictionary();
@@ -1257,6 +1257,8 @@ using Nemerle.Compiler.Utility;
                 {
                   | PExpr.Assign(PExpr.Ref(n), _) when flowing.Contains(n.Id) => _ = found.Add(n.Id)
                   | PExpr.Call(PExpr.Ref(op), PExpr.Ref(n) :: _) when StateAssignOperators.Contains(op.Id) && flowing.Contains(n.Id) => _ = found.Add(n.Id)
+                  // (an `out' or `ref' argument assigns it too)
+                  | PExpr.ParmOut(PExpr.Ref(n)) | PExpr.ParmByRef(PExpr.Ref(n)) when flowing.Contains(n.Id) => _ = found.Add(n.Id)
                   | _ => ()
                 }
               node
@@ -1763,9 +1765,20 @@ using Nemerle.Compiler.Utility;
           }
         // the inference pass: the statements, each store a record of the types there (a typed-only copy)
         mutable index = 0;
+        // (a value a function writes is its field's, whose type this pass decides: here it is a local of its own,
+        // given each value stored, as a file's inference copy has; reading the field would read a type not known yet)
+        def own(key : string) : PExpr { <[ $("_N_state_inferred_" + key.Substring(key.LastIndexOf('.') + 1) : usesite) ]> }
+        def locals = stateWritten.:NToList().Map(n => <[ mutable $(own(n)) = Nemerle.Compiler.__state_hole() ]>);
         def inferred = expressions.:NToList().Map(e => Macros.TraverseExpr(None(), e, false, (_, after, node) =>
           match (node)
           {
+            | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [PExpr.Literal(Literal.String(k)) as key, _, value])
+                when after && called.Id == "__state_store" && stateWritten.Contains(k.Substring(k.LastIndexOf('.') + 1)) =>
+              index++;
+              <[ { def value = $value; Nemerle.Compiler.__state_type($key, $(index : int), value); $(own(k)) = value } ]>
+            | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [PExpr.Literal(Literal.String(k)), _])
+                when after && called.Id == "__state_read" && stateWritten.Contains(k.Substring(k.LastIndexOf('.') + 1)) =>
+              own(k)
             | PExpr.Call(PExpr.Member(_, Splicable.Name(called)), [key, _, value]) when after && called.Id == "__state_store" =>
               index++;
               <[ Nemerle.Compiler.__state_type($key, $(index : int), $value) ]>
@@ -1776,7 +1789,7 @@ using Nemerle.Compiler.Utility;
             | PExpr.Assign(PExpr.Call(PExpr.Ref(skip), [_]), value) when after && skip.Id == "_N_skip_write_check" => <[ _ = $value ]>
             | _ => node
           }));
-        add([<[ decl: private _N_state_types() : void { ..$inferred } ]>], "", false)
+        add([<[ decl: private _N_state_types() : void { ..$(locals + inferred) } ]>], "", false)
       }
       // the files the script imports run their top-level code first, at its start
       when (scriptUsings.Count > 0)

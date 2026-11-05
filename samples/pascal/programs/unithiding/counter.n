@@ -1,0 +1,36 @@
+// A unit with an interface of types, constants, variables and routines (one with a var parameter, one with a
+// procedural one), and names its implementation keeps to itself
+space Pascal
+{
+  unit Counter;
+  interface
+    type
+      Pair = record a, b : integer end;
+    const
+      Start = 10;
+    var
+      total : integer;
+    procedure Add(n : integer);
+    procedure Swap(var p : Pair);
+    function Twice(function f(x : integer) : integer; v : integer) : integer;
+  implementation
+    var
+      calls : integer;
+    procedure Add(n : integer);
+    begin
+      total := total + n; calls := calls + 1
+    end;
+    procedure Swap(var p : Pair);
+    var t : integer;
+    begin
+      t := p.a; p.a := p.b; p.b := t
+    end;
+    function Twice(function f(x : integer) : integer; v : integer) : integer;
+    begin
+      Twice := f(f(v))
+    end;
+  begin
+    total := Start;
+    writeln('counter starts')
+  end.
+}

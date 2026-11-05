@@ -437,6 +437,16 @@ def p(x : ref int) : void {{ x = 1 }}
 def f = p;
 ignore(f)
 '''}, "ERROR:`p' has ref or out parameters: it is called"),
+    ('top-level-value-by-ref', {'main.n': f'''
+mutable count = 1;
+mutable word = "a";
+Bump(a : ref int) : void {{ a += 2 }}
+Run() : void {{ Bump(ref count); _ = System.Threading.Interlocked.Increment(ref count); _ = int.TryParse("40", out count); count += 2; word += "b" }}
+Run();
+def again = () => Bump(ref count);
+again();
+{W}($"$count $word")
+'''}, '44 ab'),   # (a top-level value written without a type, passed by ref from a function: its field)
     ('lambda-ref-delegate', {'main.n': f'''
 public delegate Bump(x : ref int) : void;
 public delegate Get(x : out int) : bool;

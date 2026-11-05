@@ -1,0 +1,16 @@
+// A unit that uses another in its interface
+space Pascal
+{
+  unit Report;
+  interface
+    uses Counter;
+    procedure Show;
+  implementation
+    procedure Show;
+    begin
+      writeln('total ', total)
+    end;
+  begin
+    writeln('report starts')
+  end.
+}

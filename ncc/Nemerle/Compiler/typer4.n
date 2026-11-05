@@ -874,6 +874,10 @@ internal class Typer4
                         when (NeedBoxing (t, parm.expr))
                           parm.expr = Box (t, parm.expr);
                     } else {
+                      // (a macro's expansion is what is passed: a file's top-level value read in a function is
+                      // `__state_read(key, field)', which is its field)
+                      def expansion (e : TExpr) : TExpr { | TExpr.MacroEnvelope (expanded = x) => expansion (x) | _ => e }
+                      parm.expr = expansion (parm.expr);
                       unless (parm.expr.IsAddressable && parm.expr.setNeedAddress (is_instance_ctor))
                         Message.Error ("a ref or out argument must be an assignable variable");
                     }

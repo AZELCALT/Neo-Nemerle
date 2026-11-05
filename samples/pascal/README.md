@@ -81,6 +81,13 @@ compiler what a Pascal space `uses`, so the units' files are found.
   `reset`, `rewrite`, `get`, `put`, `page`, `new`, `dispose`, `pack`, `unpack`, `abs`, `sqr`, `sqrt`, `sin`, `cos`,
   `arctan`, `exp`, `ln`, `trunc`, `round`, `odd`, `ord`, `chr`, `succ`, `pred`; Turbo's `assign`, `close`,
   `length`, `copy`, `pos`, `concat`, `upcase`, `inc`, `dec`, `halt`.
+- **Turbo's additions:** units' names by the unit's name (`Counter.Add(1)`, `Counter.total`), what a unit's
+  implementation declares kept to itself; `exit`, `break`, `continue`; typed constants (`const n : integer = 5;`,
+  arrays' `(1, 2, 3)` and records' `(x: 1; y: 2)`; a routine's keeps its value between calls); `longint`, `byte`,
+  `word`, `shortint` (subranges of integer, checked), `single`, `double`, `extended`, `comp` (real); `and`, `or`,
+  `xor`, `not`, `shl`, `shr` on an integer's bits, `xor` on booleans; `$FF`; `#65` and `'line'#13#10`; `string[n]`
+  (its first n characters kept); `delete`, `insert`, `str` (with `x:w:d`), `val`, `low`, `high`, `sizeof`, `random`,
+  `randomize`, `frac`, `int`, `pi`, `append`.
 - **With Nemerle:** a name the Pascal program does not declare is the Nemerle program's, as written: Pascal calls the
   file's functions and reads its values.
 
@@ -98,6 +105,12 @@ Where the choice is the implementation's, ISO lets it be:
 - **A file of any type is a value per line, as JSON** (records with arrays and sets among them), so another program
   can read it.
 - **A record is a class that assignment copies.**
+- **`integer` is 32 bits** (Turbo's is 16): `maxint` is 2147483647, and `longint` is `integer`. A value out of a
+  subrange's bounds (`byte`'s 0..255 too) is an error when the program runs, as ISO has it, where Turbo's code
+  without range checks wraps around.
+
+Not in: what Turbo has beyond the language of programs and units: its objects (5.5's `object`), `asm`, `absolute`,
+`interrupt`, `@` and `GetMem`, untyped files and `BlockRead`, and the Crt and Dos units.
 
 One thing .NET does not do: keep a reference to a variable in a value. So a nested routine that uses a `var`
 parameter of a routine around it is not passed as a procedural parameter (the routine passed would need the variable,

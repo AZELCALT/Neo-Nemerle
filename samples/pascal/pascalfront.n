@@ -23,6 +23,9 @@ public variant Expr
   | Bin { at : Location; op : string; l : Expr; r : Expr }
   | Un { at : Location; op : string; e : Expr }
   | SetOf { at : Location; items : list[Expr * Expr] } // (an element, or a range: low and high)
+  // a typed constant's value: an array's, a record's
+  | Items { at : Location; items : list[Expr] }
+  | Fields { at : Location; fields : list[string * Expr] }
 
   public Loc : Location
   {
@@ -31,7 +34,7 @@ public variant Expr
       match (this)
       {
         | Num(at, _) | RealNum(at, _) | Str(at, _) | Nil(at) | Var(at, _) | Call(at, _, _) | Bin(at, _, _, _)
-        | Un(at, _, _) | SetOf(at, _) => at
+        | Un(at, _, _) | SetOf(at, _) | Items(at, _) | Fields(at, _) => at
       }
     }
   }
@@ -87,7 +90,7 @@ public variant TypeSpec
   | SetOf { at : Location; element : TypeSpec }
   | FileOf { at : Location; element : TypeSpec } // (element null: a text file)
   | Pointer { at : Location; target : string }
-  | Str { at : Location } // Turbo's `string' and `string[n]'
+  | Str { at : Location; name : string; size : Expr } // Turbo's `string[n]'
   | Proc { at : Location; header : Header } // a procedural parameter's type
   | Conformant { at : Location; bounds : list[string * string * TypeSpec]; element : TypeSpec } // a conformant array parameter's
 }
@@ -123,6 +126,7 @@ public variant Decl
   | Const { at : Location; name : string; value : Expr }
   | TypeDecl { at : Location; name : string; type : TypeSpec }
   | VarDecl { at : Location; names : list[string]; type : TypeSpec }
+  | TypedConst { at : Location; name : string; type : TypeSpec; value : Expr } // (Turbo's: a variable with a first value)
   | Routine { at : Location; header : Header; body : Block; forward : bool } // (body null: forward, or an interface's)
 }
 
@@ -149,6 +153,32 @@ public module N
       def (endLine, endColumn) = loc.EndLineColumn;
       Location(Location.GetFileIndex(file), startLine, startColumn, endLine, endColumn)
     }
+  }
+  /// A string literal's text: its quoted parts ('' is a quote) and Turbo's `#65' codes, side by side
+  public Text(literal : string) : string
+  {
+    def b = System.Text.StringBuilder();
+    mutable i = 0;
+    while (i < literal.Length)
+      if (literal[i] == '#')
+      {
+        mutable j = i + 1;
+        while (j < literal.Length && char.IsDigit(literal[j])) j++;
+        _ = b.Append(int.Parse(literal.Substring(i + 1, j - i - 1)) :> char);
+        i = j
+      }
+      else
+      {
+        // a quoted part: to its closing quote (a doubled one is a quote of the text)
+        mutable j = i + 1;
+        mutable going = true;
+        while (going && j < literal.Length)
+          if (literal[j] == '\'' && j + 1 < literal.Length && literal[j + 1] == '\'') { _ = b.Append('\''); j += 2 }
+          else if (literal[j] == '\'') going = false
+          else { _ = b.Append(literal[j]); j++ }
+        i = j + 1
+      }
+    b.ToString()
   }
   public L[T](items : SCG.IEnumerable[object]) : list[T]
   {
@@ -227,6 +257,8 @@ public class Sym
   public mutable BoundOf : Sym;     // a conformant array parameter's bound: its parameter
   public mutable Ordinal : option[int]; // a constant's or an enumeration value's ordinal value, when known
   public mutable Routine : RoutineSig;
+  /// Declared in a unit's implementation: not seen by the programs and units that use it
+  public mutable Hidden : bool;
   public this(kind : string, name : string) { Kind = kind; Name = name }
 }
 
@@ -242,6 +274,8 @@ public class Scope
   public mutable WithType : PT;
   /// A block's (a routine's, the program's): its `label' section's labels
   public mutable IsBlock : bool;
+  /// Its code's block, which Turbo's `exit' leaves (a routine's, the program's)
+  public mutable ExitLabel : Name;
   public Labels : SCG.HashSet[string] = SCG.HashSet(StringComparer.OrdinalIgnoreCase);
   public this(parent : Scope) { Parent = parent }
 }
@@ -278,6 +312,10 @@ class Compiler
   mutable labelCount : int;
   // the variables of the for loops being compiled: ISO lets nothing in a loop assign its variable
   controls : SCG.HashSet[string] = SCG.HashSet(StringComparer.OrdinalIgnoreCase);
+  // the loops around the code being compiled, innermost first: the blocks `break' and `continue' leave
+  mutable loops : list[Name * Name] = [];
+  // the units used, by name: Turbo's `Unit.Name' is the name in that unit's interface
+  units : SCG.Dictionary[string, Scope] = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
 
   /// The routine the code being compiled is in (null: the program's or a unit's statements)
   RoutineOf() : RoutineSig
@@ -351,6 +389,12 @@ class Compiler
     }
   }
 
+  /// Turbo's integer of a size: a subrange of integer
+  static Sized(name : string, low : int, high : int) : PT
+  {
+    def t = PT("range"); t.Name = name; t.Base = Integer; t.Low = low; t.High = high; t
+  }
+
   // the standard types
   static Integer : PT = PT("integer");
   static Real : PT = PT("real");
@@ -376,7 +420,10 @@ class Compiler
   {
     def global = Scope(null); global.IsBlock = true;
     def standard = Scope(null);
-    foreach ((name, t) in [("integer", Integer), ("real", Real), ("boolean", Boolean), ("char", Char), ("string", StringT), ("text", Text)])
+    foreach ((name, t) in [("integer", Integer), ("real", Real), ("boolean", Boolean), ("char", Char), ("string", StringT), ("text", Text),
+                           // (Turbo's: its integers of other sizes, as subranges of integer; its reals, as real)
+                           ("longint", Integer), ("byte", Sized("byte", 0, 255)), ("word", Sized("word", 0, 65535)),
+                           ("shortint", Sized("shortint", -128, 127)), ("single", Real), ("double", Real), ("extended", Real), ("comp", Real)])
     { def s = Sym("type", name); s.Type = t; standard.Table[name] = s }
     foreach ((name, value) in [("false", 0), ("true", 1)])
     { def s = Sym("enumval", name); s.Type = Boolean; s.Ordinal = Some(value); s.Code = if (value == 1) <[ true ]> else <[ false ]>; standard.Table[name] = s }
@@ -391,7 +438,7 @@ class Compiler
         def inits = Uses(uses);
         PlanLabels(block.Body);
         _ = Declarations(block.Decls, true);
-        def body = Statements(block.Body);
+        def body = Exiting(global, () => Statements(block.Body));
         Finish(Located(at, () => <[ { ..$inits; $body } ]>))
       | Unit(at, name, iuses, idecls, muses, mdecls, init) =>
         def parts = moduleName.Split('.');
@@ -408,9 +455,26 @@ class Compiler
         foreach (s in global.Table.Values)
           when (s.Kind == "routine" && !s.Routine.Defined && s.Routine.IsMethod)
             Error(s.Routine.Declared, $"`$(s.Name)' is declared in the interface, and its implementation is missing");
-        def body = if (init == null) <[ () ]> else Statements(init);
+        def body = if (init == null) <[ () ]> else Exiting(global, () => Statements(init));
         Finish(Located(at, () => <[ { ..$(inits + more); $body } ]>))
     }
+  }
+
+  /// A block's code, which `exit' leaves
+  Exiting(block : Scope, code : void -> PExpr) : PExpr
+  {
+    def label = Nemerle.Compiler.macros.Macros.NewSymbol("exit");
+    def outerLabel = block.ExitLabel; def outerLoops = loops;
+    block.ExitLabel = label; loops = [];
+    try { def c = code(); <[ $(label : name) : { $c } ]> } finally { block.ExitLabel = outerLabel; loops = outerLoops }
+  }
+
+  /// A loop's body, which `break' and `continue' leave: the loop, made of its body and of the block `break' leaves
+  Looping(loop : PExpr -> PExpr, body : void -> PExpr) : PExpr
+  {
+    def broken = Nemerle.Compiler.macros.Macros.NewSymbol("break"); def continued = Nemerle.Compiler.macros.Macros.NewSymbol("continue");
+    loops ::= (broken, continued);
+    try { def b = body(); <[ $(broken : name) : { $(loop(<[ $(continued : name) : { $b } ]>)) } ]> } finally loops = loops.Tail
   }
 
   Finish(code : PExpr) : PExpr
@@ -440,6 +504,7 @@ class Compiler
         {
           def unit = export :> UnitExport;
           scope.Uses ::= unit.Scope;
+          units[name] = unit.Scope;
           when (!found.InProgress)
             inits ::= <[ System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof($(Module(unit.Module))).TypeHandle) ]>
         }
@@ -453,12 +518,36 @@ class Compiler
 
   Lookup(name : string) : Sym
   {
+    // (`Unit.Name': the name in that unit's interface)
+    def dot = name.IndexOf('.');
+    if (dot > 0)
+    {
+      mutable unit; mutable s;
+      if (units.TryGetValue(name.Substring(0, dot), out unit) && unit.Table.TryGetValue(name.Substring(dot + 1), out s)
+          && (s.Kind != "routine" || s.Routine.Public) && !s.Hidden) s
+      else null
+    }
+    else Plain(name)
+  }
+
+  /// A designator that names a unit, then a name of its interface (`Counter.total'): that name, qualified
+  Qualify(d : Desig) : Desig
+  {
+    match (d.Sels)
+    {
+      | Sel.Field(f) :: rest when units.ContainsKey(d.Name) && Plain(d.Name) == null => Desig(d.At, d.Name + "." + f, rest)
+      | _ => d
+    }
+  }
+
+  Plain(name : string) : Sym
+  {
     def inUses(units : list[Scope]) : Sym
     {
       | [] => null
       | u :: rest =>
         mutable s;
-        if (u.Table.TryGetValue(name, out s) && (s.Kind != "routine" || s.Routine.Public)) s else inUses(rest)
+        if (u.Table.TryGetValue(name, out s) && (s.Kind != "routine" || s.Routine.Public) && !s.Hidden) s else inUses(rest)
     }
     def walk(sc : Scope) : Sym
     {
@@ -481,6 +570,7 @@ class Compiler
   Declare(at : Location, s : Sym) : void
   {
     mutable old;
+    s.Hidden = !unitPublic;
     if (scope.Table.TryGetValue(s.Name, out old) && !(old.Kind == "routine" && s.Kind == "routine"))
       Error(at, $"`$(s.Name)' is declared twice in this block")
     else scope.Table[s.Name] = s
@@ -555,6 +645,22 @@ class Compiler
             }
             Declare(at, s)
           }
+        // (Turbo's typed constant: a field of the file module even in a routine, so it keeps its value between calls)
+        | TypedConst(at, name, spec, value) =>
+          def t = Type(spec, null, pointers);
+          when (t.Kind == "enum") DeclareEnum(at, t);
+          resolvePointers();
+          def s = Sym("var", name); s.Type = t;
+          def field = if (top) name else Fresh(name);
+          s.Code = <[ $(Module(moduleName)).$(field : usesite) ]>;
+          def member = Located(at, () =>
+          {
+            def first = ConstValue(value, t);
+            if (top && unitPublic) Quote(<[ decl: public static mutable $(field : usesite) : $(Clr(t)) = $first; ]>)
+            else Quote(<[ decl: static mutable $(field : usesite) : $(Clr(t)) = $first; ]>)
+          });
+          members.Add(Unquote(member));
+          Declare(at, s)
         | Routine(at, header, body, forward) =>
           def sig = Signature(at, header, top);
           mutable names;
@@ -580,6 +686,31 @@ class Compiler
     code.Rev() + group
   }
 
+  /// A typed constant's value: an array's `(1, 2, 3)', a record's `(x: 1; y: 2)', or an expression
+  ConstValue(e : Expr, t : PT) : PExpr
+  {
+    match (e)
+    {
+      | Items(at, xs) when t.Kind == "array" =>
+        def count = t.High - t.Low + 1;
+        when (xs.Length != count) Error(at, $"the array has $count values, not $(xs.Length)");
+        def a = Fresh("items");
+        mutable i = t.Low - 1;
+        def sets = xs.Map(x => { i++; <[ $(a : usesite)[$(i : int)] = $(ConstValue(x, t.Elem)) ]> });
+        <[ { def $(a : usesite) = $(Init(t, null)); { ..$sets } $(a : usesite) } ]>
+      | Fields(at, fs) when t.Kind == "record" =>
+        def r = Fresh("record");
+        def sets = fs.Map((f, x) => match (t.Field(f))
+        {
+          | Some((field, ft)) => <[ $(r : usesite).$(field : usesite) = $(ConstValue(x, ft)) ]>
+          | None => Error(at, $"$t has no field `$f'"); <[ () ]>
+        });
+        <[ { def $(r : usesite) = $(Init(t, null)); { ..$sets } $(r : usesite) } ]>
+      | Items(at, _) | Fields(at, _) => Error(at, $"a list of values is an array's or a record's, not $t's"); Init(t, null)
+      | _ => Convert(e, t, "the constant's value")
+    }
+  }
+
   Unquote(e : PExpr) : ClassMember { | PExpr.Quoted(SyntaxElement.ClassMember(m)) => m | _ => throw InvalidOperationException("not a member") }
 
   DeclareEnum(_at : Location, t : PT) : void
@@ -587,7 +718,7 @@ class Compiler
     mutable i = 0;
     foreach (name in t.Values)
     {
-      def s = Sym("enumval", name); s.Type = t; s.Ordinal = Some(i); s.Code = <[ $(i : int) ]>;
+      def s = Sym("enumval", name); s.Type = t; s.Ordinal = Some(i); s.Code = <[ $(i : int) ]>; s.Hidden = !unitPublic;
       scope.Table[name] = s; i++
     }
   }
@@ -693,7 +824,11 @@ class Compiler
         def t = PT("pointer"); t.TargetName = target;
         match (Lookup(target)) { | s when s != null && s.Kind == "type" => t.Target = s.Type | _ => pointers.Add(t) }
         t
-      | Str => StringT
+      | Str(at, name, size) =>
+        unless (String.Equals(name, "string", StringComparison.OrdinalIgnoreCase)) Error(at, $"`$name[...]' is no type: Turbo's `string[n]' is");
+        def n = ConstInt(size, "a string's length");
+        when (n < 1 || n > 255) Error(at, "a string's length is 1 to 255");
+        def t = PT("string"); t.Name = $"string[$n]"; t.High = n; t
       | Proc(at, header) => def t = PT("proc"); t.Sig = Signature(at, header, false, true); t
       | Conformant(at, bounds, element) =>
         def elem = Type(element, null, pointers);
@@ -857,10 +992,9 @@ class Compiler
       when (sig.IsFunction && !AssignsName(body, sig.Name)) Error(sig.Declared, $"function `$(sig.Name)' never assigns its result");
       PlanLabels(body.Body);
       def locals = Declarations(body.Decls, false);
-      def statements = Statements(body.Body);
       def result = if (sig.IsFunction) <[ $(scope.ResultVar : usesite) ]> else <[ () ]>;
       def declareResult = if (sig.IsFunction) [<[ mutable $(scope.ResultVar : usesite) : $(Clr(sig.Result)) = $(Init(sig.Result, null)) ]>] else [];
-      <[ { ..$(declareResult + locals); $statements; $result } ]>
+      <[ { ..$(declareResult + locals); $(Exiting(scope, () => Statements(body.Body))); $result } ]>
     }
     finally scope = outer
   }
@@ -947,10 +1081,12 @@ class Compiler
       | If(_, cond, then, elsePart) =>
         def c = Condition(cond);
         <[ if ($c) $(Statement(then)) else $(if (elsePart == null) <[ () ]> else Statement(elsePart)) ]>
-      | While(_, cond, body) => <[ while ($(Condition(cond))) $(Statement(body)) ]>
+      | While(_, cond, body) =>
+        def c = Condition(cond);
+        Looping(b => <[ while ($c) $b ]>, () => Statement(body))
       | Repeat(_, body, cond) =>
-        def b = Statements(body);
-        <[ do { $b } while (!($(Condition(cond)))) ]>
+        def c = Condition(cond);
+        Looping(b => <[ do { $b } while (!($c)) ]>, () => Statements(body))
       | For(at, variable, from, to, down, body) => For(at, variable, from, to, down, body)
       | Case(at, selector, arms, elsePart) => Case(at, selector, arms, elsePart)
       | With(_, records, body) =>
@@ -1026,6 +1162,13 @@ class Compiler
 
   ConvertCode(code : PExpr, from : PT, to : PT, at : Location, what : string) : PExpr
   {
+    // (Turbo's `string[n]' keeps its first n characters)
+    def converted = Converted(code, from, to, at, what);
+    if (to.Kind == "string" && to.High > 0) <[ pascal.Pascal.Short($converted, $(to.High : int)) ]> else converted
+  }
+
+  Converted(code : PExpr, from : PT, to : PT, at : Location, what : string) : PExpr
+  {
     def f = OrdBase(from); def t = OrdBase(to);
     def rangeChecked(c : PExpr) : PExpr
     {
@@ -1071,7 +1214,7 @@ class Compiler
       {
         $v = $first;
         mutable going = true;
-        while (going) { $(Statement(body)); if ($(ord(v)) == $(ord(<[ $(last : usesite) ]>))) going = false else $v = $step }
+        $(Looping(b => <[ while (going) { $b; if ($(ord(v)) == $(ord(<[ $(last : usesite) ]>))) going = false else $v = $step } ]>, () => Statement(body)))
       }
     } ]>
   }
@@ -1268,7 +1411,8 @@ class Compiler
   {
     match (a)
     {
-      | Expr.Var(_, d) when d.Sels.IsEmpty =>
+      | Expr.Var(_, d0) when Qualify(d0).Sels.IsEmpty =>
+        def d = Qualify(d0);
         match (Lookup(d.Name))
         {
           | s when s != null && s.Kind == "routine" =>
@@ -1337,6 +1481,60 @@ class Compiler
         def (file, ft, rest) = FileArgument(args, true);
         def reads = rest.Map(a => { def (target, t) = lvalue(a.Value); Read(file, ft, target, t, a.Value.Loc) });
         if (name == "readln") <[ { ..$reads; $file.ReadLine() } ]> else <[ { ..$reads; () } ]>
+      // Turbo's: leaving the routine (or the program), the loop, or the loop's step
+      | "exit" when values.IsEmpty =>
+        def walk(sc : Scope) : Name { if (sc == null) null else if (sc.ExitLabel != null) sc.ExitLabel else walk(sc.Parent) }
+        match (walk(scope)) { | null => Error(at, "exit leaves a routine or the program"); <[ () ]> | l => <[ $(l : name)() ]> }
+      | "break" | "continue" when values.IsEmpty =>
+        match (loops)
+        {
+          | [] => Error(at, $"$name leaves a loop, and it is not inside one"); <[ () ]>
+          | (broken, continued) :: _ => if (name == "break") <[ $(broken : name)() ]> else <[ $(continued : name)() ]>
+        }
+      | "delete" =>
+        match (values)
+        {
+          | [s, i, n] => def (sc, _) = lvalue(s); <[ $sc = pascal.Pascal.Delete($sc, $(Ordinal(i)), $(Ordinal(n))) ]>
+          | _ => Error(at, "delete takes a string, a start and a count"); <[ () ]>
+        }
+      | "insert" =>
+        match (values)
+        {
+          | [source, s, i] => def (sc, _) = lvalue(s); <[ $sc = pascal.Pascal.Insert($(Convert(source, StringT, "the inserted string")), $sc, $(Ordinal(i))) ]>
+          | _ => Error(at, "insert takes a string, the string it goes in and a place"); <[ () ]>
+        }
+      | "str" =>
+        match (args)
+        {
+          | [x, s] =>
+            def (sc, _) = lvalue(s.Value);
+            def text = Fresh("text");
+            <[ { def $(text : usesite) = pascal.PascalText.Memory(); $(Write(<[ $(text : usesite) ]>, Text, x)); $sc = $(text : usesite).Written } ]>
+          | _ => Error(at, "str takes a number and a string"); <[ () ]>
+        }
+      | "val" =>
+        match (values)
+        {
+          | [s, v, code] =>
+            def (vc, vt) = lvalue(v); def (cc, _) = lvalue(code);
+            def text = Convert(s, StringT, "val's string");
+            def c = Fresh("code");
+            def read = match (OrdBase(vt).Kind)
+            {
+              | "real" => <[ pascal.Pascal.ValReal($text, out $(c : usesite)) ]>
+              | "integer" => FromOrd(<[ pascal.Pascal.ValInt($text, out $(c : usesite)) ]>, vt)
+              | _ => Error(v.Loc, "val reads an integer or a real"); <[ 0 ]>
+            };
+            <[ { mutable $(c : usesite) = 0; $vc = $read; $cc = $(c : usesite) } ]>
+          | _ => Error(at, "val takes a string, a variable and a code"); <[ () ]>
+        }
+      | "randomize" when values.IsEmpty => <[ pascal.Pascal.Randomize() ]>
+      | "append" =>
+        def (f, ft) = lvalue(one("a text file"));
+        unless (ft.Kind == "text") Error(at, "append takes a text file");
+        <[ $f.Append() ]>
+      // (ISO: `page' alone is `page(output)')
+      | "page" when args.IsEmpty => <[ pascal.PascalText.Output.Page() ]>
       | "reset" | "rewrite" | "get" | "put" | "page" | "close" =>
         def (f, t) = lvalue(one("a file"));
         unless (t.Kind == "file" || t.Kind == "text") Error(at, $"$name takes a file");
@@ -1421,7 +1619,7 @@ class Compiler
       | "integer" => <[ $target = $(ConvertCode(<[ $file.ReadInt() ]>, Integer, t, at, "the value read")) ]>
       | "real" => <[ $target = $file.ReadReal() ]>
       | "char" => <[ $target = $file.ReadChar() ]>
-      | "string" => <[ $target = $file.ReadString() ]>
+      | "string" => if (t.High > 0) <[ $target = pascal.Pascal.Short($file.ReadString(), $(t.High : int)) ]> else <[ $target = $file.ReadString() ]>
       | _ => Error(at, $"read reads numbers, characters and strings, not $t"); <[ () ]>
     }
   }
@@ -1431,6 +1629,7 @@ class Compiler
   /// A variable's access (or a field's, an element's, a pointer's target, a file's buffer) and its type
   Designator(d : Desig) : PExpr * PT
   {
+    def d = Qualify(d);
     def s = Lookup(d.Name);
     def (code0, t0) = match (s)
     {
@@ -1486,14 +1685,16 @@ class Compiler
       | RealNum(_, v) => (<[ $(v : double) ]>, Real)
       | Str(_, text) => if (text.Length == 1) (<[ $(text[0] : char) ]>, Char) else (<[ $(text : string) ]>, StringT)
       | Nil => (<[ null ]>, NilT)
-      | Var(_, d) =>
+      | Var(_, d0) =>
+        def d = Qualify(d0);
         match (if (d.Sels.IsEmpty) Lookup(d.Name) else null)
         {
           | s when s != null && (s.Kind == "const" || s.Kind == "enumval") => (s.Code, s.Type)
           | s when s != null && s.Kind == "routine" && !s.Routine.IsFunction => Error(d.At, $"`$(d.Name)' is a procedure: it gives no value"); (<[ () ]>, Integer)
-          | null when d.Sels.IsEmpty && (String.Equals(d.Name, "eof", StringComparison.OrdinalIgnoreCase) || String.Equals(d.Name, "eoln", StringComparison.OrdinalIgnoreCase)) =>
+          | null when d.Sels.IsEmpty && ["eof", "eoln", "random"].Exists(n => String.Equals(d.Name, n, StringComparison.OrdinalIgnoreCase)) =>
             FunctionCall(d.At, d.Name, []) // (the standard functions that take no argument: `eof' is `eof(input)')
-          | null when d.Sels.IsEmpty => (<[ $(d.Name : usesite) ]>, PT("nemerle")) // (the Nemerle program's)
+          | null when d.Sels.IsEmpty && String.Equals(d.Name, "pi", StringComparison.OrdinalIgnoreCase) => (<[ System.Math.PI ]>, Real) // (Turbo's)
+          | null when d.Sels.IsEmpty && !d.Name.Contains('.') => (<[ $(d.Name : usesite) ]>, PT("nemerle")) // (the Nemerle program's)
           | _ => Designator(d)
         }
       | Call(at, name, args) => FunctionCall(at, name, args)
@@ -1516,11 +1717,13 @@ class Compiler
         match ((op, OrdBase(t).Kind))
         {
           | ("not", "boolean") => (<[ ! $c ]>, Boolean)
+          | ("not", "integer") => (<[ ~ $c ]>, Integer) // (Turbo's, on the bits)
           | ("-", "integer") | ("-", "real") => (<[ - $c ]>, OrdBase(t))
           | ("+", "integer") | ("+", "real") => (c, OrdBase(t))
           | _ => Error(at, $"$op does not apply to $t"); (c, t)
         }
       | Bin(at, op, l, r) => Binary(at, op, l, r)
+      | Items(at, _) | Fields(at, _) => Error(at, "a list of values is a typed constant's"); (<[ () ]>, Integer)
     }
   }
 
@@ -1562,6 +1765,13 @@ class Compiler
       | "mod" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ pascal.Pascal.Mod($l, $r) ]>, Integer)
       | "and" when lt.Kind == "boolean" && rt.Kind == "boolean" => (<[ $l && $r ]>, Boolean)
       | "or" when lt.Kind == "boolean" && rt.Kind == "boolean" => (<[ $l || $r ]>, Boolean)
+      | "xor" when lt.Kind == "boolean" && rt.Kind == "boolean" => (<[ $l != $r ]>, Boolean)
+      // (Turbo's, on an integer's bits)
+      | "and" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ $l & $r ]>, Integer)
+      | "or" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ $l | $r ]>, Integer)
+      | "xor" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ $l ^ $r ]>, Integer)
+      | "shl" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ $l << $r ]>, Integer)
+      | "shr" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ (($l :> uint) >> $r) :> int ]>, Integer)
       | "in" when IsOrdinal(lt) && isSet(rt) => (<[ $r.Contains($(OrdOf(l, lt))) ]>, Boolean)
       | "=" | "<>" | "<" | "<=" | ">" | ">=" =>
         def compare(a : PExpr, b : PExpr) : PExpr
@@ -1634,6 +1844,57 @@ class Compiler
               | [sub, s] => (<[ ($(Rvalue(s)[0]).IndexOf($(Rvalue(sub)[0]).ToString(), System.StringComparison.Ordinal) + 1) ]>, Integer)
               | _ => Error(at, "pos takes two strings"); (<[ 0 ]>, Integer)
             }
+          // Turbo's
+          | "low" | "high" =>
+            def low = name.ToLowerInvariant() == "low";
+            match (args)
+            {
+              | [Expr.Var(_, d) as x] =>
+                def s = if (d.Sels.IsEmpty) Lookup(d.Name) else null;
+                def t = if (s != null && s.Kind == "type") s.Type else Rvalue(x)[1];
+                match (t.Kind)
+                {
+                  | "array" when t.LowName != null => def a = Rvalue(x)[0]; (FromOrd(if (low) <[ $a.Low ]> else <[ $a.High ]>, t.Base), t.Base)
+                  | "array" => (FromOrd(<[ $((if (low) t.Low else t.High) : int) ]>, t.Base), t.Base)
+                  | "string" => if (low) (<[ 0 ]>, Integer) else (<[ $(Rvalue(x)[0]).Length ]>, Integer)
+                  | _ =>
+                    match (Bounds(t))
+                    {
+                      | Some((l, h)) => (FromOrd(<[ $((if (low) l else h) : int) ]>, t), t)
+                      | None => Error(at, $"$name takes an ordinal type or an array, not $t"); (<[ 0 ]>, Integer)
+                    }
+                }
+              | _ => Error(at, $"$name takes a type or a variable"); (<[ 0 ]>, Integer)
+            }
+          | "sizeof" =>
+            match (args)
+            {
+              | [Expr.Var(_, d) as x] =>
+                def s = if (d.Sels.IsEmpty) Lookup(d.Name) else null;
+                def t = if (s != null && s.Kind == "type") s.Type else Rvalue(x)[1];
+                def size(t : PT) : int
+                {
+                  match (t.Kind)
+                  {
+                    | "integer" | "enum" => 4 | "real" => 8 | "boolean" | "char" => 1
+                    | "range" => if (t.Low >= -128 && t.High <= 255) 1 else if (t.Low >= -32768 && t.High <= 65535) 2 else 4
+                    | "array" => (t.High - t.Low + 1) * size(t.Elem)
+                    | "record" => { mutable n = 0; foreach ((_, ft) in t.Fields) n += size(ft); n }
+                    | "set" => 32 | _ => 8
+                  }
+                }
+                (<[ $(size(t) : int) ]>, Integer)
+              | _ => Error(at, "sizeof takes a type or a variable"); (<[ 0 ]>, Integer)
+            }
+          | "random" =>
+            match (args)
+            {
+              | [] => (<[ pascal.Pascal.RandomReal() ]>, Real)
+              | [n] => (<[ pascal.Pascal.Random($(Ordinal(n))) ]>, Integer)
+              | _ => Error(at, "random takes a bound, or nothing"); (<[ 0 ]>, Integer)
+            }
+          | "frac" => def (c, t) = arg(); (<[ { def x = $(real(c, t)); x - System.Math.Truncate(x) } ]>, Real)
+          | "int" => def (c, t) = arg(); (<[ System.Math.Truncate($(real(c, t))) ]>, Real)
           | "concat" when !args.IsEmpty => (args.Tail.FoldLeft(<[ $(Rvalue(args.Head)[0]).ToString() ]>, (a, acc) => <[ $acc + $(Rvalue(a)[0]).ToString() ]>), StringT)
           | _ => (<[ $(name : usesite)(..$(args.Map(a => Rvalue(a)[0]))) ]>, PT("nemerle")) // (the Nemerle program's)
         }

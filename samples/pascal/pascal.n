@@ -151,6 +151,37 @@ public module Pascal
     s.Substring(0, index - 1) + c.ToString() + s.Substring(index)
   }
   /// Turbo's `copy(s, index, count)'
+  /// Turbo's delete(s, index, count) and insert(source, s, index): the string they leave
+  public Delete(s : string, index : int, count : int) : string
+  {
+    if (index < 1 || index > s.Length || count <= 0) s else s.Remove(index - 1, Math.Min(count, s.Length - index + 1))
+  }
+  public Insert(source : string, s : string, index : int) : string
+  {
+    s.Insert(Math.Max(0, Math.Min(s.Length, index - 1)), source)
+  }
+  /// Turbo's val(s, v, code): the number, and the place of the first character that is not one (0: none)
+  public ValInt(s : string, code : out int) : int
+  {
+    mutable v; if (int.TryParse(s.Trim(), Globalization.NumberStyles.Integer, Globalization.CultureInfo.InvariantCulture, out v)) { code = 0; v } else { code = BadAt(s); 0 }
+  }
+  public ValReal(s : string, code : out int) : double
+  {
+    mutable v; if (double.TryParse(s.Trim(), Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture, out v)) { code = 0; v } else { code = BadAt(s); 0.0 }
+  }
+  BadAt(s : string) : int
+  {
+    mutable i = 0;
+    while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '.' || s[i] == '-' || s[i] == '+' || s[i] == 'e' || s[i] == 'E' || s[i] == ' ')) i++;
+    if (i < s.Length) i + 1 else Math.Max(1, s.Length)
+  }
+  /// Turbo's random: below n, or a real in [0, 1); randomize seeds it from the clock
+  mutable randomness : System.Random = System.Random(0);
+  public Randomize() : void { randomness = System.Random() }
+  public Random(n : int) : int { if (n <= 0) 0 else randomness.Next(n) }
+  public RandomReal() : double { randomness.NextDouble() }
+  /// A value of Turbo's `string[n]': its first n characters
+  public Short(s : string, n : int) : string { if (s.Length > n) s.Substring(0, n) else s }
   public Copy(s : string, index : int, count : int) : string
   {
     if (index > s.Length || count <= 0) "" else s.Substring(Math.Max(0, index - 1), Math.Min(count, s.Length - Math.Max(0, index - 1)))
@@ -208,6 +239,11 @@ public class PascalText
   public Get() : void { when (Peek() < 0) throw EndOfStreamException("read past the end of the file"); ahead = -2 }
   public Put() : void { Out().Write(put) }
   public Page() : void { Out().Write('\f') }
+  /// (Turbo's append: writing on at the file's end)
+  public Append() : void { Close(); writer = File.AppendText(path) }
+  /// A text that writes into a string (Turbo's str): what it wrote
+  public static Memory() : PascalText { PascalText(null, StringWriter()) }
+  public Written : string { get { writer.ToString() } }
   public ReadChar() : char { def c = Buffer; Get(); c }
   SkipBlanks() : void { while (!Eof && (Peek() == '\n' || char.IsWhiteSpace(Peek() :> char))) Get() }
   Number(real : bool) : string
@@ -365,6 +401,10 @@ grammar Pascal
     regex KVarText = ['v', 'V'] ['a', 'A'] ['r', 'R'];
     regex KWhileText = ['w', 'W'] ['h', 'H'] ['i', 'I'] ['l', 'L'] ['e', 'E'];
     regex KWithText = ['w', 'W'] ['i', 'I'] ['t', 'T'] ['h', 'H'];
+    // (Turbo's)
+    regex KXorText = ['x', 'X'] ['o', 'O'] ['r', 'R'];
+    regex KShlText = ['s', 'S'] ['h', 'H'] ['l', 'L'];
+    regex KShrText = ['s', 'S'] ['h', 'H'] ['r', 'R'];
     // (directives, not reserved: a name elsewhere)
     regex KForwardText = ['f', 'F'] ['o', 'O'] ['r', 'R'] ['w', 'W'] ['a', 'A'] ['r', 'R'] ['d', 'D'];
     regex KOtherwiseText = ['o', 'O'] ['t', 'T'] ['h', 'H'] ['e', 'E'] ['r', 'R'] ['w', 'W'] ['i', 'I'] ['s', 'S'] ['e', 'E'];
@@ -407,13 +447,16 @@ grammar Pascal
     token KVar = KVarText !IdentifierPartCharacters;
     token KWhile = KWhileText !IdentifierPartCharacters;
     token KWith = KWithText !IdentifierPartCharacters;
+    token KXor = KXorText !IdentifierPartCharacters;
+    token KShl = KShlText !IdentifierPartCharacters;
+    token KShr = KShrText !IdentifierPartCharacters;
     token KForward = KForwardText !IdentifierPartCharacters;
     token KOtherwise = KOtherwiseText !IdentifierPartCharacters;
     regex Reserved = KAndText | KArrayText | KBeginText | KCaseText | KConstText | KDivText | KDoText | KDowntoText | KElseText
                    | KEndText | KFileText | KForText | KFunctionText | KGotoText | KIfText | KImplementationText | KInText
                    | KInterfaceText | KLabelText | KModText | KNilText | KNotText | KOfText | KOrText | KPackedText
                    | KProcedureText | KProgramText | KRecordText | KRepeatText | KSetText | KThenText | KToText | KTypeText
-                   | KUnitText | KUntilText | KUsesText | KVarText | KWhileText | KWithText;
+                   | KUnitText | KUntilText | KUsesText | KVarText | KWhileText | KWithText | KXorText | KShlText | KShrText;
     // a name, never a reserved word (the word's end is checked in a token: a syntax rule would skip the spaces after it
     // first, and take `nil end' for a name)
     token ReservedWord = Reserved !IdentifierPartCharacters;
@@ -429,8 +472,9 @@ grammar Pascal
     regex Digits = ['0'..'9']+;
     regex HexDigits = "$" ['0'..'9', 'a'..'f', 'A'..'F']+;
     regex RealLiteral = Digits "." Digits (('e' | 'E') ('+' | '-')? Digits)? | Digits ('e' | 'E') ('+' | '-')? Digits;
-    // (one token, so the spaces inside are the string's)
-    regex StringLiteral = "'" ("''" | (Any - '\''))* "'";
+    // (one token, so the spaces inside are the string's; Turbo's `#65' is a character by its code, and quoted parts and
+    // codes side by side are one string: 'line'#13#10)
+    regex StringLiteral = ("'" ("''" | (Any - '\''))* "'" | "#" Digits)+;
 
     [StartRule] syntax Start = Unit=CompilationUnit
     {
@@ -531,9 +575,36 @@ grammar Pascal
       | Body = Block=Block { override Ast = Block.Ast(); }
     }
 
-    syntax ConstantDeclaration = Name=Ident "=" Value=Expr ";"
+    syntax ConstantDeclaration
     {
-      Ast() : object = pascalfront.Decl.Const(pascalfront.N.At(Location), GetText(Name.Body), Value.Ast() :> pascalfront.Expr);
+      Ast() : object;
+      | Plain = Name=Ident "=" Value=Expr ";"
+        {
+          override Ast = pascalfront.Decl.Const(pascalfront.N.At(Location), GetText(Name.Body), Value.Ast() :> pascalfront.Expr);
+        }
+      // Turbo's typed constant: a variable with its first value, kept from one call to the next
+      | Typed = Name=Ident ":" Type=TypeSpec "=" Value=ConstValue ";"
+        {
+          override Ast = pascalfront.Decl.TypedConst(pascalfront.N.At(Location), GetText(Name.Body), Type.Ast() :> pascalfront.TypeSpec, Value.Ast() :> pascalfront.Expr);
+        }
+    }
+    // a typed constant's value: an expression, an array's `(1, 2, 3)', a record's `(x: 1; y: 2)'
+    syntax ConstValue
+    {
+      Ast() : object;
+      | Plain = Value=Expr { override Ast = Value.Ast(); }
+      | Items = "(" First=ConstValue "," Rest=(ConstValue; ",")+ ")"
+        {
+          override Ast = { mutable xs = [First.Ast() :> pascalfront.Expr]; foreach (v in Rest.Item1) xs ::= (v.Ast() :> pascalfront.Expr); pascalfront.Expr.Items(pascalfront.N.At(Location), xs.Rev()) };
+        }
+      | Fields = "(" Items=(ConstField; ";"; ?)+ ")"
+        {
+          override Ast = { mutable xs = []; foreach (f in Items.Item1) xs ::= (f.Ast() :> string * pascalfront.Expr); pascalfront.Expr.Fields(pascalfront.N.At(Location), xs.Rev()) };
+        }
+    }
+    syntax ConstField = Name=Ident ":" Value=ConstValue
+    {
+      Ast() : object = (GetText(Name.Body), Value.Ast() :> pascalfront.Expr);
     }
     syntax TypeDeclaration = Name=Ident "=" Type=TypeSpec ";"
     {
@@ -580,7 +651,7 @@ grammar Pascal
     {
       Ast() : object;
       | Named = Name=Ident { override Ast = pascalfront.TypeSpec.Named(pascalfront.N.At(Location), GetText(Name.Body)); }
-      | Sized = Name=Ident "[" Size=Expr "]" { override Ast = pascalfront.TypeSpec.Str(pascalfront.N.At(Location)); }
+      | Sized = Name=Ident "[" Size=Expr "]" { override Ast = pascalfront.TypeSpec.Str(pascalfront.N.At(Location), GetText(Name.Body), Size.Ast() :> pascalfront.Expr); }
       | Enum = "(" Names=(Ident; ",")+ ")"
         {
           override Ast = { mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n.Body); pascalfront.TypeSpec.Enum(pascalfront.N.At(Location), xs.Rev()) };
@@ -683,9 +754,10 @@ grammar Pascal
           override Ast = pascalfront.Stmt.Assign(pascalfront.N.At(Location), Target.Ast() :> pascalfront.Desig, Value.Ast() :> pascalfront.Expr);
         }
       // a procedure call; write, writeln, read and readln are the predeclared ones (their arguments may say a width)
-      | Call = Name=Ident Args=WriteArguments?
+      // (Turbo: a unit's routine by the unit's name, `Counter.Add(1)')
+      | Call = Unit=UnitPrefix? Name=Ident Args=WriteArguments?
         {
-          override Ast = pascalfront.Stmt.Call(pascalfront.N.At(Location), GetText(Name.Body),
+          override Ast = pascalfront.Stmt.Call(pascalfront.N.At(Location), (if (Unit.HasValue) GetText(Unit.Value.Name.Body) + "." else "") + GetText(Name.Body),
                                                if (Args.HasValue) Args.Value.Ast() :> list[pascalfront.WArg] else []);
         }
       | Compound = KBegin Body=Statements KEnd
@@ -786,12 +858,15 @@ grammar Pascal
       | Add = Left=Expr "+" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "+", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       | Sub = Left=Expr "-" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "-", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       | Or = Left=Expr KOr Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "or", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Xor = Left=Expr KXor Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "xor", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       precedence Multiplicative:
       | Mul = Left=Expr "*" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "*", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       | Divide = Left=Expr "/" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "/", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       | Div = Left=Expr KDiv Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "div", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       | Mod = Left=Expr KMod Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "mod", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       | And = Left=Expr KAnd Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "and", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Shl = Left=Expr KShl Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "shl", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Shr = Left=Expr KShr Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "shr", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       precedence Unary:
       | Not = KNot Operand=Expr { override Ast = pascalfront.Expr.Un(pascalfront.N.At(Location), "not", Operand.Ast() :> pascalfront.Expr); }
       | Negate = "-" Operand=Expr { override Ast = pascalfront.Expr.Un(pascalfront.N.At(Location), "-", Operand.Ast() :> pascalfront.Expr); }
@@ -808,20 +883,21 @@ grammar Pascal
         }
       | Text = Value=StringLiteral
         {
-          override Ast = { def q = GetText(Value); pascalfront.Expr.Str(pascalfront.N.At(Location), q.Substring(1, q.Length - 2).Replace("''", "'")) };
+          override Ast = pascalfront.Expr.Str(pascalfront.N.At(Location), pascalfront.N.Text(GetText(Value)));
         }
       | NilPointer = KNil { override Ast = pascalfront.Expr.Nil(pascalfront.N.At(Location)); }
       | SetOf = "[" Items=(SetElement; ",")* "]"
         {
           override Ast = { mutable xs = []; foreach (e in Items.Item1) xs ::= (e.Ast() :> pascalfront.Expr * pascalfront.Expr); pascalfront.Expr.SetOf(pascalfront.N.At(Location), xs.Rev()) };
         }
-      | Call = Name=Ident "(" Args=(Expr; ",")* ")"
+      | Call = Unit=UnitPrefix? Name=Ident "(" Args=(Expr; ",")* ")"
         {
-          override Ast = { mutable xs = []; foreach (a in Args.Item1) xs ::= (a.Ast() :> pascalfront.Expr); pascalfront.Expr.Call(pascalfront.N.At(Location), GetText(Name.Body), xs.Rev()) };
+          override Ast = { mutable xs = []; foreach (a in Args.Item1) xs ::= (a.Ast() :> pascalfront.Expr); pascalfront.Expr.Call(pascalfront.N.At(Location), (if (Unit.HasValue) GetText(Unit.Value.Name.Body) + "." else "") + GetText(Name.Body), xs.Rev()) };
         }
       | Variable = Target=Designator { override Ast = pascalfront.Expr.Var(pascalfront.N.At(Location), Target.Ast() :> pascalfront.Desig); }
       | Group = "(" Inner=Expr ")" { override Ast = Inner.Ast(); }
     }
+    syntax UnitPrefix = Name=Ident ".";
     syntax SetElement = Low=Expr High=(".." Expr)?
     {
       Ast() : object = (Low.Ast() :> pascalfront.Expr, if (High.HasValue) High.Value.Item2.Ast() :> pascalfront.Expr else null);

@@ -1,0 +1,9 @@
+// What a unit's implementation declares is its own: a program that uses the unit does not see it
+space Pascal
+{
+  program Main;
+  uses Counter;
+  begin
+    writeln(Counter.calls)
+  end.
+}

@@ -1,0 +1,23 @@
+// Turbo's units: names by themselves or by their unit's name (`Counter.Add'), the units' shared variables, and their
+// initialization, in the order the program uses them
+space Pascal
+{
+  program Main;
+  uses Counter, Report;
+  var
+    p : Pair;
+  function Inc1(x : integer) : integer;
+  begin
+    Inc1 := x + 1
+  end;
+  begin
+    Add(5);
+    Counter.Add(1);
+    Show;
+    p.a := 1; p.b := 2;
+    Swap(p);
+    writeln(p.a, ' ', p.b);
+    writeln(Twice(Inc1, 3));
+    writeln(Counter.total, ' ', Counter.Start)
+  end.
+}

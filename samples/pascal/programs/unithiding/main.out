@@ -1,0 +1,1 @@
+COMPILE ERROR: main.n:7:13:7:26: error: unknown name `Counter.calls'
