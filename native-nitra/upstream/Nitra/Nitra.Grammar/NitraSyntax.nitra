@@ -2110,7 +2110,7 @@ syntax module NitraSyntax : NitraLang
     | IgnoreToken+;
     | CharLiteral;
     | StringLiteral;
-    | Parentheses = "(" Expression? ")";
+    | Parentheses = "(" Expression? (";" Expression?)* ")"; // (code: `for (a; b; c)`, `(x = 1; x)`)
     //| "fold" sm Identifier "(" Expression ";" (Expression; ";"sm)+ ")";
   }
 

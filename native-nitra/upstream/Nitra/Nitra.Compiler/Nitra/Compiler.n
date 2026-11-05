@@ -6584,6 +6584,32 @@ internal abstract class RuleParseTreeEmitter : IParseTreeEmitter, IConstantEmitt
     when (parms.IsEmpty && !isOverride)
       DefineGetAstUntypedMethod(tb, syntaxMapping);
 
+    // (a mapping to Nemerle code runs at its node's place in the file: the code it makes is located there, so what the
+    // compiler says about it points into the space)
+    def code = if (returnType.ToString().EndsWith("PExpr"))
+      // (the node's place: a space's text is padded to its place in the file, see SelectedRegistry.Provider, so its
+      // line and column are the file's; none when its source is not a file)
+      <[ def at =
+         {
+           def nodeLocation = this.Location;
+           def file = if (nodeLocation.Source == null || nodeLocation.Source.File == null) null else nodeLocation.Source.File.FullName;
+           if (string.IsNullOrEmpty(file) || file.StartsWith("<")) Nemerle.Compiler.AST.Location.Default
+           else
+           {
+             def (startLine, startColumn) = nodeLocation.StartLineColumn;
+             def (endLine, endColumn) = nodeLocation.EndLineColumn;
+             Nemerle.Compiler.AST.Location(Nemerle.Compiler.AST.Location.GetFileIndex(file), startLine, startColumn, endLine, endColumn)
+           }
+         };
+         if (at.FileIndex == 0) $code
+         else
+         {
+           Nemerle.Compiler.Utility.LocationStack.Push(at);
+           try { $code }
+           catch { | e => Nemerle.Compiler.NitraShared.NitraMappingFailure.Fail(at); throw e }
+           finally { _ = Nemerle.Compiler.Utility.LocationStack.Pop() }
+         } ]>
+      else code;
     tb.Define(<[ decl: ..$mods $(syntaxMapping.Name : usesite)(..$parms) : $returnType { unchecked { $code } } ]>);
   }
 
@@ -9923,6 +9949,9 @@ internal sealed class SelectedRegistry
     else { def tree=factories[key].Invoke(provider,sequence,Func(Create)); cache.Add(identity,tree); tree }
   }
   public Output(name : string, selected : NitraStructure, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext) : PExpr
+  { Output(name,selected,location,context,false) }
+  /// `early': only a root mapping that takes no context runs (before typing; null for one that takes it).
+  public Output(name : string, selected : NitraStructure, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext, early : bool) : PExpr
   {
     def source=Provider(selected.Source,location);
     def tree=Create(name,source,selected);
@@ -9931,11 +9960,12 @@ internal sealed class SelectedRegistry
       when(method.Name=="GetAst" && method.ReturnType==typeof(PExpr) && (method.GetParameters().Length==0 || method.GetParameters().Length==1 && method.GetParameters()[0].ParameterType==typeof(NitraDialectContext))) maps.Add(method);
     when(maps.Exists(m => m.GetParameters().Length==1)) _=maps.RemoveAll(m => m.GetParameters().Length==0);
     unless(maps.Count==1) throw ArgumentException("space root requires exactly one native PExpr mapping (parameterless or NitraDialectContext); found "+maps.Count.ToString()+" for "+name);
+    when(early && maps[0].GetParameters().Length==1) return null;
     maps[0].Invoke(tree,if(maps[0].GetParameters().Length==0) null else array[context : object]) :> PExpr
   }
 }
 
-public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImageHost
+public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImageHost, INitraEarlyHost
 {
   static InputKey : string = "Nitra.Compiler.NativeSourceHost.RecognizedDefinitions";
   mutable registry : SelectedRegistry;
@@ -10115,15 +10145,26 @@ public sealed class NativeSourceHost : INitraNativeSourceHost, INitraGrammarImag
       when(syntaxModule.Name.StartsWith(owner+".",StringComparison.Ordinal)) names.Add(syntaxModule.Name);
     names.ToArray()
   }
+  // (a space is expanded again when the typer restarts its body: each error is said once)
+  reported : SCG.HashSet[string] = SCG.HashSet();
+  public ExpandEarly(rule : string, selected : NitraStructure, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext) : PExpr
+  { Run(rule,selected,location,context,true) }
   public Expand(rule : string, selected : NitraStructure, _ : Typer, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext) : PExpr
+  { Run(rule,selected,location,context,false) }
+  Run(rule : string, selected : NitraStructure, location : Nemerle.Compiler.AST.Location, context : NitraDialectContext, early : bool) : PExpr
   {
-    try { registry.Output(rule,selected,location,context) }
+    _=Nemerle.Compiler.NitraShared.NitraMappingFailure.Take();
+    try { registry.Output(rule,selected,location,context,early) }
     catch
     {
       | exception =>
         mutable error=exception;
         while(error is TargetInvocationException && error.InnerException!=null) error=error.InnerException;
-        Message.Error(location,error.Message); PExpr.Error(location)
+        // where the mapping that failed was (its node's place, see DefineGetAstMethod), else the space
+        def failed=Nemerle.Compiler.NitraShared.NitraMappingFailure.Take();
+        def at=if(failed.FileIndex!=0) failed else location;
+        when(reported.Add(at.ToString()+error.Message)) Message.Error(at,error.Message);
+        PExpr.Error(location)
     }
   }
 }

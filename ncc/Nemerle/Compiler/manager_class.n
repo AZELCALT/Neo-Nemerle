@@ -1045,7 +1045,7 @@ using Nemerle.Compiler.XmlDump;
       {
         foreach (source in Options.Sources)
         {
-          def lex = LexerString(this, source.GetText(), Location(source.FileIndex, 1, 1)); lex.Keywords = LexerBase.BaseKeywords;
+          def lex = LexerString(this, Nemerle.Compiler.NitraShared.NitraSourceScan.BlankForeign(source.GetText(), Options.IndentationSyntax), Location(source.FileIndex, 1, 1)); lex.Keywords = LexerBase.BaseKeywords;
           mutable ended = false;
           while (!ended)
           {

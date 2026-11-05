@@ -92,7 +92,8 @@ public static class ScriptMetadata
   {
     def data = ScriptCollectedData(source);
     def characters = source.Text.ToCharArray();
-    def lexer = LexerString(manager, source.Text, Location(Location.GetFileIndex(Path.GetFullPath(source.Path)), 1, 1));
+    // (a grammar's or a space's body is another language: blanked, as the grammar lane reads it apart)
+    def lexer = LexerString(manager, Nemerle.Compiler.NitraShared.NitraSourceScan.BlankForeign(source.Text), Location(Location.GetFileIndex(Path.GetFullPath(source.Path)), 1, 1));
     lexer.Keywords = LexerBase.BaseKeywords;
     mutable pending : Token = null;
     def read() : Token

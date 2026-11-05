@@ -135,8 +135,33 @@ internal sealed class GReader
       t
     }
   }
-  // Only declaration/action envelopes use this scanner. Foreign space endings are
-  // recognized by the grammar engine, not by Nemerle's lexer or this method.
+  /// A space's braced body: its text is another language's, so the body ends at the brace that balances its `{`,
+  /// counted in the raw text. A quote counts only when it closes on its own line, `'...'` with no escapes (a doubled
+  /// quote is two strings, as Pascal and SQL write one) and `"..."` with backslash escapes; any other quote (an
+  /// apostrophe in a comment) is a character. So a brace inside a string does not end the body.
+  public SpaceBlock() : GLexeme
+  {
+    def open=Take(); unless (open.Text=="{") Fail("expected block");
+    mutable depth=1; mutable p=open.End;
+    while (depth>0)
+    {
+      when (p>=Limit) { Pos=open.Start; Fail("unterminated space block"); }
+      def c=Text[p];
+      if (c=='\'' || c=='"')
+      {
+        mutable q=p+1; mutable closed= -1;
+        while (q<Limit && Text[q]!='\n' && closed<0)
+          if (c=='"' && Text[q]=='\\') q+=2 else if (Text[q]==c) closed=q else ++q;
+        p=if (closed>=0) closed+1 else p+1;
+      }
+      else { when (c=='{') ++depth; when (c=='}') --depth; ++p; }
+    }
+    Pos=p; Reset();
+    def result=GLexeme(); result.Start=open.Start; result.End=p;
+    result.Text=Text.Substring(open.Start,p-open.Start); result
+  }
+
+  // A grammar's envelope: Nitra code, read with Nemerle's quotes. (A space's is SpaceBlock or IndentedBlock.)
   public Block() : GLexeme
   {
     def open=Take(); unless (open.Text=="{") Fail("expected block");
@@ -255,9 +280,89 @@ internal module GrammarJson
     _=b.Append("],\"ruleEvaluations\":"+r.RuleEvaluations.ToString()+",\"memoHits\":"+r.MemoHits.ToString()+"}"); b.ToString()
   }
 }
+/// The place of the innermost grammar mapping an exception left (a generated mapping records its node's place as the
+/// exception passes, see Nitra's DefineGetAstMethod), for its error; taken once.
+public module NitraMappingFailure
+{
+  [System.ThreadStatic] mutable failed : Location;
+  public Fail(at : Location) : void { when (failed.FileIndex == 0) failed = at }
+  public Take() : Location { def at = failed; failed = Location.Default; at }
+}
+
 /// Finds the first grammar/space block, scope declaration or dial of a source file (envelope pre-scan only).
 public module NitraSourceScan
 {
+  /// Each grammar and space block of the text, as the grammar lane finds them: whether it is a space, the names of its
+  /// header (`space G`, `space (A, B)`), its start and end, and its body's start and end.
+  public Blocks(text : string, indentation : bool) : SCG.List[bool * list[string] * int * int * int * int]
+  {
+    def found=SCG.List();
+    when (text!=null && (text.Contains("grammar") || text.Contains("space")))
+    {
+      def indented=indentation || HasIndentPragma(text);
+      def reader=GReader(text,"",0,text.Length);
+      try
+      {
+        mutable depth=0; mutable previous="";
+        while (!reader.Is("<eof>"))
+        {
+          def t=reader.Take();
+          def after=previous; previous=t.Text;
+          if (!t.Quoted && after!="." && depth==0 && (t.Text=="grammar" || t.Text=="space"))
+          {
+            def isSpace=t.Text=="space";
+            // the header, as the lane reads it: `grammar G`, `grammar (A, B)`, `space G`, `space (A, B)`, `space`,
+            // then for a space `as Name` and `[A, B]`
+            mutable names=[];
+            when (reader.Eat("("))
+            {
+              while (!reader.Is(")") && !reader.Is("<eof>")) { def n=reader.Take(); unless (n.Text==",") names::=n.Text; }
+              _=reader.Eat(")");
+            }
+            when (reader.Peek().Text.Length>0 && (char.IsLetter(reader.Peek().Text[0]) || reader.Peek().Text[0]=='_') && !reader.Is("as") && !reader.Peek().Quoted)
+              names::=reader.Name();
+            when (isSpace && reader.Eat("as")) _=reader.Name();
+            when (isSpace && reader.Is("[")) { while (!reader.Is("]") && !reader.Is("<eof>")) _=reader.Take(); _=reader.Eat("]"); }
+            if (reader.Is("{"))
+            {
+              def block=if (isSpace) reader.SpaceBlock() else reader.Block();
+              found.Add((isSpace,names.Rev(),t.Start,block.Start+1,block.End-1,block.End)); previous="";
+            }
+            else when (isSpace && indented && reader.Is(":"))
+            {
+              def block=reader.IndentedBlock(t.Start);
+              found.Add((isSpace,names.Rev(),t.Start,block.Start+1,block.End,block.End)); previous="";
+            }
+          }
+          else unless (t.Quoted) { when (t.Text=="{") ++depth; when (t.Text=="}") --depth; }
+        }
+      }
+      // (a file the scan cannot read: what was found so far; the lane reports what is wrong with it)
+      catch
+      {
+        | _ is ArgumentException => ()
+        | _ is FormatException => ()
+        | _ is OverflowException => ()
+      }
+    }
+    found
+  }
+  /// The text with its grammar and space blocks blanked (their line breaks kept, so every position stays): what a
+  /// pass that reads a file with Nemerle's lexer before the grammar lane (finding its `using`s, a script's
+  /// dependencies) reads, since a block's body is another language.
+  public BlankForeign(text : string) : string { BlankForeign(text,false) }
+  public BlankForeign(text : string, indentation : bool) : string
+  {
+    def blocks=Blocks(text,indentation);
+    if (blocks.Count==0) text
+    else
+    {
+      def chars=text.ToCharArray();
+      foreach ((_,_,start,_,_,end) in blocks)
+        for (mutable i=start;i<end && i<chars.Length;++i) unless (chars[i]=='\n' || chars[i]=='\r') chars[i]=' ';
+      string(chars)
+    }
+  }
   internal HasIndentPragma(text : string) : bool
   {
     def reader=GReader(text,"",0,text.Length);

@@ -78,7 +78,7 @@ public sealed class FileModuleRegistry
       def extension = Path.GetExtension(Location.GetFileName(source.FileIndex)) :> string;
       unless (extension.Equals(".n", StringComparison.OrdinalIgnoreCase) || extension.Equals(".ns", StringComparison.OrdinalIgnoreCase)) continue;
       def here = Path.GetDirectoryName(Path.GetFullPath(Location.GetFileName(source.FileIndex)));
-      foreach (name in SourceUsings(source))
+      foreach (name in SourceUsings(source) + SpaceImports(source, here))
       {
         def relative = name.ToString(Path.DirectorySeparatorChar.ToString());
         def search = if (here == Root) [here] else [here, Root];
@@ -110,13 +110,59 @@ public sealed class FileModuleRegistry
     manager.Options.Sources = NList.FromArray(sources.ToArray());
   }
 
+  // the referenced libraries' ISpaceImports (asked about each space of a source), found once
+  mutable spaceImporters : list[Nemerle.Compiler.NitraDialectServices.ISpaceImports];
+  /// What the source's spaces import (see ISpaceImports), as `using` names; a name whose file is there in another case
+  /// (`uses Geometry` and geometry.n) is that file's.
+  SpaceImports(source : ISource, here : string) : list[list[string]]
+  {
+    def text = source.GetText();
+    if (text == null || !text.Contains("space")) []
+    else
+    {
+      when (spaceImporters == null)
+      {
+        spaceImporters = [];
+        foreach (reference in manager.ReferencedAssemblies)
+          try
+          {
+            foreach (type in reference.Assembly.GetExportedTypes())
+              when (!type.IsAbstract && !type.IsInterface && typeof(Nemerle.Compiler.NitraDialectServices.ISpaceImports).IsAssignableFrom(type))
+                spaceImporters ::= System.Activator.CreateInstance(type) :> Nemerle.Compiler.NitraDialectServices.ISpaceImports
+          }
+          catch { | _ is System.Exception => () }
+      }
+      mutable names = [];
+      unless (spaceImporters.IsEmpty)
+        foreach ((isSpace, grammars, _, bodyStart, bodyEnd, _) in Nemerle.Compiler.NitraShared.NitraSourceScan.Blocks(text, manager.Options.IndentationSyntax))
+          when (isSpace)
+            foreach (importer in spaceImporters)
+              foreach (grammar in (if (grammars.IsEmpty) [""] else grammars))
+                foreach (name in (try { importer.Imports(grammar, text.Substring(bodyStart, bodyEnd - bodyStart)) } catch { | _ is System.Exception => array[] }))
+                {
+                  def parts = name.Split('.');
+                  // (the file in the case it has: a Pascal unit's name is any case)
+                  def directory = Path.Combine(here, String.Join(Path.DirectorySeparatorChar.ToString(), parts, 0, parts.Length - 1));
+                  def file = parts[parts.Length - 1];
+                  def actual = if (!Directory.Exists(directory)) file
+                               else match (Directory.GetFiles(directory, "*.n").:NToList().Find(f => String.Equals(Path.GetFileNameWithoutExtension(f), file, StringComparison.OrdinalIgnoreCase)))
+                               { | Some(f) => Path.GetFileNameWithoutExtension(f) | None => file };
+                  parts[parts.Length - 1] = actual;
+                  names ::= parts.:NToList()
+                }
+      names.Rev()
+    }
+  }
+
   SourceUsings(source : ISource) : list[list[string]]
   {
-    def lexer = LexerString(manager, source.GetText(), Location(source.FileIndex, 1, 1));
+    // (a grammar's or a space's body is another language: blanked, as the grammar lane reads it apart)
+    def lexer = LexerString(manager, Nemerle.Compiler.NitraShared.NitraSourceScan.BlankForeign(source.GetText(), manager.Options.IndentationSyntax), Location(source.FileIndex, 1, 1));
     lexer.Keywords = LexerBase.BaseKeywords;
+    // (a lexer error ends this scan: the file's parse reports it, where it is)
     def read() : Token
     {
-      try { lexer.GetToken() } catch { | _ is LexerBase.PragmaIndent => read() }
+      try { lexer.GetToken() } catch { | _ is LexerBase.PragmaIndent => read() | _ is LexerBase.Error => Token.EndOfFile() }
     }
     mutable imports = [];
     mutable depth = 0;
@@ -169,7 +215,7 @@ public sealed class FileModuleRegistry
   /// Use the lexer rather than matching source text: comments, strings and conditionals keep their normal meaning.
   public RegisteredFolder(source : ISource, reportErrors : bool = true) : list[string]
   {
-    def lexer = LexerString(manager, source.GetText(), Location(source.FileIndex, 1, 1));
+    def lexer = LexerString(manager, Nemerle.Compiler.NitraShared.NitraSourceScan.BlankForeign(source.GetText(), manager.Options.IndentationSyntax), Location(source.FileIndex, 1, 1));
     lexer.Keywords = LexerBase.BaseKeywords;
     def read() : Token
     {

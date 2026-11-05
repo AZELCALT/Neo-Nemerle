@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Embed unmodified pinned Nitra declaration grammars; no upstream binaries used."""
+"""Embed unmodified pinned Nitra declaration grammars; no upstream binaries used.
+
+Historical: ncc/Nemerle/Compiler/nitra_bootstrap.n is maintained in place now (Nitra is part of this repository);
+running this again would undo the changes made there."""
 import hashlib,json,pathlib,subprocess
 repo=pathlib.Path(__file__).resolve().parents[1]
 ref=repo.parent/'nitra-reference'; target=repo/'ncc/Nemerle/Compiler/nitra_bootstrap.n'

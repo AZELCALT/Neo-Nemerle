@@ -57,6 +57,12 @@ public interface INitraNativeSourceHost
   Prepare(modules : SCG.IEnumerable[string]) : NitraPreparedGrammar;
   Expand(rule : string, selected : NitraStructure, typer : Typer, location : Location, context : NitraDialectContext) : PExpr;
 }
+/// A native host that maps a space before typing (so it may declare). Its own interface, so an older host still loads.
+public interface INitraEarlyHost
+{
+  /// The mapping, before typing, when the space's root mapping takes no context (it needs no typer); null otherwise.
+  ExpandEarly(rule : string, selected : NitraStructure, location : Location, context : NitraDialectContext) : PExpr;
+}
 /// A native host that keeps the bytes of the grammar image it compiled (for the continuation section).
 public interface INitraGrammarImageHost
 {
@@ -263,7 +269,7 @@ internal sealed class NitraSourceSession
           when(r.Eat("[")) { z.Scopes.Add(r.Name()); while(r.Eat(",")) z.Scopes.Add(r.Name()); r.Need("]"); }
           z.FileOwner=FileOwner(source.FileIndex);
           def colon=indented && r.Is(":");
-          def block=if(colon) r.IndentedBlock(t.Start) else r.Block();
+          def block=if(colon) r.IndentedBlock(t.Start) else r.SpaceBlock();
           z.Body=block.Start+1; z.End=if(colon) block.End else block.End-1; zones.Add(z);
           Blank(chars,t.Start,block.End); Insert(chars,t.Start,block.End,array["__g","(",z.Id.ToString(),")",";"]);
         }
@@ -517,7 +523,131 @@ internal sealed class NitraSourceSession
       manager.MacrosRegistry.RegisterMacro(NitraSpaceMacro(this));
       manager.MacrosRegistry.RegisterMacro(NitraScopeMacro(this));
       manager.MacrosRegistry.RegisterMacro(NitraBoundaryMacro(this));
+      // a grammar's mappings run in the compiler: what a referenced library needs (its support library) is found
+      // beside it, as when it is used anywhere else
+      foreach(reference in manager.ReferencedAssemblies)
+        when(reference.Assembly!=null && !String.IsNullOrEmpty(reference.Assembly.Location))
+          lock(besideReferences) _=besideReferences.Add(Path.GetDirectoryName(reference.Assembly.Location));
+      unless(resolvingBeside) { resolvingBeside=true; AppDomain.CurrentDomain.AssemblyResolve+=ResolveBeside; }
+      // a space that declares is mapped before the members are added, so what it declares is there for every file
+      when(nativeHost is INitraEarlyHost) manager.ExecBeforeAddMembers(fun() { foreach(z when !z.Continued && z.Space!=null in zones) _=MapEarly(z) });
     }
+  }
+
+  // the folders of the libraries the compilations referenced (a library's dependency is looked for there)
+  static besideReferences : SCG.HashSet[string] = SCG.HashSet(StringComparer.Ordinal);
+  static mutable resolvingBeside : bool;
+  static ResolveBeside(_ : object, args : ResolveEventArgs) : System.Reflection.Assembly
+  {
+    def name=System.Reflection.AssemblyName(args.Name).Name;
+    mutable found=null;
+    lock(besideReferences)
+      foreach(folder in besideReferences)
+        when(found==null && File.Exists(Path.Combine(folder,name+".dll")))
+          found=System.Reflection.Assembly.LoadFrom(Path.Combine(folder,name+".dll"));
+    found
+  }
+
+  // ---- spaces mapped before typing (they may declare; SpaceFiles) ----
+  // a space's statements, once mapped early (its `__g' is typed as them); the spaces being mapped; what each exported
+  early : SCG.Dictionary[int,PExpr] = SCG.Dictionary();
+  mappingNow : SCG.HashSet[int] = SCG.HashSet();
+  exported : SCG.Dictionary[int,SCG.Dictionary[string,object]] = SCG.Dictionary();
+  private BodyLocation(z : NitraSourceZone) : Location
+  {
+    mutable line=1; mutable column=1;
+    for(mutable i=0;i<z.Body;++i) if(z.Source[i]=='\n') { ++line; column=1; } else ++column;
+    Location(z.File,line,column)
+  }
+  /// Maps `z' before typing, unless its mapping needs a typer: its declarations become its file module's members,
+  /// its statements wait for its `__g'. True when it is mapped (or being mapped).
+  private MapEarly(z : NitraSourceZone) : bool
+  {
+    if(early.ContainsKey(z.Id) || mappingNow.Contains(z.Id)) true
+    else
+    {
+      def location=BodyLocation(z);
+      def selected=NitraSyntax.StructureCompact(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),configuration.ResolveStructure);
+      if(!selected.Success) false // (reported when its `__g' is typed)
+      else
+      {
+        _=mappingNow.Add(z.Id);
+        def exports=SCG.Dictionary.[string,object](StringComparer.Ordinal); exported[z.Id]=exports;
+        def context=NitraDialectContext(configuration.Dialects,z.Space,null,location);
+        def (previous,importOf,exportTo,moduleOf)=(NitraDialectContext.Active,SpaceFiles.ImportOf,SpaceFiles.ExportTo,SpaceFiles.ModuleOf);
+        mutable result=null;
+        try
+        {
+          NitraDialectContext.Active=context;
+          SpaceFiles.ImportOf=name => Import(z,name); SpaceFiles.ExportTo=exports; SpaceFiles.ModuleOf=z.FileOwner;
+          result=(nativeHost :> INitraEarlyHost).ExpandEarly(z.Rule,selected.Root,location,context);
+        }
+        finally
+        {
+          NitraDialectContext.Active=previous;
+          SpaceFiles.ImportOf=importOf; SpaceFiles.ExportTo=exportTo; SpaceFiles.ModuleOf=moduleOf;
+          _=mappingNow.Remove(z.Id);
+        }
+        if(result==null) { _=exported.Remove(z.Id); false }
+        else
+        {
+          // `<[ decl: ... ]>' members, wherever the result's blocks hold them, are the file module's
+          mutable members=[];
+          def statements(e : PExpr) : PExpr
+          {
+            def declares(x : PExpr) : bool
+            { | PExpr.Quoted(SyntaxElement.ClassMember) => true | PExpr.Sequence(items) => items.Exists(declares) | _ => false }
+            match(e)
+            {
+              | PExpr.Quoted(SyntaxElement.ClassMember(m)) => members::=m; <[ () ]>
+              | PExpr.Sequence(items) when items.Exists(declares) => PExpr.Sequence(e.Location,items.Map(statements))
+              | _ => e
+            }
+          }
+          def code=statements(result);
+          unless(members.IsEmpty)
+            match(manager.CoreEnv.LookupType(z.FileOwner.Split('.').:NToList()))
+            {
+              | Some(tb is Nemerle.Compiler.type_builder.TypeBuilder) =>
+                // (the types it declares are built once all its members are there, as a macro builds its types)
+                def types=SCG.List();
+                foreach(m in members.Rev())
+                  match(m)
+                  {
+                    | ClassMember.TypeDeclaration(td) as declared when !(td is TopDeclaration.Delegate) =>
+                      // a type the mapping names outside a macro has no environment: the file's, as if written there
+                      match(td.name) { | Splicable.Name(n) when n.context==null => td.name=Splicable.Name(Name(n.Id,n.color,tb.GlobalEnv)) | _ => () }
+                      types.Add(tb.DefineNestedType(declared))
+                    | _ => tb.Define(m)
+                  }
+                foreach(nested in types) nested.Compile()
+              | _ => Message.Error(location,"a space that declares must be in a file module ("+z.FileOwner+" is none)")
+            }
+          early[z.Id]=code; true
+        }
+      }
+    }
+  }
+  /// What `SpaceFiles.Import(name)' gives the space `from': the file module `name' names from its file, and what that
+  /// module's space exported (mapped first, when it is not yet; partly, when it is being mapped)
+  private Import(from : NitraSourceZone, name : string) : SpaceImport
+  {
+    def answer=SpaceImport();
+    def path=try { manager.FileModuleRegistry.ResolveUsing(name.Split('.').:NToList(),Location(from.File,1,1)) } catch { | _ => name.Split('.').:NToList() };
+    def full=String.Join(".",path.ToArray());
+    mutable target=null;
+    // (the module's case need not be the name's: a Pascal unit's name is any case)
+    foreach(z when !z.Continued && z.Space!=null && String.Equals(z.FileOwner,full,StringComparison.OrdinalIgnoreCase) in zones)
+      when(target==null || z.Dialect==from.Dialect && target.Dialect!=from.Dialect || z.FileOwner==full && target.FileOwner!=full) target=z;
+    when(target!=null)
+    {
+      answer.Module=target.FileOwner; answer.HasSpace=target.Dialect==from.Dialect;
+      answer.InProgress=mappingNow.Contains(target.Id);
+      _=MapEarly(target);
+      mutable exports; when(exported.TryGetValue(target.Id,out exports)) foreach(pair in exports) answer.Exports[pair.Key]=pair.Value;
+    }
+    when(target==null && manager.CoreEnv.LookupType(path).IsSome) answer.Module=full;
+    answer
   }
   /// A patch grammar holding only the changed and added alternatives of a stored grammar, as
   /// `extend syntax` blocks over the stored modules, and the stale stored alternatives to drop. None when the change is
@@ -626,11 +756,17 @@ internal sealed class NitraSourceSession
     mutable line=1; mutable column=1;
     for(mutable i=0;i<z.Body;++i) if(z.Source[i]=='\n') { ++line; column=1; } else ++column;
     def location=Location(z.File,line,column);
+    mutable mapped; when(early.TryGetValue(id,out mapped)) return Statement(typer,mapped,location);
     when(nativeHost!=null)
     {
       def selected=NitraSyntax.StructureCompact(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),configuration.ResolveStructure);
       unless(selected.Success)
-      { foreach(message in selected.Diagnostics) Message.Error(location,message); return PExpr.Error(location); }
+      {
+        // where the recognizer got to, as the file's line and column (the message's offset is into the body)
+        def at=if(selected.Recognition!=null) At(z.File,z.Body+selected.Recognition.Furthest) else location;
+        foreach(message in selected.Diagnostics) ReportOnce(id,at,OffsetFree.Replace(message,""));
+        return <[ () ]>; // (reported: see Statement)
+      }
       def context=NitraDialectContext(configuration.Dialects,z.Space,typer,location);
       foreach(name in z.Space.Scopes) _=context.Scope(name);
       def previous=NitraDialectContext.Active;
@@ -642,12 +778,19 @@ internal sealed class NitraSourceSession
     when(context==null || context.Typer : object != typer : object) throw ArgumentException("source context must use the current typer");
     context.Location=location;
     def compiled=NitraCompilation.Compile(z.Grammar,z.Rule,z.Source.Substring(z.Body,z.End-z.Body),context,configuration.ResolveStructure);
-    unless(compiled.Success) { foreach(message in compiled.Diagnostics) Message.Error(context.Location,message); return PExpr.Error(context.Location); }
+    unless(compiled.Success) { foreach(message in compiled.Diagnostics) ReportOnce(id,context.Location,message); return <[ () ]>; }
     Statement(typer,compiled.Expression,context.Location)
   }
+  // (a body is typed again when the typer restarts it, and its space expanded again: each error is said once)
+  reported : SCG.HashSet[int*string] = SCG.HashSet();
+  static OffsetFree : System.Text.RegularExpressions.Regex = System.Text.RegularExpressions.Regex(@" at offset \d+$");
+  private ReportOnce(zone : int, at : Location, message : string) : void
+  { when(reported.Add((zone,at.ToString()+message))) Message.Error(at,message); }
   private Statement(typer : Typer, value : PExpr, location : Location) : PExpr
   {
-    if(value is PExpr.Error || String.IsNullOrEmpty(configuration.SpaceValueTarget)) <[ _ = $value ]>
+    // (a space whose error was reported stands as nothing: typing its error again would add a bare "parse error")
+    if(value is PExpr.Error) <[ () ]>
+    else if(String.IsNullOrEmpty(configuration.SpaceValueTarget)) <[ _ = $value ]>
     else { def target=Nemerle.Compiler.main_parser.MainParser.ParseExpr(typer.Env,configuration.SpaceValueTarget,location,false); <[ $target = $value ]> }
   }
 

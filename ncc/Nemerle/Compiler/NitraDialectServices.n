@@ -321,6 +321,57 @@ public sealed class NitraDialectRegistry
   public Scopes : SCG.IEnumerable[NitraSharedScope] { get { scopes.Values } }
 }
 /// Current is dynamically scoped to a mapping/resolver invocation, not a global registry.
+/// What a space knows of another file's space while it is mapped: the file module it names (as `using` finds one,
+/// from the file being mapped), and what that space's mapping exported. A space is a logical file: one that declares
+/// (its mapping gives `<[ decl: ... ]>` members, which become its file module's) is mapped before the program is
+/// typed, in the order the spaces import each other, so its members are there for every file and space.
+public sealed class SpaceImport
+{
+  /// The file module (`a.b`), for code that reaches its members: `a.b.Member`. Null when nothing has the name.
+  public mutable Module : string;
+  /// What its space exported, by key (empty when the module has no space of its own: a Nemerle file, a library).
+  public Exports : SCG.Dictionary[string, object] = SCG.Dictionary(StringComparer.Ordinal);
+  /// Its space is being mapped now (an import back into it): only what it exported so far is there, as a unit's
+  /// interface is before its implementation.
+  public mutable InProgress : bool;
+  /// The module has a space of the importing space's grammar.
+  public mutable HasSpace : bool;
+}
+
+/// What a grammar's spaces import, for finding the files a program needs before it is parsed (as a file's `using`s are
+/// found): a referenced library may give one; the compiler asks it about each space of its grammar, and finds each
+/// name as a `using` (a file beside, or under the source root; its case does not matter).
+public interface ISpaceImports
+{
+  /// The names (dotted, as a `using`) that a space of `grammar` with this body imports.
+  Imports(grammar : string, body : string) : array[string];
+}
+
+/// The cross-space facility, for a grammar's mapping code (see SpaceImport).
+public module SpaceFiles
+{
+  /// (set by the grammar lane while it maps a space)
+  [System.ThreadStatic] internal mutable ImportOf : Func[string, SpaceImport];
+  [System.ThreadStatic] internal mutable ExportTo : SCG.Dictionary[string, object];
+  [System.ThreadStatic] internal mutable ModuleOf : string;
+  /// The file module of the space being mapped.
+  public CurrentModule : string { get { ModuleOf } }
+  /// Says `value` under `key` to the spaces that import this one (a declaration's signature, its kind, anything the
+  /// grammar's mappings need of it).
+  public Export(key : string, value : object) : void
+  {
+    when (ExportTo == null) throw InvalidOperationException("SpaceFiles.Export is for a space's mapping code");
+    ExportTo[key] = value
+  }
+  /// The file module `name` names from the file being mapped (dotted, as `using name;` resolves it), and what its
+  /// space exported; its space is mapped first when it is not yet. Module null when nothing has the name.
+  public Import(name : string) : SpaceImport
+  {
+    when (ImportOf == null) throw InvalidOperationException("SpaceFiles.Import is for a space's mapping code");
+    ImportOf.Invoke(name)
+  }
+}
+
 public sealed class NitraDialectContext
 {
   [ThreadStatic] internal static mutable Active : NitraDialectContext;
