@@ -70,13 +70,6 @@ public class PascalArray[T] : IPascalValue
   }
 }
 
-/// A `var' parameter's variable in a nested routine (a closure takes no `ref'): the cell the caller passes.
-public class PascalVar[T]
-{
-  public mutable Value : T;
-  public this(value : T) { Value = value }
-}
-
 /// A pointer: `p^' is its Value; `new(p)' makes one, `nil' is null.
 public class PascalPointer[T]
 {

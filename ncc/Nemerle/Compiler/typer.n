@@ -4400,16 +4400,22 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           {
             def name = p.name.GetName ();
 
-            when (p.Type is <[ ref $_ ]> || p.Type is <[ out $_ ]>)
-              ReportError (messenger, "ref/out parameters are not supported in local methods");
+            // a ref or out parameter, as a method's: the local function is a method then (called, never a value, and
+            // not inlined, so the parameter is the caller's variable)
+            def (kind, ty) = match (p.Type)
+            {
+              | <[ ref $t ]> => (ParmKind.Ref, FixedType.Ref (current_type.BindType (tenv, t)) : TypeVar)
+              | <[ out $t ]> => (ParmKind.Out, FixedType.Out (current_type.BindType (tenv, t)) : TypeVar)
+              | _ => (ParmKind.Normal, current_type.BindType (tenv, p.Type))
+            };
 
             def fp = TParameter(loc          = p.Location,
                                 name         = name.Id,
                                 nameLocation = p.name.Location,
                                 color        = name.color,
-                                ty           = current_type.BindType (tenv, p.Type),
+                                ty           = ty,
                                 typeLocation = p.Type.Location,
-                                kind         = ParmKind.Normal,
+                                kind         = kind,
                                 modifiers    = p.modifiers,
                                 patternHack  = p.ParsedPatternHack);
             match (p.DefaultValue)
@@ -4438,6 +4444,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
         header.SetParsedObject(fn.header); //fn.header.TypedObject = header;
         header.Parsed = fn;
+        when (parms.Exists (p => p.kind != ParmKind.Normal)) header.cannot_inline = true;
         when (inferred && !held) GetTopTyper ().local_results [header] = place;
 
         def parm_types = NList.Map (parms, fun (p : TParameter) { p.ty });

@@ -277,6 +277,9 @@ public class LocalValue : TypedBase,
     }
   }
 
+  /// Its local slot is declared (a guard that two ways of a match share is emitted twice, declaring its locals again)
+  internal HasLocalSlot : bool { get { ilkind is ILKind.Local } }
+
   internal ParmIndex : int
   {
     get {

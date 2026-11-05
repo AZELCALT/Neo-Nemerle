@@ -57,6 +57,8 @@ public class Typer2
   mutable current_fun   : TFunHeader;
 
   mutable field_inits_typed : bool = false;
+  /// lambdas with ref or out parameters given to a delegate's constructor (which they are made, as C#'s)
+  delegate_lambdas : System.Collections.Generic.HashSet[TFunHeader] = System.Collections.Generic.HashSet();
   IsCurrentFunInstanceCtor() : bool
   {
     top_level_fun.MemberKind == MemberKinds.Constructor &&
@@ -1073,6 +1075,8 @@ public class Typer2
               else match (expr)
               {
                 | TExpr.LocalFunRef(_, []) =>
+                  when (hd.Parameters.Exists (p => p.kind != ParmKind.Normal) && !delegate_lambdas.Contains (hd))
+                    Message.Error (expr.Location, $"`$(hd.Name)' has ref or out parameters: it is called, not used as a value");
                   when (hd.ConvertToLoopWithClosure)
                   {
                     hd.ConvertToLoopWithClosure = false;
@@ -1369,6 +1373,11 @@ public class Typer2
                         //to handle tuple/detuple force creation of wrapper
                       def e = parm.expr;
                       parm.expr = Walk(TExpr.TypeConversion(e.Location, e.ty, e, e.ty, ConversionKind.UpCast()));
+
+                    | TExpr.DefFunctionsIn([func], TExpr.LocalFunRef(decl, _))
+                        when func.decl.Equals(decl) && func.Parameters.Exists(p => p.kind != ParmKind.Normal) =>
+                      _ = delegate_lambdas.Add(func);
+                      parm.expr = Walk(parm.expr)
 
                     | _ => parm.expr = Walk(parm.expr)
                   }

@@ -173,6 +173,33 @@ clicked
 done
 ```
 
+A delegate whose parameters are `ref` or `out` takes a lambda that declares them so, as C#'s `(ref int x) => ...`
+does. A function value has no `ref` parameters, so such a lambda is only given to a delegate; a local function with
+`ref` or `out` parameters is called (a method of its own), never used as a value:
+
+```nemerle
+using System.Console;
+
+public delegate Bump(x : ref int) : void;
+
+mutable step = 3;
+def bump = Bump(fun (x : ref int) { x += step });
+def twice(x : ref int) : void { bump(ref x); bump(ref x) }
+
+mutable n = 1;
+twice(ref n);
+step = 10;
+bump(ref n);
+WriteLine(n)
+```
+
+```text
+17
+```
+
+The lambda keeps `step`, as any closure does; a `ref` parameter is not kept by a closure, so a lambda inside `twice`
+could not use `x`.
+
 ## Being used from C#
 
 A Nemerle library is a normal .NET assembly. Its public classes, variants (as class hierarchies), interfaces and

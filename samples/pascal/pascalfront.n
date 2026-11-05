@@ -210,6 +210,11 @@ public class RoutineSig
   public mutable Declared : Location;
   /// A procedural parameter (called through the parameter's value)
   public mutable IsParameter : bool;
+  /// A nested routine's: the `var' parameters of the routines around it that it uses (or a routine inside it does),
+  /// passed to it as its own (by `ref': a closure keeps no reference to a variable)
+  public mutable Extras : list[Sym] = [];
+  /// A procedural parameter's type with `var' parameters: its delegate (a function value takes no `ref')
+  public mutable Delegate : PExpr;
 }
 
 public class Sym
@@ -218,7 +223,8 @@ public class Sym
   public Name : string;   // as declared
   public mutable Type : PT;
   public mutable Code : PExpr;      // a variable's access, a constant's value
-  public mutable IsCell : bool;     // a variable whose access is a cell's Value (a nested routine's `var' parameter)
+  public mutable IsVarParam : bool; // a routine's `var' parameter (by `ref')
+  public mutable BoundOf : Sym;     // a conformant array parameter's bound: its parameter
   public mutable Ordinal : option[int]; // a constant's or an enumeration value's ordinal value, when known
   public mutable Routine : RoutineSig;
   public this(kind : string, name : string) { Kind = kind; Name = name }
@@ -234,6 +240,9 @@ public class Scope
   public mutable ResultVar : string;       // its result's variable (a function)
   public mutable WithRecord : PExpr;       // a `with' scope: the record it opens
   public mutable WithType : PT;
+  /// A block's (a routine's, the program's): its `label' section's labels
+  public mutable IsBlock : bool;
+  public Labels : SCG.HashSet[string] = SCG.HashSet(StringComparer.OrdinalIgnoreCase);
   public this(parent : Scope) { Parent = parent }
 }
 
@@ -275,6 +284,38 @@ class Compiler
   {
     def walk(sc : Scope) : RoutineSig { if (sc == null) null else if (sc.Routine != null) sc.Routine else walk(sc.Parent) }
     walk(scope)
+  }
+
+  /// The block the code being compiled is in: the routine's scope, or the program's
+  BlockScope() : Scope
+  {
+    def walk(sc : Scope) : Scope { if (sc.IsBlock || sc.Parent == null) sc else walk(sc.Parent) }
+    walk(scope)
+  }
+
+  /// A labeled statement's label: declared in its block's `label' section (ISO)
+  CheckLabel(at : Location, label : string) : void
+  {
+    unless (BlockScope().Labels.Contains(label)) Error(at, $"label $label is not declared: its block's declarations have no `label $label;'")
+  }
+
+  /// Whether a routine's block assigns `name' (a function's result), in its statements or its routines'
+  AssignsName(b : Block, name : string) : bool
+  {
+    def same(n : string) : bool { String.Equals(n, name, StringComparison.OrdinalIgnoreCase) }
+    def st(s : Stmt) : bool
+    {
+      match (s)
+      {
+        | Assign(_, target, _) => same(target.Name) && target.Sels.IsEmpty
+        | Block(_, body) | Repeat(_, body, _) => body.Exists(st)
+        | If(_, _, th, el) => st(th) || el != null && st(el)
+        | While(_, _, body) | For(_, _, _, _, _, body) | With(_, _, body) | Labeled(_, _, body) => st(body)
+        | Case(_, _, arms, el) => arms.Exists((_, y) => st(y)) || el != null && el.Exists(st)
+        | _ => false
+      }
+    }
+    b.Body.Exists(st) || b.Decls.Exists(d => match (d) { | Decl.Routine(_, h, body, _) when body != null && !same(h.Name) => AssignsName(body, name) | _ => false })
   }
 
   /// The labels of a routine's statements (or the program's): each sequence that has some is a state machine, its
@@ -333,7 +374,7 @@ class Compiler
 
   public Run(unit : CompUnit) : PExpr
   {
-    def global = Scope(null);
+    def global = Scope(null); global.IsBlock = true;
     def standard = Scope(null);
     foreach ((name, t) in [("integer", Integer), ("real", Real), ("boolean", Boolean), ("char", Char), ("string", StringT), ("text", Text)])
     { def s = Sym("type", name); s.Type = t; standard.Table[name] = s }
@@ -349,7 +390,7 @@ class Compiler
       | Program(at, _, uses, block) =>
         def inits = Uses(uses);
         PlanLabels(block.Body);
-        Declarations(block.Decls, true);
+        _ = Declarations(block.Decls, true);
         def body = Statements(block.Body);
         Finish(Located(at, () => <[ { ..$inits; $body } ]>))
       | Unit(at, name, iuses, idecls, muses, mdecls, init) =>
@@ -359,11 +400,11 @@ class Compiler
         def inits = Uses(iuses);
         // the interface is exported before the implementation is compiled: a unit that this one's implementation
         // uses may use this one
-        Declarations(idecls, true);
+        _ = Declarations(idecls, true);
         SpaceFiles.Export("pascal.unit", UnitExport(global, moduleName));
         unitPublic = false;
         def more = Uses(muses);
-        Declarations(mdecls, true);
+        _ = Declarations(mdecls, true);
         foreach (s in global.Table.Values)
           when (s.Kind == "routine" && !s.Routine.Defined && s.Routine.IsMethod)
             Error(s.Routine.Declared, $"`$(s.Name)' is declared in the interface, and its implementation is missing");
@@ -454,6 +495,16 @@ class Compiler
     mutable code = [];
     mutable routines = [];
     def pointers = SCG.List();
+    // the names each nested routine's body uses (with its routines'): which `var' parameters around it it needs
+    def used = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
+    unless (top)
+      foreach (d in decls)
+        match (d)
+        {
+          | Decl.Routine(_, h, body, _) when body != null =>
+            def names = SCG.HashSet(StringComparer.OrdinalIgnoreCase); UsedNames(body, names); used[h.Name] = names
+          | _ => ()
+        }
     // a pointer type's target may be declared after it, in the same type section: resolved where the section ends
     def resolvePointers()
     {
@@ -473,7 +524,8 @@ class Compiler
       unless (d is Decl.TypeDecl) resolvePointers();
       match (d)
       {
-        | Labels => () // (a label is declared where its statement is: see Statements)
+        | Labels(at, names) => // (the statement it labels is planned where its sequence is: see PlanLabels)
+          foreach (n in names) unless (BlockScope().Labels.Add(n)) Error(at, $"label $n is declared twice in this block")
         | Const(at, name, value) =>
           def (e, t) = Rvalue(value);
           def s = Sym("const", name); s.Type = t; s.Ordinal = ConstOrdinal(value); s.Code = e;
@@ -505,6 +557,8 @@ class Compiler
           }
         | Routine(at, header, body, forward) =>
           def sig = Signature(at, header, top);
+          mutable names;
+          when (!top && sig.Extras.IsEmpty && used.TryGetValue(header.Name, out names)) sig.Extras = Extras(sig, names);
           when (body != null)
           {
             sig.Defined = true;
@@ -624,7 +678,14 @@ class Compiler
         t
       | SetOf(at, element) =>
         def t = PT("set"); t.Base = Type(element, null, pointers);
-        when (Bounds(t.Base).IsNone) Error(at, "a set's base is an ordinal type");
+        match (Bounds(t.Base))
+        {
+          | None => Error(at, "a set's base is an ordinal type")
+          // (ISO leaves a set's largest base to the implementation: here, as Turbo's, the values 0..255; a set of
+          // char holds the characters 0..255, another one an error where it is put in)
+          | Some((low, high)) when OrdBase(t.Base).Kind != "char" && (low < 0 || high > 255) => Error(at, $"a set's base is of values in 0..255, not $(t.Base) (" + low.ToString() + ".." + high.ToString() + ")")
+          | _ => ()
+        }
         t
       | FileOf(_, null) => Text
       | FileOf(_, element) => def t = PT("file"); t.Base = Type(element, null, pointers); t
@@ -680,6 +741,16 @@ class Compiler
       | "text" => <[ pascal.PascalText ]>
       | "file" => <[ pascal.PascalFile[$(Clr(t.Base))] ]>
       | "pointer" => <[ pascal.PascalPointer[$(Clr(if (t.Target != null) t.Target else Integer))] ]>
+      | "proc" when t.Sig.Params.Exists(p => p.IsVar) =>
+        when (t.Sig.Delegate == null)
+        {
+          def name = Fresh("Proc");
+          def ps = t.Sig.Params.Map(p => if (p.IsVar) <[ parameter: $(p.Name : usesite) : ref $(Clr(p.Type)) ]> else <[ parameter: $(p.Name : usesite) : $(Clr(p.Type)) ]>);
+          def result = if (t.Sig.IsFunction) Clr(t.Sig.Result) else <[ void ]>;
+          members.Add(Unquote(Quote(<[ decl: public delegate $(name : usesite)(..$ps) : $result; ]>)));
+          t.Sig.Delegate = <[ $(Module(moduleName)).$(name : usesite) ]>
+        }
+        t.Sig.Delegate
       | "proc" =>
         def ps = t.Sig.Params.Map(p => Clr(p.Type));
         def args = match (ps) { | [] => <[ void ]> | [one] => one | many => many.Tail.FoldLeft(many.Head, (p, acc) => <[ $acc * $p ]>) };
@@ -749,18 +820,17 @@ class Compiler
     {
       def s = Sym("var", p.Name); s.Type = p.Type;
       def clr = Clr(p.Type);
-      def decl = if (p.IsVar && sig.IsMethod) <[ parameter: $(p.Name : usesite) : ref $clr ]>
-                 else if (p.IsVar) { s.IsCell = true; <[ parameter: $(p.Name : usesite) : pascal.PascalVar[$clr] ]> }
-                 else <[ parameter: $(p.Name : usesite) : $clr ]>;
-      s.Code = if (s.IsCell) <[ $(p.Name : usesite).Value ]> else <[ $(p.Name : usesite) ]>;
+      s.IsVarParam = p.IsVar;
+      def decl = if (p.IsVar) <[ parameter: $(p.Name : usesite) : ref $clr ]> else <[ parameter: $(p.Name : usesite) : $clr ]>;
+      s.Code = <[ $(p.Name : usesite) ]>;
       scope.Table[p.Name] = s;
       // a conformant array's bounds: its array's (an inner dimension's, its first element's)
       mutable dimension = p.Type; mutable access = s.Code;
       while (dimension != null && dimension.Kind == "array" && dimension.LowName != null)
       {
         def a = access;
-        def low = Sym("const", dimension.LowName); low.Type = dimension.Base; low.Code = FromOrd(<[ $a.Low ]>, dimension.Base);
-        def high = Sym("const", dimension.HighName); high.Type = dimension.Base; high.Code = FromOrd(<[ $a.High ]>, dimension.Base);
+        def low = Sym("const", dimension.LowName); low.Type = dimension.Base; low.Code = FromOrd(<[ $a.Low ]>, dimension.Base); low.BoundOf = s;
+        def high = Sym("const", dimension.HighName); high.Type = dimension.Base; high.Code = FromOrd(<[ $a.High ]>, dimension.Base); high.BoundOf = s;
         scope.Table[dimension.LowName] = low; scope.Table[dimension.HighName] = high;
         access = <[ $a[$a.Low] ]>; dimension = dimension.Elem
       }
@@ -775,28 +845,22 @@ class Compiler
     scope = Scope(outer); scope.Routine = sig;
     try
     {
-      parameters = Parameters(sig);
-      // a method's `var' parameter that its nested routines reach is a cell while it runs (a closure takes no
-      // `ref'): copied in, and back when it returns
-      def nested = body.Decls.Exists(_ is Decl.Routine);
-      mutable before = []; mutable after = [];
-      when (sig.IsMethod && nested)
-        foreach (p when p.IsVar in sig.Params)
+      // (the `var' parameters around it that it uses: its own, by the same name, so their code is theirs here)
+      parameters = Parameters(sig) + sig.Extras.Map(x => match (x.Code)
         {
-          def cell = Fresh(p.Name + "_cell");
-          before ::= <[ def $(cell : usesite) = pascal.PascalVar($(p.Name : usesite)) ]>;
-          after ::= <[ $(p.Name : usesite) = $(cell : usesite).Value ]>;
-          def s = scope.Table[p.Name]; s.IsCell = true; s.Code = <[ $(cell : usesite).Value ]>
-        }
+          | PExpr.Ref(n) => <[ parameter: $(n : name) : ref $(Clr(x.Type)) ]>
+          | _ => throw InvalidOperationException("a var parameter's code is its name")
+        });
+      scope.IsBlock = true;
       when (sig.IsFunction) scope.ResultVar = Fresh("result_" + sig.Name);
+      // (ISO: a function's block assigns its result; one that never does gives no value)
+      when (sig.IsFunction && !AssignsName(body, sig.Name)) Error(sig.Declared, $"function `$(sig.Name)' never assigns its result");
       PlanLabels(body.Body);
       def locals = Declarations(body.Decls, false);
       def statements = Statements(body.Body);
       def result = if (sig.IsFunction) <[ $(scope.ResultVar : usesite) ]> else <[ () ]>;
       def declareResult = if (sig.IsFunction) [<[ mutable $(scope.ResultVar : usesite) : $(Clr(sig.Result)) = $(Init(sig.Result, null)) ]>] else [];
-      def code = <[ { ..$(declareResult + locals); $statements; $result } ]>;
-      if (before.IsEmpty) code
-      else <[ { ..$(before.Rev()); try $code finally { ..$(after.Rev()) } } ]>
+      <[ { ..$(declareResult + locals); $statements; $result } ]>
     }
     finally scope = outer
   }
@@ -837,7 +901,8 @@ class Compiler
     mutable catches = [];
     foreach (s in body)
     {
-      | Labeled(_, label, inner) =>
+      | Labeled(at, label, inner) =>
+        CheckLabel(at, label);
         segments.Add(SCG.List());
         def place = labels[label];
         def jump = Nemerle.Compiler.macros.Macros.NewSymbol("jump");
@@ -867,7 +932,7 @@ class Compiler
     {
       | Empty => <[ () ]>
       | Block(_, body) => Statements(body)
-      | Labeled(_, _, inner) => Statement(inner) // (a label outside a statement sequence's top: as its statement)
+      | Labeled(at, label, inner) => CheckLabel(at, label); Statement(inner) // (a label outside a statement sequence's top: as its statement)
       | Goto(at, label) =>
         mutable target;
         if (labels.TryGetValue(label, out target))
@@ -1079,33 +1144,14 @@ class Compiler
     if (args.Length != sig.Params.Length) { Error(at, $"`$(sig.Name)' takes $(sig.Params.Length) argument(s), not $(args.Length)"); <[ () ]> }
     else
     {
-      mutable before = []; mutable passed = []; mutable after = [];
-      foreach ((a, p) in args.Zip(sig.Params))
-        if (p.IsVar)
-        {
-          def (lvalue, t) = match (a) { | Expr.Var(_, d) => Designator(d) | _ => Error(a.Loc, $"`$(p.Name)' is a var parameter: its argument is a variable"); (<[ () ]>, p.Type) };
-          when (OrdBase(t).Kind != OrdBase(p.Type).Kind && t : object != p.Type : object) Error(a.Loc, $"`$(p.Name)' is a var parameter of $(p.Type), not $t");
-          def isCellVar = match (a) { | Expr.Var(_, d) when d.Sels.IsEmpty => match (Lookup(d.Name)) { | s when s != null => s.IsCell | _ => false } | _ => false };
-          def isField = match (lvalue) { | PExpr.Member => true | PExpr.Ref => true | _ => false };
-          if (sig.IsMethod)
-          {
-            if (isField) passed ::= <[ ref $lvalue ]>
-            else
-            {
-              def temp = Fresh("arg");
-              before ::= <[ mutable $(temp : usesite) = $lvalue ]>; passed ::= <[ ref $(temp : usesite) ]>; after ::= <[ $lvalue = $(temp : usesite) ]>
-            }
-          }
-          else if (isCellVar)
-            match (lvalue) { | <[ $cell.Value ]> => passed ::= cell | _ => passed ::= lvalue }
-          else
-          {
-            def cell = Fresh("cell");
-            before ::= <[ def $(cell : usesite) = pascal.PascalVar($lvalue) ]>; passed ::= <[ $(cell : usesite) ]>; after ::= <[ $lvalue = $(cell : usesite).Value ]>
-          }
-        }
-        else if (p.Type.Kind == "proc") passed ::= ProcArgument(a, p)
-        else passed ::= Convert(a, p.Type, $"argument `$(p.Name)'");
+      def (before, given, after) = Arguments(sig.Params, args);
+      mutable passed = given;
+      // the `var' parameters around it that a nested routine uses: here, the same variables
+      foreach (x in sig.Extras)
+      {
+        when (Lookup(x.Name) : object != x) Error(at, $"`$(sig.Name)' uses `$(x.Name)' of the routine around it, which a declaration hides here");
+        passed ::= <[ ref $(x.Code) ]>
+      }
       def target = if (sig.IsMethod) <[ $(Module(sig.Module)).$(sig.ClrName : usesite) ]>
                    else <[ $(sig.ClrName : usesite) ]>;
       def call = <[ $target(..$(passed.Rev())) ]>;
@@ -1121,7 +1167,100 @@ class Compiler
     def sig = s.Type.Sig;
     when (value && !sig.IsFunction) Error(at, $"`$(s.Name)' is a procedure: it gives no value");
     if (args.Length != sig.Params.Length) { Error(at, $"`$(s.Name)' takes $(sig.Params.Length) argument(s)"); <[ () ]> }
-    else <[ $(s.Code)(..$(args.Zip(sig.Params).Map((a, p) => Convert(a, p.Type, $"argument `$(p.Name)'")))) ]>
+    else
+    {
+      def (before, passed, after) = Arguments(sig.Params, args);
+      def call = <[ $(s.Code)(..$(passed.Rev())) ]>;
+      if (before.IsEmpty) call
+      else if (value) { def r = Fresh("value"); <[ { ..$(before.Rev()); def $(r : usesite) = $call; { ..$(after.Rev()) } $(r : usesite) } ]> }
+      else <[ { ..$(before.Rev()); $call; ..$(after.Rev()) } ]>
+    }
+  }
+
+  /// A call's arguments (reversed): a `var' parameter's by `ref' (a field or a variable itself; an array's element,
+  /// through a variable copied back after the call), and what goes before and after the call
+  Arguments(ps : list[ParamSig], args : list[Expr]) : list[PExpr] * list[PExpr] * list[PExpr]
+  {
+    mutable before = []; mutable passed = []; mutable after = [];
+    foreach ((a, p) in args.Zip(ps))
+      if (p.IsVar)
+      {
+        def (lvalue, t) = match (a) { | Expr.Var(_, d) => Designator(d) | _ => Error(a.Loc, $"`$(p.Name)' is a var parameter: its argument is a variable"); (<[ () ]>, p.Type) };
+        when (OrdBase(t).Kind != OrdBase(p.Type).Kind && t : object != p.Type : object) Error(a.Loc, $"`$(p.Name)' is a var parameter of $(p.Type), not $t");
+        match (lvalue)
+        {
+          | PExpr.Member | PExpr.Ref => passed ::= <[ ref $lvalue ]>
+          | _ =>
+            def temp = Fresh("arg");
+            before ::= <[ mutable $(temp : usesite) = $lvalue ]>; passed ::= <[ ref $(temp : usesite) ]>; after ::= <[ $lvalue = $(temp : usesite) ]>
+        }
+      }
+      else if (p.Type.Kind == "proc") passed ::= ProcArgument(a, p)
+      else passed ::= Convert(a, p.Type, $"argument `$(p.Name)'");
+    (before, passed, after)
+  }
+
+  /// The names a block uses (its routines' too), in any case: what a nested routine may need of the routines around it
+  UsedNames(b : Block, into : SCG.HashSet[string]) : void
+  {
+    def e(x : Expr) : void
+    {
+      match (x)
+      {
+        | Var(_, d) => desig(d)
+        | Call(_, n, args) => _ = into.Add(n); foreach (a in args) e(a)
+        | Bin(_, _, l, r) => e(l); e(r)
+        | Un(_, _, y) => e(y)
+        | SetOf(_, items) => foreach ((a, z) in items) { e(a); when (z != null) e(z) }
+        | _ => ()
+      }
+    }
+    and desig(d : Desig) : void
+    {
+      _ = into.Add(d.Name);
+      foreach (s in d.Sels) match (s) { | Sel.Index(xs) => foreach (y in xs) e(y) | _ => () }
+    }
+    and st(s : Stmt) : void
+    {
+      match (s)
+      {
+        | Assign(_, target, v) => desig(target); e(v)
+        | Call(_, n, args) => _ = into.Add(n); foreach (a in args) { e(a.Value); when (a.Width != null) e(a.Width); when (a.Decimals != null) e(a.Decimals) }
+        | Block(_, body) => foreach (y in body) st(y)
+        | If(_, c, th, el) => e(c); st(th); when (el != null) st(el)
+        | While(_, c, body) => e(c); st(body)
+        | Repeat(_, body, c) => foreach (y in body) st(y); e(c)
+        | For(_, v, from, to, _, body) => _ = into.Add(v); e(from); e(to); st(body)
+        | Case(_, sel, arms, el) => e(sel); foreach ((_, y) in arms) st(y); when (el != null) foreach (y in el) st(y)
+        | With(_, rs, body) => foreach (r in rs) desig(r); st(body)
+        | Labeled(_, _, y) => st(y)
+        | _ => ()
+      }
+    }
+    foreach (d in b.Decls)
+      match (d)
+      {
+        | Decl.Routine(_, _, body, _) when body != null => UsedNames(body, into)
+        | Decl.Const(_, _, v) => e(v)
+        | _ => ()
+      }
+    foreach (s in b.Body) st(s)
+  }
+
+  /// The `var' parameters of the routines around a nested routine that it uses (`names'), as it sees them
+  Extras(sig : RoutineSig, names : SCG.HashSet[string]) : list[Sym]
+  {
+    def found = SCG.List();
+    foreach (n in names)
+      unless (sig.Params.Exists(p => String.Equals(p.Name, n, StringComparison.OrdinalIgnoreCase)))
+        match (Lookup(n))
+        {
+          | s when s != null && s.IsVarParam => unless (found.Contains(s)) found.Add(s)
+          | s when s != null && s.BoundOf != null && s.BoundOf.IsVarParam => unless (found.Contains(s.BoundOf)) found.Add(s.BoundOf)
+          | _ => ()
+        }
+    found.Sort((a, b) => String.CompareOrdinal(a.Name, b.Name));
+    found.:NToList()
   }
 
   /// A routine given as a procedural parameter
@@ -1134,14 +1273,27 @@ class Compiler
         {
           | s when s != null && s.Kind == "routine" =>
             def sig = s.Routine;
-            when (sig.Params.Exists(x => x.IsVar)) Error(a.Loc, "a routine with var parameters is not passed as a parameter");
-            when (sig.Params.Length != p.Type.Sig.Params.Length || sig.IsFunction != p.Type.Sig.IsFunction)
-              Error(a.Loc, $"`$(sig.Name)' does not fit parameter `$(p.Name)'");
-            def names = sig.Params.Map(x => Fresh(x.Name));
-            def ps = names.Zip(sig.Params).Map((n, x) => <[ parameter: $(n : usesite) : $(Clr(x.Type)) ]>);
-            def target = if (sig.IsMethod) <[ $(Module(sig.Module)).$(sig.ClrName : usesite) ]> else <[ $(sig.ClrName : usesite) ]>;
-            def call = <[ $target(..$(names.Map(n => <[ $(n : usesite) ]>))) ]>;
-            <[ fun (..$ps) { $call } ]>
+            def wanted = p.Type.Sig;
+            if (sig.Params.Length != wanted.Params.Length || sig.IsFunction != wanted.IsFunction
+                || sig.Params.Zip(wanted.Params).Exists((x, w) => x.IsVar != w.IsVar))
+            {
+              Error(a.Loc, $"`$(sig.Name)' does not fit parameter `$(p.Name)'"); <[ null ]>
+            }
+            // (a value keeps no reference to a variable, on .NET: such a routine needs the variables themselves)
+            else if (!sig.Extras.IsEmpty)
+            {
+              Error(a.Loc, $"`$(sig.Name)' uses var parameter `$(sig.Extras.Head.Name)' of the routine around it: it is not passed as a parameter");
+              <[ null ]>
+            }
+            else
+            {
+              def names = sig.Params.Map(x => Fresh(x.Name));
+              def ps = names.Zip(sig.Params).Map((n, x) => if (x.IsVar) <[ parameter: $(n : usesite) : ref $(Clr(x.Type)) ]> else <[ parameter: $(n : usesite) : $(Clr(x.Type)) ]>);
+              def target = if (sig.IsMethod) <[ $(Module(sig.Module)).$(sig.ClrName : usesite) ]> else <[ $(sig.ClrName : usesite) ]>;
+              def call = <[ $target(..$(names.Zip(sig.Params).Map((n, x) => if (x.IsVar) <[ ref $(n : usesite) ]> else <[ $(n : usesite) ]>))) ]>;
+              if (wanted.Params.Exists(x => x.IsVar)) <[ $(Clr(p.Type))(fun (..$ps) { $call }) ]>
+              else <[ fun (..$ps) { $call } ]>
+            }
           | s when s != null && s.Kind == "var" && s.Type.Kind == "proc" => s.Code
           | _ => Error(a.Loc, $"`$(d.Name)' is no routine"); <[ null ]>
         }

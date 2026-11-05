@@ -2270,6 +2270,8 @@ using Nemerle.Compiler.Utility;
      */
     private declare_val_local_slot (val : LocalValue) : LocalBuilder
     {
+      // (emitted again, on another way, as a match's shared guard is: the same slot)
+      if (val.HasLocalSlot) val.LocalSlot else {
       def ty =
         if (val.IsManagedPtr)
           val.Type.GetSystemType ().MakeByRefType ()
@@ -2280,6 +2282,7 @@ using Nemerle.Compiler.Utility;
         local_slot.SetLocalSymInfo (val.Name);
       val.LocalSlot = local_slot;
       local_slot
+      }
     }
 
     private declare_val_local_slot_ex (val : LocalValue) : void

@@ -1,0 +1,71 @@
+// Var parameters are the variables themselves: a nested routine's, one passed on through routines inside routines,
+// a variable seen both through its parameter and by its own name, and routines with var parameters passed as
+// procedural parameters (nested ones too)
+space Pascal
+{
+  program Aliasing;
+  var
+    g, n : integer;
+
+  procedure Outer;
+    procedure Show(var a : integer);
+    begin
+      a := 5;
+      writeln('through the parameter: ', a, ', by its name: ', g)
+    end;
+  begin
+    Show(g)
+  end;
+
+  procedure Grow(var x : integer);
+    procedure Once;
+      procedure Twice;
+      begin
+        x := x * 2
+      end;
+    begin
+      Twice;
+      x := x + 1
+    end;
+  begin
+    Once;
+    Once
+  end;
+
+  procedure Apply(procedure f(var a : integer); var v : integer);
+  begin
+    f(v);
+    f(v)
+  end;
+
+  procedure Add3(var a : integer);
+  begin
+    a := a + 3
+  end;
+
+  procedure Scaled;
+  var
+    k : integer;
+    procedure Double(var a : integer);
+    begin
+      a := a * 2 + k
+    end;
+  begin
+    k := 1;
+    Apply(Double, n)
+  end;
+
+begin
+  g := 1;
+  Outer;
+  writeln('after: ', g);
+  n := 1;
+  Grow(n);
+  writeln('grown: ', n);
+  n := 1;
+  Apply(Add3, n);
+  writeln('add3 twice: ', n);
+  Scaled;
+  writeln('doubled twice: ', n)
+end.
+}

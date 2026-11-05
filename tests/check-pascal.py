@@ -77,6 +77,14 @@ ERRORS = [
     ('name', 'program Bad;\n  begin\n    writeln(count + 1)\n  end.', '5:13', "unbound name `count'"),
     ('unit', 'program Bad;\n  uses Nowhere;\n  begin\n  end.', '4:8', "no unit `Nowhere'"),
     ('loopvariable', 'program Bad;\n  var\n    i : integer;\n  begin\n    for i := 1 to 3 do i := 2\n  end.', '7:24', "is the variable of a for loop"),
+    ('label', 'program Bad;\n  begin\n    10: writeln(1)\n  end.', '5:5', "label 10 is not declared"),
+    ('labeltwice', 'program Bad;\n  label 10, 10;\n  begin\n  end.', '4:3', "label 10 is declared twice"),
+    ('result', 'program Bad;\n  function F : integer;\n  begin\n    writeln(1)\n  end;\n  begin\n    writeln(F)\n  end.', '4:3', "never assigns its result"),
+    ('setbase', 'program Bad;\n  var\n    s : set of 0..1000;\n  begin\n  end.', '5:9', "a set's base is of values in 0..255"),
+    # (a value keeps no reference to a variable, on .NET: a nested routine that uses one around it is not one)
+    ('procvar', 'program Bad;\n  procedure Apply(procedure f(var a : integer));\n  var v : integer;\n  begin\n    f(v)\n  end;\n'
+     '  procedure M(var x : integer);\n    procedure Add(var a : integer);\n    begin\n      a := a + x\n    end;\n  begin\n    Apply(Add)\n  end;\n  begin\n  end.',
+     '15:11', "uses var parameter `x' of the routine around it"),
 ]
 for name, body, at, message in ERRORS:
     source = work / ('error_' + name + '.n')

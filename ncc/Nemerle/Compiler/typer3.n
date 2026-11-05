@@ -133,6 +133,8 @@ using Nemerle.Compiler.Utility;
     mutable closure_fields : Hashtable [int, IField];
     // or just through parms
     mutable closure_parms : Hashtable [int, LocalValue];
+    /// a function value made, by its function (a shared guard's function, emitted twice, is made once)
+    functional_values : System.Collections.Generic.Dictionary [int, TExpr] = System.Collections.Generic.Dictionary ();
     /// In the MoveNext of a local function that is an iterator (an async lambda's): the fields of the enumerator that
     /// keep the closures of the functions around it (its own closure is the enumerator, `this').
     mutable enumerator_parents : Hashtable [int, IField];
@@ -2554,8 +2556,9 @@ using Nemerle.Compiler.Utility;
         });
 
       def parms = clo_parms + fn.Parameters.Map (fun (fp) {
+        // (a ref or out parameter keeps its kind: fp.ty, not its variable's type)
         <[ parameter: $(fp.decl.Name : dyn)
-                    : $(FixType (fp.decl.Type, subst) : typed) ]>
+                    : $(FixType (if (fp.kind != ParmKind.Normal) fp.ty else fp.decl.Type, subst) : typed) ]>
       });
 
       def is_static =
@@ -2774,6 +2777,57 @@ using Nemerle.Compiler.Utility;
     }
 
 
+    /// A lambda with ref or out parameters, given to a delegate's constructor: an object of a class of its own, which
+    /// keeps the closures it uses, and its method (with the lambda's parameters, ref and out kept), for the delegate.
+    EmitRefLambda (fn : TFunHeader, children : Queue [Typer3]) : TExpr * IMethod * FixedType
+    {
+      def closures = fn.used_closures;
+      Nemerle.Compiler.UtilMacros.cassert (fn.TypeParameters.IsEmpty, $"should be handled in T2, $(fn.Name)");
+      def (new_tp, subst) = CopyFunTyparms (add_class_tyvars = true);
+      def fix_type (t) { FixType (t, subst) }
+
+      def formal_parms = fn.Parameters.Map (fp =>
+        <[ parameter: $(fp.decl.Name : dyn) : $(fix_type (if (fp.kind != ParmKind.Normal) fp.ty else fp.decl.Type) : typed) ]>);
+      def lambda_name = Macros.NewSymbol (fn.Name + "_");
+      def builder = CurrentType.DefineNestedType (<[ decl:
+        private sealed class $(lambda_name : name)
+        {
+          public Invoke (.. $formal_parms) : $(fix_type (fn.ReturnType) : typed)
+          {
+          }
+        }
+      ]>, false);
+      builder.DisableImplicitConstructor();
+      builder.forced_typarms = new_tp;
+      builder.is_lambda = true;
+      builder.FixupDefinedClass();
+
+      def clo_fields = Hashtable();
+      def (parms, assigns) =
+        NList.Split(closures.Map(fun (hd)
+          {
+            def name = Macros.NewSymbol(hd.Name + "_closure");
+            def field = builder.DefineAndReturn(<[ decl: mutable $(name : name) : $(fix_type(hd.closure_type) : typed) ]>) :> IField;
+            clo_fields[hd.id] = field;
+            (<[ parameter: $(name : name) : $(fix_type(hd.closure_type) : typed) ]>, <[ this.$(name : name) = $(name : name) ]>)
+          }));
+      def ctor = builder.DefineAndReturn(<[ decl: public this(.. $parms) { { .. $assigns } } ]>);
+
+      def the_method = SingleMemberLookup(builder, "Invoke") :> MethodBuilder;
+      the_method.PrepareForEmission(fn, subst);
+      def child = Typer3(this, the_method);
+      child.closure_fields = clo_fields;
+      child.current_subst = subst;
+      children.Push(child);
+      builder.MarkWithSpecialName();
+      builder.Compile();
+
+      def from_type = FixedType.Class(builder, FunAndClassTyparmsRefs());
+      def ctor_ref = TExpr.StaticRef(from_type.TypeOfMember(ctor), from_type, ctor, []);
+      (TExpr.Call(from_type, ctor_ref, closures.Map(hd => Parm(ClosureRef(hd))), false), the_method, from_type)
+    }
+
+
     HandleLocalFunctions (fns : list [TFunHeader]) : list [TExpr]
     {
       mutable res = [];
@@ -2789,15 +2843,23 @@ using Nemerle.Compiler.Utility;
           | FunctionUsage.NotUsed => // obvious
             {}
 
+          // (a match's guard that two of its ways share is emitted twice, with its functions: made once)
           | FunctionUsage.Used =>
-            EmitStaticLocalFunction (fn, q);
+            when (fn.static_method == null)
+              EmitStaticLocalFunction (fn, q);
 
           | FunctionUsage.UsedAsFirstClass =>
             def fval =
               if(IsIdentityFunction(fn))
                 EmitIdentityValue(fn)
+              else if (functional_values.ContainsKey(fn.id))
+                functional_values[fn.id]
               else
-                EmitFunctionalValue(fn, q);
+              {
+                def made = EmitFunctionalValue(fn, q);
+                functional_values[fn.id] = made;
+                made
+              };
             assert(fn.decl != null);
             res ::= TExpr.DefValIn (fn.decl, fval, null);
         }
@@ -2907,6 +2969,7 @@ using Nemerle.Compiler.Utility;
             when func.decl.Equals(decl) => // this is for sure lambda
 
             ComputeUsedClosures (func);
+            def takesRef = func.Parameters.Exists(p => p.kind != ParmKind.Normal);
             match (func.used_closures)
             {
               | [] when func.Parameters.Length == invokeArgsCount =>
@@ -2917,6 +2980,15 @@ using Nemerle.Compiler.Utility;
                   q.Take ().Run ();
 
                 (noObj, TExpr.MethodAddress(CurrentType.GetMemType(), func.static_method, false, func.typarms_to_pass))
+
+              // a lambda with ref or out parameters (no function value takes them): an object of its own class, its
+              // method the delegate's
+              | _ when takesRef && func.Parameters.Length == invokeArgsCount =>
+                def made = Queue();
+                def lambda = EmitRefLambda (func, made);
+                while (!made.IsEmpty)
+                  made.Take ().Run ();
+                (lambda[0], TExpr.MethodAddress(lambda[2], lambda[1], false, []))
 
               | _cls =>
                 def e = Walk(parm);

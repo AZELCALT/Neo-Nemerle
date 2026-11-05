@@ -58,7 +58,8 @@ internal module Delegates
       // build the delegate's return type and method body for the type inference engine
       def ret_type = header.ReturnType;
       def invoke_body = <[ Nemerle.ExtensionsMacros.DefaultValue ($ret_type) ]>;
-      def delegate_name = header.PName;
+      // (a name made outside a macro, by a grammar's mapping, has no environment: the delegate's place's)
+      def delegate_name = if (header.PName.context == null) Name (header.PName.Id, header.PName.color, globenv) else header.PName;
       def tparms = header.TypeParameters;
 
       // add the delegate class as a nested type in the delegate's parent type or in global env

@@ -412,6 +412,47 @@ foreach (i in [1, 2, 3]) fs ::= () => i * 10;
 Kind(n : int) : string {{ | 1 | 2 when n > 100 => "never" | 1 | 2 => "small" | _ => "other" }}
 {W}(Kind(1) + " " + Kind(2) + " " + Kind(3))
 '''}, 'never small other'),   # (a guard is the last alternative's: `| 1 | 2 when g' is `| 1 | (2 when g)')
+    ('match-guard-shared-lambda', {'main.n': f'''
+Run(l : list[int], b : bool, m : int) : int {{ match (l) {{ | [] when b => 0 | _ when l.Exists(x => x > m) => 1 | _ => 2 }} }}
+{W}($"$(Run([], true, 2)) $(Run([5], true, 2)) $(Run([], false, 2)) $(Run([1], true, 2))")
+'''}, '0 1 2 2'),   # (a guard two ways of the match reach is emitted twice: its lambda is made once)
+    # ---- ref and out: local functions and lambdas, as methods ----
+    ('local-function-ref', {'main.n': f'''
+Run() : string {{
+  mutable total = 0;
+  def add(x : ref int, by : int) : void {{ x += by; total += by }}
+  def swap[T](a : ref T, b : ref T) : void {{ def t = a; a = b; b = t }}
+  def down(x : ref int) : void {{ when (x > 0) {{ x--; down(ref x) }} }}
+  def get(x : out int) : void {{ x = 7 }}
+  mutable n = 1; add(ref n, 2); add(ref n, 2);
+  mutable s = "a"; mutable u = "b"; swap(ref s, ref u);
+  mutable d = 5; down(ref d);
+  mutable o; get(out o);
+  $"$n $total $s$u $d $o"
+}}
+{W}(Run())
+'''}, '5 4 ba 0 7'),
+    ('local-function-ref-not-a-value', {'main.n': f'''
+def p(x : ref int) : void {{ x = 1 }}
+def f = p;
+ignore(f)
+'''}, "ERROR:`p' has ref or out parameters: it is called"),
+    ('lambda-ref-delegate', {'main.n': f'''
+public delegate Bump(x : ref int) : void;
+public delegate Get(x : out int) : bool;
+class C {{ public mutable f : int = 2; public Go() : int {{ def d = Bump(fun (x : ref int) {{ x += f }}); mutable n = 1; d(ref n); n }} }}
+Run() : string {{
+  mutable by = 3;
+  def plain = Bump(fun (x : ref int) {{ x = x * 10 }});
+  def closure = Bump(fun (x : ref int) {{ x += by; by++ }});
+  def inner() : int {{ mutable k = 1; def d = Bump(fun (x : ref int) {{ x += by + k }}); mutable n = 0; d(ref n); n }}
+  def g = Get(fun (x : out int) {{ x = 9; true }});
+  mutable n = 1; plain(ref n); closure(ref n); closure(ref n);
+  mutable o; _ = g(out o);
+  $"$n $by $(inner()) $o $(C().Go())"
+}}
+{W}(Run())
+'''}, '17 5 6 9 3'),   # (C#'s `(ref int x) => ...': a lambda of a delegate with ref parameters)
 ]
 
 
