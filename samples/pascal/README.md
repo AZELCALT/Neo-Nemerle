@@ -64,18 +64,26 @@ twice); and a space's code is statements, so a Pascal program cannot declare typ
 
 ## What it found
 
-Writing it turned up these, kept as they are (the grammar works around them, or `KNOWN` in the check lists them):
+Writing it turned up these, investigated and kept as they are for now (the grammar works around them, or `KNOWN`
+in the check lists them):
 
-1. **A space's body is read by the Nemerle lexer.** A Pascal string like `'x = '` or `'Hello, world!'` is taken for a
-   Nemerle character literal ("Newline in constant"; in the `using` pre-scan, an internal compiler error), and so is an
-   apostrophe in a `{ ... }` comment. `grammar/NITRA-SYNTAX.md` says foreign input is raw. `hello`, `factorial`,
-   `sieve` and `casegrades` wait on it.
+1. **A space's body is read by the Nemerle lexer before its own lane.** The lane is right: the main parse lexes the
+   file with space bodies blanked (`DefaultParser.Parse`, `NitraSourceSession.Rewrite`). But two pre-scans lex the raw
+   file first: `FileModuleRegistry.SourceUsings` (finding the `using`s, for `ncc`; a lexer exception there is an
+   internal compiler error) and `ScriptMetadata.Collect` (finding a script's dependencies, for `nscript`). Nemerle's
+   lexer reads `'x = '` as a character literal ("Newline in constant"). The lane's own envelope scan (`GReader.Block`)
+   reads `'...'` and `"..."` with Nemerle's rules too (backslash escapes), so an apostrophe in a `{ ... }` comment
+   leaves a quote open. `hello`, `factorial`, `sieve` and `casegrades` wait on it.
 2. **Map code rejects `;` inside parentheses.** `NitraSyntax`'s `Parentheses = "(" Expression? ")"`, so a C-style
    `for (a; b; c)` in a mapping does not parse; the grammar uses `while`.
-3. **A `syntax` rule of a token and a predicate** (`syntax K = KText !IdentifierPartCharacters;`) stops the spacing
-   after it; as a `token` it works.
-4. **Mapped code has no location of its own:** an error in it (a type error in the Pascal program) is reported at the
-   `space` line, not at the Pascal line.
-5. **A space's syntax error is an offset** (`at offset 37`), not a line and column, and each is reported twice.
+3. *(not a bug)* **A keyword's boundary check belongs in a `token`.** In a `syntax` rule Nitra skips spaces after each
+   token, so `syntax K = KText !IdentifierPartCharacters;` checks the character after the space (`program Upper`
+   fails at `U`); a `token` skips none, as Nitra's own `token Keyword = ... !IdentifierPartCharacters;` does.
+4. **Mapped code has no location of its own:** the mappings' quotations take the space's location (the native host's
+   `Output` runs them without locating each in its node's span), so an error in the Pascal program is reported at the
+   `space` line.
+5. **A space's syntax error is an offset** (`at offset 37`, into the body; `Expand` does not turn it into a line and
+   column), **reported twice**: the typer restarts a body (`RestartRunBodyTyperException`), the space is expanded on
+   each pass, and `Expand` reports with `Message.Error` directly rather than through the typer.
 6. **Literals are case-sensitive**, with no option for a case-insensitive language: the grammar spells each keyword as
    a regular expression of both cases and keeps names from being reserved words with a predicate.
