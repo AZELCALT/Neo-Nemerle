@@ -23,16 +23,20 @@ public abstract class PascalRecord : IPascalValue
 /// `array [low..high] of T': indexed from its own low bound, and checked as Pascal checks it.
 public class PascalArray[T] : IPascalValue
 {
-  low : int;
-  items : array[T];
+  mutable low : int;
+  mutable items : array[T];
+  /// (for a file of it: an empty one, its bounds and elements set as they are read)
+  public this() { items = array(0) }
   public this(low : int, high : int, element : void -> T)
   {
     this.low = low;
     items = array(high - low + 1);
     for (mutable i = 0; i < items.Length; i++) items[i] = element()
   }
-  public Low : int { get { low } }
+  public Low : int { get { low } set { low = value } }
   public High : int { get { low + items.Length - 1 } }
+  /// Its elements (what a file of it keeps, with Low)
+  public Items : array[T] { get { items } set { items = value } }
   public Item[index : int] : T
   {
     get { items[Check(index)] }
@@ -83,8 +87,16 @@ public class PascalPointer[T]
 /// `set of T': its members' ordinal values (0 to 255, as Pascal implementations give), immutable.
 public sealed class PascalSet
 {
-  bits : array[ulong];
+  mutable bits : array[ulong];
   this(bits : array[ulong]) { this.bits = bits }
+  /// (for a file of it: an empty one, its members set as they are read)
+  public this() { bits = array(4) }
+  /// Its members (what a file of it keeps)
+  public Members : array[int]
+  {
+    get { def m = SCG.List(); for (mutable v = 0; v <= 255; v++) when (Contains(v)) m.Add(v); m.ToArray() }
+    set { def b = array(4) : array[ulong]; foreach (v in value) b[v / 64] = b[v / 64] | masks[v % 64]; bits = b }
+  }
   // (each bit of a word, as a mask)
   static masks : array[ulong] = Masks();
   static Masks() : array[ulong] { def m = array(64) : array[ulong]; m[0] = 1UL; for (mutable i = 1; i < 64; i++) m[i] = m[i - 1] * 2UL; m }
@@ -113,6 +125,13 @@ public sealed class PascalSet
   public Intersection(other : PascalSet) : PascalSet { Combine(other, (a, b) => a & b) }
   public SetEquals(other : PascalSet) : bool { mutable same = true; for (mutable i = 0; i < 4; i++) when (bits[i] != other.bits[i]) same = false; same }
   public IsSubsetOf(other : PascalSet) : bool { mutable sub = true; for (mutable i = 0; i < 4; i++) when ((bits[i] & ~other.bits[i]) != 0UL) sub = false; sub }
+}
+
+/// A goto out of a routine, to a label of a routine around it: thrown, and caught by the statements of that label.
+public class PascalGoto : Exception
+{
+  public Target : int;
+  public this(target : int) { base("goto out of its routine"); Target = target }
 }
 
 /// The translated programs' helpers.
@@ -597,6 +616,18 @@ grammar Pascal
           override Ast = pascalfront.TypeSpec.FileOf(pascalfront.N.At(Location), Element.Ast() :> pascalfront.TypeSpec);
         }
       | Pointer = "^" Target=Ident { override Ast = pascalfront.TypeSpec.Pointer(pascalfront.N.At(Location), GetText(Target.Body)); }
+      // a conformant array parameter (ISO's level 1): `array [lo..hi : integer; ...] of T', its bounds named
+      | Conformant = Packed=KPacked? KArray "[" Bounds=(ConformantBound; ";")+ "]" KOf Element=TypeSpec
+        {
+          override Ast = {
+            mutable xs = []; foreach (b in Bounds.Item1) xs ::= (b.Ast() :> string * string * pascalfront.TypeSpec);
+            pascalfront.TypeSpec.Conformant(pascalfront.N.At(Location), xs.Rev(), Element.Ast() :> pascalfront.TypeSpec)
+          };
+        }
+    }
+    syntax ConformantBound = Low=Ident ".." High=Ident ":" Index=Ident
+    {
+      Ast() : object = (GetText(Low.Body), GetText(High.Body), pascalfront.TypeSpec.Named(pascalfront.N.At(Index.Location), GetText(Index.Body)) : pascalfront.TypeSpec);
     }
 
     // a record's fields: `a, b : T; ...', then its variant part (`case tag : T of 1: (...); ...')

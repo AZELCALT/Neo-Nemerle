@@ -1,0 +1,47 @@
+// Eight queens (after Wirth): sets of free rows and diagonals, recursion, a global count, an early stop by goto
+// out of the recursion once the first solution is printed
+space Pascal
+{
+  program Queens;
+  label 99;
+  const
+    N = 8;
+  var
+    column : array [1..N] of integer;
+    rows, up, down : set of 0..30;
+    solutions : integer;
+
+  procedure Place(c : integer);
+  var
+    r, k : integer;
+  begin
+    for r := 1 to N do
+      if not (r in rows) and not (r + c in up) and not (r - c + N in down) then
+      begin
+        column[c] := r;
+        rows := rows + [r]; up := up + [r + c]; down := down + [r - c + N];
+        if c = N then
+        begin
+          solutions := solutions + 1;
+          if solutions = 1 then
+          begin
+            for k := 1 to N do write(column[k]:2);
+            writeln
+          end;
+          if solutions = 10 then goto 99
+        end
+        else Place(c + 1);
+        rows := rows - [r]; up := up - [r + c]; down := down - [r - c + N]
+      end
+  end;
+
+  begin
+    rows := []; up := []; down := [];
+    solutions := 0;
+    Place(1);
+    writeln('all ', solutions, ' solutions');
+    goto 99;
+  99:
+    writeln('stopped at ', solutions)
+  end.
+}

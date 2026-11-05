@@ -65,12 +65,14 @@ compiler what a Pascal space `uses`, so the units' files are found.
   [begin ...] end.` (a unit is in the file of its name), `uses` in the interface and in the implementation (two units
   may use each other through an implementation), initialization in the order of use, after the units a unit uses.
 - **Declarations:** `label`, `const`, `type`, `var`, `procedure` and `function`, nested to any depth, recursive,
-  `forward`; value, `var` and procedural parameters (`function f(x : real) : real`).
+  `forward`; value, `var` and procedural parameters (`function f(x : real) : real`), and conformant array parameters
+  (ISO's level 1: `a : array [lo..hi : integer] of real`, of one or more dimensions, `lo` and `hi` its bounds).
 - **Types:** `integer`, `real`, `boolean`, `char`, enumerations, subranges (checked), `array` of any index types
   (`array [Color] of string`, `array [1..3, 1..3]`), `record` with a variant part, `set of`, `file of`, `text`, pointers
   (`^T`, declared before their target in the same section), `packed`; Turbo's `string`.
 - **Statements:** `:=`, `begin ... end`, `if`, `while`, `repeat`, `for ... to/downto`, `case` (with Turbo's `else`
-  and `1..5:` labels), `with`, `goto` (to a label of a statement sequence around it), procedure calls.
+  and `1..5:` labels), `with`, `goto` (to a label of a statement sequence around it, in its routine or in a routine
+  around it: out of a recursion), procedure calls; a loop's variable is not assigned inside it.
 - **Expressions:** Pascal's precedence, `div`/`mod` (Pascal's), `/` real, set constructors (`['a'..'z', '_']`),
   `in`, set `+ - *` and `= <> <= >=`, `nil`, string comparison and concatenation.
 - **Standard routines:** `read`, `readln`, `write`, `writeln` (on files too, with `x:w` and `r:w:d`), `eof`, `eoln`,
@@ -80,9 +82,10 @@ compiler what a Pascal space `uses`, so the units' files are found.
 - **With Nemerle:** a name the Pascal program does not declare is the Nemerle program's, as written: Pascal calls the
   file's functions and reads its values.
 
-Not in: conformant array parameters (ISO's level 1), a `goto` out of a routine, a binary file of records holding
-arrays. Two choices come from the target: a `var` parameter of a nested routine is a cell copied back after the call
-(Pascal's, except when one variable is passed twice), and a record is a class that assignment copies.
+A `file of` any type is kept a value per line, as JSON (records with arrays and sets among them). Two choices come
+from the target: a `var` parameter of a nested routine is a cell copied back after the call (Pascal's, except when one
+variable is passed twice), and a record is a class that assignment copies. A routine with `var` parameters is not
+passed as a procedural parameter.
 
 ## What it found
 

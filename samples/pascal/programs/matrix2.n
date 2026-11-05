@@ -1,0 +1,44 @@
+// Conformant array parameters (ISO's level 1): routines that take arrays of any bounds, and see them as lo..hi
+space Pascal
+{
+  program Conformant;
+  type
+    Short = array [1..3] of real;
+    Long = array [0..5] of real;
+    Grid = array [1..2, 1..3] of integer;
+  var
+    s : Short;
+    l : Long;
+    g : Grid;
+    i, j : integer;
+
+  function Sum(a : array [lo..hi : integer] of real) : real;
+  var
+    k : integer;
+    total : real;
+  begin
+    total := 0;
+    for k := lo to hi do total := total + a[k];
+    Sum := total
+  end;
+
+  procedure Scale(var a : array [lo..hi : integer] of real; by : real);
+  var k : integer;
+  begin
+    for k := lo to hi do a[k] := a[k] * by
+  end;
+
+  function Corner(m : array [r1..r2 : integer; c1..c2 : integer] of integer) : integer;
+  begin
+    Corner := m[r2, c2] * 100 + (r2 - r1 + 1) * 10 + (c2 - c1 + 1)
+  end;
+
+  begin
+    for i := 1 to 3 do s[i] := i;
+    for i := 0 to 5 do l[i] := 1.5;
+    Scale(s, 2.0);
+    writeln(Sum(s):5:1, Sum(l):5:1);
+    for i := 1 to 2 do for j := 1 to 3 do g[i, j] := i + j;
+    writeln(Corner(g))
+  end.
+}

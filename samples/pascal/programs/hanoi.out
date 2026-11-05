@@ -1,0 +1,5 @@
+disk 3: A -> C
+disk 3: C -> B
+disk 3: B -> A
+disk 3: A -> C
+31 moves

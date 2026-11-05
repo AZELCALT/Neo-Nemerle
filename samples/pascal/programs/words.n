@@ -1,0 +1,47 @@
+// A binary tree of words with their counts: records, pointers, recursion, string comparison, reading the input
+space Pascal
+{
+  program Words(input, output);
+  type
+    Tree = ^Node;
+    Node = record word : string; count : integer; left, right : Tree end;
+  var
+    root : Tree;
+    line, w : string;
+    i : integer;
+
+  procedure Add(var t : Tree; w : string);
+  begin
+    if t = nil then
+    begin
+      new(t); t^.word := w; t^.count := 1; t^.left := nil; t^.right := nil
+    end
+    else if w < t^.word then Add(t^.left, w)
+    else if w > t^.word then Add(t^.right, w)
+    else t^.count := t^.count + 1
+  end;
+
+  procedure Show(t : Tree);
+  begin
+    if t <> nil then
+    begin
+      Show(t^.left);
+      writeln(t^.word, ' ', t^.count);
+      Show(t^.right)
+    end
+  end;
+
+  begin
+    root := nil;
+    while not eof do
+    begin
+      readln(line);
+      w := '';
+      for i := 1 to length(line) do
+        if line[i] = ' ' then begin if w <> '' then Add(root, w); w := '' end
+        else w := w + line[i];
+      if w <> '' then Add(root, w)
+    end;
+    Show(root)
+  end.
+}

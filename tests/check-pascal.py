@@ -76,6 +76,7 @@ ERRORS = [
     # (a name Pascal does not declare is the Nemerle program's: Nemerle says it has none)
     ('name', 'program Bad;\n  begin\n    writeln(count + 1)\n  end.', '5:13', "unbound name `count'"),
     ('unit', 'program Bad;\n  uses Nowhere;\n  begin\n  end.', '4:8', "no unit `Nowhere'"),
+    ('loopvariable', 'program Bad;\n  var\n    i : integer;\n  begin\n    for i := 1 to 3 do i := 2\n  end.', '7:24', "is the variable of a for loop"),
 ]
 for name, body, at, message in ERRORS:
     source = work / ('error_' + name + '.n')

@@ -1,0 +1,32 @@
+// A file of records that hold an array and a set: written, read back, and the values as they were
+space Pascal
+{
+  program Store;
+  type
+    Entry = record
+      name : string;
+      scores : array [1..3] of integer;
+      tags : set of 0..9
+    end;
+  var
+    f : file of Entry;
+    e : Entry;
+    i, total : integer;
+  begin
+    assign(f, 'pascal-entries.json');
+    rewrite(f);
+    e.name := 'ada'; e.scores[1] := 9; e.scores[2] := 8; e.scores[3] := 10; e.tags := [1, 3];
+    write(f, e);
+    e.name := 'alan'; e.scores[1] := 7; e.scores[2] := 7; e.scores[3] := 7; e.tags := [2];
+    write(f, e);
+    close(f);
+    reset(f);
+    while not eof(f) do
+    begin
+      read(f, e);
+      total := 0;
+      for i := 1 to 3 do total := total + e.scores[i];
+      writeln(e.name, ' ', total, ' ', 3 in e.tags)
+    end
+  end.
+}

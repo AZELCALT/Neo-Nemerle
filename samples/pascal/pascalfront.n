@@ -89,6 +89,7 @@ public variant TypeSpec
   | Pointer { at : Location; target : string }
   | Str { at : Location } // Turbo's `string' and `string[n]'
   | Proc { at : Location; header : Header } // a procedural parameter's type
+  | Conformant { at : Location; bounds : list[string * string * TypeSpec]; element : TypeSpec } // a conformant array parameter's
 }
 
 /// A record's fields: the fixed part, then the variant part (its tag's name or null, its tag's type, its cases)
@@ -173,6 +174,8 @@ public class PT
   public mutable ClassPath : string;                  // a record's class (its full name)
   public Fields : SCG.List[string * PT] = SCG.List(); // a record's fields, in order
   public mutable Sig : RoutineSig;                    // a procedural parameter's
+  // a conformant array parameter's bounds, named (each dimension's array has its own)
+  public mutable LowName : string; public mutable HighName : string;
   public this(kind : string) { Kind = kind }
   public override ToString() : string { if (Name != null) Name else Kind }
   /// A record's field by its name in any case: its declared name and type
@@ -242,8 +245,12 @@ public module Front
   public Compile(unit : CompUnit) : PExpr { Compiler().Run(unit) }
 }
 
-/// The interface of a compiled unit (what SpaceFiles exports): its scope and its moduleName.
+/// The interface of a compiled unit (what SpaceFiles exports): its scope and its module.
 [Record] public class UnitExport { public Scope : Scope; public Module : string; }
+
+/// A label's place: its sequence's state variable and step, its segment, the routine it is in, and its number (what a
+/// goto from a routine inside that one throws).
+[Record] public class LabelPlace { public State : string; public Step : Name; public Segment : int; public Routine : RoutineSig; public Id : int; }
 
 class Compiler
 {
@@ -255,7 +262,53 @@ class Compiler
   mutable scope : Scope;
   mutable unitPublic : bool = true; // what is declared now is public (a program's and a unit interface's)
   // the labels a goto reaches: its statement sequence's state variable, its block, its segment
-  labels : SCG.Dictionary[string, string * Name * int] = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
+  labels : SCG.Dictionary[string, LabelPlace] = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
+  // each statement sequence with labels: its state variable and its step (planned before its routine's
+  // declarations, so a nested routine's goto finds an outer routine's label)
+  plans : SCG.Dictionary[object, string * Name] = SCG.Dictionary(SCG.ReferenceEqualityComparer.Instance);
+  mutable labelCount : int;
+  // the variables of the for loops being compiled: ISO lets nothing in a loop assign its variable
+  controls : SCG.HashSet[string] = SCG.HashSet(StringComparer.OrdinalIgnoreCase);
+
+  /// The routine the code being compiled is in (null: the program's or a unit's statements)
+  RoutineOf() : RoutineSig
+  {
+    def walk(sc : Scope) : RoutineSig { if (sc == null) null else if (sc.Routine != null) sc.Routine else walk(sc.Parent) }
+    walk(scope)
+  }
+
+  /// The labels of a routine's statements (or the program's): each sequence that has some is a state machine, its
+  /// labels' places known before the code that may jump to them is compiled
+  PlanLabels(body : list[Stmt]) : void
+  {
+    when (body.Exists(_ is Stmt.Labeled))
+    {
+      def state = Fresh("state");
+      def step = Nemerle.Compiler.macros.Macros.NewSymbol("step");
+      plans[body] = (state, step);
+      mutable segment = 0;
+      foreach (s in body)
+        match (s)
+        {
+          | Labeled(_, label, _) =>
+            segment++; labelCount++;
+            labels[label] = LabelPlace(state, step, segment, RoutineOf(), labelCount)
+          | _ => ()
+        }
+    }
+    foreach (s in body) PlanInside(s)
+  }
+  PlanInside(s : Stmt) : void
+  {
+    match (s)
+    {
+      | Block(_, b) | Repeat(_, b, _) => PlanLabels(b)
+      | If(_, _, t, e) => PlanInside(t); when (e != null) PlanInside(e)
+      | While(_, _, b) | For(_, _, _, _, _, b) | With(_, _, b) | Labeled(_, _, b) => PlanInside(b)
+      | Case(_, _, arms, elsePart) => foreach ((_, b) in arms) PlanInside(b); when (elsePart != null) PlanLabels(elsePart)
+      | _ => ()
+    }
+  }
 
   // the standard types
   static Integer : PT = PT("integer");
@@ -295,6 +348,7 @@ class Compiler
     {
       | Program(at, _, uses, block) =>
         def inits = Uses(uses);
+        PlanLabels(block.Body);
         Declarations(block.Decls, true);
         def body = Statements(block.Body);
         Finish(Located(at, () => <[ { ..$inits; $body } ]>))
@@ -580,6 +634,15 @@ class Compiler
         t
       | Str => StringT
       | Proc(at, header) => def t = PT("proc"); t.Sig = Signature(at, header, false, true); t
+      | Conformant(at, bounds, element) =>
+        def elem = Type(element, null, pointers);
+        bounds.FoldRight(elem, ((low, high, index), inner) =>
+        {
+          def t = PT("array"); t.Elem = inner; t.Base = Type(index, null, pointers);
+          when (Bounds(t.Base).IsNone) Error(at, "a conformant array's index is an ordinal type");
+          t.LowName = low; t.HighName = high; t.Name = "conformant array";
+          t
+        })
     }
   }
 
@@ -691,6 +754,16 @@ class Compiler
                  else <[ parameter: $(p.Name : usesite) : $clr ]>;
       s.Code = if (s.IsCell) <[ $(p.Name : usesite).Value ]> else <[ $(p.Name : usesite) ]>;
       scope.Table[p.Name] = s;
+      // a conformant array's bounds: its array's (an inner dimension's, its first element's)
+      mutable dimension = p.Type; mutable access = s.Code;
+      while (dimension != null && dimension.Kind == "array" && dimension.LowName != null)
+      {
+        def a = access;
+        def low = Sym("const", dimension.LowName); low.Type = dimension.Base; low.Code = FromOrd(<[ $a.Low ]>, dimension.Base);
+        def high = Sym("const", dimension.HighName); high.Type = dimension.Base; high.Code = FromOrd(<[ $a.High ]>, dimension.Base);
+        scope.Table[dimension.LowName] = low; scope.Table[dimension.HighName] = high;
+        access = <[ $a[$a.Low] ]>; dimension = dimension.Elem
+      }
       decl
     })
   }
@@ -716,6 +789,7 @@ class Compiler
           def s = scope.Table[p.Name]; s.IsCell = true; s.Code = <[ $(cell : usesite).Value ]>
         }
       when (sig.IsFunction) scope.ResultVar = Fresh("result_" + sig.Name);
+      PlanLabels(body.Body);
       def locals = Declarations(body.Decls, false);
       def statements = Statements(body.Body);
       def result = if (sig.IsFunction) <[ $(scope.ResultVar : usesite) ]> else <[ () ]>;
@@ -755,15 +829,20 @@ class Compiler
 
   Machine(body : list[Stmt]) : PExpr
   {
-    def state = Fresh("state");
-    def step = Nemerle.Compiler.macros.Macros.NewSymbol("step");
-    // the segments: from the start, and from each labeled statement
+    unless (plans.ContainsKey(body)) PlanLabels(body);
+    def (state, step) = plans[body];
+    // the segments: from the start, and from each labeled statement; a goto from a routine inside this one throws
+    // its label's number, caught here
     def segments = SCG.List.[SCG.List[Stmt]](); segments.Add(SCG.List());
+    mutable catches = [];
     foreach (s in body)
     {
       | Labeled(_, label, inner) =>
         segments.Add(SCG.List());
-        labels[label] = (state, step, segments.Count - 1);
+        def place = labels[label];
+        def jump = Nemerle.Compiler.macros.Macros.NewSymbol("jump");
+        catches ::= TryCase.Filter(Splicable.Name(jump), <[ pascal.PascalGoto ]>, <[ $(jump : name).Target == $(place.Id : int) ]>,
+                                   <[ $(state : usesite) = $(place.Segment : int) ]>);
         segments[segments.Count - 1].Add(inner)
       | _ => segments[segments.Count - 1].Add(s)
     }
@@ -777,7 +856,7 @@ class Compiler
     cases.Add(<[ case: | _ => $(state : usesite) = -1 ]>);
     <[ {
       mutable $(state : usesite) = 0;
-      while ($(state : usesite) >= 0) $(step : name) : { match ($(state : usesite)) { ..$(cases.:NToList()) } }
+      while ($(state : usesite) >= 0) $(step : name) : { $(PExpr.Try(<[ match ($(state : usesite)) { ..$(cases.:NToList()) } ]>, catches.Rev())) }
     } ]>
   }
 
@@ -791,7 +870,12 @@ class Compiler
       | Labeled(_, _, inner) => Statement(inner) // (a label outside a statement sequence's top: as its statement)
       | Goto(at, label) =>
         mutable target;
-        if (labels.TryGetValue(label, out target)) { def (state, step, segment) = target; <[ { $(state : usesite) = $(segment : int); $(step : name)() } ]> }
+        if (labels.TryGetValue(label, out target))
+        {
+          // (a label of this routine: its state, and out of the step; of a routine around this one: thrown to it)
+          if (target.Routine : object == RoutineOf() : object) <[ { $(target.State : usesite) = $(target.Segment : int); $(target.Step : name)() } ]>
+          else <[ throw pascal.PascalGoto($(target.Id : int)) ]>
+        }
         else { Error(at, $"goto $label: no statement of a sequence around it has that label"); <[ () ]> }
       | Assign(at, target, value) => Assign(at, target, value)
       | Call(at, name, args) => CallStatement(at, name, args)
@@ -832,6 +916,8 @@ class Compiler
 
   Assign(at : Location, target : Desig, value : Expr) : PExpr
   {
+    when (target.Sels.IsEmpty && controls.Contains(target.Name))
+      Error(at, $"`$(target.Name)' is the variable of a for loop around this assignment: a loop may not change it");
     // `F := e' in function F (or a routine inside it) gives its result
     def resultOf(sc : Scope) : Scope
     {
@@ -897,6 +983,13 @@ class Compiler
   }
 
   For(at : Location, variable : string, from : Expr, to : Expr, down : bool, body : Stmt) : PExpr
+  {
+    when (controls.Contains(variable)) Error(at, $"`$variable' is the variable of a for loop around this one: a loop may not change it");
+    def own = controls.Add(variable);
+    try ForLoop(at, variable, from, to, down, body) finally when (own) _ = controls.Remove(variable)
+  }
+
+  ForLoop(at : Location, variable : string, from : Expr, to : Expr, down : bool, body : Stmt) : PExpr
   {
     def (v, t) = Designator(Desig(at, variable, []));
     unless (IsOrdinal(t)) Error(at, "a for loop's variable is an ordinal");

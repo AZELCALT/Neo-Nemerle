@@ -1,0 +1,28 @@
+// The towers of Hanoi: recursion with value parameters of an enumeration, and a count passed by var
+space Pascal
+{
+  program Hanoi;
+  type
+    Peg = (left, middle, right);
+  var
+    names : array [Peg] of char;
+    moves : integer;
+
+  procedure Move(n : integer; source, target, spare : Peg; var count : integer);
+  begin
+    if n > 0 then
+    begin
+      Move(n - 1, source, spare, target, count);
+      count := count + 1;
+      if n = 3 then writeln('disk 3: ', names[source], ' -> ', names[target]);
+      Move(n - 1, spare, target, source, count)
+    end
+  end;
+
+  begin
+    names[left] := 'A'; names[middle] := 'B'; names[right] := 'C';
+    moves := 0;
+    Move(5, left, right, middle, moves);
+    writeln(moves, ' moves')
+  end.
+}
