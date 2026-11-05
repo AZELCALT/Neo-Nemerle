@@ -1,89 +1,100 @@
 # Pascal in Nemerle
 
-`pascal.n` is Pascal (the core of ISO 7185) as a grammar library. A Nemerle file that references `pascal.dll` can
-hold a Pascal program in a space:
+Pascal, as ISO 7185 has it, with Turbo Pascal's units, as a grammar library. A Nemerle file holds a Pascal program or a
+unit in a space:
 
 ```nemerle
+// file: geometry.n
 space Pascal
 {
-  program Factorials;
-  var
-    i : integer;
+  unit Geometry;
+  interface
+    type Point = record x, y : real end;
+    function Distance(a, b : Point) : real;
+  implementation
+    function Distance(a, b : Point) : real;
+    begin Distance := sqrt(sqr(a.x - b.x) + sqr(a.y - b.y)) end;
+  end.
+}
 
-  function Factorial(n : integer) : integer;
+// file: main.n
+space Pascal
+{
+  program Main;
+  uses Geometry;
+  var p, q : Point;
   begin
-    if n <= 1 then Factorial := 1
-    else Factorial := n * Factorial(n - 1)
-  end;
-
-  begin
-    for i := 1 to 6 do writeln(i, Factorial(i):6)
+    q.x := 3; q.y := 4;
+    writeln(Distance(p, q):4:1)
   end.
 }
 ```
 
-The program is translated to Nemerle code when the file is compiled, so it runs as fast as the same code written in
-Nemerle, and nothing parses Pascal at run time. It is a demo of the grammar machinery and a test of it: the grammar is
-written on the toolchain as it is, with no change to the compiler for it.
+`ncc -r:pascal.dll main.n` finds geometry.n from `uses Geometry`, as a `using` finds a file. Each space is translated
+when its file is compiled: a program's or a unit's declarations become members of its file's module (its variables
+fields, its routines methods, its records classes), its statements the file's top-level code. So the program runs as
+the same code written in Nemerle would, nothing parses Pascal at run time, and Nemerle (or C#) calls a unit's
+interface as it calls any module: `geometry.Distance(a, b)`.
 
 ```sh
-ncc samples/pascal/pascal.n -target:library -out:pascal.dll
+ncc samples/pascal/pascalfront.n -target:library -out:pascalfront.dll -r:Nemerle.Compiler.dll -r:Integrated.Nitra.Runtime.dll
+ncc samples/pascal/pascal.n -target:library -out:pascal.dll -r:pascalfront.dll -r:Nemerle.Compiler.dll
 ncc -r:pascal.dll samples/pascal/programs/sort.n -out:sort.exe
 ```
 
-`tests/check-pascal.py` builds the library and runs every program in `programs/` against its `.out` file.
+`tests/check-pascal.py` builds both and runs every program of `programs/` (and the folder `programs/units/`) against
+its `.out` file, with its `.in` file as its input.
+
+## How it is made
+
+- **`pascal.n`, the grammar:** Pascal's syntax, case-insensitive (each keyword in any case, never the start of a
+  longer name). Its rule methods (`Ast() : object`) build the front end's syntax tree; its root mapping hands that tree
+  to the front end. It also holds what the translated programs use at run time: arrays with their own bounds,
+  `var`-parameter cells, pointers, sets, the base of records, text and typed files, the standard routines' helpers.
+- **`pascalfront.n`, the front end:** Pascal's scopes and types, its checks (each error at its Pascal line), and the
+  Nemerle code. It runs in the compiler, when the space is mapped; it is a library of its own, found beside pascal.dll.
+
+The front end stands on the grammar lane's facilities for a space that is a logical file (book, chapter 10): a space
+that declares is mapped before the program is typed, its `<[ decl: ... ]>` members are its file module's, and
+`SpaceFiles.Import`/`Export` are how a unit finds another's interface. `PascalImports` (an `ISpaceImports`) tells the
+compiler what a Pascal space `uses`, so the units' files are found.
 
 ## What is in
 
-- **Programs and blocks:** `program Name(input, output);`, `const`, `type`, `var`, nested `procedure`s and
-  `function`s (recursive, reading and changing the variables around them), `begin ... end.`
-- **Statements:** `:=`, `if ... then ... else`, `while ... do`, `repeat ... until`, `for ... to/downto ... do` (bounds
-  evaluated once), `case ... of` with several labels and `else`, compound statements, the empty statement.
-- **Types:** `integer`, `real`, `boolean`, `char`, `string`, subranges, `array [a..b, c..d] of T` (indexed from its own
-  bounds, range-checked, `m[i, j]` is `m[i][j]`), named types.
-- **Parameters:** value parameters and `var` parameters (copied in, and back when the routine returns; see below).
-- **Expressions:** Pascal's precedence (`not`; `* / div mod and`; `+ - or`; relations), `/` gives a real.
-- **Standard routines:** `write`, `writeln` (with `x:width` and `r:width:decimals`), `read`, `readln`, `abs`, `sqr`,
-  `sqrt`, `sin`, `cos`, `arctan`, `exp`, `ln`, `trunc`, `round`, `odd`, `ord`, `chr`, `succ`, `pred`, `length`.
-- **Lexical:** case-insensitive keywords and names, `(* ... *)` and `{ ... }` comments, `'it''s'` strings.
+- **Programs and units:** `program Name(input, output);`, `uses`; `unit Name; interface ... implementation ...
+  [begin ...] end.` (a unit is in the file of its name), `uses` in the interface and in the implementation (two units
+  may use each other through an implementation), initialization in the order of use, after the units a unit uses.
+- **Declarations:** `label`, `const`, `type`, `var`, `procedure` and `function`, nested to any depth, recursive,
+  `forward`; value, `var` and procedural parameters (`function f(x : real) : real`).
+- **Types:** `integer`, `real`, `boolean`, `char`, enumerations, subranges (checked), `array` of any index types
+  (`array [Color] of string`, `array [1..3, 1..3]`), `record` with a variant part, `set of`, `file of`, `text`, pointers
+  (`^T`, declared before their target in the same section), `packed`; Turbo's `string`.
+- **Statements:** `:=`, `begin ... end`, `if`, `while`, `repeat`, `for ... to/downto`, `case` (with Turbo's `else`
+  and `1..5:` labels), `with`, `goto` (to a label of a statement sequence around it), procedure calls.
+- **Expressions:** Pascal's precedence, `div`/`mod` (Pascal's), `/` real, set constructors (`['a'..'z', '_']`),
+  `in`, set `+ - *` and `= <> <= >=`, `nil`, string comparison and concatenation.
+- **Standard routines:** `read`, `readln`, `write`, `writeln` (on files too, with `x:w` and `r:w:d`), `eof`, `eoln`,
+  `reset`, `rewrite`, `get`, `put`, `page`, `new`, `dispose`, `pack`, `unpack`, `abs`, `sqr`, `sqrt`, `sin`, `cos`,
+  `arctan`, `exp`, `ln`, `trunc`, `round`, `odd`, `ord`, `chr`, `succ`, `pred`; Turbo's `assign`, `close`,
+  `length`, `copy`, `pos`, `concat`, `upcase`, `inc`, `dec`, `halt`.
 - **With Nemerle:** a name the Pascal program does not declare is the Nemerle program's, as written: Pascal calls the
-  file's functions and reads its values (`programs/interop.n`).
+  file's functions and reads its values.
 
-Not in: records, pointers, sets, files, `goto`, `with`, enumerated types, `forward`, functions as parameters.
-
-## How it maps
-
-Each rule says what it becomes (`map PExpr`): a Pascal routine is a local function, a `var` a mutable, `for` a loop
-with its bound kept once. The tables a mapping needs from earlier declarations (types, routines, the function being
-mapped, its `var` parameters, the names declared) are kept while one program is mapped; Pascal declares before use,
-so a declaration is always mapped before the code that uses it.
-
-Two choices come from what the target allows: a local function takes no `ref` parameter, so a `var` parameter is a
-cell (`PascalVar`) whose value is copied back after the call (the same as Pascal's, except when one variable is passed
-twice); and a space's code is statements, so a Pascal program cannot declare types (hence no records).
+Not in: conformant array parameters (ISO's level 1), a `goto` out of a routine, a binary file of records holding
+arrays. Two choices come from the target: a `var` parameter of a nested routine is a cell copied back after the call
+(Pascal's, except when one variable is passed twice), and a record is a class that assignment copies.
 
 ## What it found
 
-Writing it turned up these, investigated and kept as they are for now (the grammar works around them, or `KNOWN`
-in the check lists them):
+Writing the first version (statements only) turned up these in the compiler and the grammar machinery; they are fixed
+and `tests/check-pascal.py` keeps them so:
 
-1. **A space's body is read by the Nemerle lexer before its own lane.** The lane is right: the main parse lexes the
-   file with space bodies blanked (`DefaultParser.Parse`, `NitraSourceSession.Rewrite`). But two pre-scans lex the raw
-   file first: `FileModuleRegistry.SourceUsings` (finding the `using`s, for `ncc`; a lexer exception there is an
-   internal compiler error) and `ScriptMetadata.Collect` (finding a script's dependencies, for `nscript`). Nemerle's
-   lexer reads `'x = '` as a character literal ("Newline in constant"). The lane's own envelope scan (`GReader.Block`)
-   reads `'...'` and `"..."` with Nemerle's rules too (backslash escapes), so an apostrophe in a `{ ... }` comment
-   leaves a quote open. `hello`, `factorial`, `sieve` and `casegrades` wait on it.
-2. **Map code rejects `;` inside parentheses.** `NitraSyntax`'s `Parentheses = "(" Expression? ")"`, so a C-style
-   `for (a; b; c)` in a mapping does not parse; the grammar uses `while`.
-3. *(not a bug)* **A keyword's boundary check belongs in a `token`.** In a `syntax` rule Nitra skips spaces after each
-   token, so `syntax K = KText !IdentifierPartCharacters;` checks the character after the space (`program Upper`
-   fails at `U`); a `token` skips none, as Nitra's own `token Keyword = ... !IdentifierPartCharacters;` does.
-4. **Mapped code has no location of its own:** the mappings' quotations take the space's location (the native host's
-   `Output` runs them without locating each in its node's span), so an error in the Pascal program is reported at the
-   `space` line.
-5. **A space's syntax error is an offset** (`at offset 37`, into the body; `Expand` does not turn it into a line and
-   column), **reported twice**: the typer restarts a body (`RestartRunBodyTyperException`), the space is expanded on
-   each pass, and `Expand` reports with `Message.Error` directly rather than through the typer.
-6. **Literals are case-sensitive**, with no option for a case-insensitive language: the grammar spells each keyword as
-   a regular expression of both cases and keeps names from being reserved words with a predicate.
+1. **A space's body was read by the Nemerle lexer before its own lane**: the pre-scans for a file's `using`s and a
+   script's dependencies lexed the raw file, and the lane's envelope scan read quotes Nemerle's way.
+2. **Map code rejected `;` inside parentheses** (a C-style `for` in a mapping), from upstream Nitra.
+3. **Mapped code had no location of its own**, so an error pointed at the `space` line.
+4. **A space's syntax error was an offset, reported twice**, then a bare "parse error".
+
+Units needed what a space could not do yet: declare members, be mapped before typing, find another space, and be
+found as a file. Those are the facilities above. And two are how Nitra is: a keyword's boundary check belongs in a
+`token` (a `syntax` rule skips spaces before a predicate), and literals are case-sensitive.

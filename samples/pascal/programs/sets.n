@@ -1,0 +1,29 @@
+// Sets: of characters and of an enumeration; constructors with ranges, +, -, *, in, comparisons
+space Pascal
+{
+  program Sets;
+  type
+    Day = (mon, tue, wed, thu, fri, sat, sun);
+    Days = set of Day;
+  var
+    vowels, letters, consonants : set of char;
+    weekend, work, all : Days;
+    c : char;
+    d : Day;
+    count : integer;
+  begin
+    vowels := ['a', 'e', 'i', 'o', 'u'];
+    letters := ['a'..'z'];
+    consonants := letters - vowels;
+    count := 0;
+    for c := 'a' to 'z' do if c in consonants then count := count + 1;
+    writeln('consonants ', count);
+    weekend := [sat, sun];
+    work := [mon..fri];
+    all := work + weekend;
+    writeln(all = [mon..sun], ' ', weekend <= all, ' ', work * weekend = [], ' ', wed in work);
+    count := 0;
+    for d := mon to sun do if not (d in weekend) then count := count + 1;
+    writeln('work days ', count)
+  end.
+}

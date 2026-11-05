@@ -1,0 +1,38 @@
+// A Turbo Pascal unit: its interface is what other spaces (and Nemerle) see, its implementation is its own; its
+// initialization runs before the program that uses it. Its implementation uses Shapes, whose interface uses it.
+space Pascal
+{
+  unit Geometry;
+  interface
+    type
+      Point = record x, y : real end;
+    const
+      UnitRadius = 1.0;
+    var
+      Moves : integer;
+    function Distance(a, b : Point) : real;
+    procedure Move(var p : Point; dx, dy : real);
+    function Describe(p : Point) : string;
+
+  implementation
+    uses Shapes;
+
+    function Squared(v : real) : real;  { private to the unit }
+    begin Squared := v * v end;
+
+    function Distance(a, b : Point) : real;
+    begin Distance := sqrt(Squared(a.x - b.x) + Squared(a.y - b.y)) end;
+
+    procedure Move(var p : Point; dx, dy : real);
+    begin p.x := p.x + dx; p.y := p.y + dy; Moves := Moves + 1 end;
+
+    function Describe(p : Point) : string;
+    begin
+      if InsideUnitCircle(p) then Describe := 'inside' else Describe := 'outside'
+    end;
+
+  begin
+    Moves := 0;
+    writeln('geometry ready')
+  end.
+}

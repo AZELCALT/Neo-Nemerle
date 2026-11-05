@@ -1,0 +1,32 @@
+// Files: a text file written and read back line by line, and a file of integer
+space Pascal
+{
+  program Files(output);
+  var
+    t : text;
+    numbers : file of integer;
+    line : string;
+    n, total : integer;
+  begin
+    assign(t, 'pascal-lines.txt');
+    rewrite(t);
+    writeln(t, 'first line');
+    writeln(t, 'second line');
+    close(t);
+    reset(t);
+    while not eof(t) do
+    begin
+      readln(t, line);
+      writeln('read: ', line)
+    end;
+    close(t);
+    assign(numbers, 'pascal-numbers.json');
+    rewrite(numbers);
+    for n := 1 to 4 do write(numbers, n * 100);
+    close(numbers);
+    reset(numbers);
+    total := 0;
+    while not eof(numbers) do begin read(numbers, n); total := total + n end;
+    writeln('sum ', total)
+  end.
+}

@@ -1,0 +1,20 @@
+// Strings: Turbo Pascal's string (length, copy, pos, concatenation, characters, comparison) and a packed array of char
+space Pascal
+{
+  program Strings;
+  var
+    s, t : string;
+    word : packed array [1..5] of char;
+    i : integer;
+  begin
+    s := 'Pascal';
+    t := s + ' in ' + 'Nemerle';
+    writeln(t, ' ', length(t));
+    writeln(copy(t, 1, 6), ' ', pos('in', t), ' ', s < 'Python');
+    s[1] := 'p';
+    writeln(s, ' ', upcase(s[2]));
+    word := 'hello';
+    for i := 5 downto 1 do write(word[i]);
+    writeln
+  end.
+}

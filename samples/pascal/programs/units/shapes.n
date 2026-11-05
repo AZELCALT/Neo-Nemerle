@@ -1,0 +1,26 @@
+// A unit whose interface uses another: its types and routines are there for this unit's interface
+space Pascal
+{
+  unit Shapes;
+  interface
+    uses Geometry;
+    type
+      Circle = record center : Point; radius : real end;
+    function Area(c : Circle) : real;
+    function InsideUnitCircle(p : Point) : boolean;
+
+  implementation
+    function Area(c : Circle) : real;
+    begin Area := 3.14159 * c.radius * c.radius end;
+
+    function InsideUnitCircle(p : Point) : boolean;
+    var origin : Point;
+    begin
+      origin.x := 0; origin.y := 0;
+      InsideUnitCircle := Distance(origin, p) < UnitRadius
+    end;
+
+  begin
+    writeln('shapes ready')
+  end.
+}

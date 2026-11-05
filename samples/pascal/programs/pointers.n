@@ -1,0 +1,33 @@
+// Pointers: a linked list built with new, walked through `^', ended by nil, and freed with dispose
+space Pascal
+{
+  program Pointers;
+  type
+    Link = ^Node;
+    Node = record value : integer; next : Link end;
+  var
+    head, cell, spare : Link;
+    i, total : integer;
+  begin
+    head := nil;
+    for i := 1 to 5 do
+    begin
+      new(cell);
+      cell^.value := i * i;
+      cell^.next := head;
+      head := cell
+    end;
+    total := 0;
+    cell := head;
+    while cell <> nil do
+    begin
+      write(cell^.value, ' ');
+      total := total + cell^.value;
+      cell := cell^.next
+    end;
+    writeln;
+    writeln('total ', total);
+    while head <> nil do begin spare := head; head := head^.next; dispose(spare) end;
+    writeln(head = nil)
+  end.
+}

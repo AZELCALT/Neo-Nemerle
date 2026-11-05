@@ -1,9 +1,27 @@
-// Pascal (ISO 7185, its core) as a grammar library: in a program that references pascal.dll,
-// `space Pascal { program Name; ... begin ... end. }` is a Pascal program, translated to Nemerle code when the file is
-// compiled. A demo and a test of the grammar machinery, built on the toolchain as it is (README.md says what is in).
+// Pascal (ISO 7185, with Turbo Pascal's units) as a grammar library: in a program that references pascal.dll, a
+// `space Pascal { ... }` holds a Pascal program (`program P; ... end.`) or a unit (`unit U; interface ... end.`, in the
+// file of its name), translated when the file is compiled: its declarations are members of its file's module, its
+// statements the file's top-level code, and units find each other as files do. The grammar parses; the front end
+// (pascalfront.n, pascalfront.dll beside this library) compiles. README.md says what is in.
 
-/// A Pascal array, `array [low..high] of T`: indexed from its own low bound, and checked as Pascal checks it.
-public class PascalArray[T]
+using System;
+using System.IO;
+using SCG = System.Collections.Generic;
+
+// ---- what the translated programs use ----
+
+/// A value Pascal copies when it is assigned or passed (an array, a record).
+public interface IPascalValue { Clone() : object; }
+
+/// A record: a class of its fields, copied as Pascal copies a record.
+public abstract class PascalRecord : IPascalValue
+{
+  public abstract Copy() : PascalRecord;
+  public Clone() : object { Copy() }
+}
+
+/// `array [low..high] of T': indexed from its own low bound, and checked as Pascal checks it.
+public class PascalArray[T] : IPascalValue
 {
   low : int;
   items : array[T];
@@ -23,109 +41,371 @@ public class PascalArray[T]
   Check(index : int) : int
   {
     when (index < low || index > High)
-      throw System.IndexOutOfRangeException("index " + index.ToString() + " is out of the array's range " + low.ToString() + ".." + High.ToString());
+      throw IndexOutOfRangeException("index " + index.ToString() + " is out of the array's range " + low.ToString() + ".." + High.ToString());
     index - low
   }
-  /// (a copy, as Pascal assigns arrays by value)
-  public Copy() : PascalArray[T] { def copy = PascalArray(low, High, () => default(T)); System.Array.Copy(items, copy.items, items.Length); copy }
+  public Clone() : object
+  {
+    def copy = PascalArray(low, High, () => default(T));
+    for (mutable i = 0; i < items.Length; i++) copy.items[i] = Pascal.Value(items[i]);
+    copy
+  }
+  /// A packed array of char as the string it holds
+  public AsString() : string
+  {
+    def b = System.Text.StringBuilder();
+    foreach (x in items) _ = b.Append((x : object) :> char);
+    b.ToString()
+  }
+  /// A string as a packed array of char from `low' (a string literal assigned to one)
+  public static FromString(low : int, text : string) : PascalArray[char]
+  {
+    def a = PascalArray(low, low + text.Length - 1, () => ' ');
+    for (mutable i = 0; i < text.Length; i++) a.items[i] = text[i];
+    a
+  }
 }
 
-/// A `var' parameter's variable: the argument is copied in, and copied back when the routine returns.
+/// A `var' parameter's variable in a nested routine (a closure takes no `ref'): the cell the caller passes.
 public class PascalVar[T]
 {
   public mutable Value : T;
   public this(value : T) { Value = value }
 }
 
-/// What write and writeln print: a value in a field of a width (right-aligned), a real with a number of decimals.
-public module PascalText
+/// A pointer: `p^' is its Value; `new(p)' makes one, `nil' is null.
+public class PascalPointer[T]
 {
-  public Field(value : object, width : int) : string { Show(value).PadLeft(width) }
-  public Fixed(value : double, width : int, decimals : int) : string
+  public mutable Value : T;
+  public this(value : T) { Value = value }
+}
+
+/// `set of T': its members' ordinal values (0 to 255, as Pascal implementations give), immutable.
+public sealed class PascalSet
+{
+  bits : array[ulong];
+  this(bits : array[ulong]) { this.bits = bits }
+  // (each bit of a word, as a mask)
+  static masks : array[ulong] = Masks();
+  static Masks() : array[ulong] { def m = array(64) : array[ulong]; m[0] = 1UL; for (mutable i = 1; i < 64; i++) m[i] = m[i - 1] * 2UL; m }
+  public static Empty : PascalSet = PascalSet(array(4));
+  /// The set of the ranges given, as low and high pairs (`[1, 3..5]' is 1, 1, 3, 5)
+  public static Of(params bounds : array[int]) : PascalSet
   {
-    value.ToString("F" + decimals.ToString(), System.Globalization.CultureInfo.InvariantCulture).PadLeft(width)
+    def b = array(4) : array[ulong];
+    for (mutable i = 0; i + 1 < bounds.Length; i += 2)
+      for (mutable v = bounds[i]; v <= bounds[i + 1]; v++)
+      {
+        when (v < 0 || v > 255) throw ArgumentOutOfRangeException("set element", v, "a set's element is 0 to 255");
+        b[v / 64] = b[v / 64] | masks[v % 64]
+      }
+    PascalSet(b)
   }
-  public Show(value : object) : string
+  public Contains(v : int) : bool { v >= 0 && v <= 255 && (bits[v / 64] & masks[v % 64]) != 0UL }
+  Combine(other : PascalSet, f : ulong * ulong -> ulong) : PascalSet
   {
-    match (value)
+    def b = array(4) : array[ulong];
+    for (mutable i = 0; i < 4; i++) b[i] = f(bits[i], other.bits[i]);
+    PascalSet(b)
+  }
+  public Union(other : PascalSet) : PascalSet { Combine(other, (a, b) => a | b) }
+  public Difference(other : PascalSet) : PascalSet { Combine(other, (a, b) => a & ~b) }
+  public Intersection(other : PascalSet) : PascalSet { Combine(other, (a, b) => a & b) }
+  public SetEquals(other : PascalSet) : bool { mutable same = true; for (mutable i = 0; i < 4; i++) when (bits[i] != other.bits[i]) same = false; same }
+  public IsSubsetOf(other : PascalSet) : bool { mutable sub = true; for (mutable i = 0; i < 4; i++) when ((bits[i] & ~other.bits[i]) != 0UL) sub = false; sub }
+}
+
+/// The translated programs' helpers.
+public module Pascal
+{
+  /// An assigned or passed value: a copy of an array or a record
+  public Value[T](x : T) : T { match (x : object) { | v is IPascalValue => v.Clone() :> T | _ => x } }
+  /// A subrange's value, checked
+  public Check(v : int, low : int, high : int) : int
+  {
+    when (v < low || v > high) throw ArgumentOutOfRangeException("value", v, "out of the subrange " + low.ToString() + ".." + high.ToString());
+    v
+  }
+  /// Pascal's `mod': never negative; the divisor is positive
+  public Mod(a : int, b : int) : int
+  {
+    when (b <= 0) throw DivideByZeroException("mod by a divisor that is not positive");
+    ((a % b) + b) % b
+  }
+  /// A Turbo string with its character at `index' (from 1) changed
+  public SetChar(s : string, index : int, c : char) : string
+  {
+    when (index < 1 || index > s.Length) throw IndexOutOfRangeException("index " + index.ToString() + " is out of the string");
+    s.Substring(0, index - 1) + c.ToString() + s.Substring(index)
+  }
+  /// Turbo's `copy(s, index, count)'
+  public Copy(s : string, index : int, count : int) : string
+  {
+    if (index > s.Length || count <= 0) "" else s.Substring(Math.Max(0, index - 1), Math.Min(count, s.Length - Math.Max(0, index - 1)))
+  }
+  public Pack[T](a : PascalArray[T], from : int, z : PascalArray[T]) : void
+  { for (mutable j = z.Low; j <= z.High; j++) z[j] = a[from + j - z.Low] }
+  public Unpack[T](z : PascalArray[T], a : PascalArray[T], from : int) : void
+  { for (mutable j = z.Low; j <= z.High; j++) a[from + j - z.Low] = z[j] }
+}
+
+/// A text file (`text', `input', `output'): reading and writing as Pascal's are, on a file or on the console.
+public class PascalText
+{
+  public static Input : PascalText = PascalText(Console.In, null);
+  public static Output : PascalText = PascalText(null, Console.Out);
+  mutable path : string;
+  mutable reader : TextReader;
+  mutable writer : TextWriter;
+  mutable ahead : int = -2; // (the next character, read ahead; -2 when not yet)
+  mutable put : char = ' ';
+  console : bool;
+  public this(name : string) { path = name }
+  this(r : TextReader, w : TextWriter) { reader = r; writer = w; console = true }
+  public Assign(name : string) : void { path = name }
+  public Reset() : void { Close(); reader = File.OpenText(path); ahead = -2 }
+  public Rewrite() : void { Close(); writer = StreamWriter(path) }
+  public Close() : void
+  {
+    unless (console)
     {
-      | b is bool => if (b) "TRUE" else "FALSE"
-      | d is double => d.ToString("0.0#########E+000", System.Globalization.CultureInfo.InvariantCulture)
-      | null => ""
-      | v => v.ToString()
+      when (reader != null) { reader.Dispose(); reader = null }
+      when (writer != null) { writer.Dispose(); writer = null }
     }
   }
-  public ReadInteger() : int { int.Parse((System.Console.ReadLine() ?? "").Trim()) }
-  public ReadReal() : double { double.Parse((System.Console.ReadLine() ?? "").Trim(), System.Globalization.CultureInfo.InvariantCulture) }
+  In() : TextReader { when (reader == null) throw InvalidOperationException("the file is not open for reading (reset it)"); reader }
+  Out() : TextWriter { when (writer == null) throw InvalidOperationException("the file is not open for writing (rewrite it)"); writer }
+  Peek() : int
+  {
+    when (ahead == -2)
+    {
+      ahead = In().Read();
+      // (a line ends with "\n" or "\r\n": one end of line)
+      when (ahead == '\r') { when (In().Peek() == '\n') _ = In().Read(); ahead = '\n' }
+    }
+    ahead
+  }
+  public Eof : bool { get { Peek() < 0 } }
+  public Eoln : bool { get { def c = Peek(); c == '\n' || c < 0 } }
+  /// The buffer variable `f^': the next character (a space at the end of a line); what `put' writes
+  public Buffer : char
+  {
+    get { def c = Peek(); if (c < 0 || c == '\n') ' ' else (c :> char) }
+    set { put = value }
+  }
+  public Get() : void { when (Peek() < 0) throw EndOfStreamException("read past the end of the file"); ahead = -2 }
+  public Put() : void { Out().Write(put) }
+  public Page() : void { Out().Write('\f') }
+  public ReadChar() : char { def c = Buffer; Get(); c }
+  SkipBlanks() : void { while (!Eof && (Peek() == '\n' || char.IsWhiteSpace(Peek() :> char))) Get() }
+  Number(real : bool) : string
+  {
+    SkipBlanks();
+    def b = System.Text.StringBuilder();
+    def take() { _ = b.Append(Peek() :> char); Get() }
+    when (!Eof && (Peek() == '+' || Peek() == '-')) take();
+    while (!Eof && char.IsDigit(Peek() :> char)) take();
+    when (real)
+    {
+      when (!Eof && Peek() == '.') { take(); while (!Eof && char.IsDigit(Peek() :> char)) take() }
+      when (!Eof && (Peek() == 'e' || Peek() == 'E'))
+      {
+        take(); when (!Eof && (Peek() == '+' || Peek() == '-')) take();
+        while (!Eof && char.IsDigit(Peek() :> char)) take()
+      }
+    }
+    when (b.Length == 0 || b.ToString() == "+" || b.ToString() == "-") throw FormatException("read: no number here");
+    b.ToString()
+  }
+  public ReadInt() : int { int.Parse(Number(false), Globalization.CultureInfo.InvariantCulture) }
+  public ReadReal() : double { double.Parse(Number(true), Globalization.CultureInfo.InvariantCulture) }
+  /// (Turbo's string read: the rest of the line)
+  public ReadString() : string { def b = System.Text.StringBuilder(); while (!Eoln) _ = b.Append(ReadChar()); b.ToString() }
+  public ReadLine() : void { while (!Eoln) Get(); unless (Eof) Get() }
+  Field(text : string, width : int) : void { Out().Write(if (width > text.Length) text.PadLeft(width) else text) }
+  public WriteInt(v : int, width : int) : void { Field(v.ToString(Globalization.CultureInfo.InvariantCulture), width) }
+  public WriteChar(v : char, width : int) : void { Field(v.ToString(), width) }
+  public WriteString(v : string, width : int) : void { Field(v, width) }
+  public WriteBool(v : bool, width : int) : void { Field(if (v) "TRUE" else "FALSE", width) }
+  public WriteValue(v : object, width : int) : void { Field(if (v == null) "" else v.ToString(), width) }
+  /// A real: `x:w:d' fixed with d decimals; `x' or `x:w' in floating-point form (as many digits as the width gives)
+  public WriteReal(v : double, width : int, decimals : int) : void
+  {
+    def culture = Globalization.CultureInfo.InvariantCulture;
+    if (decimals >= 0) Field(v.ToString("F" + decimals.ToString(), culture), width)
+    else
+    {
+      def digits = if (width <= 0) 10 else Math.Max(1, width - 7);
+      def text = v.ToString("0." + string('0', digits) + "E+000", culture);
+      Field(if (v >= 0) " " + text else text, width)
+    }
+  }
+  public WriteLine() : void { Out().WriteLine() }
 }
+
+/// `file of T': its elements, kept in the file a line each (as JSON).
+public class PascalFile[T]
+{
+  mutable path : string;
+  items : SCG.List[T] = SCG.List();
+  mutable position : int;
+  mutable writing : bool;
+  public mutable Buffer : T;
+  static options : System.Text.Json.JsonSerializerOptions = Options();
+  static Options() : System.Text.Json.JsonSerializerOptions { def o = System.Text.Json.JsonSerializerOptions(); o.IncludeFields = true; o }
+  public this(name : string) { path = name }
+  public Assign(name : string) : void { path = name }
+  public Reset() : void
+  {
+    Close(); items.Clear(); writing = false; position = 0;
+    when (File.Exists(path))
+      foreach (line when line.Length > 0 in File.ReadAllLines(path))
+        items.Add(System.Text.Json.JsonSerializer.Deserialize.[T](line, options));
+    Buffer = if (items.Count > 0) items[0] else default(T)
+  }
+  public Rewrite() : void { Close(); items.Clear(); writing = true; position = 0 }
+  public Eof : bool { get { writing || position >= items.Count } }
+  public Get() : void
+  {
+    when (writing || position >= items.Count) throw EndOfStreamException("read past the end of the file");
+    position++;
+    Buffer = if (position < items.Count) items[position] else default(T)
+  }
+  public Put() : void { unless (writing) throw InvalidOperationException("the file is not open for writing (rewrite it)"); items.Add(Buffer) }
+  public Page() : void { }
+  public Close() : void
+  {
+    when (writing && path != null && path.Length > 0)
+    {
+      def lines = SCG.List();
+      foreach (x in items) lines.Add(System.Text.Json.JsonSerializer.Serialize(x, options));
+      File.WriteAllLines(path, lines);
+      writing = false
+    }
+  }
+}
+
+/// What a Pascal space imports (its `uses'), so that a program's units are found as files are.
+public class PascalImports : Nemerle.Compiler.NitraDialectServices.ISpaceImports
+{
+  public Imports(grammar : string, body : string) : array[string]
+  {
+    if (!String.Equals(grammar, "Pascal", StringComparison.OrdinalIgnoreCase)) array[]
+    else
+    {
+      // (comments and strings out, then each `uses a, b;')
+      def text = System.Text.RegularExpressions.Regex.Replace(body, @"\{[^}]*\}|\(\*.*?\*\)|'([^']|'')*'", " ", System.Text.RegularExpressions.RegexOptions.Singleline);
+      def names = SCG.List();
+      foreach (m is System.Text.RegularExpressions.Match in System.Text.RegularExpressions.Regex.Matches(text, @"\buses\b([^;]*);", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        foreach (n in m.Groups[1].Value.Split(','))
+          when (n.Trim().Length > 0) names.Add(n.Trim());
+      names.ToArray()
+    }
+  }
+}
+
+// ---- the grammar ----
 
 grammar Pascal
 {
-  using Nemerle.Compiler;
   using Nemerle.Compiler.Parsetree;
-  using SCG = System.Collections.Generic;
   syntax module Program
   {
     using Nitra.Core;
 
-    // Pascal is case-insensitive: each keyword in any case (`begin', `BEGIN', `Begin'), not a prefix of a longer name
-    regex KProgramText = ['p', 'P'] ['r', 'R'] ['o', 'O'] ['g', 'G'] ['r', 'R'] ['a', 'A'] ['m', 'M'];
-    regex KConstText = ['c', 'C'] ['o', 'O'] ['n', 'N'] ['s', 'S'] ['t', 'T'];
-    regex KTypeText = ['t', 'T'] ['y', 'Y'] ['p', 'P'] ['e', 'E'];
-    regex KVarText = ['v', 'V'] ['a', 'A'] ['r', 'R'];
-    regex KProcedureText = ['p', 'P'] ['r', 'R'] ['o', 'O'] ['c', 'C'] ['e', 'E'] ['d', 'D'] ['u', 'U'] ['r', 'R'] ['e', 'E'];
-    regex KFunctionText = ['f', 'F'] ['u', 'U'] ['n', 'N'] ['c', 'C'] ['t', 'T'] ['i', 'I'] ['o', 'O'] ['n', 'N'];
-    regex KBeginText = ['b', 'B'] ['e', 'E'] ['g', 'G'] ['i', 'I'] ['n', 'N'];
-    regex KEndText = ['e', 'E'] ['n', 'N'] ['d', 'D'];
-    regex KIfText = ['i', 'I'] ['f', 'F'];
-    regex KThenText = ['t', 'T'] ['h', 'H'] ['e', 'E'] ['n', 'N'];
-    regex KElseText = ['e', 'E'] ['l', 'L'] ['s', 'S'] ['e', 'E'];
-    regex KWhileText = ['w', 'W'] ['h', 'H'] ['i', 'I'] ['l', 'L'] ['e', 'E'];
-    regex KDoText = ['d', 'D'] ['o', 'O'];
-    regex KRepeatText = ['r', 'R'] ['e', 'E'] ['p', 'P'] ['e', 'E'] ['a', 'A'] ['t', 'T'];
-    regex KUntilText = ['u', 'U'] ['n', 'N'] ['t', 'T'] ['i', 'I'] ['l', 'L'];
-    regex KForText = ['f', 'F'] ['o', 'O'] ['r', 'R'];
-    regex KToText = ['t', 'T'] ['o', 'O'];
-    regex KDowntoText = ['d', 'D'] ['o', 'O'] ['w', 'W'] ['n', 'N'] ['t', 'T'] ['o', 'O'];
-    regex KCaseText = ['c', 'C'] ['a', 'A'] ['s', 'S'] ['e', 'E'];
-    regex KOfText = ['o', 'O'] ['f', 'F'];
-    regex KArrayText = ['a', 'A'] ['r', 'R'] ['r', 'R'] ['a', 'A'] ['y', 'Y'];
-    regex KPackedText = ['p', 'P'] ['a', 'A'] ['c', 'C'] ['k', 'K'] ['e', 'E'] ['d', 'D'];
-    regex KDivText = ['d', 'D'] ['i', 'I'] ['v', 'V'];
-    regex KModText = ['m', 'M'] ['o', 'O'] ['d', 'D'];
+    // Pascal is case-insensitive: each keyword in any case (`begin', `BEGIN', `Begin'), not the start of a longer name
     regex KAndText = ['a', 'A'] ['n', 'N'] ['d', 'D'];
-    regex KOrText = ['o', 'O'] ['r', 'R'];
+    regex KArrayText = ['a', 'A'] ['r', 'R'] ['r', 'R'] ['a', 'A'] ['y', 'Y'];
+    regex KBeginText = ['b', 'B'] ['e', 'E'] ['g', 'G'] ['i', 'I'] ['n', 'N'];
+    regex KCaseText = ['c', 'C'] ['a', 'A'] ['s', 'S'] ['e', 'E'];
+    regex KConstText = ['c', 'C'] ['o', 'O'] ['n', 'N'] ['s', 'S'] ['t', 'T'];
+    regex KDivText = ['d', 'D'] ['i', 'I'] ['v', 'V'];
+    regex KDoText = ['d', 'D'] ['o', 'O'];
+    regex KDowntoText = ['d', 'D'] ['o', 'O'] ['w', 'W'] ['n', 'N'] ['t', 'T'] ['o', 'O'];
+    regex KElseText = ['e', 'E'] ['l', 'L'] ['s', 'S'] ['e', 'E'];
+    regex KEndText = ['e', 'E'] ['n', 'N'] ['d', 'D'];
+    regex KFileText = ['f', 'F'] ['i', 'I'] ['l', 'L'] ['e', 'E'];
+    regex KForText = ['f', 'F'] ['o', 'O'] ['r', 'R'];
+    regex KFunctionText = ['f', 'F'] ['u', 'U'] ['n', 'N'] ['c', 'C'] ['t', 'T'] ['i', 'I'] ['o', 'O'] ['n', 'N'];
+    regex KGotoText = ['g', 'G'] ['o', 'O'] ['t', 'T'] ['o', 'O'];
+    regex KIfText = ['i', 'I'] ['f', 'F'];
+    regex KImplementationText = ['i', 'I'] ['m', 'M'] ['p', 'P'] ['l', 'L'] ['e', 'E'] ['m', 'M'] ['e', 'E'] ['n', 'N'] ['t', 'T'] ['a', 'A'] ['t', 'T'] ['i', 'I'] ['o', 'O'] ['n', 'N'];
+    regex KInText = ['i', 'I'] ['n', 'N'];
+    regex KInterfaceText = ['i', 'I'] ['n', 'N'] ['t', 'T'] ['e', 'E'] ['r', 'R'] ['f', 'F'] ['a', 'A'] ['c', 'C'] ['e', 'E'];
+    regex KLabelText = ['l', 'L'] ['a', 'A'] ['b', 'B'] ['e', 'E'] ['l', 'L'];
+    regex KModText = ['m', 'M'] ['o', 'O'] ['d', 'D'];
+    regex KNilText = ['n', 'N'] ['i', 'I'] ['l', 'L'];
     regex KNotText = ['n', 'N'] ['o', 'O'] ['t', 'T'];
-    token KProgram = KProgramText !IdentifierPartCharacters;
-    token KConst = KConstText !IdentifierPartCharacters;
-    token KType = KTypeText !IdentifierPartCharacters;
-    token KVar = KVarText !IdentifierPartCharacters;
-    token KProcedure = KProcedureText !IdentifierPartCharacters;
-    token KFunction = KFunctionText !IdentifierPartCharacters;
-    token KBegin = KBeginText !IdentifierPartCharacters;
-    token KEnd = KEndText !IdentifierPartCharacters;
-    token KIf = KIfText !IdentifierPartCharacters;
-    token KThen = KThenText !IdentifierPartCharacters;
-    token KElse = KElseText !IdentifierPartCharacters;
-    token KWhile = KWhileText !IdentifierPartCharacters;
-    token KDo = KDoText !IdentifierPartCharacters;
-    token KRepeat = KRepeatText !IdentifierPartCharacters;
-    token KUntil = KUntilText !IdentifierPartCharacters;
-    token KFor = KForText !IdentifierPartCharacters;
-    token KTo = KToText !IdentifierPartCharacters;
-    token KDownto = KDowntoText !IdentifierPartCharacters;
-    token KCase = KCaseText !IdentifierPartCharacters;
-    token KOf = KOfText !IdentifierPartCharacters;
-    token KArray = KArrayText !IdentifierPartCharacters;
-    token KPacked = KPackedText !IdentifierPartCharacters;
-    token KDiv = KDivText !IdentifierPartCharacters;
-    token KMod = KModText !IdentifierPartCharacters;
+    regex KOfText = ['o', 'O'] ['f', 'F'];
+    regex KOrText = ['o', 'O'] ['r', 'R'];
+    regex KPackedText = ['p', 'P'] ['a', 'A'] ['c', 'C'] ['k', 'K'] ['e', 'E'] ['d', 'D'];
+    regex KProcedureText = ['p', 'P'] ['r', 'R'] ['o', 'O'] ['c', 'C'] ['e', 'E'] ['d', 'D'] ['u', 'U'] ['r', 'R'] ['e', 'E'];
+    regex KProgramText = ['p', 'P'] ['r', 'R'] ['o', 'O'] ['g', 'G'] ['r', 'R'] ['a', 'A'] ['m', 'M'];
+    regex KRecordText = ['r', 'R'] ['e', 'E'] ['c', 'C'] ['o', 'O'] ['r', 'R'] ['d', 'D'];
+    regex KRepeatText = ['r', 'R'] ['e', 'E'] ['p', 'P'] ['e', 'E'] ['a', 'A'] ['t', 'T'];
+    regex KSetText = ['s', 'S'] ['e', 'E'] ['t', 'T'];
+    regex KThenText = ['t', 'T'] ['h', 'H'] ['e', 'E'] ['n', 'N'];
+    regex KToText = ['t', 'T'] ['o', 'O'];
+    regex KTypeText = ['t', 'T'] ['y', 'Y'] ['p', 'P'] ['e', 'E'];
+    regex KUnitText = ['u', 'U'] ['n', 'N'] ['i', 'I'] ['t', 'T'];
+    regex KUntilText = ['u', 'U'] ['n', 'N'] ['t', 'T'] ['i', 'I'] ['l', 'L'];
+    regex KUsesText = ['u', 'U'] ['s', 'S'] ['e', 'E'] ['s', 'S'];
+    regex KVarText = ['v', 'V'] ['a', 'A'] ['r', 'R'];
+    regex KWhileText = ['w', 'W'] ['h', 'H'] ['i', 'I'] ['l', 'L'] ['e', 'E'];
+    regex KWithText = ['w', 'W'] ['i', 'I'] ['t', 'T'] ['h', 'H'];
+    // (directives, not reserved: a name elsewhere)
+    regex KForwardText = ['f', 'F'] ['o', 'O'] ['r', 'R'] ['w', 'W'] ['a', 'A'] ['r', 'R'] ['d', 'D'];
+    regex KOtherwiseText = ['o', 'O'] ['t', 'T'] ['h', 'H'] ['e', 'E'] ['r', 'R'] ['w', 'W'] ['i', 'I'] ['s', 'S'] ['e', 'E'];
     token KAnd = KAndText !IdentifierPartCharacters;
-    token KOr = KOrText !IdentifierPartCharacters;
+    token KArray = KArrayText !IdentifierPartCharacters;
+    token KBegin = KBeginText !IdentifierPartCharacters;
+    token KCase = KCaseText !IdentifierPartCharacters;
+    token KConst = KConstText !IdentifierPartCharacters;
+    token KDiv = KDivText !IdentifierPartCharacters;
+    token KDo = KDoText !IdentifierPartCharacters;
+    token KDownto = KDowntoText !IdentifierPartCharacters;
+    token KElse = KElseText !IdentifierPartCharacters;
+    token KEnd = KEndText !IdentifierPartCharacters;
+    token KFile = KFileText !IdentifierPartCharacters;
+    token KFor = KForText !IdentifierPartCharacters;
+    token KFunction = KFunctionText !IdentifierPartCharacters;
+    token KGoto = KGotoText !IdentifierPartCharacters;
+    token KIf = KIfText !IdentifierPartCharacters;
+    token KImplementation = KImplementationText !IdentifierPartCharacters;
+    token KIn = KInText !IdentifierPartCharacters;
+    token KInterface = KInterfaceText !IdentifierPartCharacters;
+    token KLabel = KLabelText !IdentifierPartCharacters;
+    token KMod = KModText !IdentifierPartCharacters;
+    token KNil = KNilText !IdentifierPartCharacters;
     token KNot = KNotText !IdentifierPartCharacters;
-    regex Reserved = KProgramText | KConstText | KTypeText | KVarText | KProcedureText | KFunctionText | KBeginText | KEndText | KIfText | KThenText | KElseText | KWhileText | KDoText | KRepeatText | KUntilText | KForText | KToText | KDowntoText | KCaseText | KOfText | KArrayText | KPackedText | KDivText | KModText | KAndText | KOrText | KNotText;
-    // a name, never a reserved word
-    syntax Ident = !(Reserved !IdentifierPartCharacters) Body=IdentifierBody;
+    token KOf = KOfText !IdentifierPartCharacters;
+    token KOr = KOrText !IdentifierPartCharacters;
+    token KPacked = KPackedText !IdentifierPartCharacters;
+    token KProcedure = KProcedureText !IdentifierPartCharacters;
+    token KProgram = KProgramText !IdentifierPartCharacters;
+    token KRecord = KRecordText !IdentifierPartCharacters;
+    token KRepeat = KRepeatText !IdentifierPartCharacters;
+    token KSet = KSetText !IdentifierPartCharacters;
+    token KThen = KThenText !IdentifierPartCharacters;
+    token KTo = KToText !IdentifierPartCharacters;
+    token KType = KTypeText !IdentifierPartCharacters;
+    token KUnit = KUnitText !IdentifierPartCharacters;
+    token KUntil = KUntilText !IdentifierPartCharacters;
+    token KUses = KUsesText !IdentifierPartCharacters;
+    token KVar = KVarText !IdentifierPartCharacters;
+    token KWhile = KWhileText !IdentifierPartCharacters;
+    token KWith = KWithText !IdentifierPartCharacters;
+    token KForward = KForwardText !IdentifierPartCharacters;
+    token KOtherwise = KOtherwiseText !IdentifierPartCharacters;
+    regex Reserved = KAndText | KArrayText | KBeginText | KCaseText | KConstText | KDivText | KDoText | KDowntoText | KElseText
+                   | KEndText | KFileText | KForText | KFunctionText | KGotoText | KIfText | KImplementationText | KInText
+                   | KInterfaceText | KLabelText | KModText | KNilText | KNotText | KOfText | KOrText | KPackedText
+                   | KProcedureText | KProgramText | KRecordText | KRepeatText | KSetText | KThenText | KToText | KTypeText
+                   | KUnitText | KUntilText | KUsesText | KVarText | KWhileText | KWithText;
+    // a name, never a reserved word (the word's end is checked in a token: a syntax rule would skip the spaces after it
+    // first, and take `nil end' for a name)
+    token ReservedWord = Reserved !IdentifierPartCharacters;
+    syntax Ident = !ReservedWord Body=IdentifierBody;
 
     // Pascal's comments, `(* ... *)' and `{ ... }'
     extend token IgnoreToken
@@ -134,389 +414,393 @@ grammar Pascal
       | BraceComment = "{" Body=(!"}" Any)* "}";
     }
 
-    // The mapping's tables, kept while a program is mapped (Pascal declares before use, so a declaration is mapped
-    // before the code that uses it): the types declared (their Nemerle type and initial value), the routines (which
-    // parameters are `var'), the function being mapped (its result), and the `var' parameters in reach.
-    [StartRule] syntax Start = KProgram Name=Ident Files=ProgramFiles? ";" Block "."
+    regex Digits = ['0'..'9']+;
+    regex HexDigits = "$" ['0'..'9', 'a'..'f', 'A'..'F']+;
+    regex RealLiteral = Digits "." Digits (('e' | 'E') ('+' | '-')? Digits)? | Digits ('e' | 'E') ('+' | '-')? Digits;
+    // (one token, so the spaces inside are the string's)
+    regex StringLiteral = "'" ("''" | (Any - '\''))* "'";
+
+    [StartRule] syntax Start = Unit=CompilationUnit
     {
-      map PExpr = {
-        def domain = System.AppDomain.CurrentDomain;
-        domain.SetData("pascal.types", SCG.Dictionary.[string, PExpr * PExpr]());
-        domain.SetData("pascal.routines", SCG.Dictionary.[string, list[bool]]());
-        domain.SetData("pascal.results", SCG.Stack.[string * string]());
-        domain.SetData("pascal.vars", SCG.HashSet.[string]());
-        // the names the program declares: Pascal names are case-insensitive (kept lower-case); any other name is the
-        // Nemerle program's, as written
-        domain.SetData("pascal.names", SCG.HashSet.[string]());
-        this.Block.GetAst()
-      };
+      map PExpr = pascalfront.Front.Compile(Unit.Ast() :> pascalfront.CompUnit);
+    }
+
+    syntax CompilationUnit
+    {
+      Ast() : object;
+      | Program = KProgram Name=Ident Files=ProgramFiles? ";" Uses=UsesClause? Block=Block "."
+        {
+          override Ast = pascalfront.CompUnit.Program(pascalfront.N.At(Location), GetText(Name.Body),
+                                                      if (Uses.HasValue) Uses.Value.List() :> list[string * Nemerle.Compiler.AST.Location] else [],
+                                                      Block.Ast() :> pascalfront.Block);
+        }
+      | Unit = KUnit Name=Ident ";" KInterface IUses=UsesClause? IDecls=InterfaceDeclaration* KImplementation MUses=UsesClause?
+               MDecls=Declaration* Init=UnitInit? KEnd "."
+        {
+          override Ast = {
+            mutable idecls = []; foreach (d in IDecls) idecls = idecls + (d.Ast() :> list[pascalfront.Decl]);
+            mutable mdecls = []; foreach (d in MDecls) mdecls = mdecls + (d.Ast() :> list[pascalfront.Decl]);
+            pascalfront.CompUnit.Unit(pascalfront.N.At(Location), GetText(Name.Body),
+                                      if (IUses.HasValue) IUses.Value.List() :> list[string * Nemerle.Compiler.AST.Location] else [], idecls,
+                                      if (MUses.HasValue) MUses.Value.List() :> list[string * Nemerle.Compiler.AST.Location] else [], mdecls,
+                                      if (Init.HasValue) Init.Value.Body.Ast() :> list[pascalfront.Stmt] else null)
+          };
+        }
     }
     syntax ProgramFiles = "(" Names=(Ident; ",")* ")";
+    syntax UsesClause = KUses Names=(Ident; ",")+ ";"
+    {
+      List() : object = { mutable xs = []; foreach (n in Names.Item1) xs ::= (GetText(n.Body), pascalfront.N.At(n.Location)); xs.Rev() };
+    }
+    syntax UnitInit = KBegin Body=Statements;
 
     syntax Block = Declarations=Declaration* KBegin Body=Statements KEnd
     {
-      map PExpr = {
-        // (a section's declarations are spliced in, so they stay in scope for the rest of the block)
-        mutable code = [];
-        def add(e : PExpr) { | PExpr.Sequence(items) => foreach (i in items) add(i) | e => code ::= e }
-        foreach (d in this.Declarations) add(d.GetAst());
-        <[ { ..$(code.Rev()); $(this.Body.GetAst()) } ]>
+      Ast() : object = {
+        mutable decls = []; foreach (d in Declarations) decls = decls + (d.Ast() :> list[pascalfront.Decl]);
+        pascalfront.Block(decls, Body.Ast() :> list[pascalfront.Stmt])
       };
     }
 
+    // (each gives the declarations of its section)
     syntax Declaration
     {
-      map PExpr;
+      Ast() : object;
+      | Labels = KLabel Names=(Digits; ",")+ ";"
+        {
+          override Ast = { mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n); [pascalfront.Decl.Labels(pascalfront.N.At(Location), xs.Rev()) : pascalfront.Decl] };
+        }
       | Constants = KConst Items=ConstantDeclaration+
         {
-          map PExpr = { mutable code = []; foreach (c in this.Items) code ::= c.GetAst(); <[ { ..$(code.Rev()) } ]> };
+          override Ast = { mutable xs = []; foreach (c in Items) xs ::= (c.Ast() :> pascalfront.Decl); xs.Rev() };
         }
       | Types = KType Items=TypeDeclaration+
         {
-          map PExpr = { foreach (t in this.Items) _ = t.GetAst(); <[ () ]> };
+          override Ast = { mutable xs = []; foreach (c in Items) xs ::= (c.Ast() :> pascalfront.Decl); xs.Rev() };
         }
       | Variables = KVar Items=VariableDeclaration+
         {
-          map PExpr = { mutable code = []; foreach (v in this.Items) code ::= v.GetAst(); <[ { ..$(code.Rev()) } ]> };
+          override Ast = { mutable xs = []; foreach (c in Items) xs ::= (c.Ast() :> pascalfront.Decl); xs.Rev() };
         }
-      | Routine = Header=RoutineHeader ";" Body=Block ";"
+      | Routine = Header=RoutineHeader ";" Body=RoutineBody ";"
         {
-          map PExpr = {
-            def domain = System.AppDomain.CurrentDomain;
-            def routines = domain.GetData("pascal.routines") :> SCG.Dictionary[string, list[bool]];
-            def results = domain.GetData("pascal.results") :> SCG.Stack[string * string];
-            def vars = domain.GetData("pascal.vars") :> SCG.HashSet[string];
-            def header = this.Header;
-            def name = GetText(header.Name.Body).ToLowerInvariant();
-            _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(name);
-            // the parameters: (name, its Nemerle type, var or not), in order
-            mutable parameters = [];
-            when (header.Parameters.HasValue)
-              foreach (group in header.Parameters.Value.Groups.Item1)
-              {
-                def isVar = group.Var.HasValue;
-                def (type, _) = match (group.Type.GetAst()) { | PExpr.Tuple([t, i]) => (t, i) | e => (e, e) };
-                foreach (n in group.Names.Item1)
-                  parameters ::= ({ def low = GetText(n.Body).ToLowerInvariant(); _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(low); low }, if (isVar) <[ pascal.PascalVar[$type] ]> else type, isVar)
-              }
-            parameters = parameters.Rev();
-            routines[name] = parameters.Map((_, _, v) => v);
-            def result = if (header.Result.HasValue) match (header.Result.Value.Item2.GetAst()) { | PExpr.Tuple([type, _]) => Some(type) | e => Some(e) } else None();
-            def resultName = "result_" + name;
-            def added = parameters.Filter((n, _, v) => v && vars.Add(n)).Map((n, _, _) => n);
-            results.Push((name, if (result.IsSome) resultName else null));
-            def body = this.Body.GetAst();
-            _ = results.Pop();
-            foreach (n in added) _ = vars.Remove(n);
-            def fparams = parameters.Map((n, t, _) => <[ parameter: $(n : usesite) : $t ]>);
-            match (result)
-            {
-              | Some(type) =>
-                <[ def $(name : usesite)(..$fparams) : $type
-                   {
-                     mutable $(resultName : usesite) : $type = default($type);
-                     $body;
-                     $(resultName : usesite)
-                   } ]>
-              | None => <[ def $(name : usesite)(..$fparams) : void { $body } ]>
-            }
+          override Ast = {
+            def body = Body.Ast();
+            [pascalfront.Decl.Routine(pascalfront.N.At(Location), Header.Ast() :> pascalfront.Header,
+                                      if (body == null) null else body :> pascalfront.Block, body == null) : pascalfront.Decl]
           };
         }
     }
-
-    // (a procedure has no result, a function has one: `function F(...) : T')
-    syntax RoutineHeader = Kind=RoutineKind Name=Ident Parameters=ParameterList? Result=(":" TypeSpec)?;
-    syntax RoutineKind { | Procedure = KProcedure | Function = KFunction }
-    syntax ParameterList = "(" Groups=(ParameterGroup; ";")* ")";
-    syntax ParameterGroup = Var=KVar? Names=(Ident; ",")+ ":" Type=TypeSpec;
+    // a unit's interface: its constants, types, variables, and its routines' headings
+    syntax InterfaceDeclaration
+    {
+      Ast() : object;
+      | Constants = KConst Items=ConstantDeclaration+
+        {
+          override Ast = { mutable xs = []; foreach (c in Items) xs ::= (c.Ast() :> pascalfront.Decl); xs.Rev() };
+        }
+      | Types = KType Items=TypeDeclaration+
+        {
+          override Ast = { mutable xs = []; foreach (c in Items) xs ::= (c.Ast() :> pascalfront.Decl); xs.Rev() };
+        }
+      | Variables = KVar Items=VariableDeclaration+
+        {
+          override Ast = { mutable xs = []; foreach (c in Items) xs ::= (c.Ast() :> pascalfront.Decl); xs.Rev() };
+        }
+      | Heading = Header=RoutineHeader ";"
+        {
+          override Ast = [pascalfront.Decl.Routine(pascalfront.N.At(Location), Header.Ast() :> pascalfront.Header, null, false) : pascalfront.Decl];
+        }
+    }
+    syntax RoutineBody
+    {
+      Ast() : object;
+      | Forward = KForward { override Ast = null; }
+      | Body = Block=Block { override Ast = Block.Ast(); }
+    }
 
     syntax ConstantDeclaration = Name=Ident "=" Value=Expr ";"
     {
-      map PExpr = { def name = GetText(this.Name.Body).ToLowerInvariant(); _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(name); <[ def $(name : usesite) = $(this.Value.GetAst()) ]> };
+      Ast() : object = pascalfront.Decl.Const(pascalfront.N.At(Location), GetText(Name.Body), Value.Ast() :> pascalfront.Expr);
     }
-
     syntax TypeDeclaration = Name=Ident "=" Type=TypeSpec ";"
     {
-      map PExpr = {
-        def types = System.AppDomain.CurrentDomain.GetData("pascal.types") :> SCG.Dictionary[string, PExpr * PExpr];
-        match (this.Type.GetAst()) { | PExpr.Tuple([t, i]) => types[GetText(this.Name.Body).ToLowerInvariant()] = (t, i) | _ => () }
-        <[ () ]>
-      };
+      Ast() : object = pascalfront.Decl.TypeDecl(pascalfront.N.At(Location), GetText(Name.Body), Type.Ast() :> pascalfront.TypeSpec);
     }
-
     syntax VariableDeclaration = Names=(Ident; ",")+ ":" Type=TypeSpec ";"
     {
-      map PExpr = {
-        def (type, initial) = match (this.Type.GetAst()) { | PExpr.Tuple([t, i]) => (t, i) | e => (e, e) };
-        mutable code = [];
-        foreach (n in this.Names.Item1) { def name = GetText(n.Body).ToLowerInvariant(); _ = (System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Add(name); code ::= <[ mutable $(name : usesite) : $type = $initial ]> }
-        <[ { ..$(code.Rev()) } ]>
+      Ast() : object = {
+        mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n.Body);
+        pascalfront.Decl.VarDecl(pascalfront.N.At(Location), xs.Rev(), Type.Ast() :> pascalfront.TypeSpec)
       };
     }
 
-    // A type maps to (its Nemerle type, the initial value of a variable of it)
+    // `procedure P(...)', `function F(...) : T' (the parameters left out where it was declared before)
+    syntax RoutineHeader = Kind=RoutineKind Name=Ident Parameters=ParameterList? Result=(":" Ident)?
+    {
+      Ast() : object = {
+        def result = if (Result.HasValue) pascalfront.TypeSpec.Named(pascalfront.N.At(Result.Value.Item2.Location), GetText(Result.Value.Item2.Body)) else null;
+        pascalfront.Header(pascalfront.N.At(Location), Kind is RoutineKind.Function, GetText(Name.Body),
+                           if (Parameters.HasValue) Parameters.Value.Ast() :> list[pascalfront.Param] else null, result)
+      };
+    }
+    syntax RoutineKind { | Procedure = KProcedure | Function = KFunction }
+    syntax ParameterList = "(" Groups=(ParameterGroup; ";")* ")"
+    {
+      Ast() : object = { mutable xs = []; foreach (g in Groups.Item1) xs ::= (g.Ast() :> pascalfront.Param); xs.Rev() };
+    }
+    syntax ParameterGroup
+    {
+      Ast() : object;
+      | Value = Names=(Ident; ",")+ ":" Type=TypeSpec
+        {
+          override Ast = { mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n.Body); pascalfront.Param.Value(xs.Rev(), Type.Ast() :> pascalfront.TypeSpec) };
+        }
+      | ByRef = KVar Names=(Ident; ",")+ ":" Type=TypeSpec
+        {
+          override Ast = { mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n.Body); pascalfront.Param.ByRef(xs.Rev(), Type.Ast() :> pascalfront.TypeSpec) };
+        }
+      // a procedural parameter: `procedure p(x : real)', `function f(x : real) : real'
+      | Routine = Header=RoutineHeader { override Ast = pascalfront.Param.Routine(Header.Ast() :> pascalfront.Header); }
+    }
+
     syntax TypeSpec
     {
-      map PExpr;
-      | Subrange = Low=Expr ".." High=Expr { map PExpr = <[ (int, $(this.Low.GetAst())) ]>; }
-      | Array = Packed=KPacked? KArray "[" Ranges=(Range; ",")+ "]" KOf Element=TypeSpec
+      Ast() : object;
+      | Named = Name=Ident { override Ast = pascalfront.TypeSpec.Named(pascalfront.N.At(Location), GetText(Name.Body)); }
+      | Sized = Name=Ident "[" Size=Expr "]" { override Ast = pascalfront.TypeSpec.Str(pascalfront.N.At(Location)); }
+      | Enum = "(" Names=(Ident; ",")+ ")"
         {
-          map PExpr = {
-            def element = match (this.Element.GetAst()) { | PExpr.Tuple([t, i]) => (t, i) | e => (e, e) };
-            mutable type = element[0];
-            mutable initial = element[1];
-            // `array [a..b, c..d] of T' is `array [a..b] of array [c..d] of T'
-            mutable ranges = [];
-            foreach (r in this.Ranges.Item1) ranges ::= r;
-            foreach (r in ranges)
-            {
-              def element = initial;
-              initial = <[ pascal.PascalArray.[$type]($(r.Low.GetAst()), $(r.High.GetAst()), () => $element) ]>;
-              type = <[ pascal.PascalArray[$type] ]>
-            }
-            <[ ($type, $initial) ]>
+          override Ast = { mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n.Body); pascalfront.TypeSpec.Enum(pascalfront.N.At(Location), xs.Rev()) };
+        }
+      | Range = Low=Expr ".." High=Expr
+        {
+          override Ast = pascalfront.TypeSpec.Range(pascalfront.N.At(Location), Low.Ast() :> pascalfront.Expr, High.Ast() :> pascalfront.Expr);
+        }
+      | Array = Packed=KPacked? KArray "[" Indexes=(TypeSpec; ",")+ "]" KOf Element=TypeSpec
+        {
+          override Ast = {
+            mutable xs = []; foreach (i in Indexes.Item1) xs ::= (i.Ast() :> pascalfront.TypeSpec);
+            pascalfront.TypeSpec.Array(pascalfront.N.At(Location), xs.Rev(), Element.Ast() :> pascalfront.TypeSpec)
           };
         }
-      | Named = Name=Ident
+      | Record = Packed=KPacked? KRecord Fields=FieldList KEnd
         {
-          map PExpr = {
-            def types = System.AppDomain.CurrentDomain.GetData("pascal.types") :> SCG.Dictionary[string, PExpr * PExpr];
-            def name = GetText(this.Name.Body).ToLowerInvariant();
-            // (the predeclared types are names, as in Pascal: a program may declare its own of those names)
-            if (types.ContainsKey(name)) { def (t, i) = types[name]; <[ ($t, $i) ]> }
-            else if (name == "integer") <[ (int, 0) ]>
-            else if (name == "real") <[ (double, 0.0) ]>
-            else if (name == "boolean") <[ (bool, false) ]>
-            else if (name == "char") <[ (char, ' ') ]>
-            else if (name == "string") <[ (string, "") ]>
-            else throw System.ArgumentException($"unknown Pascal type `$name'")
-          };
+          override Ast = pascalfront.TypeSpec.Record(pascalfront.N.At(Location), Fields.Ast() :> pascalfront.FieldList);
+        }
+      | SetOf = Packed=KPacked? KSet KOf Element=TypeSpec
+        {
+          override Ast = pascalfront.TypeSpec.SetOf(pascalfront.N.At(Location), Element.Ast() :> pascalfront.TypeSpec);
+        }
+      | FileOf = Packed=KPacked? KFile KOf Element=TypeSpec
+        {
+          override Ast = pascalfront.TypeSpec.FileOf(pascalfront.N.At(Location), Element.Ast() :> pascalfront.TypeSpec);
+        }
+      | Pointer = "^" Target=Ident { override Ast = pascalfront.TypeSpec.Pointer(pascalfront.N.At(Location), GetText(Target.Body)); }
+    }
+
+    // a record's fields: `a, b : T; ...', then its variant part (`case tag : T of 1: (...); ...')
+    syntax FieldList = Sections=(FieldSection; ";"; ?)* Variant=VariantPart? ";"?
+    {
+      Ast() : object = {
+        mutable fixed = []; foreach (s in Sections.Item1) fixed ::= (s.Ast() :> list[string] * pascalfront.TypeSpec);
+        if (Variant.HasValue)
+        {
+          def (tag, tagType, cases) = Variant.Value.Ast() :> string * pascalfront.TypeSpec * list[list[pascalfront.Expr] * pascalfront.FieldList];
+          pascalfront.FieldList(fixed.Rev(), tag, tagType, cases)
+        }
+        else pascalfront.FieldList(fixed.Rev(), null, null, [])
+      };
+    }
+    syntax FieldSection = Names=(Ident; ",")+ ":" Type=TypeSpec
+    {
+      Ast() : object = { mutable xs = []; foreach (n in Names.Item1) xs ::= GetText(n.Body); (xs.Rev(), Type.Ast() :> pascalfront.TypeSpec) };
+    }
+    syntax VariantPart = KCase Tag=VariantTag KOf Cases=(VariantCase; ";"; ?)+
+    {
+      Ast() : object = {
+        mutable cs = []; foreach (c in Cases.Item1) cs ::= (c.Ast() :> list[pascalfront.Expr] * pascalfront.FieldList);
+        def (name, type) = Tag.Ast() :> string * pascalfront.TypeSpec;
+        (name, type, cs.Rev())
+      };
+    }
+    syntax VariantTag
+    {
+      Ast() : object;
+      | Named = Name=Ident ":" Type=Ident
+        {
+          override Ast = (GetText(Name.Body), pascalfront.TypeSpec.Named(pascalfront.N.At(Type.Location), GetText(Type.Body)) : pascalfront.TypeSpec);
+        }
+      | Anonymous = Type=Ident
+        {
+          override Ast = (null : string, pascalfront.TypeSpec.Named(pascalfront.N.At(Type.Location), GetText(Type.Body)) : pascalfront.TypeSpec);
         }
     }
-    syntax Range = Low=Expr ".." High=Expr;
+    syntax VariantCase = Labels=(Expr; ",")+ ":" "(" Fields=FieldList ")"
+    {
+      Ast() : object = { mutable xs = []; foreach (l in Labels.Item1) xs ::= (l.Ast() :> pascalfront.Expr); (xs.Rev(), Fields.Ast() :> pascalfront.FieldList) };
+    }
 
-    // (`;` separates statements; one before `end` is Pascal's empty statement)
+    // (`;' separates statements; one before `end' is Pascal's empty statement)
     syntax Statements = Items=(Statement; ";"; ?)*
     {
-      map PExpr = {
-        mutable code = [];
-        foreach (s in this.Items.Item1) code ::= s.GetAst();
-        <[ { ..$(code.Rev()); () } ]>
-      };
+      Ast() : object = { mutable xs = []; foreach (s in Items.Item1) xs ::= (s.Ast() :> pascalfront.Stmt); xs.Rev() };
     }
 
     syntax Statement
     {
-      map PExpr;
+      Ast() : object;
+      | Labeled = Label=Digits ":" Stmt=Statement
+        {
+          override Ast = pascalfront.Stmt.Labeled(pascalfront.N.At(Location), GetText(Label), Stmt.Ast() :> pascalfront.Stmt);
+        }
       | Assign = Target=Designator ":=" Value=Expr
         {
-          map PExpr = {
-            def results = System.AppDomain.CurrentDomain.GetData("pascal.results") :> SCG.Stack[string * string];
-            def target = this.Target.GetAst();
-            // `F := e' in function F gives its result
-            def resultOf(name) { mutable found = null; foreach ((f, r) in results) when (found == null && f == name) found = r; found }
-            match (target)
-            {
-              | PExpr.Ref(n) when resultOf(n.Id) != null => <[ $(resultOf(n.Id) : usesite) = $(this.Value.GetAst()) ]>
-              | _ => <[ $target = $(this.Value.GetAst()) ]>
-            }
-          };
-        }
-      | Compound = KBegin Body=Statements KEnd { map PExpr = this.Body.GetAst(); }
-      | If = KIf Condition=Expr KThen Then=Statement Else=(KElse Statement)?
-        {
-          map PExpr = {
-            def other = if (this.Else.HasValue) this.Else.Value.Item2.GetAst() else <[ () ]>;
-            <[ if ($(this.Condition.GetAst())) $(this.Then.GetAst()) else $other ]>
-          };
-        }
-      | While = KWhile Condition=Expr KDo Body=Statement { map PExpr = <[ while ($(this.Condition.GetAst())) $(this.Body.GetAst()) ]>; }
-      | Repeat = KRepeat Body=Statements KUntil Condition=Expr
-        {
-          map PExpr = <[ do { $(this.Body.GetAst()) } while (!($(this.Condition.GetAst()))) ]>;
-        }
-      | For = KFor Variable=Ident ":=" From=Expr Direction=ForDirection To=Expr KDo Body=Statement
-        {
-          map PExpr = {
-            def v = <[ $({ def text = GetText(this.Variable.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text } : usesite) ]>;
-            def up = this.Direction is ForDirection.Up;
-            // (the bounds are evaluated once, before the loop, as Pascal says)
-            def last = Nemerle.Compiler.macros.Macros.NewSymbol("last");
-            def step = if (up) <[ $v = $v + 1 ]> else <[ $v = $v - 1 ]>;
-            def within = if (up) <[ $v <= $(last : name) ]> else <[ $v >= $(last : name) ]>;
-            <[ { def $(last : name) = $(this.To.GetAst()); $v = $(this.From.GetAst()); while ($within) { $(this.Body.GetAst()); $step } } ]>
-          };
-        }
-      | Case = KCase Selector=Expr KOf Arms=(CaseArm; ";")+ Otherwise=CaseElse? KEnd
-        {
-          map PExpr = {
-            mutable cases = [];
-            foreach (arm in this.Arms.Item1)
-            {
-              mutable labels = [];
-              foreach (l in arm.Labels.Item1) labels ::= l.GetAst();
-              cases ::= MatchCase(labels.Rev(), arm.Body.GetAst())
-            }
-            def other = if (this.Otherwise.HasValue) this.Otherwise.Value.Body.GetAst() else <[ () ]>;
-            cases ::= MatchCase([<[ _ ]>], other);
-            PExpr.Match(this.Selector.GetAst(), cases.Rev())
-          };
+          override Ast = pascalfront.Stmt.Assign(pascalfront.N.At(Location), Target.Ast() :> pascalfront.Desig, Value.Ast() :> pascalfront.Expr);
         }
       // a procedure call; write, writeln, read and readln are the predeclared ones (their arguments may say a width)
       | Call = Name=Ident Args=WriteArguments?
         {
-          map PExpr = {
-            def routines = System.AppDomain.CurrentDomain.GetData("pascal.routines") :> SCG.Dictionary[string, list[bool]];
-            def name = GetText(this.Name.Body).ToLowerInvariant();
-            def called = { def text = GetText(this.Name.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text };
-            mutable args = [];
-            when (this.Args.HasValue) foreach (a in this.Args.Value.Items.Item1) args ::= a.Value.GetAst();
-            args = args.Rev();
-            def written() { if (this.Args.HasValue) this.Args.Value.GetAst() else <[ () ]> }
-            if (name == "write" && !routines.ContainsKey(name)) written()
-            else if (name == "writeln" && !routines.ContainsKey(name)) <[ { $(written()); System.Console.WriteLine() } ]>
-            else if ((name == "readln" || name == "read") && !routines.ContainsKey(name))
-              match (args)
-              {
-                | [] => <[ _ = System.Console.ReadLine() ]>
-                | targets => <[ { ..$(targets.Map(target => <[ $target = pascal.PascalText.ReadInteger() ]>)) } ]>
-              }
-            else {
-            // a `var' argument: its variable is copied into a cell, and back after the call
-            def flags = if (routines.ContainsKey(name)) routines[name] else args.Map(_ => false);
-            if (flags.Exists(f => f) && flags.Length == args.Length)
-            {
-              mutable before = []; mutable passed = []; mutable after = [];
-              foreach ((a, isVar) in args.Zip(flags))
-                if (isVar)
-                {
-                  def cell = Nemerle.Compiler.macros.Macros.NewSymbol("cell");
-                  before ::= <[ def $(cell : name) = pascal.PascalVar($a) ]>;
-                  passed ::= <[ $(cell : name) ]>;
-                  after ::= <[ $a = $(cell : name).Value ]>
-                }
-                else passed ::= a;
-              <[ { ..$(before.Rev()); $(called : usesite)(..$(passed.Rev())); ..$(after.Rev()) } ]>
-            }
-            else <[ $(called : usesite)(..$args) ]>
-            }
+          override Ast = pascalfront.Stmt.Call(pascalfront.N.At(Location), GetText(Name.Body),
+                                               if (Args.HasValue) Args.Value.Ast() :> list[pascalfront.WArg] else []);
+        }
+      | Compound = KBegin Body=Statements KEnd
+        {
+          override Ast = pascalfront.Stmt.Block(pascalfront.N.At(Location), Body.Ast() :> list[pascalfront.Stmt]);
+        }
+      | If = KIf Condition=Expr KThen Then=Statement Else=(KElse Statement)?
+        {
+          override Ast = pascalfront.Stmt.If(pascalfront.N.At(Location), Condition.Ast() :> pascalfront.Expr, Then.Ast() :> pascalfront.Stmt,
+                                             if (Else.HasValue) Else.Value.Item2.Ast() :> pascalfront.Stmt else null);
+        }
+      | While = KWhile Condition=Expr KDo Body=Statement
+        {
+          override Ast = pascalfront.Stmt.While(pascalfront.N.At(Location), Condition.Ast() :> pascalfront.Expr, Body.Ast() :> pascalfront.Stmt);
+        }
+      | Repeat = KRepeat Body=Statements KUntil Condition=Expr
+        {
+          override Ast = pascalfront.Stmt.Repeat(pascalfront.N.At(Location), Body.Ast() :> list[pascalfront.Stmt], Condition.Ast() :> pascalfront.Expr);
+        }
+      | For = KFor Variable=Ident ":=" From=Expr Direction=ForDirection To=Expr KDo Body=Statement
+        {
+          override Ast = pascalfront.Stmt.For(pascalfront.N.At(Location), GetText(Variable.Body), From.Ast() :> pascalfront.Expr,
+                                              To.Ast() :> pascalfront.Expr, Direction is ForDirection.Down, Body.Ast() :> pascalfront.Stmt);
+        }
+      | Case = KCase Selector=Expr KOf Arms=(CaseArm; ";"; ?)+ Else=CaseElse? KEnd
+        {
+          override Ast = {
+            mutable arms = []; foreach (a in Arms.Item1) arms ::= (a.Ast() :> list[pascalfront.Expr * pascalfront.Expr] * pascalfront.Stmt);
+            pascalfront.Stmt.Case(pascalfront.N.At(Location), Selector.Ast() :> pascalfront.Expr, arms.Rev(),
+                                  if (Else.HasValue) Else.Value.Body.Ast() :> list[pascalfront.Stmt] else null)
           };
         }
+      | With = KWith Records=(Designator; ",")+ KDo Body=Statement
+        {
+          override Ast = {
+            mutable xs = []; foreach (r in Records.Item1) xs ::= (r.Ast() :> pascalfront.Desig);
+            pascalfront.Stmt.With(pascalfront.N.At(Location), xs.Rev(), Body.Ast() :> pascalfront.Stmt)
+          };
+        }
+      | Goto = KGoto Label=Digits { override Ast = pascalfront.Stmt.Goto(pascalfront.N.At(Location), GetText(Label)); }
     }
     syntax ForDirection { | Up = KTo | Down = KDownto }
-    syntax CaseArm = Labels=(Expr; ",")+ ":" Body=Statement;
-    syntax CaseElse = ";"? KElse Body=Statement;
+    syntax CaseArm = Labels=(CaseLabel; ",")+ ":" Body=Statement
+    {
+      Ast() : object = { mutable xs = []; foreach (l in Labels.Item1) xs ::= (l.Ast() :> pascalfront.Expr * pascalfront.Expr); (xs.Rev(), Body.Ast() :> pascalfront.Stmt) };
+    }
+    // a label, or a range of them (Turbo Pascal's `1..5:')
+    syntax CaseLabel = Low=Expr High=(".." Expr)?
+    {
+      Ast() : object = (Low.Ast() :> pascalfront.Expr, if (High.HasValue) High.Value.Item2.Ast() :> pascalfront.Expr else null);
+    }
+    syntax CaseElse = ";"? Keyword=CaseElseKeyword Body=Statements;
+    syntax CaseElseKeyword { | Else = KElse | Otherwise = KOtherwise }
 
     syntax WriteArguments = "(" Items=(WriteArgument; ",")* ")"
     {
-      map PExpr = {
-        mutable code = [];
-        foreach (a in this.Items.Item1) code ::= <[ System.Console.Write($(a.GetAst())) ]>;
-        <[ { ..$(code.Rev()) } ]>
-      };
+      Ast() : object = { mutable xs = []; foreach (a in Items.Item1) xs ::= (a.Ast() :> pascalfront.WArg); xs.Rev() };
     }
     // `e', `e:width', `e:width:decimals'
     syntax WriteArgument = Value=Expr Width=(":" Expr)? Decimals=(":" Expr)?
     {
-      map PExpr = {
-        def v = this.Value.GetAst();
-        if (this.Decimals.HasValue && this.Width.HasValue)
-          <[ pascal.PascalText.Fixed($v, $(this.Width.Value.Item2.GetAst()), $(this.Decimals.Value.Item2.GetAst())) ]>
-        else if (this.Width.HasValue) <[ pascal.PascalText.Field($v, $(this.Width.Value.Item2.GetAst())) ]>
-        else <[ pascal.PascalText.Show($v) ]>
-      };
+      Ast() : object = pascalfront.WArg(Value.Ast() :> pascalfront.Expr,
+                                        if (Width.HasValue) Width.Value.Item2.Ast() :> pascalfront.Expr else null,
+                                        if (Decimals.HasValue) Decimals.Value.Item2.Ast() :> pascalfront.Expr else null);
     }
 
-    // A variable, an element of an array (`a[i, j]' is `a[i][j]')
-    syntax Designator = Name=Ident Indexes=IndexPart*
+    // a variable, an element (`a[i, j]'), a field (`r.f'), a pointer's target or a file's buffer (`p^')
+    syntax Designator = Name=Ident Selectors=Selector*
     {
-      map PExpr = {
-        def vars = System.AppDomain.CurrentDomain.GetData("pascal.vars") :> SCG.HashSet[string];
-        def name = { def text = GetText(this.Name.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text };
-        mutable e = if (vars.Contains(name)) <[ $(name : usesite).Value ]>
-                    else if (name.ToLowerInvariant() == "true") <[ true ]> else if (name.ToLowerInvariant() == "false") <[ false ]>
-                    else <[ $(name : usesite) ]>;
-        foreach (part in this.Indexes) foreach (i in part.Items.Item1) e = <[ $e[$(i.GetAst())] ]>;
-        e
+      Ast() : object = {
+        mutable xs = []; foreach (s in Selectors) xs ::= (s.Ast() :> pascalfront.Sel);
+        pascalfront.Desig(pascalfront.N.At(Location), GetText(Name.Body), xs.Rev())
       };
     }
-    syntax IndexPart = "[" Items=(Expr; ",")+ "]";
-
-    regex Digits = ['0'..'9']+;
-    // (one token, so the spaces inside are the string's)
-    regex StringLiteral = "'" ("''" | (Any - '\''))* "'";
+    syntax Selector
+    {
+      Ast() : object;
+      | Index = "[" Items=(Expr; ",")+ "]"
+        {
+          override Ast = { mutable xs = []; foreach (e in Items.Item1) xs ::= (e.Ast() :> pascalfront.Expr); pascalfront.Sel.Index(xs.Rev()) };
+        }
+      | Field = "." Name=Ident { override Ast = pascalfront.Sel.Field(GetText(Name.Body)); }
+      | Deref = "^" { override Ast = pascalfront.Sel.Deref(); }
+    }
 
     syntax Expr
     {
-      map PExpr;
+      Ast() : object;
       precedence Relational:
-      | Equal = Left=Expr "=" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) == $(this.Right.GetAst()) ]>; }
-      | NotEqual = Left=Expr "<>" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) != $(this.Right.GetAst()) ]>; }
-      | Less = Left=Expr "<" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) < $(this.Right.GetAst()) ]>; }
-      | LessEqual = Left=Expr "<=" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) <= $(this.Right.GetAst()) ]>; }
-      | Greater = Left=Expr ">" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) > $(this.Right.GetAst()) ]>; }
-      | GreaterEqual = Left=Expr ">=" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) >= $(this.Right.GetAst()) ]>; }
+      | Equal = Left=Expr "=" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "=", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | NotEqual = Left=Expr "<>" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "<>", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Less = Left=Expr "<" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "<", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | LessEqual = Left=Expr "<=" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "<=", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Greater = Left=Expr ">" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), ">", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | GreaterEqual = Left=Expr ">=" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), ">=", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | In = Left=Expr KIn Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "in", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       precedence Additive:
-      | Add = Left=Expr "+" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) + $(this.Right.GetAst()) ]>; }
-      | Sub = Left=Expr "-" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) - $(this.Right.GetAst()) ]>; }
-      | Or = Left=Expr KOr Right=Expr { map PExpr = <[ $(this.Left.GetAst()) || $(this.Right.GetAst()) ]>; }
+      | Add = Left=Expr "+" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "+", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Sub = Left=Expr "-" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "-", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Or = Left=Expr KOr Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "or", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       precedence Multiplicative:
-      | Mul = Left=Expr "*" Right=Expr { map PExpr = <[ $(this.Left.GetAst()) * $(this.Right.GetAst()) ]>; }
-      | Divide = Left=Expr "/" Right=Expr { map PExpr = <[ ($(this.Left.GetAst()) : double) / $(this.Right.GetAst()) ]>; }
-      | Div = Left=Expr KDiv Right=Expr { map PExpr = <[ $(this.Left.GetAst()) / $(this.Right.GetAst()) ]>; }
-      | Mod = Left=Expr KMod Right=Expr { map PExpr = <[ $(this.Left.GetAst()) % $(this.Right.GetAst()) ]>; }
-      | And = Left=Expr KAnd Right=Expr { map PExpr = <[ $(this.Left.GetAst()) && $(this.Right.GetAst()) ]>; }
+      | Mul = Left=Expr "*" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "*", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Divide = Left=Expr "/" Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "/", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Div = Left=Expr KDiv Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "div", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | Mod = Left=Expr KMod Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "mod", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
+      | And = Left=Expr KAnd Right=Expr { override Ast = pascalfront.Expr.Bin(pascalfront.N.At(Location), "and", Left.Ast() :> pascalfront.Expr, Right.Ast() :> pascalfront.Expr); }
       precedence Unary:
-      | Not = KNot Operand=Expr { map PExpr = <[ ! $(this.Operand.GetAst()) ]>; }
-      | Negate = "-" Operand=Expr { map PExpr = <[ - $(this.Operand.GetAst()) ]>; }
-      | Plus = "+" Operand=Expr { map PExpr = this.Operand.GetAst(); }
+      | Not = KNot Operand=Expr { override Ast = pascalfront.Expr.Un(pascalfront.N.At(Location), "not", Operand.Ast() :> pascalfront.Expr); }
+      | Negate = "-" Operand=Expr { override Ast = pascalfront.Expr.Un(pascalfront.N.At(Location), "-", Operand.Ast() :> pascalfront.Expr); }
+      | Plus = "+" Operand=Expr { override Ast = pascalfront.Expr.Un(pascalfront.N.At(Location), "+", Operand.Ast() :> pascalfront.Expr); }
       precedence 0:
-      | Number = Value=Digits { map PExpr = <[ $(int.Parse(GetText(this.Value)) : int) ]>; }
-      | RealNumber = Whole=Digits "." Fraction=Digits
+      | Number = Value=Digits { override Ast = pascalfront.Expr.Num(pascalfront.N.At(Location), int.Parse(GetText(Value))); }
+      | Hex = Value=HexDigits
         {
-          map PExpr = <[ $(double.Parse(GetText(this.Whole) + "." + GetText(this.Fraction), System.Globalization.CultureInfo.InvariantCulture) : double) ]>;
+          override Ast = pascalfront.Expr.Num(pascalfront.N.At(Location), int.Parse(GetText(Value).Substring(1), System.Globalization.NumberStyles.HexNumber));
+        }
+      | RealNumber = Value=RealLiteral
+        {
+          override Ast = pascalfront.Expr.RealNum(pascalfront.N.At(Location), double.Parse(GetText(Value), System.Globalization.CultureInfo.InvariantCulture));
         }
       | Text = Value=StringLiteral
         {
-          map PExpr = {
-            def quoted = GetText(this.Value);
-            def text = quoted.Substring(1, quoted.Length - 2).Replace("''", "'");
-            // a one-character literal is a char, as in Pascal
-            if (text.Length == 1) <[ $(text[0] : char) ]> else <[ $(text : string) ]>
-          };
+          override Ast = { def q = GetText(Value); pascalfront.Expr.Str(pascalfront.N.At(Location), q.Substring(1, q.Length - 2).Replace("''", "'")) };
+        }
+      | NilPointer = KNil { override Ast = pascalfront.Expr.Nil(pascalfront.N.At(Location)); }
+      | SetOf = "[" Items=(SetElement; ",")* "]"
+        {
+          override Ast = { mutable xs = []; foreach (e in Items.Item1) xs ::= (e.Ast() :> pascalfront.Expr * pascalfront.Expr); pascalfront.Expr.SetOf(pascalfront.N.At(Location), xs.Rev()) };
         }
       | Call = Name=Ident "(" Args=(Expr; ",")* ")"
         {
-          map PExpr = {
-            def name = GetText(this.Name.Body).ToLowerInvariant();
-            def called = { def text = GetText(this.Name.Body); def low = text.ToLowerInvariant(); if ((System.AppDomain.CurrentDomain.GetData("pascal.names") :> SCG.HashSet[string]).Contains(low)) low else text };
-            mutable args = [];
-            foreach (a in this.Args.Item1) args ::= a.GetAst();
-            match ((name, args.Rev()))
-            {
-              // the standard functions
-              | ("abs", [x]) => <[ System.Math.Abs($x) ]>
-              | ("sqr", [x]) => <[ $x * $x ]>
-              | ("sqrt", [x]) => <[ System.Math.Sqrt($x) ]>
-              | ("sin", [x]) => <[ System.Math.Sin($x) ]>
-              | ("cos", [x]) => <[ System.Math.Cos($x) ]>
-              | ("arctan", [x]) => <[ System.Math.Atan($x) ]>
-              | ("exp", [x]) => <[ System.Math.Exp($x) ]>
-              | ("ln", [x]) => <[ System.Math.Log($x) ]>
-              | ("trunc", [x]) => <[ (System.Math.Truncate($x : double) :> int) ]>
-              | ("round", [x]) => <[ (System.Math.Round($x : double, System.MidpointRounding.AwayFromZero) :> int) ]>
-              | ("odd", [x]) => <[ $x % 2 != 0 ]>
-              | ("ord", [x]) => <[ ($x :> int) ]>
-              | ("chr", [x]) => <[ ($x :> char) ]>
-              | ("succ", [x]) => <[ $x + 1 ]>
-              | ("pred", [x]) => <[ $x - 1 ]>
-              | ("length", [x]) => <[ $x.Length ]>
-              | (_, args) => <[ $(called : usesite)(..$args) ]>
-            }
-          };
+          override Ast = { mutable xs = []; foreach (a in Args.Item1) xs ::= (a.Ast() :> pascalfront.Expr); pascalfront.Expr.Call(pascalfront.N.At(Location), GetText(Name.Body), xs.Rev()) };
         }
-      | Variable = Target=Designator { map PExpr = this.Target.GetAst(); }
-      | Group = "(" Expr ")" { map PExpr { Expr } }
+      | Variable = Target=Designator { override Ast = pascalfront.Expr.Var(pascalfront.N.At(Location), Target.Ast() :> pascalfront.Desig); }
+      | Group = "(" Inner=Expr ")" { override Ast = Inner.Ast(); }
+    }
+    syntax SetElement = Low=Expr High=(".." Expr)?
+    {
+      Ast() : object = (Low.Ast() :> pascalfront.Expr, if (High.HasValue) High.Value.Item2.Ast() :> pascalfront.Expr else null);
     }
   }
 }

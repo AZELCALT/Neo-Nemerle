@@ -1,0 +1,23 @@
+// A program of two units: found as files are (uses Geometry is geometry.n), initialized in the order it uses them
+space Pascal
+{
+  program Main;
+  uses Geometry, Shapes;
+  var
+    p, q : Point;
+    c : Circle;
+  begin
+    p.x := 0; p.y := 0;
+    q.x := 3; q.y := 4;
+    writeln('distance ', Distance(p, q):4:1);
+    Move(p, 0.5, 0.25);
+    writeln('moved to ', p.x:4:2, ',', p.y:4:2, ' after ', Moves, ' move(s): ', Describe(p));
+    c.center := q; c.radius := 2;
+    writeln('area ', Area(c):6:3)
+  end.
+}
+
+// and from Nemerle: a unit's interface is its file's public members
+def far = geometry.Point();
+far.x = 6.0; far.y = 8.0;
+System.Console.WriteLine(geometry.Distance(geometry.Point(), far))

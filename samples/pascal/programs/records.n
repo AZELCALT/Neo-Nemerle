@@ -1,0 +1,42 @@
+// Records: fields, a record of records, an array of records, `with', a variant part, and value copies
+space Pascal
+{
+  program Records;
+  type
+    Point = record x, y : integer end;
+    Segment = record a, b : Point; name : string end;
+    Kind = (circle, rectangle);
+    Shape = record
+      at : Point;
+      case kind : Kind of
+        circle: (radius : integer);
+        rectangle: (width, height : integer)
+    end;
+  var
+    p, q : Point;
+    s : Segment;
+    shapes : array [1..2] of Shape;
+    i, area : integer;
+  begin
+    p.x := 1; p.y := 2;
+    q := p;          { a copy: changing q leaves p }
+    q.x := 10;
+    writeln(p.x, ' ', q.x);
+    with s do
+    begin
+      a := p; b := q; name := 'diagonal';
+      writeln(name, ' from ', a.x, ',', a.y, ' to ', b.x, ',', b.y)
+    end;
+    with shapes[1] do begin kind := circle; radius := 2 end;
+    with shapes[2], at do begin kind := rectangle; width := 3; height := 4; x := 5 end;
+    for i := 1 to 2 do
+      with shapes[i] do
+      begin
+        case kind of
+          circle: area := 3 * radius * radius;
+          rectangle: area := width * height
+        end;
+        writeln('shape ', i, ' area ', area, ' at x ', at.x)
+      end
+  end.
+}

@@ -1,0 +1,17 @@
+// Reading: numbers from the input, as Pascal reads them (across lines), until its end
+space Pascal
+{
+  program Sum(input, output);
+  var
+    n, total, count : integer;
+  begin
+    total := 0; count := 0;
+    while not eof do
+    begin
+      read(n);
+      total := total + n; count := count + 1;
+      readln
+    end;
+    writeln(count, ' numbers, total ', total)
+  end.
+}

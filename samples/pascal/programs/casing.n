@@ -3,7 +3,7 @@ space Pascal
 {
   PROGRAM Casing;
   VAR
-    Count, ending : Integer;   { ending starts with a keyword, and is a name }
+    Count, ending : Integer;   { `ending' starts with a keyword, and is a name }
   BEGIN
     count := 40;
     ENDING := 2;

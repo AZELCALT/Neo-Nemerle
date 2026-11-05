@@ -1,0 +1,26 @@
+// Enumerations: ord, succ, pred, a loop over one, a case on one, an array indexed by one, a subrange of one
+space Pascal
+{
+  program Enums;
+  type
+    Color = (red, orange, yellow, green, blue);
+    Warm = red..yellow;
+  var
+    c : Color;
+    w : Warm;
+    names : array [Color] of string;
+  begin
+    names[red] := 'red'; names[orange] := 'orange'; names[yellow] := 'yellow';
+    names[green] := 'green'; names[blue] := 'blue';
+    for c := red to blue do
+    begin
+      write(names[c], ' ', ord(c));
+      case c of
+        red, orange, yellow: writeln(' warm');
+        green, blue: writeln(' cool')
+      end
+    end;
+    w := orange;
+    writeln(names[succ(w)], ' ', names[pred(w)], ' ', ord(blue) - ord(red))
+  end.
+}

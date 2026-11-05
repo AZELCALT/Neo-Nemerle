@@ -1,0 +1,1397 @@
+// The Pascal front end: what the Pascal grammar (pascal.n) parses is built into this file's syntax tree by the
+// grammar's rule methods, and compiled here, with Pascal's scopes and types, to Nemerle code: a program's or a unit's
+// declarations become members of its file module (fields, methods, record classes), its statements the file's
+// top-level code. It runs in the compiler, when the space is mapped (before the program is typed); units find each
+// other through the grammar lane's SpaceFiles. GPL-2.0-or-later, as the compiler it extends.
+using System;
+using SCG = System.Collections.Generic;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.AST;
+using Nemerle.Compiler.NitraDialectServices;
+
+// ---- the syntax tree ----
+
+public variant Expr
+{
+  | Num { at : Location; value : int }
+  | RealNum { at : Location; value : double }
+  | Str { at : Location; text : string }
+  | Nil { at : Location }
+  | Var { at : Location; d : Desig }
+  | Call { at : Location; name : string; args : list[Expr] }
+  | Bin { at : Location; op : string; l : Expr; r : Expr }
+  | Un { at : Location; op : string; e : Expr }
+  | SetOf { at : Location; items : list[Expr * Expr] } // (an element, or a range: low and high)
+
+  public Loc : Location
+  {
+    get
+    {
+      match (this)
+      {
+        | Num(at, _) | RealNum(at, _) | Str(at, _) | Nil(at) | Var(at, _) | Call(at, _, _) | Bin(at, _, _, _)
+        | Un(at, _, _) | SetOf(at, _) => at
+      }
+    }
+  }
+}
+
+public variant Sel
+{
+  | Index { exprs : list[Expr] }
+  | Field { name : string }
+  | Deref
+}
+
+[Record] public class Desig { public At : Location; public Name : string; public Sels : list[Sel]; }
+
+/// A write or read argument: the value, and `:width' and `:decimals' (null when not written)
+[Record] public class WArg { public Value : Expr; public Width : Expr; public Decimals : Expr; }
+
+public variant Stmt
+{
+  | Assign { at : Location; target : Desig; value : Expr }
+  | Call { at : Location; name : string; args : list[WArg] }
+  | Block { at : Location; body : list[Stmt] }
+  | If { at : Location; cond : Expr; then : Stmt; elsePart : Stmt }
+  | While { at : Location; cond : Expr; body : Stmt }
+  | Repeat { at : Location; body : list[Stmt]; cond : Expr }
+  | For { at : Location; variable : string; from : Expr; to : Expr; down : bool; body : Stmt }
+  | Case { at : Location; selector : Expr; arms : list[list[Expr * Expr] * Stmt]; elsePart : list[Stmt] }
+  | With { at : Location; records : list[Desig]; body : Stmt }
+  | Goto { at : Location; label : string }
+  | Labeled { at : Location; label : string; stmt : Stmt }
+  | Empty { at : Location }
+
+  public Loc : Location
+  {
+    get
+    {
+      match (this)
+      {
+        | Assign(at, _, _) | Call(at, _, _) | Block(at, _) | If(at, _, _, _) | While(at, _, _) | Repeat(at, _, _)
+        | For(at, _, _, _, _, _) | Case(at, _, _, _) | With(at, _, _) | Goto(at, _) | Labeled(at, _, _) | Empty(at) => at
+      }
+    }
+  }
+}
+
+public variant TypeSpec
+{
+  | Named { at : Location; name : string }
+  | Enum { at : Location; names : list[string] }
+  | Range { at : Location; low : Expr; high : Expr }
+  | Array { at : Location; indexes : list[TypeSpec]; element : TypeSpec }
+  | Record { at : Location; fields : FieldList }
+  | SetOf { at : Location; element : TypeSpec }
+  | FileOf { at : Location; element : TypeSpec } // (element null: a text file)
+  | Pointer { at : Location; target : string }
+  | Str { at : Location } // Turbo's `string' and `string[n]'
+  | Proc { at : Location; header : Header } // a procedural parameter's type
+}
+
+/// A record's fields: the fixed part, then the variant part (its tag's name or null, its tag's type, its cases)
+[Record] public class FieldList
+{
+  public Fixed : list[list[string] * TypeSpec];
+  public TagName : string;
+  public TagType : TypeSpec;
+  public Variants : list[list[Expr] * FieldList];
+}
+
+public variant Param
+{
+  | Value { names : list[string]; type : TypeSpec }
+  | ByRef { names : list[string]; type : TypeSpec }
+  | Routine { header : Header }
+}
+
+[Record] public class Header
+{
+  public At : Location;
+  public IsFunction : bool;
+  public Name : string;
+  public Params : list[Param]; // null when not written (a routine declared `forward' before, or in an interface)
+  public Result : TypeSpec;
+}
+
+public variant Decl
+{
+  | Labels { at : Location; names : list[string] }
+  | Const { at : Location; name : string; value : Expr }
+  | TypeDecl { at : Location; name : string; type : TypeSpec }
+  | VarDecl { at : Location; names : list[string]; type : TypeSpec }
+  | Routine { at : Location; header : Header; body : Block; forward : bool } // (body null: forward, or an interface's)
+}
+
+[Record] public class Block { public Decls : list[Decl]; public Body : list[Stmt]; }
+
+public variant CompUnit
+{
+  | Program { at : Location; name : string; uses : list[string * Location]; block : Block }
+  | Unit { at : Location; name : string; interfaceUses : list[string * Location]; interfaceDecls : list[Decl];
+           implementationUses : list[string * Location]; implementationDecls : list[Decl]; init : list[Stmt] }
+}
+
+/// For the grammar's rule methods: a parse tree node's place, as a Nemerle location (the space's text is padded to
+/// its place in the file, so a node's line and column are the file's).
+public module N
+{
+  public At(loc : Nitra.Runtime.Location) : Location
+  {
+    def file = if (loc.Source == null || loc.Source.File == null) null else loc.Source.File.FullName;
+    if (string.IsNullOrEmpty(file) || file.StartsWith("<")) Location.Default
+    else
+    {
+      def (startLine, startColumn) = loc.StartLineColumn;
+      def (endLine, endColumn) = loc.EndLineColumn;
+      Location(Location.GetFileIndex(file), startLine, startColumn, endLine, endColumn)
+    }
+  }
+  public L[T](items : SCG.IEnumerable[object]) : list[T]
+  {
+    mutable result = [];
+    foreach (i in items) result ::= (i :> T);
+    result.Rev()
+  }
+}
+
+// ---- types, symbols and scopes ----
+
+/// A Pascal type.
+public class PT
+{
+  public Kind : string; // integer real boolean char string enum range array record set file text pointer nil emptyset proc
+  public mutable Name : string;
+  public mutable Values : list[string] = [];          // an enumeration's names
+  public mutable Low : int; public mutable High : int; // a subrange's bounds, an array's index bounds
+  public mutable Base : PT;                           // a subrange's base, an array's index type, a set's base, a file's element
+  public mutable Elem : PT;                           // an array's element
+  public mutable Target : PT;                         // a pointer's target (resolved at the end of its type section)
+  public mutable TargetName : string;
+  public mutable ClassPath : string;                  // a record's class (its full name)
+  public Fields : SCG.List[string * PT] = SCG.List(); // a record's fields, in order
+  public mutable Sig : RoutineSig;                    // a procedural parameter's
+  public this(kind : string) { Kind = kind }
+  public override ToString() : string { if (Name != null) Name else Kind }
+  /// A record's field by its name in any case: its declared name and type
+  public Field(name : string) : option[string * PT]
+  {
+    mutable found = None();
+    foreach ((field, type) in Fields) when (found.IsNone && String.Equals(field, name, StringComparison.OrdinalIgnoreCase)) found = Some((field, type));
+    found
+  }
+  /// The Nemerle program's value (a name Pascal does not declare): of whatever type the program gives it
+  public IsNemerle : bool { get { Kind == "nemerle" } }
+}
+
+public class ParamSig
+{
+  public Name : string; public Type : PT; public IsVar : bool;
+  public this(name : string, type : PT, isVar : bool) { Name = name; Type = type; IsVar = isVar }
+}
+
+public class RoutineSig
+{
+  public mutable Name : string;      // as declared
+  public mutable ClrName : string;   // its Nemerle name (a nested routine's may be made unique)
+  public mutable IsFunction : bool;
+  public mutable Params : list[ParamSig] = [];
+  public mutable Result : PT;
+  /// A member of its file module (a static method, `var' parameters by `ref'), not a local function (cells).
+  public mutable IsMethod : bool;
+  public mutable Module : string;    // a method's file module
+  public mutable Public : bool;
+  public mutable Defined : bool;     // its body is there (not only a `forward' or an interface's heading)
+  public mutable Declared : Location;
+  /// A procedural parameter (called through the parameter's value)
+  public mutable IsParameter : bool;
+}
+
+public class Sym
+{
+  public Kind : string;   // const var type routine enumval
+  public Name : string;   // as declared
+  public mutable Type : PT;
+  public mutable Code : PExpr;      // a variable's access, a constant's value
+  public mutable IsCell : bool;     // a variable whose access is a cell's Value (a nested routine's `var' parameter)
+  public mutable Ordinal : option[int]; // a constant's or an enumeration value's ordinal value, when known
+  public mutable Routine : RoutineSig;
+  public this(kind : string, name : string) { Kind = kind; Name = name }
+}
+
+public class Scope
+{
+  public mutable Parent : Scope;
+  public Table : SCG.Dictionary[string, Sym] = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
+  /// (a program's or a unit's scope: the interfaces of the units it uses, the last one first)
+  public mutable Uses : list[Scope] = [];
+  public mutable Routine : RoutineSig;     // the routine whose scope this is
+  public mutable ResultVar : string;       // its result's variable (a function)
+  public mutable WithRecord : PExpr;       // a `with' scope: the record it opens
+  public mutable WithType : PT;
+  public this(parent : Scope) { Parent = parent }
+}
+
+// ---- the compiler ----
+
+public module Front
+{
+  /// What the grammar's root mapping gives: the space's code, its declarations quoted in it (see SpaceFiles).
+  public Compile(unit : CompUnit) : PExpr { Compiler().Run(unit) }
+}
+
+/// The interface of a compiled unit (what SpaceFiles exports): its scope and its moduleName.
+[Record] public class UnitExport { public Scope : Scope; public Module : string; }
+
+class Compiler
+{
+  moduleName : string = SpaceFiles.CurrentModule;
+  members : SCG.List[ClassMember] = SCG.List();
+  // the classes of the records a type section declares: written where it ends, once its pointers' targets are known
+  pendingClasses : SCG.List[void -> void] = SCG.List();
+  mutable counter : int;
+  mutable scope : Scope;
+  mutable unitPublic : bool = true; // what is declared now is public (a program's and a unit interface's)
+  // the labels a goto reaches: its statement sequence's state variable, its block, its segment
+  labels : SCG.Dictionary[string, string * Name * int] = SCG.Dictionary(StringComparer.OrdinalIgnoreCase);
+
+  // the standard types
+  static Integer : PT = PT("integer");
+  static Real : PT = PT("real");
+  static Boolean : PT = PT("boolean");
+  static Char : PT = PT("char");
+  static StringT : PT = PT("string");
+  static Text : PT = PT("text");
+  static NilT : PT = PT("nil");
+  static EmptySet : PT = PT("emptyset");
+
+  mutable errors : int;
+  Error(at : Location, message : string) : void { errors++; Nemerle.Compiler.Utility.Message.Error(at, message) }
+  Fresh(prefix : string) : string { counter++; prefix + "_" + counter.ToString() }
+  Module(path : string) : PExpr { PExpr.FromQualifiedIdentifier(Nemerle.Compiler.manager_class.ManagerClass.Instance, path) }
+  Quote(m : ClassMember) : PExpr { PExpr.Quoted(SyntaxElement.ClassMember(m)) }
+  Located(at : Location, f : void -> PExpr) : PExpr
+  {
+    if (at.FileIndex == 0) f()
+    else { Nemerle.Compiler.Utility.LocationStack.Push(at); try f() finally _ = Nemerle.Compiler.Utility.LocationStack.Pop() }
+  }
+
+  public Run(unit : CompUnit) : PExpr
+  {
+    def global = Scope(null);
+    def standard = Scope(null);
+    foreach ((name, t) in [("integer", Integer), ("real", Real), ("boolean", Boolean), ("char", Char), ("string", StringT), ("text", Text)])
+    { def s = Sym("type", name); s.Type = t; standard.Table[name] = s }
+    foreach ((name, value) in [("false", 0), ("true", 1)])
+    { def s = Sym("enumval", name); s.Type = Boolean; s.Ordinal = Some(value); s.Code = if (value == 1) <[ true ]> else <[ false ]>; standard.Table[name] = s }
+    { def s = Sym("const", "maxint"); s.Type = Integer; s.Ordinal = Some(int.MaxValue); s.Code = <[ $(int.MaxValue : int) ]>; standard.Table["maxint"] = s }
+    { def s = Sym("var", "input"); s.Type = Text; s.Code = <[ pascal.PascalText.Input ]>; standard.Table["input"] = s }
+    { def s = Sym("var", "output"); s.Type = Text; s.Code = <[ pascal.PascalText.Output ]>; standard.Table["output"] = s }
+    global.Parent = standard;
+    scope = global;
+    match (unit)
+    {
+      | Program(at, _, uses, block) =>
+        def inits = Uses(uses);
+        Declarations(block.Decls, true);
+        def body = Statements(block.Body);
+        Finish(Located(at, () => <[ { ..$inits; $body } ]>))
+      | Unit(at, name, iuses, idecls, muses, mdecls, init) =>
+        def parts = moduleName.Split('.');
+        when (!String.Equals(name, parts[parts.Length - 1], StringComparison.OrdinalIgnoreCase))
+          Error(at, $"unit `$name' is in the file of module `$moduleName': a unit's name is its file's");
+        def inits = Uses(iuses);
+        // the interface is exported before the implementation is compiled: a unit that this one's implementation
+        // uses may use this one
+        Declarations(idecls, true);
+        SpaceFiles.Export("pascal.unit", UnitExport(global, moduleName));
+        unitPublic = false;
+        def more = Uses(muses);
+        Declarations(mdecls, true);
+        foreach (s in global.Table.Values)
+          when (s.Kind == "routine" && !s.Routine.Defined && s.Routine.IsMethod)
+            Error(s.Routine.Declared, $"`$(s.Name)' is declared in the interface, and its implementation is missing");
+        def body = if (init == null) <[ () ]> else Statements(init);
+        Finish(Located(at, () => <[ { ..$(inits + more); $body } ]>))
+    }
+  }
+
+  Finish(code : PExpr) : PExpr
+  {
+    // (a program the front end reported errors in gives no code: the compiler would only say more of the same)
+    if (errors > 0) <[ () ]>
+    else
+    {
+      def all = members.ConvertAll(Quote).:NToList();
+      <[ { ..$all; $code } ]>
+    }
+  }
+
+  /// `uses A, B': their interfaces open in this scope (the last one first, as in Turbo Pascal), their initialization
+  /// runs first (the code returned)
+  Uses(names : list[string * Location]) : list[PExpr]
+  {
+    mutable inits = [];
+    foreach ((name, at) in names)
+    {
+      def found = SpaceFiles.Import(name);
+      if (found.Module == null) Error(at, $"no unit `$name': a unit is the space of a file of that name")
+      else
+      {
+        mutable export;
+        if (found.Exports.TryGetValue("pascal.unit", out export))
+        {
+          def unit = export :> UnitExport;
+          scope.Uses ::= unit.Scope;
+          when (!found.InProgress)
+            inits ::= <[ System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof($(Module(unit.Module))).TypeHandle) ]>
+        }
+        else when (!found.InProgress) Error(at, $"`$name' is a module with no Pascal unit")
+      }
+    }
+    inits.Rev()
+  }
+
+  // ---- lookup ----
+
+  Lookup(name : string) : Sym
+  {
+    def inUses(units : list[Scope]) : Sym
+    {
+      | [] => null
+      | u :: rest =>
+        mutable s;
+        if (u.Table.TryGetValue(name, out s) && (s.Kind != "routine" || s.Routine.Public)) s else inUses(rest)
+    }
+    def walk(sc : Scope) : Sym
+    {
+      if (sc == null) null
+      else
+      {
+        mutable s;
+        if (sc.WithType != null && sc.WithType.Field(name).IsSome)
+        {
+          def (field, t) = sc.WithType.Field(name).Value;
+          def v = Sym("var", field); v.Type = t; v.Code = <[ $(sc.WithRecord).$(field : usesite) ]>; v
+        }
+        else if (sc.Table.TryGetValue(name, out s)) s
+        else match (inUses(sc.Uses)) { | null => walk(sc.Parent) | found => found }
+      }
+    }
+    walk(scope)
+  }
+
+  Declare(at : Location, s : Sym) : void
+  {
+    mutable old;
+    if (scope.Table.TryGetValue(s.Name, out old) && !(old.Kind == "routine" && s.Kind == "routine"))
+      Error(at, $"`$(s.Name)' is declared twice in this block")
+    else scope.Table[s.Name] = s
+  }
+
+  // ---- declarations ----
+
+  /// A block's declarations: at the top level (a program's, a unit's) they are members of the file moduleName; in a
+  /// routine, local. Gives a routine's local code (its constants, variables and nested routines).
+  Declarations(decls : list[Decl], top : bool) : list[PExpr]
+  {
+    mutable code = [];
+    mutable routines = [];
+    def pointers = SCG.List();
+    // a pointer type's target may be declared after it, in the same type section: resolved where the section ends
+    def resolvePointers()
+    {
+      foreach (p in pointers)
+        when (p.Target == null)
+          match (Lookup(p.TargetName))
+          {
+            | s when s != null && s.Kind == "type" => p.Target = s.Type
+            | _ => Error(Location.Default, $"pointer to `$(p.TargetName)': no such type"); p.Target = Integer
+          }
+      pointers.Clear();
+      foreach (write in pendingClasses) write();
+      pendingClasses.Clear()
+    }
+    foreach (d in decls)
+    {
+      unless (d is Decl.TypeDecl) resolvePointers();
+      match (d)
+      {
+        | Labels => () // (a label is declared where its statement is: see Statements)
+        | Const(at, name, value) =>
+          def (e, t) = Rvalue(value);
+          def s = Sym("const", name); s.Type = t; s.Ordinal = ConstOrdinal(value); s.Code = e;
+          Declare(at, s)
+        | TypeDecl(at, name, spec) =>
+          def t = Type(spec, name, pointers);
+          when (t.Name == null || t.Kind == "range" || t.Kind == "enum") t.Name = name;
+          def s = Sym("type", name); s.Type = t; Declare(at, s);
+          when (t.Kind == "enum") DeclareEnum(at, t)
+        | VarDecl(at, names, spec) =>
+          def t = Type(spec, null, pointers);
+          when (t.Kind == "enum") DeclareEnum(at, t);
+          foreach (name in names)
+          {
+            def s = Sym("var", name); s.Type = t;
+            if (top)
+            {
+              s.Code = <[ $(Module(moduleName)).$(name : usesite) ]>;
+              def field = Located(at, () => if (unitPublic) Quote(<[ decl: public static mutable $(name : usesite) : $(Clr(t)) = $(Init(t, name)); ]>)
+                                            else Quote(<[ decl: static mutable $(name : usesite) : $(Clr(t)) = $(Init(t, name)); ]>));
+              members.Add(Unquote(field))
+            }
+            else
+            {
+              s.Code = <[ $(name : usesite) ]>;
+              code ::= Located(at, () => <[ mutable $(name : usesite) : $(Clr(t)) = $(Init(t, name)) ]>)
+            }
+            Declare(at, s)
+          }
+        | Routine(at, header, body, forward) =>
+          def sig = Signature(at, header, top);
+          when (body != null)
+          {
+            sig.Defined = true;
+            if (top) members.Add(Unquote(Located(at, () => Quote(Method(sig, body)))))
+            else routines ::= Located(at, () => LocalFunction(sig, body))
+          }
+          when (body == null && !forward && !top) Error(at, $"`$(header.Name)' has no body")
+      }
+    }
+    resolvePointers();
+    // a block's routines are one group: each reaches the others (as `forward' says in Pascal)
+    def group = match (routines.Rev())
+    {
+      | [] => []
+      | fs =>
+        def decls = fs.FoldRight([], (f, acc) => match (f) { | PExpr.DefFunctions(ds) => ds + acc | _ => acc });
+        [PExpr.DefFunctions(decls)]
+    }
+    code.Rev() + group
+  }
+
+  Unquote(e : PExpr) : ClassMember { | PExpr.Quoted(SyntaxElement.ClassMember(m)) => m | _ => throw InvalidOperationException("not a member") }
+
+  DeclareEnum(_at : Location, t : PT) : void
+  {
+    mutable i = 0;
+    foreach (name in t.Values)
+    {
+      def s = Sym("enumval", name); s.Type = t; s.Ordinal = Some(i); s.Code = <[ $(i : int) ]>;
+      scope.Table[name] = s; i++
+    }
+  }
+
+  /// A constant's ordinal value, when the expression is one (a number, a character, a constant, `-n')
+  ConstOrdinal(e : Expr) : option[int]
+  {
+    match (e)
+    {
+      | Num(_, v) => Some(v)
+      | Str(_, t) when t.Length == 1 => Some(t[0] :> int)
+      | Un(_, "-", x) => match (ConstOrdinal(x)) { | Some(v) => Some(-v) | None => None() }
+      | Un(_, "+", x) => ConstOrdinal(x)
+      | Var(_, d) when d.Sels.IsEmpty =>
+        match (Lookup(d.Name)) { | null => None() | s => s.Ordinal }
+      | Bin(_, op, l, r) =>
+        match ((ConstOrdinal(l), ConstOrdinal(r)))
+        {
+          | (Some(a), Some(b)) =>
+            match (op) { | "+" => Some(a + b) | "-" => Some(a - b) | "*" => Some(a * b) | "div" when b != 0 => Some(a / b) | "mod" when b != 0 => Some(a % b) | _ => None() }
+          | _ => None()
+        }
+      | _ => None()
+    }
+  }
+
+  ConstInt(e : Expr, what : string) : int
+  {
+    match (ConstOrdinal(e)) { | Some(v) => v | None => Error(e.Loc, $"$what must be a constant"); 0 }
+  }
+
+  /// A type from its declaration (`name': the type declaration's name, for a record's class)
+  Type(spec : TypeSpec, name : string, pointers : SCG.List[PT]) : PT
+  {
+    match (spec)
+    {
+      | Named(at, n) =>
+        match (Lookup(n))
+        {
+          | s when s != null && s.Kind == "type" => s.Type
+          | _ => Error(at, $"unknown type `$n'"); Integer
+        }
+      | Enum(_, names) => def t = PT("enum"); t.Values = names; t.Low = 0; t.High = names.Length - 1; t.Base = t; t
+      | Range(_, low, high) =>
+        def t = PT("range");
+        t.Low = ConstInt(low, "a subrange's bound"); t.High = ConstInt(high, "a subrange's bound");
+        t.Base = match (low) { | Str => Char | Var(_, d) when Lookup(d.Name) != null && Lookup(d.Name).Kind == "enumval" => Lookup(d.Name).Type | _ => Integer };
+        t
+      | Array(at, indexes, element) =>
+        def elem = Type(element, null, pointers);
+        indexes.FoldRight(elem, (index, inner) =>
+        {
+          def it = Type(index, null, pointers);
+          def t = PT("array"); t.Elem = inner; t.Base = it;
+          match (Bounds(it)) { | Some((lo, hi)) => t.Low = lo; t.High = hi | None => Error(at, $"an array's index is an ordinal type, not $it") }
+          t
+        })
+      | Record(at, fields) =>
+        def t = PT("record");
+        def className = if (name != null && !members.Exists(m => m.Name == name)) name else Fresh(if (name != null) name else "Record");
+        t.ClassPath = moduleName + "." + className;
+        def all = SCG.List();
+        def collect(list : FieldList) : void
+        {
+          foreach ((names, ts) in list.Fixed) { def ft = Type(ts, null, pointers); foreach (n in names) all.Add((n, ft)) }
+          when (list.TagType != null)
+          {
+            def tag = Type(list.TagType, null, pointers);
+            when (list.TagName != null) all.Add((list.TagName, tag));
+            foreach ((_, variantPart) in list.Variants) collect(variantPart)
+          }
+        }
+        collect(fields);
+        t.Fields.AddRange(all);
+        pendingClasses.Add(fun()
+        {
+          mutable fieldDecls = []; mutable copies = [];
+          foreach ((n, ft) in all)
+          {
+            fieldDecls ::= <[ decl: public mutable $(n : usesite) : $(Clr(ft)) = $(Init(ft, n)); ]>;
+            copies ::= <[ copy.$(n : usesite) = pascal.Pascal.Value(this.$(n : usesite)) ]>
+          }
+          fieldDecls = fieldDecls.Rev(); copies = copies.Rev();
+          def copy = <[ decl: public override Copy() : pascal.PascalRecord { def copy = $(className : usesite)(); { ..$copies } copy } ]>;
+          def body = fieldDecls + [copy];
+          members.Add(Unquote(Located(at, () => Quote(<[ decl: public class $(className : usesite) : pascal.PascalRecord { ..$body } ]>))))
+        });
+        t
+      | SetOf(at, element) =>
+        def t = PT("set"); t.Base = Type(element, null, pointers);
+        when (Bounds(t.Base).IsNone) Error(at, "a set's base is an ordinal type");
+        t
+      | FileOf(_, null) => Text
+      | FileOf(_, element) => def t = PT("file"); t.Base = Type(element, null, pointers); t
+      | Pointer(_, target) =>
+        def t = PT("pointer"); t.TargetName = target;
+        match (Lookup(target)) { | s when s != null && s.Kind == "type" => t.Target = s.Type | _ => pointers.Add(t) }
+        t
+      | Str => StringT
+      | Proc(at, header) => def t = PT("proc"); t.Sig = Signature(at, header, false, true); t
+    }
+  }
+
+  /// An ordinal type's bounds
+  Bounds(t : PT) : option[int * int]
+  {
+    match (t.Kind)
+    {
+      | "range" | "enum" => Some((t.Low, t.High))
+      | "boolean" => Some((0, 1))
+      | "char" => Some((0, 65535))
+      | "integer" => Some((int.MinValue, int.MaxValue))
+      | _ => None()
+    }
+  }
+
+  IsOrdinal(t : PT) : bool { Bounds(t).IsSome }
+  OrdBase(t : PT) : PT { if (t.Kind == "range") t.Base else t }
+
+  /// A type's Nemerle type
+  Clr(t : PT) : PExpr
+  {
+    match (t.Kind)
+    {
+      | "integer" => <[ int ]>
+      | "real" => <[ double ]>
+      | "boolean" => <[ bool ]>
+      | "char" => <[ char ]>
+      | "string" => <[ string ]>
+      | "enum" => <[ int ]>
+      | "range" => Clr(t.Base)
+      | "array" => <[ pascal.PascalArray[$(Clr(t.Elem))] ]>
+      | "record" => Module(t.ClassPath)
+      | "set" => <[ pascal.PascalSet ]>
+      | "text" => <[ pascal.PascalText ]>
+      | "file" => <[ pascal.PascalFile[$(Clr(t.Base))] ]>
+      | "pointer" => <[ pascal.PascalPointer[$(Clr(if (t.Target != null) t.Target else Integer))] ]>
+      | "proc" =>
+        def ps = t.Sig.Params.Map(p => Clr(p.Type));
+        def args = match (ps) { | [] => <[ void ]> | [one] => one | many => many.Tail.FoldLeft(many.Head, (p, acc) => <[ $acc * $p ]>) };
+        def result = if (t.Sig.IsFunction) Clr(t.Sig.Result) else <[ void ]>;
+        <[ $args -> $result ]>
+      | _ => <[ object ]>
+    }
+  }
+
+  /// A variable's initial value (`name': its name, a file's external name)
+  Init(t : PT, name : string) : PExpr
+  {
+    match (t.Kind)
+    {
+      | "integer" | "enum" => <[ 0 ]>
+      | "real" => <[ 0.0 ]>
+      | "boolean" => <[ false ]>
+      | "char" => <[ ' ' ]>
+      | "string" => <[ "" ]>
+      | "range" => if (t.Base.Kind == "char") <[ $((t.Low :> char) : char) ]> else <[ $(t.Low : int) ]>
+      | "array" => <[ pascal.PascalArray.[$(Clr(t.Elem))]($(t.Low : int), $(t.High : int), () => $(Init(t.Elem, null))) ]>
+      | "record" => <[ $(Module(t.ClassPath))() ]>
+      | "set" => <[ pascal.PascalSet.Empty ]>
+      | "text" => <[ pascal.PascalText($(name ?? "" : string)) ]>
+      | "file" => <[ pascal.PascalFile.[$(Clr(t.Base))]($(name ?? "" : string)) ]>
+      | _ => <[ null ]>
+    }
+  }
+
+  /// A routine's heading as a signature, declared in the current scope (or the one it completes: a `forward' or an
+  /// interface heading, given again or not)
+  Signature(at : Location, header : Header, top : bool, parameter : bool = false) : RoutineSig
+  {
+    mutable existing = null;
+    mutable old;
+    when (!parameter && scope.Table.TryGetValue(header.Name, out old) && old.Kind == "routine" && !old.Routine.Defined) existing = old.Routine;
+    if (existing != null && header.Params == null) existing
+    else
+    {
+      def sig = RoutineSig();
+      sig.Name = header.Name; sig.IsFunction = header.IsFunction; sig.Declared = at;
+      sig.IsMethod = top && !parameter; sig.Module = moduleName; sig.Public = unitPublic || existing != null && existing.Public;
+      sig.ClrName = if (top || parameter) header.Name else Fresh(header.Name);
+      sig.IsParameter = parameter;
+      def ps = SCG.List();
+      foreach (p in header.Params ?? [])
+        match (p)
+        {
+          | Value(names, ts) => def t = Type(ts, null, SCG.List()); foreach (n in names) ps.Add(ParamSig(n, t, false))
+          | ByRef(names, ts) => def t = Type(ts, null, SCG.List()); foreach (n in names) ps.Add(ParamSig(n, t, true))
+          | Routine(h) => def t = PT("proc"); t.Sig = Signature(h.At, h, false, true); ps.Add(ParamSig(h.Name, t, false))
+        }
+      sig.Params = ps.:NToList();
+      when (header.IsFunction)
+        sig.Result = if (header.Result != null) Type(header.Result, null, SCG.List()) else if (existing != null) existing.Result else { Error(at, $"function `$(header.Name)' has no result type"); Integer };
+      when (existing != null && header.Params != null && existing.Params.Length != sig.Params.Length)
+        Error(at, $"`$(header.Name)' has other parameters than where it was declared before");
+      unless (parameter) { def s = Sym("routine", header.Name); s.Routine = sig; scope.Table[header.Name] = s }
+      sig
+    }
+  }
+
+  /// The parameters' declarations, and the scope's symbols for them
+  Parameters(sig : RoutineSig) : list[PParameter]
+  {
+    sig.Params.Map(p =>
+    {
+      def s = Sym("var", p.Name); s.Type = p.Type;
+      def clr = Clr(p.Type);
+      def decl = if (p.IsVar && sig.IsMethod) <[ parameter: $(p.Name : usesite) : ref $clr ]>
+                 else if (p.IsVar) { s.IsCell = true; <[ parameter: $(p.Name : usesite) : pascal.PascalVar[$clr] ]> }
+                 else <[ parameter: $(p.Name : usesite) : $clr ]>;
+      s.Code = if (s.IsCell) <[ $(p.Name : usesite).Value ]> else <[ $(p.Name : usesite) ]>;
+      scope.Table[p.Name] = s;
+      decl
+    })
+  }
+
+  /// A routine's body in its own scope: its parameters, its result, its declarations and statements
+  RoutineBody(sig : RoutineSig, body : Block, parameters : out list[PParameter]) : PExpr
+  {
+    def outer = scope;
+    scope = Scope(outer); scope.Routine = sig;
+    try
+    {
+      parameters = Parameters(sig);
+      // a method's `var' parameter that its nested routines reach is a cell while it runs (a closure takes no
+      // `ref'): copied in, and back when it returns
+      def nested = body.Decls.Exists(_ is Decl.Routine);
+      mutable before = []; mutable after = [];
+      when (sig.IsMethod && nested)
+        foreach (p when p.IsVar in sig.Params)
+        {
+          def cell = Fresh(p.Name + "_cell");
+          before ::= <[ def $(cell : usesite) = pascal.PascalVar($(p.Name : usesite)) ]>;
+          after ::= <[ $(p.Name : usesite) = $(cell : usesite).Value ]>;
+          def s = scope.Table[p.Name]; s.IsCell = true; s.Code = <[ $(cell : usesite).Value ]>
+        }
+      when (sig.IsFunction) scope.ResultVar = Fresh("result_" + sig.Name);
+      def locals = Declarations(body.Decls, false);
+      def statements = Statements(body.Body);
+      def result = if (sig.IsFunction) <[ $(scope.ResultVar : usesite) ]> else <[ () ]>;
+      def declareResult = if (sig.IsFunction) [<[ mutable $(scope.ResultVar : usesite) : $(Clr(sig.Result)) = $(Init(sig.Result, null)) ]>] else [];
+      def code = <[ { ..$(declareResult + locals); $statements; $result } ]>;
+      if (before.IsEmpty) code
+      else <[ { ..$(before.Rev()); try $code finally { ..$(after.Rev()) } } ]>
+    }
+    finally scope = outer
+  }
+
+  Method(sig : RoutineSig, body : Block) : ClassMember
+  {
+    mutable ps;
+    def code = RoutineBody(sig, body, out ps);
+    def result = if (sig.IsFunction) Clr(sig.Result) else <[ void ]>;
+    if (sig.Public) <[ decl: public static $(sig.ClrName : usesite)(..$ps) : $result { $code } ]>
+    else <[ decl: static $(sig.ClrName : usesite)(..$ps) : $result { $code } ]>
+  }
+
+  LocalFunction(sig : RoutineSig, body : Block) : PExpr
+  {
+    mutable ps;
+    def code = RoutineBody(sig, body, out ps);
+    def result = if (sig.IsFunction) Clr(sig.Result) else <[ void ]>;
+    <[ def $(sig.ClrName : usesite)(..$ps) : $result { $code } ]>
+  }
+
+  // ---- statements ----
+
+  Statements(body : list[Stmt]) : PExpr
+  {
+    // a sequence with labeled statements is a state machine: a goto sets its state and leaves its step
+    if (body.Exists(_ is Stmt.Labeled)) Machine(body)
+    else { def code = body.Map(Statement); <[ { ..$code; () } ]> }
+  }
+
+  Machine(body : list[Stmt]) : PExpr
+  {
+    def state = Fresh("state");
+    def step = Nemerle.Compiler.macros.Macros.NewSymbol("step");
+    // the segments: from the start, and from each labeled statement
+    def segments = SCG.List.[SCG.List[Stmt]](); segments.Add(SCG.List());
+    foreach (s in body)
+    {
+      | Labeled(_, label, inner) =>
+        segments.Add(SCG.List());
+        labels[label] = (state, step, segments.Count - 1);
+        segments[segments.Count - 1].Add(inner)
+      | _ => segments[segments.Count - 1].Add(s)
+    }
+    def cases = SCG.List();
+    for (mutable i = 0; i < segments.Count; i++)
+    {
+      def code = segments[i].ConvertAll(Statement).:NToList();
+      def next = if (i + 1 < segments.Count) i + 1 else -1;
+      cases.Add(<[ case: | $(i : int) => { ..$code; $(state : usesite) = $(next : int) } ]>)
+    }
+    cases.Add(<[ case: | _ => $(state : usesite) = -1 ]>);
+    <[ {
+      mutable $(state : usesite) = 0;
+      while ($(state : usesite) >= 0) $(step : name) : { match ($(state : usesite)) { ..$(cases.:NToList()) } }
+    } ]>
+  }
+
+  Statement(s : Stmt) : PExpr
+  {
+    Located(s.Loc, () =>
+    match (s)
+    {
+      | Empty => <[ () ]>
+      | Block(_, body) => Statements(body)
+      | Labeled(_, _, inner) => Statement(inner) // (a label outside a statement sequence's top: as its statement)
+      | Goto(at, label) =>
+        mutable target;
+        if (labels.TryGetValue(label, out target)) { def (state, step, segment) = target; <[ { $(state : usesite) = $(segment : int); $(step : name)() } ]> }
+        else { Error(at, $"goto $label: no statement of a sequence around it has that label"); <[ () ]> }
+      | Assign(at, target, value) => Assign(at, target, value)
+      | Call(at, name, args) => CallStatement(at, name, args)
+      | If(_, cond, then, elsePart) =>
+        def c = Condition(cond);
+        <[ if ($c) $(Statement(then)) else $(if (elsePart == null) <[ () ]> else Statement(elsePart)) ]>
+      | While(_, cond, body) => <[ while ($(Condition(cond))) $(Statement(body)) ]>
+      | Repeat(_, body, cond) =>
+        def b = Statements(body);
+        <[ do { $b } while (!($(Condition(cond)))) ]>
+      | For(at, variable, from, to, down, body) => For(at, variable, from, to, down, body)
+      | Case(at, selector, arms, elsePart) => Case(at, selector, arms, elsePart)
+      | With(_, records, body) =>
+        def open(rs : list[Desig]) : PExpr
+        {
+          | [] => Statement(body)
+          | r :: rest =>
+            def (code, t) = Designator(r);
+            if (t.Kind != "record") { Error(r.At, "`with' opens a record"); <[ () ]> }
+            else
+            {
+              def w = Fresh("with");
+              def outer = scope;
+              scope = Scope(outer); scope.WithRecord = <[ $(w : usesite) ]>; scope.WithType = t;
+              try <[ { def $(w : usesite) = $code; $(open(rest)) } ]> finally scope = outer
+            }
+        }
+        open(records)
+    })
+  }
+
+  Condition(e : Expr) : PExpr
+  {
+    def (code, t) = Rvalue(e);
+    when (t.Kind != "boolean") Error(e.Loc, $"a condition is a boolean, not $t");
+    code
+  }
+
+  Assign(at : Location, target : Desig, value : Expr) : PExpr
+  {
+    // `F := e' in function F (or a routine inside it) gives its result
+    def resultOf(sc : Scope) : Scope
+    {
+      if (sc == null) null
+      else if (sc.Routine != null && sc.Routine.IsFunction && String.Equals(sc.Routine.Name, target.Name, StringComparison.OrdinalIgnoreCase)) sc
+      else resultOf(sc.Parent)
+    }
+    match (if (target.Sels.IsEmpty) resultOf(scope) else null)
+    {
+      | null =>
+        // a Turbo string's character: the string again, with it
+        def stringChar = match (target.Sels.Rev())
+        {
+          | Sel.Index([i]) :: rest =>
+            def (s, st) = Designator(Desig(target.At, target.Name, rest.Rev()));
+            if (st.Kind == "string") Some((s, i)) else None()
+          | _ => None()
+        }
+        match (stringChar)
+        {
+          | Some((s, i)) =>
+            def (c, ct) = Rvalue(value);
+            when (ct.Kind != "char") Error(value.Loc, "a string's character is a char");
+            <[ $s = pascal.Pascal.SetChar($s, $(Ordinal(i)), $c) ]>
+          | None =>
+            def (lhs, t) = Designator(target);
+            def rhs = Convert(value, t, "the assigned value");
+            <[ $lhs = $rhs ]>
+        }
+      | sc => <[ $(sc.ResultVar : usesite) = $(Convert(value, sc.Routine.Result, "the function's result")) ]>
+    }
+  }
+
+  /// `value' as a `to'-typed value (int to real, a string to a packed array of char, a record's or an array's copy,
+  /// a subrange's check)
+  Convert(value : Expr, to : PT, what : string) : PExpr
+  {
+    def (code, from) = Rvalue(value);
+    ConvertCode(code, from, to, value.Loc, what)
+  }
+
+  ConvertCode(code : PExpr, from : PT, to : PT, at : Location, what : string) : PExpr
+  {
+    def f = OrdBase(from); def t = OrdBase(to);
+    def rangeChecked(c : PExpr) : PExpr
+    {
+      if (to.Kind == "range" && t.Kind != "char") <[ pascal.Pascal.Check($c, $(to.Low : int), $(to.High : int)) ]> else c
+    }
+    match ((f.Kind, t.Kind))
+    {
+      | ("nemerle", _) | (_, "nemerle") => code
+      | ("integer", "real") => <[ ($code :> double) ]>
+      | ("char", "string") => <[ $code.ToString() ]>
+      | ("string", "array") when t.Elem.Kind == "char" => <[ pascal.PascalArray.FromString($(t.Low : int), $code) ]>
+      | ("nil", "pointer") | ("nil", "proc") => <[ null ]>
+      | ("emptyset", "set") => code
+      | ("record", "record") | ("array", "array") => <[ pascal.Pascal.Value($code) ]>
+      | (a, b) when a == b || f : object == t : object => rangeChecked(code)
+      | ("enum", "enum") => rangeChecked(code)
+      | ("proc", "proc") => code
+      | (a, b) => Error(at, $"$what is $from, not $to"); ignore((a, b)); code
+    }
+  }
+
+  For(at : Location, variable : string, from : Expr, to : Expr, down : bool, body : Stmt) : PExpr
+  {
+    def (v, t) = Designator(Desig(at, variable, []));
+    unless (IsOrdinal(t)) Error(at, "a for loop's variable is an ordinal");
+    def first = Convert(from, t, "the loop's start");
+    def last = Fresh("last");
+    def lastValue = Convert(to, t, "the loop's end");
+    def step = if (down) Pred(v, t) else Succ(v, t);
+    def ord(x : PExpr) { OrdOf(x, t) }
+    def within = if (down) <[ $(ord(first)) >= $(ord(<[ $(last : usesite) ]>)) ]> else <[ $(ord(first)) <= $(ord(<[ $(last : usesite) ]>)) ]>;
+    // (bounds once; the variable ends at the last value, so a loop to maxint does not overflow)
+    <[ {
+      def $(last : usesite) = $lastValue;
+      when ($within)
+      {
+        $v = $first;
+        mutable going = true;
+        while (going) { $(Statement(body)); if ($(ord(v)) == $(ord(<[ $(last : usesite) ]>))) going = false else $v = $step }
+      }
+    } ]>
+  }
+
+  Case(at : Location, selector : Expr, arms : list[list[Expr * Expr] * Stmt], elsePart : list[Stmt]) : PExpr
+  {
+    def (sel, t) = Rvalue(selector);
+    unless (IsOrdinal(t)) Error(at, "a case selector is an ordinal");
+    def value = Fresh("selector");
+    def labelValue(e : Expr) : int { ConstInt(e, "a case label") }
+    def cases = arms.Map((labels, body) =>
+    {
+      def tests = labels.Map((low, high) =>
+        if (high == null) <[ $(OrdOf(<[ $(value : usesite) ]>, t)) == $(labelValue(low) : int) ]>
+        else <[ $(OrdOf(<[ $(value : usesite) ]>, t)) >= $(labelValue(low) : int) && $(OrdOf(<[ $(value : usesite) ]>, t)) <= $(labelValue(high) : int) ]>);
+      def test = tests.Tail.FoldLeft(tests.Head, (x, acc) => <[ $acc || $x ]>);
+      (test, Statement(body))
+    });
+    def fallback = if (elsePart != null) Statements(elsePart)
+                   else <[ throw System.InvalidOperationException("case: the selector matches no label") ]>;
+    def chain = cases.FoldRight(fallback, ((test, code), rest) => <[ if ($test) $code else $rest ]>);
+    <[ { def $(value : usesite) = $sel; $chain } ]>
+  }
+
+  /// An ordinal value as an int
+  OrdOf(code : PExpr, t : PT) : PExpr
+  {
+    match (OrdBase(t).Kind)
+    {
+      | "char" => <[ ($code :> int) ]>
+      | "boolean" => <[ (if ($code) 1 else 0) ]>
+      | _ => code
+    }
+  }
+
+  /// An int as an ordinal value of `t'
+  FromOrd(code : PExpr, t : PT) : PExpr
+  {
+    match (OrdBase(t).Kind)
+    {
+      | "char" => <[ ($code :> char) ]>
+      | "boolean" => <[ ($code != 0) ]>
+      | _ => code
+    }
+  }
+
+  Succ(code : PExpr, t : PT) : PExpr { FromOrd(<[ $(OrdOf(code, t)) + 1 ]>, t) }
+  Pred(code : PExpr, t : PT) : PExpr { FromOrd(<[ $(OrdOf(code, t)) - 1 ]>, t) }
+
+  /// An index as the int an array takes
+  Ordinal(e : Expr) : PExpr { def (c, t) = Rvalue(e); OrdOf(c, t) }
+
+  // ---- calls ----
+
+  CallStatement(at : Location, name : string, args : list[WArg]) : PExpr
+  {
+    def plain() { args.Map(a => { when (a.Width != null) Error(a.Width.Loc, "only write and writeln take a width"); a.Value }) }
+    match (Lookup(name))
+    {
+      | s when s != null && s.Kind == "routine" => Call(at, s.Routine, plain(), false)
+      | s when s != null && s.Kind == "var" && s.Type.Kind == "proc" => CallValue(at, s, plain(), false)
+      | _ => Standard(at, name, args)
+    }
+  }
+
+  /// A call of a routine (a function's value when `value')
+  Call(at : Location, sig : RoutineSig, args : list[Expr], value : bool) : PExpr
+  {
+    when (value && !sig.IsFunction) Error(at, $"`$(sig.Name)' is a procedure: it gives no value");
+    if (args.Length != sig.Params.Length) { Error(at, $"`$(sig.Name)' takes $(sig.Params.Length) argument(s), not $(args.Length)"); <[ () ]> }
+    else
+    {
+      mutable before = []; mutable passed = []; mutable after = [];
+      foreach ((a, p) in args.Zip(sig.Params))
+        if (p.IsVar)
+        {
+          def (lvalue, t) = match (a) { | Expr.Var(_, d) => Designator(d) | _ => Error(a.Loc, $"`$(p.Name)' is a var parameter: its argument is a variable"); (<[ () ]>, p.Type) };
+          when (OrdBase(t).Kind != OrdBase(p.Type).Kind && t : object != p.Type : object) Error(a.Loc, $"`$(p.Name)' is a var parameter of $(p.Type), not $t");
+          def isCellVar = match (a) { | Expr.Var(_, d) when d.Sels.IsEmpty => match (Lookup(d.Name)) { | s when s != null => s.IsCell | _ => false } | _ => false };
+          def isField = match (lvalue) { | PExpr.Member => true | PExpr.Ref => true | _ => false };
+          if (sig.IsMethod)
+          {
+            if (isField) passed ::= <[ ref $lvalue ]>
+            else
+            {
+              def temp = Fresh("arg");
+              before ::= <[ mutable $(temp : usesite) = $lvalue ]>; passed ::= <[ ref $(temp : usesite) ]>; after ::= <[ $lvalue = $(temp : usesite) ]>
+            }
+          }
+          else if (isCellVar)
+            match (lvalue) { | <[ $cell.Value ]> => passed ::= cell | _ => passed ::= lvalue }
+          else
+          {
+            def cell = Fresh("cell");
+            before ::= <[ def $(cell : usesite) = pascal.PascalVar($lvalue) ]>; passed ::= <[ $(cell : usesite) ]>; after ::= <[ $lvalue = $(cell : usesite).Value ]>
+          }
+        }
+        else if (p.Type.Kind == "proc") passed ::= ProcArgument(a, p)
+        else passed ::= Convert(a, p.Type, $"argument `$(p.Name)'");
+      def target = if (sig.IsMethod) <[ $(Module(sig.Module)).$(sig.ClrName : usesite) ]>
+                   else <[ $(sig.ClrName : usesite) ]>;
+      def call = <[ $target(..$(passed.Rev())) ]>;
+      if (before.IsEmpty) call
+      else if (value) { def r = Fresh("value"); <[ { ..$(before.Rev()); def $(r : usesite) = $call; { ..$(after.Rev()) } $(r : usesite) } ]> }
+      else <[ { ..$(before.Rev()); $call; ..$(after.Rev()) } ]>
+    }
+  }
+
+  /// A call through a procedural parameter
+  CallValue(at : Location, s : Sym, args : list[Expr], value : bool) : PExpr
+  {
+    def sig = s.Type.Sig;
+    when (value && !sig.IsFunction) Error(at, $"`$(s.Name)' is a procedure: it gives no value");
+    if (args.Length != sig.Params.Length) { Error(at, $"`$(s.Name)' takes $(sig.Params.Length) argument(s)"); <[ () ]> }
+    else <[ $(s.Code)(..$(args.Zip(sig.Params).Map((a, p) => Convert(a, p.Type, $"argument `$(p.Name)'")))) ]>
+  }
+
+  /// A routine given as a procedural parameter
+  ProcArgument(a : Expr, p : ParamSig) : PExpr
+  {
+    match (a)
+    {
+      | Expr.Var(_, d) when d.Sels.IsEmpty =>
+        match (Lookup(d.Name))
+        {
+          | s when s != null && s.Kind == "routine" =>
+            def sig = s.Routine;
+            when (sig.Params.Exists(x => x.IsVar)) Error(a.Loc, "a routine with var parameters is not passed as a parameter");
+            when (sig.Params.Length != p.Type.Sig.Params.Length || sig.IsFunction != p.Type.Sig.IsFunction)
+              Error(a.Loc, $"`$(sig.Name)' does not fit parameter `$(p.Name)'");
+            def names = sig.Params.Map(x => Fresh(x.Name));
+            def ps = names.Zip(sig.Params).Map((n, x) => <[ parameter: $(n : usesite) : $(Clr(x.Type)) ]>);
+            def target = if (sig.IsMethod) <[ $(Module(sig.Module)).$(sig.ClrName : usesite) ]> else <[ $(sig.ClrName : usesite) ]>;
+            def call = <[ $target(..$(names.Map(n => <[ $(n : usesite) ]>))) ]>;
+            <[ fun (..$ps) { $call } ]>
+          | s when s != null && s.Kind == "var" && s.Type.Kind == "proc" => s.Code
+          | _ => Error(a.Loc, $"`$(d.Name)' is no routine"); <[ null ]>
+        }
+      | _ => Error(a.Loc, "a procedural parameter takes a routine's name"); <[ null ]>
+    }
+  }
+
+  /// The file a read or write is on (its first argument, when it is a file), and the other arguments
+  FileArgument(args : list[WArg], input : bool) : PExpr * PT * list[WArg]
+  {
+    def standard = if (input) (<[ pascal.PascalText.Input ]>, Text) else (<[ pascal.PascalText.Output ]>, Text);
+    match (args)
+    {
+      | first :: rest when first.Width == null =>
+        match (first.Value)
+        {
+          | Expr.Var(_, d) =>
+            def s = if (d.Sels.IsEmpty) Lookup(d.Name) else null;
+            if (s != null && s.Kind == "var" && (s.Type.Kind == "text" || s.Type.Kind == "file")) { def (c, t) = Designator(d); (c, t, rest) }
+            else { def (f, t) = standard; (f, t, args) }
+          | _ => def (f, t) = standard; (f, t, args)
+        }
+      | _ => def (f, t) = standard; (f, t, args)
+    }
+  }
+
+  /// The standard procedures
+  Standard(at : Location, original : string, args : list[WArg]) : PExpr
+  {
+    def name = original.ToLowerInvariant();
+    def values = args.Map(a => a.Value);
+    def one(what : string) : Expr { match (values) { | [x] => x | _ => Error(at, $"$name takes $what"); Expr.Num(at, 0) } }
+    def lvalue(e : Expr) : PExpr * PT { match (e) { | Expr.Var(_, d) => Designator(d) | _ => Error(e.Loc, $"$name takes a variable"); (<[ () ]>, Integer) } }
+    match (name)
+    {
+      | "write" | "writeln" =>
+        def (file, ft, rest) = FileArgument(args, false);
+        def writes = rest.Map(a => Write(file, ft, a));
+        if (name == "writeln") <[ { ..$writes; $file.WriteLine() } ]> else <[ { ..$writes; () } ]>
+      | "read" | "readln" =>
+        def (file, ft, rest) = FileArgument(args, true);
+        def reads = rest.Map(a => { def (target, t) = lvalue(a.Value); Read(file, ft, target, t, a.Value.Loc) });
+        if (name == "readln") <[ { ..$reads; $file.ReadLine() } ]> else <[ { ..$reads; () } ]>
+      | "reset" | "rewrite" | "get" | "put" | "page" | "close" =>
+        def (f, t) = lvalue(one("a file"));
+        unless (t.Kind == "file" || t.Kind == "text") Error(at, $"$name takes a file");
+        match (name)
+        {
+          | "reset" => <[ $f.Reset() ]> | "rewrite" => <[ $f.Rewrite() ]> | "get" => <[ $f.Get() ]>
+          | "put" => <[ $f.Put() ]> | "page" => <[ $f.Page() ]> | _ => <[ $f.Close() ]>
+        }
+      | "assign" =>
+        match (values)
+        {
+          | [f, path] => def (fc, _) = lvalue(f); def (p, _) = Rvalue(path); <[ $fc.Assign($p) ]>
+          | _ => Error(at, "assign takes a file and its name"); <[ () ]>
+        }
+      | "new" =>
+        match (values)
+        {
+          | p :: _ =>
+            def (pc, t) = lvalue(p);
+            if (t.Kind != "pointer") { Error(at, "new takes a pointer"); <[ () ]> }
+            else <[ $pc = pascal.PascalPointer($(Init(t.Target, null))) ]>
+          | _ => Error(at, "new takes a pointer"); <[ () ]>
+        }
+      | "dispose" =>
+        match (values) { | p :: _ => def (pc, _) = lvalue(p); <[ $pc = null ]> | _ => Error(at, "dispose takes a pointer"); <[ () ]> }
+      | "inc" | "dec" =>
+        match (values)
+        {
+          | [v] | [v, _] =>
+            def (vc, t) = lvalue(v);
+            def by = match (values) { | [_, n] => Ordinal(n) | _ => <[ 1 ]> };
+            def changed = if (name == "inc") <[ $(OrdOf(vc, t)) + $by ]> else <[ $(OrdOf(vc, t)) - $by ]>;
+            <[ $vc = $(FromOrd(changed, t)) ]>
+          | _ => Error(at, $"$name takes a variable"); <[ () ]>
+        }
+      | "pack" | "unpack" =>
+        match (values)
+        {
+          // pack(a, i, z) packs a from index i into z; unpack(z, a, i) unpacks z into a from index i
+          | [a, i, z] when name == "pack" =>
+            def (ac, _) = Rvalue(a); def (zc, _) = Rvalue(z);
+            <[ pascal.Pascal.Pack($ac, $(Ordinal(i)), $zc) ]>
+          | [z, a, i] =>
+            def (zc, _) = Rvalue(z); def (ac, _) = Rvalue(a);
+            <[ pascal.Pascal.Unpack($zc, $ac, $(Ordinal(i))) ]>
+          | _ => Error(at, $"$name takes three arguments"); <[ () ]>
+        }
+      | "halt" => <[ System.Environment.Exit(0) ]>
+      | _ => <[ $(original : usesite)(..$(values.Map(v => Rvalue(v)[0]))) ]> // (a name Pascal does not declare: the Nemerle program's)
+    }
+  }
+
+  Write(file : PExpr, ft : PT, a : WArg) : PExpr
+  {
+    def (v, t) = Rvalue(a.Value);
+    def width = if (a.Width == null) <[ -1 ]> else Ordinal(a.Width);
+    if (ft.Kind == "file")
+    {
+      when (a.Width != null) Error(a.Width.Loc, "a binary file's write takes no width");
+      <[ { $file.Buffer = $(ConvertCode(v, t, ft.Base, a.Value.Loc, "the value written")); $file.Put() } ]>
+    }
+    else match (OrdBase(t).Kind)
+    {
+      | "integer" | "enum" => <[ $file.WriteInt($v, $width) ]>
+      | "real" =>
+        def decimals = if (a.Decimals == null) <[ -1 ]> else Ordinal(a.Decimals);
+        <[ $file.WriteReal($v, $width, $decimals) ]>
+      | "boolean" => <[ $file.WriteBool($v, $width) ]>
+      | "char" => <[ $file.WriteChar($v, $width) ]>
+      | "string" => <[ $file.WriteString($v, $width) ]>
+      | "array" when t.Elem.Kind == "char" => <[ $file.WriteString($v.AsString(), $width) ]>
+      | "nemerle" => <[ $file.WriteValue($v, $width) ]>
+      | _ => Error(a.Value.Loc, $"write writes numbers, characters, strings and booleans, not $t"); <[ () ]>
+    }
+  }
+
+  Read(file : PExpr, ft : PT, target : PExpr, t : PT, at : Location) : PExpr
+  {
+    if (ft.Kind == "file") <[ { $target = $file.Buffer; $file.Get() } ]>
+    else match (OrdBase(t).Kind)
+    {
+      | "integer" => <[ $target = $(ConvertCode(<[ $file.ReadInt() ]>, Integer, t, at, "the value read")) ]>
+      | "real" => <[ $target = $file.ReadReal() ]>
+      | "char" => <[ $target = $file.ReadChar() ]>
+      | "string" => <[ $target = $file.ReadString() ]>
+      | _ => Error(at, $"read reads numbers, characters and strings, not $t"); <[ () ]>
+    }
+  }
+
+  // ---- expressions ----
+
+  /// A variable's access (or a field's, an element's, a pointer's target, a file's buffer) and its type
+  Designator(d : Desig) : PExpr * PT
+  {
+    def s = Lookup(d.Name);
+    def (code0, t0) = match (s)
+    {
+      | null => Error(d.At, $"unknown name `$(d.Name)'"); (<[ () ]>, Integer)
+      | s when s.Kind == "var" => (s.Code, s.Type)
+      | s when s.Kind == "routine" && s.Routine.IsFunction && d.Sels.IsEmpty =>
+        (Call(d.At, s.Routine, [], true), s.Routine.Result)
+      | s => Error(d.At, $"`$(d.Name)' is a $(s.Kind), not a variable"); (<[ () ]>, Integer)
+    };
+    mutable code = code0; mutable t = t0;
+    foreach (sel in d.Sels)
+      match (sel)
+      {
+        | Index(exprs) =>
+          foreach (e in exprs)
+            match (t.Kind)
+            {
+              | "array" => code = <[ $code[$(Ordinal(e))] ]>; t = t.Elem
+              | "string" => code = <[ $code[$(Ordinal(e)) - 1] ]>; t = Char
+              | _ => Error(e.Loc, $"$t is not indexed"); ()
+            }
+        | Field(name) =>
+          match (if (t.Kind == "record") t.Field(name) else None())
+          {
+            | Some((field, ft)) => code = <[ $code.$(field : usesite) ]>; t = ft
+            | None => Error(d.At, $"$t has no field `$name'")
+          }
+        | Deref =>
+          match (t.Kind)
+          {
+            | "pointer" => code = <[ $code.Value ]>; t = t.Target
+            | "file" => code = <[ $code.Buffer ]>; t = t.Base
+            | "text" => code = <[ $code.Buffer ]>; t = Char
+            | _ => Error(d.At, $"$t is not a pointer or a file")
+          }
+      }
+    (code, t)
+  }
+
+  Rvalue(e : Expr) : PExpr * PT
+  {
+    // (built at the expression's place, so what the compiler says of it points there)
+    mutable t = null;
+    def code = Located(e.Loc, () => { def (c, ct) = Expression(e); t = ct; c });
+    (code, t)
+  }
+
+  Expression(e : Expr) : PExpr * PT
+  {
+    match (e)
+    {
+      | Num(_, v) => (<[ $(v : int) ]>, Integer)
+      | RealNum(_, v) => (<[ $(v : double) ]>, Real)
+      | Str(_, text) => if (text.Length == 1) (<[ $(text[0] : char) ]>, Char) else (<[ $(text : string) ]>, StringT)
+      | Nil => (<[ null ]>, NilT)
+      | Var(_, d) =>
+        match (if (d.Sels.IsEmpty) Lookup(d.Name) else null)
+        {
+          | s when s != null && (s.Kind == "const" || s.Kind == "enumval") => (s.Code, s.Type)
+          | s when s != null && s.Kind == "routine" && !s.Routine.IsFunction => Error(d.At, $"`$(d.Name)' is a procedure: it gives no value"); (<[ () ]>, Integer)
+          | null when d.Sels.IsEmpty && (String.Equals(d.Name, "eof", StringComparison.OrdinalIgnoreCase) || String.Equals(d.Name, "eoln", StringComparison.OrdinalIgnoreCase)) =>
+            FunctionCall(d.At, d.Name, []) // (the standard functions that take no argument: `eof' is `eof(input)')
+          | null when d.Sels.IsEmpty => (<[ $(d.Name : usesite) ]>, PT("nemerle")) // (the Nemerle program's)
+          | _ => Designator(d)
+        }
+      | Call(at, name, args) => FunctionCall(at, name, args)
+      | SetOf(_, []) => (<[ pascal.PascalSet.Empty ]>, EmptySet)
+      | SetOf(at, items) =>
+        mutable baseType = null;
+        def bounds = items.Map((low, high) =>
+        {
+          def (l, lt) = Rvalue(low);
+          def (h, _) = if (high == null) (l, lt) else Rvalue(high);
+          when (baseType == null) baseType = OrdBase(lt);
+          unless (IsOrdinal(lt)) Error(at, "a set's elements are ordinals");
+          (OrdOf(l, lt), OrdOf(h, lt))
+        });
+        def flat = bounds.FoldRight([], ((l, h), acc) => l :: h :: acc);
+        def t = PT("set"); t.Base = baseType;
+        (<[ pascal.PascalSet.Of(array[..$flat]) ]>, t)
+      | Un(at, op, x) =>
+        def (c, t) = Rvalue(x);
+        match ((op, OrdBase(t).Kind))
+        {
+          | ("not", "boolean") => (<[ ! $c ]>, Boolean)
+          | ("-", "integer") | ("-", "real") => (<[ - $c ]>, OrdBase(t))
+          | ("+", "integer") | ("+", "real") => (c, OrdBase(t))
+          | _ => Error(at, $"$op does not apply to $t"); (c, t)
+        }
+      | Bin(at, op, l, r) => Binary(at, op, l, r)
+    }
+  }
+
+  Binary(at : Location, op : string, left : Expr, right : Expr) : PExpr * PT
+  {
+    def (l, lt0) = Rvalue(left); def (r, rt0) = Rvalue(right);
+    def lt = OrdBase(lt0); def rt = OrdBase(rt0);
+    def numeric(t : PT) { t.Kind == "integer" || t.Kind == "real" }
+    def real(c : PExpr, t : PT) { if (t.Kind == "integer") <[ ($c :> double) ]> else c }
+    def isSet(t : PT) { t.Kind == "set" || t.Kind == "emptyset" }
+    def stringy(t : PT) { t.Kind == "string" || t.Kind == "char" || t.Kind == "array" && t.Elem.Kind == "char" }
+    def str(c : PExpr, t : PT) { match (t.Kind) { | "char" => <[ $c.ToString() ]> | "array" => <[ $c.AsString() ]> | _ => c } }
+    def bad() { Error(at, $"$op does not apply to $lt0 and $rt0"); (l, lt) }
+    def nemerle = if (lt.IsNemerle) rt else if (rt.IsNemerle) lt else null;
+    if (nemerle != null)
+    {
+      def t = if (nemerle.IsNemerle) nemerle else if (op == "/") Real else if (["=", "<>", "<", "<=", ">", ">=", "in"].Contains(op)) Boolean else nemerle;
+      def code = match (op)
+      {
+        | "+" => <[ $l + $r ]> | "-" => <[ $l - $r ]> | "*" => <[ $l * $r ]> | "/" => <[ ($l :> double) / $r ]>
+        | "div" => <[ $l / $r ]> | "mod" => <[ $l % $r ]> | "and" => <[ $l && $r ]> | "or" => <[ $l || $r ]>
+        | "=" => <[ $l == $r ]> | "<>" => <[ $l != $r ]> | "<" => <[ $l < $r ]> | "<=" => <[ $l <= $r ]>
+        | ">" => <[ $l > $r ]> | ">=" => <[ $l >= $r ]> | _ => Error(at, $"$op with a Nemerle value"); l
+      };
+      (code, t)
+    }
+    else match (op)
+    {
+      | _ when (op == "+" || op == "-" || op == "*") && isSet(lt) && isSet(rt) =>
+        def t = if (lt.Kind == "set") lt else rt;
+        match (op) { | "+" => (<[ $l.Union($r) ]>, t) | "-" => (<[ $l.Difference($r) ]>, t) | _ => (<[ $l.Intersection($r) ]>, t) }
+      | "+" when stringy(lt) && stringy(rt) && (lt.Kind != "char" || rt.Kind != "char") => (<[ $(str(l, lt)) + $(str(r, rt)) ]>, StringT)
+      | _ when (op == "+" || op == "-" || op == "*") && numeric(lt) && numeric(rt) =>
+        if (lt.Kind == "integer" && rt.Kind == "integer")
+          match (op) { | "+" => (<[ $l + $r ]>, Integer) | "-" => (<[ $l - $r ]>, Integer) | _ => (<[ $l * $r ]>, Integer) }
+        else match (op) { | "+" => (<[ $(real(l, lt)) + $(real(r, rt)) ]>, Real) | "-" => (<[ $(real(l, lt)) - $(real(r, rt)) ]>, Real) | _ => (<[ $(real(l, lt)) * $(real(r, rt)) ]>, Real) }
+      | "/" when numeric(lt) && numeric(rt) => (<[ $(real(l, lt)) / $(real(r, rt)) ]>, Real)
+      | "div" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ $l / $r ]>, Integer)
+      | "mod" when lt.Kind == "integer" && rt.Kind == "integer" => (<[ pascal.Pascal.Mod($l, $r) ]>, Integer)
+      | "and" when lt.Kind == "boolean" && rt.Kind == "boolean" => (<[ $l && $r ]>, Boolean)
+      | "or" when lt.Kind == "boolean" && rt.Kind == "boolean" => (<[ $l || $r ]>, Boolean)
+      | "in" when IsOrdinal(lt) && isSet(rt) => (<[ $r.Contains($(OrdOf(l, lt))) ]>, Boolean)
+      | "=" | "<>" | "<" | "<=" | ">" | ">=" =>
+        def compare(a : PExpr, b : PExpr) : PExpr
+        {
+          match (op)
+          {
+            | "=" => <[ $a == $b ]> | "<>" => <[ $a != $b ]> | "<" => <[ $a < $b ]>
+            | "<=" => <[ $a <= $b ]> | ">" => <[ $a > $b ]> | _ => <[ $a >= $b ]>
+          }
+        }
+        if (numeric(lt) && numeric(rt)) (if (lt.Kind == "real" || rt.Kind == "real") compare(real(l, lt), real(r, rt)) else compare(l, r), Boolean)
+        else if (stringy(lt) && stringy(rt) && (lt.Kind != "char" || rt.Kind != "char"))
+          (compare(<[ string.CompareOrdinal($(str(l, lt)), $(str(r, rt))) ]>, <[ 0 ]>), Boolean)
+        else if (IsOrdinal(lt) && IsOrdinal(rt)) (compare(OrdOf(l, lt), OrdOf(r, rt)), Boolean)
+        else if (isSet(lt) && isSet(rt))
+          match (op)
+          {
+            | "=" => (<[ $l.SetEquals($r) ]>, Boolean) | "<>" => (<[ ! $l.SetEquals($r) ]>, Boolean)
+            | "<=" => (<[ $l.IsSubsetOf($r) ]>, Boolean) | ">=" => (<[ $r.IsSubsetOf($l) ]>, Boolean)
+            | _ => bad()
+          }
+        else if ((lt.Kind == "pointer" || lt.Kind == "nil") && (rt.Kind == "pointer" || rt.Kind == "nil") && (op == "=" || op == "<>"))
+          (if (op == "=") <[ object.ReferenceEquals($l, $r) ]> else <[ !object.ReferenceEquals($l, $r) ]>, Boolean)
+        else bad()
+      | _ => bad()
+    }
+  }
+
+  /// The standard functions, a user function, a Nemerle function (a name Pascal does not declare)
+  FunctionCall(at : Location, name : string, args : list[Expr]) : PExpr * PT
+  {
+    match (Lookup(name))
+    {
+      | s when s != null && s.Kind == "routine" => (Call(at, s.Routine, args, true), s.Routine.Result)
+      | s when s != null && s.Kind == "var" && s.Type.Kind == "proc" => (CallValue(at, s, args, true), s.Type.Sig.Result)
+      | _ =>
+        def arg() : PExpr * PT { match (args) { | [x] => Rvalue(x) | _ => Error(at, $"$name takes one argument"); (<[ 0 ]>, Integer) } }
+        def real(c : PExpr, t : PT) { if (OrdBase(t).Kind == "integer") <[ ($c :> double) ]> else c }
+        match (name.ToLowerInvariant())
+        {
+          | "abs" => def (c, t) = arg(); (<[ System.Math.Abs($c) ]>, OrdBase(t))
+          | "sqr" => def (c, t) = arg(); (<[ $c * $c ]>, OrdBase(t))
+          | "sqrt" => def (c, t) = arg(); (<[ System.Math.Sqrt($(real(c, t))) ]>, Real)
+          | "sin" => def (c, t) = arg(); (<[ System.Math.Sin($(real(c, t))) ]>, Real)
+          | "cos" => def (c, t) = arg(); (<[ System.Math.Cos($(real(c, t))) ]>, Real)
+          | "arctan" => def (c, t) = arg(); (<[ System.Math.Atan($(real(c, t))) ]>, Real)
+          | "exp" => def (c, t) = arg(); (<[ System.Math.Exp($(real(c, t))) ]>, Real)
+          | "ln" => def (c, t) = arg(); (<[ System.Math.Log($(real(c, t))) ]>, Real)
+          | "trunc" => def (c, t) = arg(); (<[ (System.Math.Truncate($(real(c, t))) :> int) ]>, Integer)
+          | "round" => def (c, t) = arg(); (<[ (System.Math.Round($(real(c, t)), System.MidpointRounding.AwayFromZero) :> int) ]>, Integer)
+          | "odd" => def (c, _) = arg(); (<[ pascal.Pascal.Mod($c, 2) == 1 ]>, Boolean)
+          | "ord" => def (c, t) = arg(); (OrdOf(c, t), Integer)
+          | "chr" => def (c, _) = arg(); (<[ ($c :> char) ]>, Char)
+          | "succ" => def (c, t) = arg(); (Succ(c, t), t)
+          | "pred" => def (c, t) = arg(); (Pred(c, t), t)
+          | "length" => def (c, t) = arg(); (if (t.Kind == "array") <[ ($(t.High : int) - $(t.Low : int) + 1) ]> else <[ $c.Length ]>, Integer)
+          | "upcase" => def (c, _) = arg(); (<[ System.Char.ToUpperInvariant($c) ]>, Char)
+          | "eof" | "eoln" =>
+            def f = match (args) { | [] => <[ pascal.PascalText.Input ]> | [x] => Rvalue(x)[0] | _ => Error(at, $"$name takes a file"); <[ pascal.PascalText.Input ]> };
+            (if (name.ToLowerInvariant() == "eof") <[ $f.Eof ]> else <[ $f.Eoln ]>, Boolean)
+          | "copy" =>
+            match (args)
+            {
+              | [s, i, n] => (<[ pascal.Pascal.Copy($(Rvalue(s)[0]), $(Ordinal(i)), $(Ordinal(n))) ]>, StringT)
+              | _ => Error(at, "copy takes a string, a start and a count"); (<[ "" ]>, StringT)
+            }
+          | "pos" =>
+            match (args)
+            {
+              | [sub, s] => (<[ ($(Rvalue(s)[0]).IndexOf($(Rvalue(sub)[0]).ToString(), System.StringComparison.Ordinal) + 1) ]>, Integer)
+              | _ => Error(at, "pos takes two strings"); (<[ 0 ]>, Integer)
+            }
+          | "concat" when !args.IsEmpty => (args.Tail.FoldLeft(<[ $(Rvalue(args.Head)[0]).ToString() ]>, (a, acc) => <[ $acc + $(Rvalue(a)[0]).ToString() ]>), StringT)
+          | _ => (<[ $(name : usesite)(..$(args.Map(a => Rvalue(a)[0]))) ]>, PT("nemerle")) // (the Nemerle program's)
+        }
+    }
+  }
+}

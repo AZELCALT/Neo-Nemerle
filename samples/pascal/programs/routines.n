@@ -1,0 +1,49 @@
+// forward declarations (mutual recursion), procedural parameters, and nested functions
+space Pascal
+{
+  program Routines;
+  var
+    i : integer;
+
+  function IsEven(n : integer) : boolean; forward;
+
+  function IsOdd(n : integer) : boolean;
+  begin
+    if n = 0 then IsOdd := false else IsOdd := IsEven(n - 1)
+  end;
+
+  function IsEven;
+  begin
+    if n = 0 then IsEven := true else IsEven := IsOdd(n - 1)
+  end;
+
+  function Square(x : real) : real;
+  begin Square := x * x end;
+
+  { the area under f from a to b, by the trapezoid rule }
+  function Integrate(function f(x : real) : real; a, b : real; steps : integer) : real;
+  var
+    h, sum : real;
+    k : integer;
+  begin
+    h := (b - a) / steps;
+    sum := (f(a) + f(b)) / 2;
+    for k := 1 to steps - 1 do sum := sum + f(a + k * h);
+    Integrate := sum * h
+  end;
+
+  procedure Apply(procedure p(n : integer); times : integer);
+  var k : integer;
+  begin for k := 1 to times do p(k) end;
+
+  procedure Show(n : integer);
+  begin write(n * 10, ' ') end;
+
+  begin
+    for i := 0 to 5 do write(IsEven(i), ' ');
+    writeln;
+    writeln(Integrate(Square, 0.0, 3.0, 1000):8:4);
+    Apply(Show, 3);
+    writeln
+  end.
+}

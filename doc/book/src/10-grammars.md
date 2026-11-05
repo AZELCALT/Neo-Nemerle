@@ -422,4 +422,82 @@ can dial into them, `dial:.file.G::member` with the library's file, as it dials 
 Scripts continue from libraries the same way, which makes a script a plugin of the application that hosts it. A
 script can use the host's grammars, scopes and dials without defining any of them (see [Scripts](11-scripts.md)).
 
+## Spaces that declare, and spaces that use each other
+
+A space is a logical file, and like a file it can declare: when its mapping gives members, `<[ decl: ... ]>` quoted as
+`PExpr.Quoted(SyntaxElement.ClassMember(...))`, they become members of its file's module, there for every file of the
+program and for C#. The rest of what it gives is its statements, as before. A space whose root mapping takes no
+`NitraDialectContext` is mapped before the program is typed, so its members are there when other code is typed.
+
+Spaces find each other as files do. `SpaceFiles.Import(name)`, in a mapping, names a file module from the file being
+mapped (as `using name;` would) and gives what that module's space said with `SpaceFiles.Export(key, value)`: a
+declaration's signature, its kind, anything the grammar needs of it. The space it names is mapped first when it is not
+yet; one that is being mapped gives what it has exported so far, so two spaces may use each other as long as each
+exports what the other needs before it asks.
+
+```nemerle,lib=defs
+// ncc: -r:{toolchain}/Nemerle.Compiler.dll
+// file: defs.n
+grammar Defs
+{
+  using Nemerle.Compiler.Parsetree;
+  using Nemerle.Compiler.NitraDialectServices;
+  syntax module M
+  {
+    using Nitra.Core;
+    regex Digits = ['0'..'9']+;
+    [StartRule] syntax Start = Items=Item*
+    {
+      map PExpr = { mutable code = []; foreach (i in this.Items) code ::= i.GetAst(); <[ { ..$(code.Rev()); () } ]> };
+    }
+    syntax Item
+    {
+      map PExpr;
+      // `define x = 5;' declares x() in its file's module, and tells the spaces that use this one
+      | Define = "define" Name=IdentifierBody "=" Value=Digits ";"
+        {
+          map PExpr = {
+            def name = GetText(this.Name);
+            SpaceFiles.Export(name, int.Parse(GetText(this.Value)));
+            PExpr.Quoted(SyntaxElement.ClassMember(<[ decl: public static $(name : usesite)() : int { $(int.Parse(GetText(this.Value)) : int) } ]>))
+          };
+        }
+      // `use f show x;' prints f's x(), and the value f's space exported for it
+      | Show = "use" Other=IdentifierBody "show" Name=IdentifierBody ";"
+        {
+          map PExpr = {
+            def found = SpaceFiles.Import(GetText(this.Other));
+            def name = GetText(this.Name);
+            if (!found.Exports.ContainsKey(name)) throw System.ArgumentException(GetText(this.Other) + " defines no " + name)
+            else <[ System.Console.WriteLine($(found.Module : usesite).$(name : usesite)() + 1000 * $(found.Exports[name] :> int : int)) ]>
+          };
+        }
+    }
+  }
+}
+```
+
+```nemerle
+// ncc: -r:{chapter}/defs.dll
+// file: numbers.n
+space Defs { define seven = 7; }
+
+// file: main.n
+space Defs { use numbers show seven; }
+System.Console.WriteLine(numbers.seven() * 6)
+```
+
+```text
+7007
+42
+```
+
+`numbers.seven()` is a member like any other: the Nemerle code after the space calls it. Here both files are given to
+the compiler. For a program compiled from its main file alone, its other files are found from what it imports: a
+library that holds a grammar may give a class that implements `ISpaceImports`, whose `Imports(grammar, body)` lists the
+names a space of its grammar imports, and each is found as a `using` of that name would be (a file beside, or under
+the source root, in any case). `samples/pascal` is a whole language on these: Pascal with Turbo Pascal's units, each
+unit the space of its own file.
+
+
 Like macros, grammars are language extensions: a distributed grammar comes with its source under the GPL.

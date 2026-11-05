@@ -1,0 +1,41 @@
+// Text input character by character (eoln, the buffer variable input^), a file written with put, and pack/unpack
+space Pascal
+{
+  program TextIO(input, output);
+  var
+    c : char;
+    letters, lines : integer;
+    t : text;
+    loose : array [1..4] of char;
+    tight : packed array [1..4] of char;
+    i : integer;
+  begin
+    letters := 0; lines := 0;
+    while not eof do
+    begin
+      while not eoln do
+      begin
+        read(c);
+        if c <> ' ' then letters := letters + 1
+      end;
+      readln;
+      lines := lines + 1
+    end;
+    writeln(lines, ' lines, ', letters, ' letters');
+    assign(t, 'pascal-put.txt');
+    rewrite(t);
+    for c := 'a' to 'e' do begin t^ := c; put(t) end;
+    writeln(t);
+    close(t);
+    reset(t);
+    write('back: ');
+    while not eoln(t) do begin write(t^); get(t) end;
+    writeln;
+    for i := 1 to 4 do loose[i] := chr(ord('w') + i - 1);
+    pack(loose, 1, tight);
+    writeln(tight);
+    tight := 'nemo';
+    unpack(tight, loose, 1);
+    writeln(loose[1], loose[4])
+  end.
+}

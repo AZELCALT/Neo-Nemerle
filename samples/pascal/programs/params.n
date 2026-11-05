@@ -1,0 +1,38 @@
+// Parameters: a var parameter that a nested routine changes, a nested routine's own var parameter, and value
+// parameters of a record and an array, which the routine gets copies of
+space Pascal
+{
+  program Params;
+  type
+    Pair = record a, b : integer end;
+    Row = array [1..3] of integer;
+  var
+    n : integer;
+    p : Pair;
+    r : Row;
+
+  procedure Bump(var x : integer);
+    procedure Twice;
+    begin x := x * 2 end;
+    procedure Add(var y : integer; by : integer);
+    begin y := y + by end;
+  begin
+    Twice;
+    Add(x, 1)
+  end;
+
+  procedure Spoil(q : Pair; row : Row);
+  begin
+    q.a := 99; row[1] := 99;
+    writeln('inside ', q.a, ' ', row[1])
+  end;
+
+  begin
+    n := 5;
+    Bump(n);
+    writeln('bumped ', n);
+    p.a := 1; p.b := 2; r[1] := 7; r[2] := 8; r[3] := 9;
+    Spoil(p, r);
+    writeln('outside ', p.a, ' ', r[1])
+  end.
+}
