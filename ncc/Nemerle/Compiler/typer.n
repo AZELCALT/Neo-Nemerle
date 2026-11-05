@@ -6904,7 +6904,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
           | _ => false
         };
       unless (produces)
-        _ = Manager.YieldLabels.Add(label_no);
+        // (method bodies are typed on several threads: the labels are the manager's, one at a time)
+        lock (Manager.YieldLabels) _ = Manager.YieldLabels.Add(label_no);
       def state_no = AddYieldLabel(label_no);
       def label = TExpr.Label(InternalType.Void, label_no, VoidLiteral());
 

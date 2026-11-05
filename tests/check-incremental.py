@@ -77,7 +77,9 @@ def build(name, args, label, tc=T, incremental=False):
     out = work / label; out.mkdir(exist_ok=True)
     env = dict(os.environ, NEMERLE_INCREMENTAL_DEBUG='1')
     started = time.time()
-    r = subprocess.run(['dotnet', str(tc / 'ncc.exe'), *args, '-out:' + str(out / (name + '.dll')),
+    # (typed in order: what is compared is a full compile and an incremental one, not two orders of typing)
+    ordered = ['-parallel-'] if '-parallel-' in subprocess.run(['dotnet', str(tc / 'ncc.exe'), '-help'], capture_output=True, text=True).stdout else []
+    r = subprocess.run(['dotnet', str(tc / 'ncc.exe'), *args, *ordered, '-out:' + str(out / (name + '.dll')),
                         *(['-incremental:' + str(state)] if incremental else [])],
                        cwd=work, capture_output=True, text=True, timeout=1200, env=env)
     took = time.time() - started

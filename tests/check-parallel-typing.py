@@ -85,7 +85,8 @@ def build(name, args, extra, label):
     return printed, (r.stdout + r.stderr).replace(str(out), '<out>')
 
 for name, args in corpora.items():
-    first, said1 = build(name, args, [], 'in-order')
+    # (in order: ncc types in parallel unless told -parallel-)
+    first, said1 = build(name, args, ['-parallel-'] if parallel else [], 'in-order')
     second, said2 = build(name, args, ['-parallel'] if parallel else [], 'parallel' if parallel else 'again')
     if said1 != said2:
         raise SystemExit('FAILED: %s: the compiles gave different messages\n--- first\n%s\n--- second\n%s' % (name, said1[-2000:], said2[-2000:]))

@@ -430,6 +430,8 @@ public sealed class ScriptHost
         options.AutoResolveSources = false;
         options.IgnoreConfusion = true; options.ProgressBar = false; options.ColorMessages = false;
         options.TargetReferenceDirectory = definition.TargetReferenceDirectory;
+        // (a script's method bodies are typed in parallel, as ncc's: it starts sooner; its options may say -parallel-)
+        options.ParallelTyping = true;
         ScriptCompilerOptions.Apply(options, definition.CompilerOptions, source.Path);
         options.EmitDebug = definition.Debug;
         options.OutputFileName = Path.Combine(directory, "Script_" + Guid.NewGuid().ToString("N") + ".dll");

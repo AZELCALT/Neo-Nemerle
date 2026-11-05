@@ -802,7 +802,7 @@ using Nemerle.Compiler.Utility;
 
           // an async state machine's resume point, after the jump that suspended it: the debugger's step over an
           // `await' waits for it (the PDB's async stepping information)
-          when (IsDebugEnabled && Manager.YieldLabels.Contains(id) && _method_builder.Name == "MoveNext"
+          when (IsDebugEnabled && lock (Manager.YieldLabels) Manager.YieldLabels.Contains(id) && _method_builder.Name == "MoveNext"
                 && Manager.AsyncStateMachineTypes.Contains(_method_builder.DeclaringType))
           {
             unless (Manager.AsyncStepping.ContainsKey(_method_builder))

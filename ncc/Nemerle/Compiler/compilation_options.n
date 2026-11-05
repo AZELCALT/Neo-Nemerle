@@ -759,9 +759,9 @@ using Nemerle.Compiler.Utility;
                        help = "Keep in DIR what the next compile needs to retype only the files whose text changed",
                        handler = fun (s) { this.IncrementalDir = s; }),
 
-        Getopt.CliOption.Flag (name = "-parallel",
-                               help = "Type method bodies on several threads (the result is the same as without it)",
-                               handler = fun () { this.ParallelTyping = true }),
+        Getopt.CliOption.Boolean (name = "-parallel",
+                     help = "Type method bodies on several threads (ncc's default; the result is the same as without it); -parallel- types them in order, on one thread (the made-up names are then the same from one compile to the next)",
+                     handler = fun (x) { this.ParallelTyping = x }),
 
         Getopt.CliOption.Flag (name = "-no-color",
                                help = "Disable ANSI coloring of error/warning/hint messages",

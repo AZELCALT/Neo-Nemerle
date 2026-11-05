@@ -39,10 +39,13 @@ code is `Main`. A library gets a `NAME.n` instead, with one public function to s
 
 `[project]` is the project's folder or its `.nproj` file; the default is the current folder. Options given to
 `build` and `run` are passed to the compiler (`ncc build -debug+`), and `--offline` resolves packages from the
-local cache and local feeds only.
+local cache and local feeds only; `--no-incremental` builds without the last build's state (see below).
 
 A build is skipped when nothing it depends on changed: the project file, the sources, the references, the options
-and the compiler itself. The output folder is ready to run or ship: the binary, `Nemerle.dll`, and every assembly
+and the compiler itself. When something did, the build is incremental: it keeps its state in `out/.incremental`, and
+a file whose text did not change (when no file's declarations did) is taken from the last build instead of typed
+again; the method bodies it does type are typed on several threads. The output is a full build's. `--no-incremental`
+types every file again. The output folder is ready to run or ship: the binary, `Nemerle.dll`, and every assembly
 the references need, so `dotnet out/hello.dll` works anywhere the .NET 10 runtime is installed.
 
 A program also gets a launcher next to its `.dll`: `out/hello.exe` on Windows, `out/hello` elsewhere. It is the .NET

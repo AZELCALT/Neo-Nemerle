@@ -29,8 +29,8 @@ internal module Projects
   }
 
   Usage : string = "usage: ncc init [folder] [--lib] [--name NAME]\n"
-                 + "       ncc build [project] [compiler options] [--offline]\n"
-                 + "       ncc run [project] [compiler options] [--offline] [-- program arguments]\n"
+                 + "       ncc build [project] [compiler options] [--offline] [--no-incremental]\n"
+                 + "       ncc run [project] [compiler options] [--offline] [--no-incremental] [-- program arguments]\n"
                  + "       ncc pack [project] [compiler options] [--offline]\n"
                  + "       ncc clean [project]\n"
                  + "A project is a folder with one .nproj file; [project] is that folder or file (default: the current folder).";
@@ -170,6 +170,9 @@ internal module Projects
   /// Builds the project of `file` (after the projects it uses) and returns its binary.
   Build(file : string, options : list[string], offline : bool, building : list[string]) : string
   {
+    // (a project compiles incrementally, its state in its output folder, unless --no-incremental)
+    def incremental = !options.Contains("--no-incremental");
+    def options = options.Filter(o => o != "--no-incremental");
     def project = Project.Load(file);
     foreach (w in project.Warnings) Console.Error.WriteLine("warning: " + w);
     when (building.Contains(project.File))
@@ -269,6 +272,7 @@ internal module Projects
       def started = Stopwatch.StartNew();
       def arguments = SCG.List.[string]();
       arguments.AddRange(options);
+      when (incremental) arguments.Add("-incremental:" + Path.Combine(output, ".incremental"));
       arguments.AddRange(targetOptions); // after the launcher's -target-references, which they replace
       arguments.Add("-source-root:" + project.Root);
       arguments.Add("-out:" + binary);

@@ -98,6 +98,9 @@ using Nemerle.ProjectCommands;
       def arguments = Environment.GetCommandLineArgs().:NToList().Tail;
       when (Projects.IsCommand(arguments)) Environment.Exit(Projects.Run(arguments));
       Options = CompilationOptions();
+      // (ncc types method bodies in parallel unless told otherwise, -parallel-: the same output, sooner; a program that
+      // embeds the compiler chooses for itself)
+      Options.ParallelTyping = true;
       Manager = ManagerClass(Options);
       Manager.InitOutput(Console.Out);
       parse_command_line();
