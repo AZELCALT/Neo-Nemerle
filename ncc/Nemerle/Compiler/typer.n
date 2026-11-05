@@ -228,6 +228,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     mutable flow_case_ends : list[SCG.Dictionary[LocalValue, Nemerle.Compiler.typer_flow.FlowPoint] * TExpr];
     // (where each local function's body ends: its flow there, kept by the method's typer)
     mutable flow_ends : SCG.Dictionary[TFunHeader, SCG.Dictionary[LocalValue, Nemerle.Compiler.typer_flow.FlowPoint]] = SCG.Dictionary();
+    // (the inferred results of the local functions and lambdas written without a result type, and their places)
+    local_results : SCG.Dictionary[TFunHeader, string] = SCG.Dictionary();
     // (the conditions typed so far: their flows where true and where false)
     mutable flow_conditions : SCG.Dictionary[TExpr, Nemerle.Compiler.typer_flow.FlowCondition] = SCG.Dictionary();
 
@@ -471,6 +473,8 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
               assert(Manager.IsIntelliSenseMode || !messenger.SeenError);
               messenger.InErrorMode = true;
               RunDelayedTypings();
+              // (a local function's result learned to be a `content': typed again so, LocalContentResult)
+              when (current_method_builder.LocalContentLearned && facts.Attempts < 16) { current_method_builder.LocalContentLearned = false; restart_flow () }
               facts.Publish ();
               // (nested code assigned a value types the code around it did not know: again, knowing them; the facts
               // only grow and the types are finitely many, and types that never compare equal stop after a few)
@@ -503,6 +507,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             }
             catch
             {
+              | _ is RestartInErrorMode when current_method_builder.LocalContentLearned && current_method_builder.FlowFacts.Attempts < 16 =>
+                current_method_builder.LocalContentLearned = false;
+                restart_flow ()
               | _ is RestartInErrorMode =>
                 def errorCount = Message.ErrorCount;
                 put_in_error_mode (typer_done);
@@ -2013,7 +2020,9 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
     /// holds a value of several types. Never by a cast (`x :> content' is an error): a content is made only here.
     ContentHold(expr : TExpr, target : TypeVar) : TExpr
     {
-      if (!IsContentType(target) || expr.Type.Hint.IsNone || IsContentType(expr.Type)) null
+      // (as a `[...]' list is built into another shape: not when several methods are in play, so an overload that
+      // takes the value as it is wins, `object' among them; a single method holds it)
+      if (!IsContentType(target) || expr.Type.Hint.IsNone || IsContentType(expr.Type) || Manager.NoListCoercion) null
       else
       {
         def held = TypeExpr(<[ Nemerle.Scopes.Content.Of($(expr : typed)) ]>, target);
@@ -2776,6 +2785,10 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         | <[ _ : $_ ]>
         | <[ _ . $_ ]> =>
           TypeExpr (PartialApplication (expression), expected)
+
+        // a `[...]' literal cast to a type takes its shape, as where that type is expected (`[3, 4] :> array[int]')
+        | PExpr.TypeConversion (PExpr.ListLiteral as literal, typeAst) =>
+          TypeExpr(PExpr.TypeEnforcement(expression.Location, literal, typeAst), expected)
 
         | PExpr.TypeConversion (expr, typeAst) =>
           def fixedType = BindType(typeAst).Fix();
@@ -4346,6 +4359,22 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
       found
     }
 
+    /// The branches of a body cannot agree on `expected': when it is the inferred result of a local function or
+    /// lambda, that function's result is a `content' (its return points give several types), and the body is typed
+    /// again with it so (RunFullTyping's restart, as the flow's).
+    LocalContentResult(expected : TypeVar) : void
+    {
+      // (the function whose body is being typed, when it is such a one, and the branches are of its result: the
+      // function's result type, or what it is required to fit)
+      mutable place;
+      when (!Manager.IsSpeculativeTyping && CurrentMethodBuilder != null && current_fun != null
+            && GetTopTyper ().local_results.TryGetValue(current_fun, out place)
+            && (expected.Equals(current_fun.ReturnType) || expected.IsFree || current_fun.ReturnType.IsFree || current_fun.ReturnType.Hint.Equals(expected.Hint))
+            && CurrentMethodBuilder.LocalContentResults.Add(place))
+        // (the body is typed again once this attempt is done, as when the flow learns more: what it reported is forgotten)
+        CurrentMethodBuilder.LocalContentLearned = true
+    }
+
     TypeLocalFunction (functions : list [PT.Function_decl]) : TExpr
     {
       mutable headers = [];
@@ -4392,8 +4421,14 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
             fp
           });
         def name_obj = fn.header.PName;
+        // a local function or lambda written without its result type: a `content' when its return points give
+        // several types (as a function's result is; learned on a first try, see LocalContentResult)
+        def inferred = fn.header.ReturnType is PT.PExpr.Wildcard && CurrentMethodBuilder != null;
+        // (its place: a lambda's name is made again in each attempt)
+        def place = fn.header.Location.ToString();
+        def held = inferred && CurrentMethodBuilder.LocalContentResults.Contains(place);
         def header = TFunHeader(
-           ret_type     = current_type.BindType (tenv, fn.header.ReturnType),
+           ret_type     = current_type.BindType (tenv, if (held) <[ Nemerle.Scopes.Content ]> else fn.header.ReturnType),
            ret_type_loc = fn.header.ReturnType.Location,
            typarms      = typarms,
            name         = name_obj.Id,
@@ -4403,6 +4438,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
 
         header.SetParsedObject(fn.header); //fn.header.TypedObject = header;
         header.Parsed = fn;
+        when (inferred && !held) GetTopTyper ().local_results [header] = place;
 
         def parm_types = NList.Map (parms, fun (p : TParameter) { p.ty });
         def fun_type = ConstructFunctionType (parm_types, header.ReturnType);
@@ -6666,6 +6702,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                     prevLoc      = loc;
                   }
                     
+                when (hasError) LocalContentResult(expected);
                 when (hasError)
                 {
                   ReportLocatedError(prevLoc, messenger, $"Type of this computation branch ($prevTypeName) is incompatible with type ($(typeName  )) of other branch.");
@@ -6684,6 +6721,7 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
                       body
                     else
                       TryAddCastTo(body, expected);
+                  when (newBody == null) LocalContentResult(expected);
                   if (newBody == null)
                   {
                     ReportLocatedError(body.Location, messenger, $"Cannot implicitly convert type '$(body.Type)' to '$expected'.");

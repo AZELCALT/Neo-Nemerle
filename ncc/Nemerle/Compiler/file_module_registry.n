@@ -72,6 +72,35 @@ public sealed class FileModuleRegistry
       }
       directories[directory]
     }
+    // a found file, and the folder of its name beside it (`a.n' is the module of `a/', whose modules `using a' reaches)
+    def add(candidate : ISource) : void
+    {
+      def path = Path.GetFullPath(Location.GetFileName(candidate.FileIndex));
+      when (selected.Add(path))
+      {
+        sources.Add(candidate);
+        def folder = Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path));
+        when (Directory.Exists(folder)) foreach (inner in candidates(folder)) add(inner)
+      }
+    }
+    // the .n files under the source root (where a registered module is looked for, when nothing else gives it)
+    mutable underRoot = null;
+    def registeredUnderRoot() : list[ISource]
+    {
+      when (underRoot == null)
+      {
+        def skipped = ["out", "bin", "obj", ".git", "node_modules"];
+        def walk(directory : string) : list[ISource]
+        {
+          mutable found = candidates(directory);
+          foreach (sub in Directory.GetDirectories(directory))
+            unless (skipped.Contains(Path.GetFileName(sub))) found = found + walk(sub);
+          found
+        }
+        underRoot = if (Root != null && Directory.Exists(Root)) walk(Root) else []
+      }
+      underRoot
+    }
     for (mutable i = 0; i < sources.Count; i++)
     {
       def source = sources[i];
@@ -101,10 +130,17 @@ public sealed class FileModuleRegistry
           foreach (candidate in choices)
           {
             imported = true;
-            def path = Path.GetFullPath(Location.GetFileName(candidate.FileIndex));
-            when (selected.Add(path)) sources.Add(candidate);
+            add(candidate)
           }
         }
+        // a registered module may be anywhere under the source root (`register text;' in impl/words.n is text.words)
+        when (!imported && manager.NameTree != null && !HasClrNamespace(name))
+          foreach (candidate in registeredUnderRoot().Filter(candidate =>
+                   {
+                     def folder = registration(candidate);
+                     !folder.IsEmpty && (folder == name || folder + [Path.GetFileNameWithoutExtension(Location.GetFileName(candidate.FileIndex))] == name)
+                   }))
+            add(candidate)
       }
     }
     manager.Options.Sources = NList.FromArray(sources.ToArray());

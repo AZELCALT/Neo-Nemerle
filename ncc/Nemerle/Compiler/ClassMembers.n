@@ -1249,6 +1249,11 @@ public class MethodBuilder : MemberBuilder, IMethod
   public mutable ResultBody : PT.PExpr;
   public PointTypes : SCG.Dictionary[int, list[TypeVar]] = SCG.Dictionary();
   public PointLocations : SCG.Dictionary[int, Location] = SCG.Dictionary();
+  /// Its local functions and lambdas (by their place) whose return points give several types: their result is a
+  /// `content', as a function's is; learned when one's branches cannot agree, and its body typed again.
+  public LocalContentResults : SCG.HashSet[string] = SCG.HashSet();
+  /// One was learned in this typing attempt: the body is typed again.
+  public mutable LocalContentLearned : bool;
   
   public IsExtension : bool { get; internal set; }
 

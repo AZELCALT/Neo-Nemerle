@@ -74,6 +74,8 @@ using Nemerle.UtilityMacros;
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "&=",    false, 141, 140)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "^=",    false, 141, 140)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "|=",    false, 141, 140)]
+// (an assignment, as `=' is: `fs ::= x => x + 1' puts the lambda in front, `xs ::= a :: b' the list)
+[assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "::=",   false, 141, 140)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "=>",    false, 145, 120)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "??",    false, 146, 145)]
 [assembly: Nemerle.Internal.OperatorAttribute ("Nemerle.CoreMacros", "||",    false, 150, 151)]
@@ -1384,7 +1386,10 @@ macro _N_ExtensionMethodOnThisParameter (_tb : TypeBuilder, pm : ParsedMethod, p
         def body = Macros.NewSymbol(pm.Name);
         def parameters = pm.header.Parameters.Map(q => <[ parameter: $(q.PName : name) : $(q.Type) ]>);
         def arguments = pm.header.Parameters.Map(q => <[ $(q.PName : name) ]>);
-        _tb.Define(<[ decl: private $(body : name)(..$parameters) : $(pm.header.ReturnType) { $(pm.Body) } ]>);
+        // (with the extension's own type parameters: `Second[T](this xs : list[T])')
+        def holder = <[ decl: private $(body : name)(..$parameters) : $(pm.header.ReturnType) { $(pm.Body) } ]>;
+        match (holder) { | ClassMember.Function as f => f.header.TypeParameters = pm.header.TypeParameters | _ => () }
+        _tb.Define(holder);
         pm.Body = <[ ($(script.Prefix + "current" : usesite) :> $(PExpr.FromQualifiedIdentifier(_tb.Manager, _tb.FullName))).$(body : name)(..$arguments) ]>;
         pm.modifiers.mods |= NemerleModifiers.Static;
         when ((pm.modifiers.mods & NemerleModifiers.AccessModifiers) == NemerleModifiers.None)
