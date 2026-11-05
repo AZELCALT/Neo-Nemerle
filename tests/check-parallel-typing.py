@@ -54,13 +54,25 @@ corpora = {
 
 generated = re.compile(r'[\w<>`$@%&|^!=+*/.-]*(?:_N_|d__|<>)[\w<>`$@%&|^!=+*/.-]*')
 def normalized(text):
-    """The print with the numbers of made-up names taken out, its types in the order of that text."""
+    """The print with the numbers of made-up names taken out, its types in the order of that text, and each type's
+    members too (made-up members, such as two local functions of one name in two methods, are ordered by their numbers,
+    which typing in parallel gives in another order)."""
+    def members(block):
+        head, parts, cur = [], [], None
+        for line in block.splitlines(keepends=True):
+            if line.startswith('  ') and not line.startswith('   '):
+                if cur is not None: parts.append(''.join(cur))
+                cur = [line]
+            elif cur is None: head.append(line)
+            else: cur.append(line)
+        if cur is not None: parts.append(''.join(cur))
+        return ''.join(head) + ''.join(sorted(parts))
     blocks, cur = [], []
     for line in text.splitlines(keepends=True):
         if line.startswith('type ') and cur: blocks.append(''.join(cur)); cur = []
         cur.append(generated.sub(lambda m: re.sub(r'\d+', '#', m.group(0)), line))
     if cur: blocks.append(''.join(cur))
-    return ''.join(sorted(blocks))
+    return ''.join(sorted(members(b) for b in blocks))
 
 def build(name, args, extra, label):
     out = work / label; out.mkdir(exist_ok=True)
@@ -79,8 +91,9 @@ for name, args in corpora.items():
         raise SystemExit('FAILED: %s: the compiles gave different messages\n--- first\n%s\n--- second\n%s' % (name, said1[-2000:], said2[-2000:]))
     if parallel: first, second = normalized(first), normalized(second)
     if first != second:
-        diff = subprocess.run(['diff', str(work / 'in-order' / (name + '.txt')), str(work / ('parallel' if parallel else 'again') / (name + '.txt'))],
-                              capture_output=True, text=True).stdout
+        # (the difference of what is compared: the made-up names' numbers out, the types in order)
+        import difflib
+        diff = ''.join(difflib.unified_diff(first.splitlines(True), second.splitlines(True), 'in order', 'parallel' if parallel else 'again', n=2))
         raise SystemExit('FAILED: %s: the two compiles gave different assemblies\n%s' % (name, diff[:3000]))
     print('PASS: %s: %s (%d lines of IL and metadata)' % (
         name, 'typing in parallel gives what typing in order does' if parallel else 'two compiles give the same assembly',

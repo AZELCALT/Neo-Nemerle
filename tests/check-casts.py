@@ -97,16 +97,21 @@ def fits(got, expected):
     return got == expected
 
 
-failures, count = [], 0
+failures, count, runs = [], 0, []
 for mode in ('file', 'script', 'indent'):
     for name, code, expected in cases:
         if mode == 'indent':
             if '{' in code: continue   # (a braced body has a layout of its own)
             code = '#pragma indent\n' + code.replace('; ', '\n')
-        count += 1
-        got = run(mode, name, code)
-        if not fits(got, expected):
-            failures.append('%s [%s]: expected %s, got %s' % (name, mode, expected, got))
+        runs.append((mode, name, code, expected))
+# (each run in a folder of its own: several at once, reported in order)
+import concurrent.futures, os
+with concurrent.futures.ThreadPoolExecutor(max_workers=int(os.environ.get('NEMERLE_TEST_JOBS', max(2, (os.cpu_count() or 2) // 4)))) as pool:
+    results = list(pool.map(lambda r: run(r[0], r[1], r[2]), runs))
+for (mode, name, _, expected), got in zip(runs, results):
+    count += 1
+    if not fits(got, expected):
+        failures.append('%s [%s]: expected %s, got %s' % (name, mode, expected, got))
 if failures:
     print('FAILED:\n' + '\n'.join(failures)); sys.exit(1)
 shutil.rmtree(work, ignore_errors=True)

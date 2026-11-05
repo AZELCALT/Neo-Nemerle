@@ -39,6 +39,8 @@ p.add_argument('--quick', action='store_true', help='fast suites only (no Nitra 
 p.add_argument('--no-comparison', action='store_true', help='skip the Nitra differential (the slowest suite)')
 p.add_argument('--update-boot', action='store_true', help='replace boot/coreclr with the result when everything passed')
 p.add_argument('--no-cache', action='store_true', help='compile everything again (no reuse of unchanged compiles)')
+p.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) // 2)),
+               help='test suites run at once (default: half the processors, at most 8; 1 runs them in order)')
 p.add_argument('--build-only', action='store_true', help='build the toolchain and tools without running the test suites (installer performs smoke checks)')
 a = p.parse_args()
 if a.no_cache: os.environ['NEMERLE_BUILD_CACHE'] = 'off'   # (read by every build step it starts)
@@ -140,6 +142,7 @@ suites = [
     ('extensions', ['check-extensions.py', '--toolchain', T]),
     ('casts', ['check-casts.py', '--toolchain', T, '--references', R]),
     ('pascal', ['check-pascal.py', '--toolchain', T, '--references', R]),
+    ('corners', ['check-corners.py', '--toolchain', T, '--references', R]),
     ('index-range', ['check-index-range.py', '--toolchain', T]),
     ('dynamic', ['check-dynamic.py', '--toolchain', T, '--references', R]),
     ('csharp-interop', ['check-csharp-interop.py', '--toolchain', T, '--references', R]),
@@ -174,7 +177,24 @@ if not a.quick:
     if not a.no_comparison:
         suites.append(('nitra-comparison', ['check-nitra-comparison.py', '--toolchain', T, '--references', R,
                                             '--no-benchmarks', '--output', out / 'comparison.json']))
-for name, command in ([] if a.build_only else suites):
+def run_suite(name, command):
     step(name, [py, tests / command[0], *command[1:]], env={'NITRA_VERIFY': '1'} if name == 'nitra-comparison' else None,
          required=False)
+
+# The suites are independent (each in a folder of its own; the build cache writes through a rename), so they run
+# several at once, the longest first; those that drive a program of the machine (an editor, a debugger, an installer
+# into the user's places) run alone, after.
+alone = {'installers', 'vscode-extension', 'debugger'}
+longest = ['book-variants', 'book', 'nitra-comparison', 'casts', 'continuation', 'file-modules', 'type-flow', 'corners',
+           'incremental', 'pascal', 'parallel-typing']
+chosen = [] if a.build_only else suites
+together = sorted((s for s in chosen if s[0] not in alone), key=lambda s: longest.index(s[0]) if s[0] in longest else len(longest))
+if a.jobs > 1:
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:
+        for f in [pool.submit(run_suite, name, command) for name, command in together]: f.result()
+else:
+    for name, command in together: run_suite(name, command)
+for name, command in chosen:
+    if name in alone: run_suite(name, command)
 finish()

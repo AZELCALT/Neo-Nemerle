@@ -71,7 +71,7 @@ def variant(kind, root, code):
     return (r.stdout if r.returncode == 0 else None), r.stderr
 
 
-failures, count, known = [], 0, 0
+failures, count, known, runs = [], 0, 0, []
 for md in sorted(book.glob('*.md')):
     if a.chapter and a.chapter not in md.name: continue
     text = md.read_text()
@@ -83,14 +83,20 @@ for md in sorted(book.glob('*.md')):
             continue
         expected = blocks[i + 1][1]
         for kind in variants:
-            count += 1
-            output, diagnostics = variant(kind, w / md.stem / ('example%d' % line) / kind, code)
-            if output is not None and output.rstrip() == expected.rstrip(): continue
-            if (md.name, line, kind) in KNOWN:
-                known += 1; continue
-            failures.append('%s:%d [%s]\n%s\nexpected:\n%s' % (md.name, line, kind,
-                            (diagnostics if output is None else 'printed:\n' + output).strip()[-1500:], expected.rstrip()))
-            print('FAIL: %s:%d [%s]' % (md.name, line, kind), flush=True)
+            runs.append((md.name, line, kind, w / md.stem / ('example%d' % line) / kind, code, expected))
+# (the runs are independent, each in a folder of its own: several at once, reported in the book's order)
+import concurrent.futures, os
+jobs = int(os.environ.get('NEMERLE_TEST_JOBS', max(2, (os.cpu_count() or 2) // 4)))
+with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+    results = list(pool.map(lambda r: variant(r[2], r[3], r[4]), runs))
+for (name, line, kind, _, _, expected), (output, diagnostics) in zip(runs, results):
+    count += 1
+    if output is not None and output.rstrip() == expected.rstrip(): continue
+    if (name, line, kind) in KNOWN:
+        known += 1; continue
+    failures.append('%s:%d [%s]\n%s\nexpected:\n%s' % (name, line, kind,
+                    (diagnostics if output is None else 'printed:\n' + output).strip()[-1500:], expected.rstrip()))
+    print('FAIL: %s:%d [%s]' % (name, line, kind), flush=True)
 if failures:
     print('\n\n'.join(failures))
     sys.exit(1)

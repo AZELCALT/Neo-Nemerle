@@ -89,8 +89,9 @@ def check(chapter, line, tags, code, expected, folder):
     return ok, r.stdout + r.stderr
 
 
-for md in sorted(book.glob('*.md')):
-    if a.chapter and a.chapter not in md.name: continue
+def chapter(md):
+    """A chapter's examples, in order (a later one may use a library an earlier one built): its failures and count."""
+    found, n = [], 0
     text = md.read_text()
     blocks = [(m.group(1).strip(), m.group(2), text.count('\n', 0, m.start()) + 1, m.end()) for m in FENCE.finditer(text)]
     folder = w / md.stem
@@ -101,11 +102,20 @@ for md in sorted(book.glob('*.md')):
         expected = None
         if i + 1 < len(blocks) and blocks[i + 1][0] == 'text' and text[end:text.find('```', end)].strip() == '':
             expected = blocks[i + 1][1]
-        count += 1
+        n += 1
         ok, log = check(md.name, line, tags[1:], code, expected, folder)
         if not ok:
-            failures.append('%s:%d\n%s\nexpected:\n%s' % (md.name, line, log.strip()[-1500:], expected))
+            found.append('%s:%d\n%s\nexpected:\n%s' % (md.name, line, log.strip()[-1500:], expected))
             print('FAIL: %s:%d' % (md.name, line), flush=True)
+    return found, n
+
+
+# (the chapters are independent: several at once, their failures reported in the book's order)
+import concurrent.futures, os
+chapters = [md for md in sorted(book.glob('*.md')) if not a.chapter or a.chapter in md.name]
+with concurrent.futures.ThreadPoolExecutor(max_workers=int(os.environ.get('NEMERLE_TEST_JOBS', max(2, (os.cpu_count() or 2) // 4)))) as pool:
+    for found, n in pool.map(chapter, chapters):
+        failures.extend(found); count += n
 if failures:
     print('\n\n'.join(failures))
     sys.exit(1)
