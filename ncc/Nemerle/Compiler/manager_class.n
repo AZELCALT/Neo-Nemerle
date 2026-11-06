@@ -355,6 +355,21 @@ using Nemerle.Compiler.XmlDump;
     public AsyncStepping : System.Collections.Generic.Dictionary[Nemerle.Compiler.ClassMembers.MethodBuilder, System.Collections.Generic.List[int]] = System.Collections.Generic.Dictionary();
     /// How many async lambdas were taken as `void' delegates (Typer.NonLiteralCast), for overload resolution.
     public AsyncVoidAdaptations : int { get { Typing.AsyncVoidAdaptations } set { Typing.AsyncVoidAdaptations = value } }
+    // Source initializer expressions keyed by the actual field identity, including
+    // separate storage for each `def` rebind. The dependency scheduler uses these
+    // before the field's CLR type has been finalized. It never treats object or
+    // void as a sentinel for an unknown result.
+    public StateInitializerExpressions : System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[Nemerle.Compiler.Parsetree.PExpr]] = System.Collections.Generic.Dictionary();
+    public RegisterStateInitializer(key : string, value : Nemerle.Compiler.Parsetree.PExpr) : void
+    {
+      mutable values;
+      unless (StateInitializerExpressions.TryGetValue(key, out values))
+      {
+        values = System.Collections.Generic.List.[Nemerle.Compiler.Parsetree.PExpr]();
+        StateInitializerExpressions[key] = values;
+      }
+      values.Add(value)
+    }
     /// Per top-level value (`module.name`): the type of each of its bindings, learned by the inference pass.
     public StateTypes : System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[int, Nemerle.Compiler.type_var.TypeVar]] = System.Collections.Generic.Dictionary();
     /// The target's reference assemblies, when the target is not the compiler's own .NET: what the typed code uses
@@ -883,7 +898,7 @@ using Nemerle.Compiler.XmlDump;
       foreach (path when IO.File.Exists(path) && Nemerle.Platform.ClrCompilerSection.HasSection(path) in Options.ReferencedLibraries) add(path);
       ContinueFrom = NList.FromArray(sources.ToArray());
       ContinuesScopes = false;
-      ModuleBindings.Clear(); ModuleTypedBindings.Clear(); StateTypes.Clear(); StateStorage.Clear(); StateReads.Clear(); StateLines.Clear(); QuietMessages = 0; QuietErrors = 0;
+      ModuleBindings.Clear(); ModuleTypedBindings.Clear(); StateInitializerExpressions.Clear(); StateTypes.Clear(); StateStorage.Clear(); StateReads.Clear(); StateLines.Clear(); QuietMessages = 0; QuietErrors = 0;
       Typer_BetterTypeCache.Clear();
 
       when (CompilationStart != null)

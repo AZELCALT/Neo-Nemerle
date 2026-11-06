@@ -547,7 +547,11 @@ using Nemerle.Compiler.Utility;
                   // declaration may expose the source name to importing modules.
                   field(storageName, ty, mutables.Contains(name.Id), expression.Location,
                         isPublic && storageName.Id == name.Id);
-                  when (ty is <[ _ ]>) lex.Manager.ModuleBindings[key] = value;
+                  when (ty is <[ _ ]>)
+                  {
+                    lex.Manager.ModuleBindings[key] = value;
+                    lex.Manager.RegisterStateInitializer(key, value);
+                  }
                 }
                 if (flowing.Contains(name.Id) || (bindings[name.Id] > 1 || resultBound.Contains(name.Id)) && !mutables.Contains(name.Id))
                 {
@@ -1686,6 +1690,7 @@ using Nemerle.Compiler.Utility;
                 (if (exported) NemerleModifiers.Public else NemerleModifiers.Private)
                   | NemerleModifiers.CompilerMutable, []);
               add([ClassMember.Field(expression.Location, Splicable.Name(Name(storage)), mods, ty, null)], "", exported);
+              when (value != null && ty is <[ _ ]>) manager.RegisterStateInitializer(key, value);
               _ = manager.FileModuleRegistry.Flowing.Add(key);
               // Keeping this a local declaration gives subsequent code the
               // original language's lexical scope and closure capture semantics.
@@ -1700,6 +1705,7 @@ using Nemerle.Compiler.Utility;
                 add([ClassMember.Field(expression.Location, Splicable.Name(name), mods, ty, null)], "", true);
                 _ = manager.FileModuleRegistry.Flowing.Add(key);
               }
+              when (value != null && ty is <[ _ ]>) manager.RegisterStateInitializer(key, value);
               if (stateWritten.Contains(name.Id))
               {
                 // (a value a function writes: its field's alone)
@@ -1717,7 +1723,11 @@ using Nemerle.Compiler.Utility;
               def mods = AttributesAndModifiers(NemerleModifiers.Public |
                 (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
               when (value != null)
-                match (ty) { | <[ _ ]> => data.InferredInitializers[name.Id] = value; data.InferenceFunctions[name.Id] = functions(); | _ => (); }
+                match (ty) { | <[ _ ]> =>
+                    data.InferredInitializers[name.Id] = value;
+                    data.InferenceFunctions[name.Id] = functions();
+                    manager.RegisterStateInitializer(data.TypeName + "." + name.Id, value);
+                  | _ => (); }
               def initializer = if (data.InferredInitializers.ContainsKey(name.Id))
                 <[ Nemerle.Compiler.__script_binding_value($(name.Id : string)) ]> else value;
               when (initializer != null) initializer.Location = value.Location;

@@ -768,6 +768,50 @@ using Nemerle.Compiler.Utility;
       foreach (ti in all) visit(ti);
     }
 
+    // Compile-time NotYet guard for a binding's initializer. A reference to an
+    // inferred function is not its return type until that function is decided.
+    // Look through source expressions rather than the field's provisional CLR
+    // storage type: object and void are both legitimate resolved types.
+    BindingNotYet(ti : TypeBuilder, key : string, visited : System.Collections.Generic.HashSet[string]) : bool
+    {
+      mutable values;
+      unless (Manager.StateInitializerExpressions.TryGetValue(key, out values)) return false;
+      // An initializer cycle is still pending. The result scheduler will report
+      // a cycle instead of freezing an unconstrained type variable to object.
+      unless (visited.Add(key)) return true;
+      mutable pending = false;
+      try
+      {
+        foreach (source in values)
+          when (!pending)
+            _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), source, false, (_, after, node) =>
+            {
+              unless (after)
+                match (node)
+                {
+                  | PT.PExpr.Call(PT.PExpr.Ref(n), _) =>
+                    foreach (method is MethodBuilder in ti.LookupMember(n.Id))
+                      when (method.InferredResult && !method.ResultDecided) pending = true;
+                  | PT.PExpr.Ref(n) =>
+                    // The source name may be a local; if this name also denotes a
+                    // top-level state field, depending on it is conservative.
+                    def dependency = ti.FullName + "." + n.Id;
+                    when (dependency != key && Manager.StateInitializerExpressions.ContainsKey(dependency)
+                          && BindingNotYet(ti, dependency, visited)) pending = true;
+                  | _ => ()
+                }
+              node
+            });
+      }
+      finally { _ = visited.Remove(key); }
+      pending
+    }
+
+    BindingNotYet(ti : TypeBuilder, key : string) : bool
+    {
+      BindingNotYet(ti, key, System.Collections.Generic.HashSet.[string]())
+    }
+
     /// The inference pass of a file module's top-level values (see compile_all_tyinfos).
     InferModuleState(ti : TypeBuilder) : void
     {
@@ -805,14 +849,20 @@ using Nemerle.Compiler.Utility;
         // (code calling a function whose result is not decided yet: what it uses of that result is typed again, once
         // the function is; its values of known types are decided now, as the functions reading them need)
         def waits = Manager.FileModuleRegistry.UndecidedResults != undecided;
-        when (waits) _ = pendingModules.Add(ti);
-        when (Manager.QuietErrors == quietErrors || waits)
+        // The typer's undecided-result counter can miss a result forwarded
+        // through a top-level local before __state_type sees it. The source
+        // dependency remains NotYet until the producing function is decided.
+        mutable sourceWaits = false;
+        foreach (key in Manager.StateInitializerExpressions.Keys)
+          when (key.StartsWith(prefix, System.StringComparison.Ordinal) && BindingNotYet(ti, key)) sourceWaits = true;
+        when (waits || sourceWaits) _ = pendingModules.Add(ti);
+        when (Manager.QuietErrors == quietErrors || waits || sourceWaits)
         {
           def learned = System.Collections.Generic.List.[string]();
           foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) learned.Add(key);
           // (one bound to such a result is decided once it is: the file infers again after those functions)
           foreach (key in learned)
-            unless (waits && Manager.FileModuleRegistry.UndecidedStates.Contains(key))
+            unless (BindingNotYet(ti, key) || waits && Manager.FileModuleRegistry.UndecidedStates.Contains(key))
               DecideModuleState(ti, key, key.Substring(prefix.Length));
         }
       }
@@ -903,6 +953,9 @@ using Nemerle.Compiler.Utility;
         foreach (name in named(m))
         {
           def key = prefix + name;
+          // A resolved storage entry is authoritative only once every
+          // inferred-function dependency of its initializer is decided.
+          when (BindingNotYet(m.DeclaringType, key)) return BindingInferenceStatus.NotYet;
           when ((Manager.StateLines.ContainsKey(key) || Manager.ModuleBindings.ContainsKey(key)
                  || Manager.FileModuleRegistry.Flowing.Contains(key))
                 && !Manager.StateStorage.ContainsKey(key))
@@ -985,6 +1038,10 @@ using Nemerle.Compiler.Utility;
     /// Gives a top-level value's field its type: the one type of all its bindings, else a Content.
     DecideModuleState(ti : TypeBuilder, key : string, name : string) : void
     {
+      // Guard the final Fix() as well: Fixating an unconstrained TypeVar
+      // would otherwise make the temporary unknown appear to be object.
+      when (BindingNotYet(ti, key) || !Manager.StateTypes.ContainsKey(key)
+            || Manager.StateTypes[key].Count == 0) return;
       def types = System.Collections.Generic.List.[FixedType]();
       foreach (pair in Manager.StateTypes[key]) types.Add(pair.Value.Fix());
       def first = types[0];
