@@ -103,6 +103,19 @@ cases = [
     ('script-field-function-chain',
      f'def size = 10;\nTwice() {{ size * 2 }}\ndef doubled = Twice();\nAgain() {{ doubled + 1 }}\ndef last = Again();\nEnd() {{ last + 1 }}\n{W}(End())\n',
      '22', None),
+    # A regular inferred def depends on the previous def's value, not its
+    # provisional CLR field representation; the consumer is inferred once.
+    ('def-field-chain',
+     f'def first = 7;\ndef second = first + 2;\nPlus() {{ second + 1 }}\n{W}(Plus())\n',
+     '10', None),
+    # Neither object nor void is a synonym for NotYet: both are valid final
+    # signature types and must survive the dependency readiness guard.
+    ('actual-object-binding',
+     f'def boxed : object = 41;\nText() {{ boxed.ToString() }}\n{W}(Text())\n',
+     '41', None),
+    ('actual-void-return',
+     f'NoValue() : void {{ {W}("written") }}\nNoValue()\n',
+     'written', None),
     # a type written down is the type
     ('typed', f'mutable x : int = 1;\nx = "one";\n{W}(x)\n', None, 'expected int'),
     # a name keeps its kind

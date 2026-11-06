@@ -1232,6 +1232,10 @@ internal sealed class StateMacro : IMacro
       | ("__state_hole", []) =>
         <[ $(TExpr.DefaultValue(ctx.FreshTypeVar()) : typed) ]>
       | ("__state_type", [PExpr.Literal(Literal.String(key)), PExpr.Literal(Literal.Integer(k, _, _)), value]) =>
+        // NotYet is a compile-time dependency, never System.Object or void.
+        // Do not type/fix a binding's forward function result in an early
+        // inference copy. A later pass records it once the producer is ready.
+        when (manager.Hierarchy != null && manager.Hierarchy.BindingNotYet(ctx.CurrentType, key)) return <[ () ]>;
         unless (manager.StateTypes.ContainsKey(key)) manager.StateTypes[key] = System.Collections.Generic.Dictionary();
         // (bound to the result of a function whose result is not decided yet: one of its types, a Content)
         match (value) { | PExpr.Ref (n) when manager.FileModuleRegistry.UndecidedLocals.Contains (n.Id) => _ = manager.FileModuleRegistry.UndecidedStates.Add (key) | _ => () }

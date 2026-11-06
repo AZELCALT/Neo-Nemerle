@@ -626,6 +626,11 @@ public class FieldBuilder : MemberBuilder, IField
     def key = DeclaringType.FullName + "." + Name;
     when (manager.ModuleBindings.ContainsKey(key) && !manager.ModuleTypedBindings.ContainsKey(key))
     {
+      // A file's top-level field may be inspected while the inference copy
+      // is still exploring a call to an inferred-return function. Do not
+      // cache an unconstrained TypeVar's default (object) as its final type:
+      // the dependency scheduler will revisit this binding when ready.
+      when (manager.Hierarchy != null && manager.Hierarchy.BindingNotYet(DeclaringType, key)) return;
       when (scriptInferring) Nemerle.Compiler.MessageMacros.FatalError(Ast.Location, "Recursive top-level binding needs a type annotation: " + Name);
       scriptInferring = true;
       try
@@ -655,6 +660,9 @@ public class FieldBuilder : MemberBuilder, IField
     def script = DeclaringType.Manager.Options.Script;
     when (script != null && DeclaringType.FullName == script.TypeName && script.InferredInitializers.ContainsKey(Name) && !script.TypedInitializers.ContainsKey(Name))
     {
+      // The other eager def path (script fields) must also respect NotYet.
+      // Otherwise its DeepFix() can cache an undecided call as System.Object.
+      when (manager.Hierarchy != null && manager.Hierarchy.BindingNotYet(DeclaringType, key)) return;
       when (scriptInferring) Nemerle.Compiler.MessageMacros.FatalError(Ast.Location, "Recursive script binding needs a type annotation: " + Name);
       scriptInferring = true;
       try

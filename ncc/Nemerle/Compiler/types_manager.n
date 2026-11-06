@@ -807,7 +807,9 @@ using Nemerle.Compiler.Utility;
       pending
     }
 
-    BindingNotYet(ti : TypeBuilder, key : string) : bool
+    // Consulted also by eager field initializer typing. Returning NotYet here
+    // means postpone that initializer, not type it as object or void.
+    internal BindingNotYet(ti : TypeBuilder, key : string) : bool
     {
       BindingNotYet(ti, key, System.Collections.Generic.HashSet.[string]())
     }
@@ -817,15 +819,43 @@ using Nemerle.Compiler.Utility;
     {
       foreach (inference is MethodBuilder in ti.LookupMember("_N_state_types"))
       {
-        // (inferred again, after the functions whose results it binds: from its code as written)
-        if (inferenceBodies.ContainsKey(ti)) inference.Body = inferenceBodies[ti] else inferenceBodies[ti] = inference.Body;
+        // Each state inference pass starts with its original source and *new*
+        // flow facts.  The old facts may contain type variables already fixed
+        // as object when a forward function had no known result.  Never reuse
+        // those facts across passes; RunFullTyping still reuses facts within a
+        // pass when it restarts for real nested/loop flow convergence.
+        if (inferenceBodies.ContainsKey(ti)) inference.Body = inferenceBodies[ti];
+        else inferenceBodies[ti] = inference.Body;
+        inference.FlowFacts = Nemerle.Compiler.typer_flow.FlowFacts();
         def prefix = ti.FullName + ".";
         def forget()
         {
           def keys = System.Collections.Generic.List.[string]();
           foreach (key in Manager.StateTypes.Keys) when (key.StartsWith(prefix, System.StringComparison.Ordinal)) keys.Add(key);
           foreach (key in keys) _ = Manager.StateTypes.Remove(key);
+          // These flags describe the previous inference attempt too. Its
+          // pending results must be recomputed from this pass, not retained.
+          def pendingKeys = System.Collections.Generic.List.[string]();
+          foreach (key in Manager.FileModuleRegistry.UndecidedStates)
+            when (key.StartsWith(prefix, System.StringComparison.Ordinal)) pendingKeys.Add(key);
+          foreach (key in pendingKeys) _ = Manager.FileModuleRegistry.UndecidedStates.Remove(key);
         }
+        // _N_state_<name>_<version> locals from an earlier inference may
+        // retain an undecided-call marker or a Content result set. Clear only
+        // this inference body's synthetic locals before retyping its source;
+        // later assignments in the same pass must accumulate normally.
+        when (inference.Body != null)
+          _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), inference.Body, false, (_, after, node) =>
+          {
+            match (node)
+            {
+              | PT.PExpr.Ref(n) when !after && n.Id.StartsWith("_N_state_", System.StringComparison.Ordinal) =>
+                _ = Manager.FileModuleRegistry.UndecidedLocals.Remove(n.Id);
+                _ = Manager.FileModuleRegistry.LocalSets.Remove(n.Id);
+              | _ => ()
+            }
+            node
+          });
         def quietErrors = Manager.QuietErrors;
         def undecided = Manager.FileModuleRegistry.UndecidedResults;
         Manager.QuietMessages++;
