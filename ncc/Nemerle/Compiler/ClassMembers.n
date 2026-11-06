@@ -1235,7 +1235,7 @@ public class MethodBuilder : MemberBuilder, IMethod
   public ImplementedMethods : list[FixedType.Class * IMethod] { get; internal set; }
 
   /// What typing the body learned about its values' flow, kept across its typing attempts (see typer_flow).
-  public FlowFacts : Nemerle.Compiler.typer_flow.FlowFacts = Nemerle.Compiler.typer_flow.FlowFacts();
+  public mutable FlowFacts : Nemerle.Compiler.typer_flow.FlowFacts = Nemerle.Compiler.typer_flow.FlowFacts();
 
   public SkipEmiting : bool { get; set; }
 
