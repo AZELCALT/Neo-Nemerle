@@ -19,7 +19,7 @@ if runtime == 'dotnet':
     if args.target_references is None: parser.error('--target-references is required for dotnet checks')
     sdk_version, sdk_root = subprocess.check_output(['dotnet', '--list-sdks'], text=True).splitlines()[-1].split(' ', 1)
     csharp = pathlib.Path(sdk_root.strip('[]')) / sdk_version / 'Roslyn/bincore/csc.dll'
-    modern_references = ['-target-references:' + str(args.target_references.resolve())]
+    modern_references = ['-target-references:' + str(args.target_references.resolve()), '-launcher-']
 here = pathlib.Path(__file__).resolve().parent
 work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-module-checks-'))
 print('Module check artifacts:', work, flush=True)
@@ -1100,7 +1100,9 @@ cases = [
     ('lambda', 'def show() { System.Console.WriteLine(x) }\ndef x = 42;\nshow();', ['42']),
     ('refined', 'mutable items = [];\nitems ::= 1;\nitems ::= 2;\nSum() : int { items.FoldLeft(0, _ + _) }\nSystem.Console.WriteLine(Sum());', ['3']),
     ('rebound', 'def x = 5;\ndef x = x * 2;\nShow() : void { System.Console.WriteLine(x) }\nShow();', ['10']),
-    ('retyped', 'def y = 5;\ndef y = y.ToString() + "!";\nSystem.Console.WriteLine(y.Length);\nShow() : void { System.Console.WriteLine(y.As.[string]()) }\nShow();', ['2', '5!']),
+    ('def-lexical-methods', 'def x = 10;\nOld() : int { x }\ndef x = "hello";\nNew() : string { x }\nSystem.Console.WriteLine(Old());\nSystem.Console.WriteLine(New());', ['10', 'hello']),
+    ('def-lexical-capture', 'def x = 10;\ndef old = () => x;\ndef x = 20;\nSystem.Console.WriteLine(old());\nSystem.Console.WriteLine(x);', ['10', '20']),
+    ('retyped', 'def y = 5;\ndef y = y.ToString() + "!";\nSystem.Console.WriteLine(y.Length);\nShow() : void { System.Console.WriteLine(y) }\nShow();', ['2', '5!']),
     # (a function reads a top-level value of several types whenever it runs: it checks it first)
     ('checked', 'def y = 5;\ndef y = y.ToString() + "?";\nShow() : void { match (y) { | s is string => System.Console.WriteLine(s.Length) | _ => () } }\nShow();', ['2']),
     ('checked-if', 'def y = 5;\ndef y = "five";\nShow() : void { if (y is string) System.Console.WriteLine(y) else System.Console.WriteLine("int") }\nShow();', ['five']),
@@ -1116,9 +1118,17 @@ for name, text, expected in cases + [(n + '-debug', t, e) for (n, t, e) in cases
     if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / ('state-' + name + '.runtimeconfig.json'))
     got = run([runtime, work / ('state-' + name + '.exe')]).stdout.split()
     if got != expected: raise RuntimeError('top-level state ' + name + ': ' + ' '.join(got))
-source('init/main.n', 'def y = 5;\ndef y = y.ToString();\nBad() : int { y + 1 }\nSystem.Console.WriteLine(Bad());')
-run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-bad.exe'), '-no-color', *modern_references],
-    False, "`y' is int or string (declared at lines 1, 2): it is a top-level value, and this code can run at any time")
+source('init/main.n', 'public def y = 5;\nOld() : int { y }\npublic def y = y.ToString();\nNew() : string { y }\nSystem.Console.WriteLine(Old());\nSystem.Console.WriteLine(New());')
+run([runtime, compiler, init / 'main.n', '-source-root:' + str(init), '-out:' + str(work / 'state-shadow.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'state-shadow.runtimeconfig.json')
+if run([runtime, work / 'state-shadow.exe']).stdout.split() != ['5', '5']:
+    raise RuntimeError('top-level def history not preserved')
+source('init/defs.n', 'public def x = 10;\npublic Old() : int { x }\npublic def x = "hello";\npublic New() : string { x }')
+source('init/main.n', 'using defs;\nSystem.Console.WriteLine(defs.x);\nSystem.Console.WriteLine(defs.Old());\nSystem.Console.WriteLine(defs.New());')
+run([runtime, compiler, init / 'main.n', init / 'defs.n', '-source-root:' + str(init), '-out:' + str(work / 'state-import-shadow.exe'), '-no-color', *modern_references])
+if runtime != 'mono': shutil.copy2(compiler.with_name('ncc.runtimeconfig.json'), work / 'state-import-shadow.runtimeconfig.json')
+if run([runtime, work / 'state-import-shadow.exe']).stdout.split() != ['hello', '10', 'hello']:
+    raise RuntimeError('imported module did not expose final def binding')
 # a user's macro in the top-level code expands once (the inference pass that types a quiet copy of the code leaves
 # it for the real code): a macro that counts its expansions sees one
 counter = work / 'counter'; counter.mkdir()

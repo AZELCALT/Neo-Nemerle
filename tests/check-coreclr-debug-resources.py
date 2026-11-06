@@ -7,6 +7,9 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'build'))
+from tooling import verify_strong_name
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--toolchain', type=pathlib.Path, required=True)
@@ -72,7 +75,7 @@ command = ['dotnet', work / 'ncc.exe', source, '-source-root:' + str(work), '-de
            '-win32res:' + str(work / 'native.res'),
            '-keyfile:' + str(repo / 'misc/keys/Nemerle.Compiler.snk'), '-project-path:' + str(work / 'test.nproj'), '-no-color']
 run(command)
-run(['sn', '-vf', work / 'DebugSample.dll'])
+verify_strong_name(work / 'DebugSample.dll')
 cs('Inspect', '''using System; using System.IO; using System.Linq; using System.Reflection;
 using System.Reflection.Metadata; using System.Reflection.PortableExecutable;
 class Inspect {

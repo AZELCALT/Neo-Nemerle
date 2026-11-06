@@ -130,6 +130,12 @@ public static class ScriptingChecks {
   Check((int)rp.Value==20,"implicit receiver property precedence");
   Check((int)Eval("mask math { class Box { public Value : int; public this(n : int) { Value = n; } } Make() : Box { Box(7) } }\nx.math.Make().Value\n").Value==7,"masked type in function signature");
   Check((int)Eval("def n = 41 : int; Read() : int { n + 1 } Read()\n").Value==42,"top-level def belongs to script instance");
+  Check((int)Eval("def x = 10;\nOld() : int { x }\ndef x = \"hello\";\nNew() : string { x }\nOld() + New().Length\n").Value==15,
+        "one script submission: functions retain distinct def bindings");
+  Check((int)Eval("def x = 10;\ndef old = () => x;\ndef x = 20;\nold() + x\n").Value==30,
+        "one script submission: local closure preserves def history");
+  Check((int)Eval("def (x, y) = (1, 2);\nOld() : int { x }\ndef (x, y) = (10, 20);\nNew() : int { x }\nOld() + New() + y\n").Value==31,
+        "one script submission: pattern binding shadowing");
   using (var session = new ScriptSession(host,new ScriptDefinition(),new ScriptInputs())) {
     SubmissionResult Submit(string code) {
       var result=session.Submit(new ScriptSource(code,Path.Combine(root,"repl.n")));

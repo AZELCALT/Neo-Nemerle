@@ -59,13 +59,12 @@ $NoDependencies = $false
   function Test-DotNet([bool]$sdk) { return $script:ready.ContainsKey('Microsoft.DotNet.SDK.10') }
   function Find-InstallPython { if ($script:ready.ContainsKey('Python.Python.3.14')) { return @{ Command = 'py'; Arguments = @('-3') } }; return $null }
   function Get-Command([string]$Name, $ErrorAction) {
-    if ($Name -eq 'sn' -and $script:ready.ContainsKey('Mono.Mono')) { return @{ Source = 'sn.bat' } }
     if ($Name -eq 'git' -and $script:ready.ContainsKey('Git.Git')) { return @{ Source = 'git.exe' } }
     return $null
   }
   function Install-WinGetDependency([string]$id, [string]$label) { $script:installs += $id; $script:ready[$id] = $true }
   Install-NemerlePrerequisites
-  Check (($script:installs -join ',') -eq 'Microsoft.DotNet.SDK.10,Python.Python.3.14,Mono.Mono,Git.Git') 'source-build prerequisites are incomplete'
+  Check (($script:installs -join ',') -eq 'Microsoft.DotNet.SDK.10,Python.Python.3.14,Git.Git') 'source-build prerequisites are incomplete'
 }
 & {
   $NoDependencies = $true

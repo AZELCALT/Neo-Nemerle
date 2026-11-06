@@ -6,6 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--compiler', required=True, type=pathlib.Path)
@@ -13,6 +14,8 @@ parser.add_argument('--support', required=True, type=pathlib.Path)
 args = parser.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 repo = here.parent
+sys.path.insert(0, str(repo / 'build'))
+from tooling import verify_strong_name
 work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-coreclr-'))
 print('CoreCLR artifacts:', work, flush=True)
 for folder in (args.support, args.compiler):
@@ -47,7 +50,7 @@ result = subprocess.run(command, cwd=work, stdout=subprocess.PIPE, stderr=subpro
 (work / 'compiler.log').write_text(result.stdout)
 print(result.stdout, flush=True)
 if result.returncode: raise SystemExit(result.returncode)
-subprocess.run(['sn', '-vf', str(work / 'sample.dll')], check=True)
+verify_strong_name(work / 'sample.dll')
 
 def compile_nemerle(source, output, extra=()):
     command = ['dotnet', str(work / 'ncc.exe'), '-source-root:' + str(work),

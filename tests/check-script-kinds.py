@@ -9,6 +9,8 @@ script and on NEMERLE_SCRIPT_PATH; compiled kind scripts load again; a static Co
 scripts are unaffected; a kind nobody declares is reported clearly."""
 import argparse, os, pathlib, shutil, subprocess, tempfile
 
+from windows_commands import ncc_command, nscript_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
@@ -70,7 +72,7 @@ public module TaskKind
 lib = w / 'libs'
 lib.mkdir()
 (lib / 'buildkind.n').write_text(KIND)
-run([T / 'ncc', lib / 'buildkind.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'buildkind.dll'), '-no-color',
+run([*ncc_command(T), lib / 'buildkind.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'buildkind.dll'), '-no-color',
      '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll')])
 SCRIPT = 'Log("target " + Target);\nWriteLine(twice(21));\nspace Steps { copy }\n'
 EXPECTED = ['[build] target release', '42', 'copying files']
@@ -80,7 +82,7 @@ here = w / 'project'
 here.mkdir()
 shutil.copy2(lib / 'buildkind.dll', here / 'buildkind.dll')
 (here / 'deploy.build.n').write_text(SCRIPT)
-out = run([T / 'nscript', 'run', here / 'deploy.build.n', '--no-cache'], cwd=here).stdout.splitlines()
+out = run([*nscript_command(T), 'run', here / 'deploy.build.n', '--no-cache'], cwd=here).stdout.splitlines()
 if out != EXPECTED:
     raise SystemExit('FAILED: kind next to the script printed %r' % out)
 print('PASS: a .build.n script with no setup uses the kind\'s base class, imports, macro and grammar', flush=True)
@@ -90,51 +92,51 @@ away = w / 'elsewhere'
 away.mkdir()
 (away / 'deploy.build.n').write_text(SCRIPT)
 env = dict(os.environ, NEMERLE_SCRIPT_PATH=str(lib))
-if run([T / 'nscript', 'run', away / 'deploy.build.n', '--no-cache'], cwd=away, env=env).stdout.splitlines() != EXPECTED:
+if run([*nscript_command(T), 'run', away / 'deploy.build.n', '--no-cache'], cwd=away, env=env).stdout.splitlines() != EXPECTED:
     raise SystemExit('FAILED: kind found through NEMERLE_SCRIPT_PATH')
-run([T / 'nscript', 'compile', away / 'deploy.build.n', away / 'deploy.dll', '--no-cache'], cwd=away, env=env)
-if run([T / 'nscript', 'run-compiled', away / 'deploy.dll'], cwd=away, env=env).stdout.splitlines() != EXPECTED:
+run([*nscript_command(T), 'compile', away / 'deploy.build.n', away / 'deploy.dll', '--no-cache'], cwd=away, env=env)
+if run([*nscript_command(T), 'run-compiled', away / 'deploy.dll'], cwd=away, env=env).stdout.splitlines() != EXPECTED:
     raise SystemExit('FAILED: compiled kind script does not load again')
 print('PASS: kinds are found on NEMERLE_SCRIPT_PATH, and a compiled kind script loads again', flush=True)
 
 # 3. a kind configured by a static Configure (imports, compiler options)
 (here / 'hello.task.n').write_text('#if TASK\nWriteLine("task mode");\n#endif\n')
-if run([T / 'nscript', 'run', here / 'hello.task.n', '--no-cache'], cwd=here).stdout.strip() != 'task mode':
+if run([*nscript_command(T), 'run', here / 'hello.task.n', '--no-cache'], cwd=here).stdout.strip() != 'task mode':
     raise SystemExit('FAILED: Configure did not refine the .task.n definition')
 print('PASS: a kind\'s static Configure refines its definition', flush=True)
 
 # 4. plain scripts are unaffected; an undeclared kind is reported
 (here / 'plain.n').write_text('System.Console.WriteLine(6 * 7);\n')
-if run([T / 'nscript', 'run', here / 'plain.n', '--no-cache'], cwd=here).stdout.strip() != '42':
+if run([*nscript_command(T), 'run', here / 'plain.n', '--no-cache'], cwd=here).stdout.strip() != '42':
     raise SystemExit('FAILED: plain script')
 missing = w / 'missing'
 missing.mkdir()
 (missing / 'deploy.build.n').write_text(SCRIPT)
-r = run([T / 'nscript', 'run', missing / 'deploy.build.n', '--no-cache'], cwd=missing, ok=False)
+r = run([*nscript_command(T), 'run', missing / 'deploy.build.n', '--no-cache'], cwd=missing, ok=False)
 if 'no script kind declares the extension .build.n' not in r.stderr:
     raise SystemExit('FAILED: undeclared kind message\n' + r.stderr)
 print('PASS: plain scripts use the default definition; an undeclared kind is reported', flush=True)
 
 # 5. the script format: a .ns file; a kind's .build.n covers x.build.ns, the same way as x.build.n
 (here / 'deploy.build.ns').write_text(SCRIPT)
-out = run([T / 'nscript', 'run', here / 'deploy.build.ns', '--no-cache'], cwd=here).stdout.splitlines()
+out = run([*nscript_command(T), 'run', here / 'deploy.build.ns', '--no-cache'], cwd=here).stdout.splitlines()
 if out != EXPECTED:
     raise SystemExit('FAILED: a .build.ns script printed %r' % out)
 (here / 'plain.ns').write_text('System.Console.WriteLine(6 * 7);\n')
-if run([T / 'nscript', 'run', here / 'plain.ns', '--no-cache'], cwd=here).stdout.strip() != '42':
+if run([*nscript_command(T), 'run', here / 'plain.ns', '--no-cache'], cwd=here).stdout.strip() != '42':
     raise SystemExit('FAILED: plain .ns script')
 (missing / 'deploy.build.ns').write_text(SCRIPT)
-r = run([T / 'nscript', 'run', missing / 'deploy.build.ns', '--no-cache'], cwd=missing, ok=False)
+r = run([*nscript_command(T), 'run', missing / 'deploy.build.ns', '--no-cache'], cwd=missing, ok=False)
 if 'no script kind declares the extension .build.ns' not in r.stderr:
     raise SystemExit('FAILED: undeclared .ns kind message\n' + r.stderr)
 # patterns in a script are taken apart as in a module: a written-out shape or `else` declares the names, anything
 # that can fail to match is an error
 (here / 'shapes.ns').write_text('def [a, b] = [1, 2];\nTwo() : list[int] { [3, 4] }\ndef (c :: _) = Two() else 9;\n'
                                 'def (d, (e, _)) = (5, (6, 7));\nSystem.Console.WriteLine(a + b + c + d + e);\n')
-if run([T / 'nscript', 'run', here / 'shapes.ns', '--no-cache'], cwd=here).stdout.strip() != '17':
+if run([*nscript_command(T), 'run', here / 'shapes.ns', '--no-cache'], cwd=here).stdout.strip() != '17':
     raise SystemExit('FAILED: patterns in a script')
 (here / 'refutable.ns').write_text('def l : list[int] = [1];\ndef [x] = l;\nSystem.Console.WriteLine(x);\n')
-r = run([T / 'nscript', 'run', here / 'refutable.ns', '--no-cache'], cwd=here, ok=False)
+r = run([*nscript_command(T), 'run', here / 'refutable.ns', '--no-cache'], cwd=here, ok=False)
 if 'does not fit every value' not in r.stdout + r.stderr:
     raise SystemExit('FAILED: a script pattern that can fail\n' + r.stdout + r.stderr)
 print('PASS: .ns scripts: plain, of a kind (.build.n covers x.build.ns), and an undeclared kind reported; patterns as in modules', flush=True)

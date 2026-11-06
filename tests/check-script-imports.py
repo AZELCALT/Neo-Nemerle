@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import lsp_command
+
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--server', type=pathlib.Path, help='also check script diagnostics through the language server')
@@ -118,7 +120,7 @@ if a.server:
         path = source('editor' + extension, text)
         request = {'root': str(scripts), 'references': str(tc / 'references'),
                    'files': [{'path': str(path), 'text': text}], 'fileNameNamespaces': True}
-        result = subprocess.run([str(a.server.resolve()), '--check'], input=json.dumps(request),
+        result = subprocess.run([*lsp_command(a.server.resolve()), '--check'], input=json.dumps(request),
                                 capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, result.stdout + result.stderr
         errors = [d for d in json.loads(result.stdout)['diagnostics'] if d['severity'] == 1]

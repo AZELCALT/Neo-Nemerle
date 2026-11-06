@@ -65,7 +65,7 @@ def check(chapter, line, tags, code, expected, folder):
     output = folder / (kind[4:] + '.dll') if library else root / 'main.exe'
     sources = [p for p in paths if p.suffix == '.n']
     command = ['dotnet', str(T / 'ncc.exe'), '-target-references:' + str(a.references.resolve()),
-               *map(str, sources), '-source-root:' + str(root), '-out:' + str(output), '-no-color', *extra]
+               *map(str, sources), '-source-root:' + str(root), '-out:' + str(output), '-launcher-', '-no-color', *extra]
     if library: command.insert(-len(extra) if extra else len(command), '-target:library')
     r = subprocess.run(command, cwd=root, capture_output=True, text=True)
     diagnostics = r.stdout + r.stderr

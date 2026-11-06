@@ -109,7 +109,7 @@ if 'cli' in parts:
         runtime / 'System.Text.Json.dll', runtime / 'System.Memory.dll', runtime / 'System.Reflection.Metadata.dll',
         runtime / 'System.Collections.Immutable.dll', runtime / 'System.IO.Compression.ZipFile.dll']
     build('cli', T / 'ncc.exe', [repo / 'ncc/Nemerle/CommandlineCompiler.n', repo / 'ncc/Nemerle/ProjectCommands.n'],
-          cli_refs, ['-no-stdlib', '-r:' + str(base / 'Nemerle.dll'), '-source-root:' + str(repo / 'ncc')])
+          cli_refs, ['-no-stdlib', '-r:' + str(base / 'Nemerle.dll'), '-source-root:' + str(repo / 'ncc'), '-launcher-'])
     tune_compiler_runtime(T)
 py, b = sys.executable, repo / 'build'
 if 'nitra' in parts:

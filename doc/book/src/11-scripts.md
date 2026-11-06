@@ -108,6 +108,33 @@ The call and the top-level code share `calls`. A second `nscript run tally.ns` s
 binding, type and visibility rules apply; [Files are modules](07-files-and-modules.md) explains values that change
 type. Persistent interactive state is covered in the [REPL section](#interactive-use-the-repl).
 
+### Shadowing inside one submission
+
+Scripts execute ordinary Nemerle declarations in source order. Repeating a
+`def` introduces a **new immutable binding**; it does not write into the old
+one. A function or lambda created before the new declaration keeps the
+older binding. The newest public script member retains the source name.
+The same rule applies to names declared by tuple and other patterns.
+
+```nemerle,script
+def x = 4;
+Old() : int { x }
+def x = "after";
+New() : string { x }
+System.Console.WriteLine(Old());
+System.Console.WriteLine(New());
+```
+
+```text
+4
+after
+```
+
+A fresh REPL submission also has its own script instance. Its declarations
+may shadow members of earlier submissions, but existing delegates keep the
+previous instance alive. `mutable` remains ordinary shared mutable state
+within its owning instance.
+
 ### Async work
 
 Top-level `await` works without adding an async entry point. Await the operation whose result you want before the

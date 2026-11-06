@@ -15,7 +15,7 @@ compiles everything again.
 """
 import argparse
 import os, pathlib, re, shutil, subprocess, sys, time
-from tooling import artifact_path
+from tooling import artifact_path, remove_readonly_tree
 
 repo = pathlib.Path(__file__).resolve().parents[1]
 build, tests = repo / 'build', repo / 'tests'
@@ -50,7 +50,7 @@ boot = a.boot.resolve()
 refs = (a.references or default_references()).resolve()
 out = a.output.resolve()
 toolchain, logs = out / 'toolchain', out / 'logs'
-if out.exists(): shutil.rmtree(out)
+if out.exists(): remove_readonly_tree(out)
 logs.mkdir(parents=True)
 print('boot:', boot, '\nreferences:', refs, '\noutput:', out, flush=True)
 failures, scratch = [], []
@@ -88,7 +88,7 @@ def finish():
                 if f.name in ('references', 'netstandard2.0') or f.suffix in ('.dll', '.nitrametadata', '.nitrametadata2', '.exe', '.json', '.txt', '.rtf', '.png')
                 or f.name in ('ncc', 'nscript')]
         keep = [f for f in keep if not f.name.endswith('-STATUS.json') and not f.name.startswith('_N_')]
-        shutil.rmtree(target); target.mkdir()
+        remove_readonly_tree(target); target.mkdir()
         for f in keep:
             (shutil.copytree if f.is_dir() else shutil.copy2)(f, target / f.name)
         print('\nboot/coreclr updated from', toolchain)
@@ -101,6 +101,10 @@ py = sys.executable
 #    compiler stages compile against the platform API of this source tree.
 seed = out / 'seed'
 shutil.copytree(boot, seed)
+# Repair a non-Windows CodeDOM only in the disposable bootstrap seed.
+if os.name == 'nt':
+    from windows_codedom import ensure_windows_codedom
+    ensure_windows_codedom(seed)
 step('platform', [py, build / 'build-coreclr-platform.py', '--toolchain', seed, '--references', refs])
 # 2. compiler, two stages from the seed
 text = step('compiler', [py, build / 'build-coreclr-toolchain.py', '--bootstrap', seed, '--references', refs])
@@ -123,6 +127,11 @@ step('vscode-build', [py, build / 'build-vscode-extension.py', '--server', out /
 T, R = toolchain, refs
 suites = [
     ('file-modules', ['check-file-modules.py', T / 'ncc.exe', '--runtime', 'dotnet', '--target-references', R]),
+    # Fast, independently reported .n/.ns lexical-binding regression suite.
+    # The JSON artifact is retained in out/bootstrap/reports, with the full
+    # command output in the normal out/bootstrap/logs/def-shadowing.log.
+    ('def-shadowing', ['check-def-shadowing.py', '--toolchain', T, '--references', R,
+                       '--report', out / 'reports/def-shadowing.json']),
     ('source-resolution', ['check-source-resolution.py', '--toolchain', T, '--references', R]),
     ('logical-modules', ['check-logical-modules.py', '--toolchain', T, '--references', R]),
     ('projects', ['check-projects.py', '--toolchain', T]),
@@ -185,7 +194,7 @@ def run_suite(name, command):
 # several at once, the longest first; those that drive a program of the machine (an editor, a debugger, an installer
 # into the user's places) run alone, after.
 alone = {'installers', 'vscode-extension', 'debugger'}
-longest = ['book-variants', 'book', 'nitra-comparison', 'casts', 'continuation', 'file-modules', 'type-flow', 'corners',
+longest = ['book-variants', 'book', 'nitra-comparison', 'casts', 'continuation', 'file-modules', 'def-shadowing', 'type-flow', 'corners',
            'incremental', 'pascal', 'parallel-typing']
 chosen = [] if a.build_only else suites
 together = sorted((s for s in chosen if s[0] not in alone), key=lambda s: longest.index(s[0]) if s[0] in longest else len(longest))

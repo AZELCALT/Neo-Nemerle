@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command, nscript_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
@@ -41,7 +43,7 @@ def compile(name, text):
     d = work / name
     d.mkdir()
     (d / 'main.n').write_text(text)
-    r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'),
+    r = subprocess.run([*ncc_command(T), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'),
                         '-launcher-', '-no-color', '-r:' + str(work / 'Api.dll')], capture_output=True, text=True)
     return d, r.returncode == 0, r.stdout + r.stderr
 
@@ -74,10 +76,10 @@ s.mkdir()
 shutil.copy2(work / 'Api.dll', s / 'Api.dll')
 (s / 'uses.ns').write_text('[assembly: DependsOn("Api.dll")]\ndef d = Api.Get(1);\n'
                            'System.Console.WriteLine(match (d) { | t is string => t | _ => "?" });\n')
-r = subprocess.run([str(T / 'nscript'), 'run', str(s / 'uses.ns'), '--no-cache'], capture_output=True, text=True, timeout=120)
+r = subprocess.run([*nscript_command(T), 'run', str(s / 'uses.ns'), '--no-cache'], capture_output=True, text=True, timeout=120)
 if r.stdout.strip() != 'text': raise SystemExit('FAILED: a script checks a dynamic value\n' + r.stdout + r.stderr)
 (s / 'blind.ns').write_text('[assembly: DependsOn("Api.dll")]\ndef d = Api.Get(1);\nSystem.Console.WriteLine(d.ToString())\n')
-r = subprocess.run([str(T / 'nscript'), 'run', str(s / 'blind.ns'), '--no-cache'], capture_output=True, text=True, timeout=120)
+r = subprocess.run([*nscript_command(T), 'run', str(s / 'blind.ns'), '--no-cache'], capture_output=True, text=True, timeout=120)
 if r.returncode == 0 or (r.stdout + r.stderr).count('is dynamic: its type is not known here') != 1:
     raise SystemExit('FAILED: a script\'s unchecked use of a dynamic value\n' + r.stdout + r.stderr)
 print('PASS: a script checks a dynamic value, and an unchecked use is its error')

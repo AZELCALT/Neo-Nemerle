@@ -1223,6 +1223,8 @@ internal sealed class StateMacro : IMacro
     }
     match (name, exprs)
     {
+      | ("__state_read", [PExpr.Literal(Literal.String(key)), _, PExpr.Literal(Literal.String(original))])
+          when shadowing(original) != null => shadowing(original)
       | ("__state_read", PExpr.Literal(Literal.String(key)) :: _) when shadowing(key) != null => shadowing(key)
       // (a local of that name where the code is: the code's own, as a read's)
       | ("__state_store", [PExpr.Literal(Literal.String(key)), _, value]) when shadowing(key) != null => <[ $(shadowing(key)) = $value ]>

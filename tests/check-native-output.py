@@ -8,6 +8,9 @@ import argparse
 import pathlib
 import shutil
 import subprocess
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'build'))
+from tooling import net10_runtime
 import tempfile
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -22,15 +25,11 @@ for root in (a.toolchain, a.native_core):
         if f.is_file() and f.suffix in {'.dll', '.exe', '.json', '.nitrametadata'}:
             shutil.copy2(f, w / f.name)
 here = pathlib.Path(__file__).resolve().parent
-common = ['dotnet', str(w / 'ncc.exe'), '-no-color', '-source-root:' + str(here), '-target-references:' + str(a.references.resolve())]
+common = ['dotnet', str(w / 'ncc.exe'), '-launcher-', '-no-color', '-source-root:' + str(here), '-target-references:' + str(a.references.resolve())]
 references = ['-r:' + str(w / name) for name in (
     'Nemerle.Compiler.dll', 'Integrated.Nitra.Runtime.dll',
     'Integrated.DotNetLang.dll', 'Integrated.Nitra.Grammar.dll')]
-rows = [line.split() for line in subprocess.check_output(
-    ['dotnet', '--list-runtimes'], text=True).splitlines()
-    if line.startswith('Microsoft.NETCore.App ')]
-row = max(rows, key=lambda x: tuple(map(int, x[1].split('.'))))
-runtime = pathlib.Path(row[2].strip('[]')) / row[1]
+runtime = net10_runtime()
 references += ['-r:' + str(runtime / (name + '.dll')) for name in (
     'System.Collections.Immutable', 'System.Linq', 'System.Xml.XDocument',
     'System.Xml.ReaderWriter', 'System.Xml.XmlDocument')]

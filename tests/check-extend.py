@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 a = p.parse_args()
@@ -30,7 +32,7 @@ def files(d, sources):
 def compile(d, sources, *extra, library=False):
     paths = files(d, sources)
     out = d / ('lib.dll' if library else 'main.exe')
-    r = subprocess.run([str(T / 'ncc'), *paths, '-source-root:' + str(d), '-out:' + str(out), '-no-color', *extra,
+    r = subprocess.run([*ncc_command(T), *paths, '-source-root:' + str(d), '-out:' + str(out), '-no-color', *extra,
                         *(['-target:library'] if library else ['-launcher-'])], capture_output=True, text=True)
     return r.returncode == 0, r.stdout + r.stderr
 

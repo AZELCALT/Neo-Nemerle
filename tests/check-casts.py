@@ -82,7 +82,7 @@ def run(mode, name, code):
         r = subprocess.run(['dotnet', str(T / 'nscript.exe'), 'run', 'm.ns', '--no-cache'], cwd=d, capture_output=True, text=True, timeout=120)
         return outcome(r.stdout + r.stderr, True) or (thrown(r.stdout + r.stderr) if r.returncode else r.stdout.strip())
     (d / 'm.n').write_text(code + '\n')
-    r = subprocess.run(['dotnet', str(T / 'ncc.exe'), '-target-references:' + str(R), 'm.n', '-out:m.exe', '-no-color'],
+    r = subprocess.run(['dotnet', str(T / 'ncc.exe'), '-target-references:' + str(R), 'm.n', '-out:m.exe', '-launcher-', '-no-color'],
                        cwd=d, capture_output=True, text=True)
     failed = outcome(r.stdout + r.stderr, (d / 'm.exe').exists())
     if failed: return failed

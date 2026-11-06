@@ -13,18 +13,28 @@ parser.add_argument('--references', type=pathlib.Path, default=pathlib.Path(__fi
 args = parser.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 installation = pathlib.Path(shutil.which('dotnet')).resolve().parent
+def link_runtime_dir(destination, source):
+    if os.name == 'nt':
+        # Directory junctions don't require symlink privilege.
+        subprocess.run(['cmd', '/c', 'mklink', '/J', str(destination), str(source)],
+                       capture_output=True, text=True, check=True)
+    else:
+        destination.symlink_to(source, target_is_directory=True)
+
+
 root = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-runtime-only-'))
-shutil.copy2(installation / 'dotnet', root / 'dotnet')
+host_name = 'dotnet.exe' if os.name == 'nt' else 'dotnet'
+shutil.copy2(installation / host_name, root / host_name)
 (root / 'host').mkdir()
-(root / 'host/fxr').symlink_to(installation / 'host/fxr', target_is_directory=True)
+link_runtime_dir(root / 'host/fxr', installation / 'host/fxr')
 (root / 'shared').mkdir()
-(root / 'shared/Microsoft.NETCore.App').symlink_to(installation / 'shared/Microsoft.NETCore.App', target_is_directory=True)
+link_runtime_dir(root / 'shared/Microsoft.NETCore.App', installation / 'shared/Microsoft.NETCore.App')
 env = os.environ.copy()
 env['DOTNET_ROOT'] = str(root)
 env['DOTNET_MULTILEVEL_LOOKUP'] = '0'
-sdks = subprocess.check_output([str(root / 'dotnet'), '--list-sdks'], env=env, text=True)
+sdks = subprocess.check_output([str(root / host_name), '--list-sdks'], env=env, text=True)
 if sdks.strip(): raise RuntimeError('Runtime-only host unexpectedly sees an SDK: ' + sdks)
-subprocess.run([str(root / 'dotnet'), str(args.compiler.resolve()),
+subprocess.run([str(root / host_name), str(args.compiler.resolve()),
     '-target-references:' + str(args.references.resolve()),
     '-source-root:' + str(here / 'file-modules'),
     str(here / 'file-modules/alpha.n'), str(here / 'file-modules/beta.n'),

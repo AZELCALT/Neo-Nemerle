@@ -10,7 +10,7 @@ rsp=w/'checks.rsp';rsp.write_text('\n'.join(['-nologo','-nostdlib+','-target:exe
 subprocess.run(['dotnet',str(csc),'@'+str(rsp)],check=True);shutil.copy2(w/'ncc.runtimeconfig.json',w/'Checks.runtimeconfig.json')
 subprocess.run(['dotnet',str(w/'Checks.dll')],check=True,timeout=180)
 here=pathlib.Path(__file__).resolve().parent
-common=['dotnet',str(w/'ncc.exe'),'-target-references:'+str(a.references.resolve()),'-no-color','-source-root:'+str(here)]
+common=['dotnet',str(w/'ncc.exe'),'-target-references:'+str(a.references.resolve()),'-launcher-','-no-color','-source-root:'+str(here)]
 subprocess.run(common+[str(here/'NitraTupleConstructor.n'),'-out:'+str(w/'ConstructorChecks.exe')],check=True,timeout=180)
 shutil.copy2(w/'ncc.runtimeconfig.json',w/'ConstructorChecks.runtimeconfig.json')
 subprocess.run(['dotnet',str(w/'ConstructorChecks.exe')],check=True,timeout=30)

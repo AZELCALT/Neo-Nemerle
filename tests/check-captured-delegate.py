@@ -20,7 +20,7 @@ for mode in ('release', 'debug'):
     output = work / (mode + '.exe')
     subprocess.run([
         'dotnet', str(work / 'ncc.exe'), str(source.resolve()), '-source-root:' + str(source.resolve().parent),
-        '-out:' + str(output), '-no-color',
+        '-out:' + str(output), '-launcher-', '-no-color',
         '-debug+' if mode == 'debug' else '-debug-',
         '-target-references:' + str(a.references.resolve()),
     ], check=True, timeout=120)

@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
@@ -26,7 +28,7 @@ def files(d, sources):
     return [str(d / name) for name in sources]
 
 def ncc(d, sources, *extra):
-    r = subprocess.run([str(T / 'ncc'), *files(d, sources), '-source-root:' + str(d), '-no-color', *extra], capture_output=True, text=True)
+    r = subprocess.run([*ncc_command(T), *files(d, sources), '-source-root:' + str(d), '-no-color', *extra], capture_output=True, text=True)
     return r.returncode == 0, r.stdout + r.stderr
 
 modules = {

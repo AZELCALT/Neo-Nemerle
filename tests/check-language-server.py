@@ -5,6 +5,8 @@ Usage: check-language-server.py --server <out>/nemerle-lsp [--log FILE]
 Build the server first with build-language-server.py."""
 import argparse, json, os, pathlib, shutil, subprocess, tempfile, threading, queue, time, sys
 
+from windows_commands import lsp_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--server', type=pathlib.Path, required=True)
 p.add_argument('--log', type=pathlib.Path)
@@ -23,7 +25,7 @@ testdata = tempfile.mkdtemp(prefix='nemerle-lsp-data-')
 class Client:
     def __init__(self, log=None, env=None):
         log = log or a.log
-        args = [str(a.server)] + (['--log', str(log)] if log else [])
+        args = lsp_command(a.server) + (['--log', str(log)] if log else [])
         env = env or dict(os.environ, XDG_DATA_HOME=testdata, LOCALAPPDATA=testdata)
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         self.next_id = 0; self.inbox = queue.Queue(); self.diagnostics = {}

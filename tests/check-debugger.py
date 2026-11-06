@@ -10,6 +10,8 @@ and parameters, locals and top-level state have their values. Without netcoredbg
 --netcoredbg) the check is skipped."""
 import argparse, json, os, pathlib, queue, shutil, subprocess, tempfile, threading, time
 
+from windows_commands import ncc_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--netcoredbg', type=pathlib.Path)
@@ -67,7 +69,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
     config, adapter = both['config'], both['adapter']
     check(config['type'] == 'nemerle' and config['program'] == str(prog / 'out/prog.dll') and config['build'] is True,
           'the extension\'s launch configuration: %s' % config)
-    r = subprocess.run([str(tc / 'ncc'), 'build', str(prog)], capture_output=True, text=True)
+    r = subprocess.run([*ncc_command(tc, managed_output=False), 'build', str(prog)], capture_output=True, text=True)
     check(r.returncode == 0 and (prog / 'out/prog.pdb').exists(), 'the build with debug information: ' + r.stdout + r.stderr)
 
     # the debug adapter session
@@ -157,7 +159,7 @@ console.log(JSON.stringify({ config, adapter: ext._test.adapterConfiguration(con
                                   'async Scaled(n : int) : Task[int]\n{\n  def factor = n + 1;\n  def scale = x => x * factor;\n'
                                   '  await Task.Delay(10);\n  def doubled = scale(2);\n  doubled\n}\n'
                                   'System.Console.WriteLine(await Scaled(4))\n')
-    r = subprocess.run([str(tc / 'ncc'), 'build', str(aprog)], capture_output=True, text=True)
+    r = subprocess.run([*ncc_command(tc, managed_output=False), 'build', str(aprog)], capture_output=True, text=True)
     check(r.returncode == 0, 'the async program\'s build: ' + r.stdout + r.stderr)
     proc = subprocess.Popen([str(debugger), '--interpreter=vscode'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     inbox = queue.Queue()

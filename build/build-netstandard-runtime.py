@@ -10,7 +10,7 @@ nuget.org (NETStandard.Library 2.0.3), downloaded once into the same cache `ncc 
 without the cache, the step is skipped: the toolchain then builds for its own .NET only, and says so.
 """
 import argparse, io, os, pathlib, re, shutil, subprocess, sys, tempfile, urllib.request, zipfile
-from tooling import net10_runtime
+from tooling import net10_runtime, cleanup_generated_items, cleanup_generated_items_readonly
 import buildcache
 
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -56,5 +56,5 @@ command = ['dotnet', str(tc / 'ncc.exe'), *map(str, sorted((repo / 'lib/Nemerle'
            *['-r:' + str(runtime / n) for n in ('System.Xml.ReaderWriter.dll', 'System.Xml.XmlDocument.dll', 'System.Console.dll')]]
 log = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-netstandard-build-')) / 'build.log'
 if buildcache.run(command, log): sys.exit(log.read_text())   # (an unchanged compile is reused)
-for leftover in out.glob('_N_*'): leftover.unlink()
+cleanup_generated_items_readonly(out)
 print('PASS: Nemerle.dll for .NET Standard 2.0 (%s), version %s' % (out / 'Nemerle.dll', match.group(1)))

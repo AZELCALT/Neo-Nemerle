@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
@@ -39,7 +41,7 @@ if csc is None:
     '  public MakeLogger() : string -> void { s => System.Console.WriteLine("log: " + s) }\n'
     '  public Several() : object { Nemerle.Scopes.Content("forty-two") }\n'
     '}\n')
-r = subprocess.run([str(T / 'ncc'), str(work / 'engine.n'), '-source-root:' + str(work), '-target:library',
+r = subprocess.run([*ncc_command(T), str(work / 'engine.n'), '-source-root:' + str(work), '-target:library',
                     '-out:' + str(work / 'engine.dll'), '-no-color'], capture_output=True, text=True)
 if not (work / 'engine.dll').exists():
     raise SystemExit('FAILED: the Nemerle engine library\n' + r.stdout + r.stderr)

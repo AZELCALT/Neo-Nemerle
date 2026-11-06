@@ -63,6 +63,14 @@ using Nemerle.Compiler.Utility;
   /* ---------------------------------------------------------------------- */
   /* -- GLOBAL PROCESSING OF ALL TYPEBUILDERS------------------------------ */
   /* ---------------------------------------------------------------------- */
+  // Compile-time dependency readiness only.  Neither state is a CLR type;
+  // `object` and `void` remain genuine, distinct user-visible types.
+  internal enum BindingInferenceStatus
+  {
+    | NotYet
+    | Ready
+  }
+
   [ManagerAccess]
   public class TypesManager : System.IDisposable
   {
@@ -848,31 +856,130 @@ using Nemerle.Compiler.Utility;
                                                              | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
                                                              | System.Reflection.BindingFlags.DeclaredOnly))
                    when (m.InferredResult) functions.Add(m));
-      def named(m : MethodBuilder) : System.Collections.Generic.HashSet[string]
+      // SCRIPT-INFERRED-FIELD-DEPENDENCIES: v1
+      // A script's inferred fields start as object placeholders. A function with
+      // an inferred return type can read one of those fields before the script
+      // constructor has inferred its initializer. Resolve the referenced field
+      // (and the function/field dependencies of its initializer) first. This is
+      // needed for def size = 10; Twice() { size * 2 } in .ns scripts.
+      def namedExpr(e : PT.PExpr) : System.Collections.Generic.HashSet[string]
       {
-        def found = System.Collections.Generic.HashSet();
-        _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), m.Body, false, (_, after, node) =>
-          {
-            match (node) { | PT.PExpr.Ref(n) when !after => _ = found.Add(n.Id) | PT.PExpr.Member(_, n) when !after => _ = found.Add(n.GetName().Id) | _ => () }
-            node
-          });
+        def found = System.Collections.Generic.HashSet.[string]();
+        when (e != null)
+          _ = Nemerle.Compiler.macros.Macros.TraverseExpr(None(), e, false, (_, after, node) =>
+            {
+              match (node)
+              {
+                | PT.PExpr.Ref(n) when !after => _ = found.Add(n.Id)
+                | PT.PExpr.Member(_, n) when !after => _ = found.Add(n.GetName().Id)
+                | _ => ()
+              }
+              node
+            });
         found
       }
-      when (functions.Count > 0) Nemerle.Compiler.file_module_registry.FunctionResultMacro.Register(Manager);
-      def visiting = System.Collections.Generic.HashSet.[MethodBuilder]();
-      def type(m : MethodBuilder) : void
-      {
-        when (!m.ResultDecided && visiting.Add(m))
+      def named(m : MethodBuilder) : System.Collections.Generic.HashSet[string] { namedExpr(m.Body) }
+      def script = Manager.Options.Script;
+      def scriptFields = System.Collections.Generic.Dictionary.[string, FieldBuilder]();
+      mutable scriptConstructor : MethodBuilder = null;
+      when (script != null)
+        Iter(ti => when (ti.FullName == script.TypeName)
         {
-          def names = named(m);
-          foreach (callee when callee : object != m && names.Contains(callee.Name) in functions) type(callee);
-          // (its return points, the result macro's: first typed to learn the types they give)
-          match (m.Body) { | null => () | body => m.Body = ResultPoints(body); m.ResultBody = m.Body }
-          m.RunBodyTyper();
-          m.ResultDecided = true
+          foreach (constructor is MethodBuilder in ti.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                                                                      | System.Reflection.BindingFlags.Instance))
+            when (scriptConstructor == null) scriptConstructor = constructor;
+          foreach (field is FieldBuilder in ti.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                                                         | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static))
+            scriptFields[field.Name] = field;
+        });
+      when (functions.Count > 0) Nemerle.Compiler.file_module_registry.FunctionResultMacro.Register(Manager);
+      // A top-level binding can depend on an inferred function result, and a later
+      // inferred function can read that binding.  Do not type that reader against
+      // the field's provisional CLR storage type.  The binding is compile-time
+      // NotYet until the inference copy has actually selected its type.
+      def state(m : MethodBuilder) : BindingInferenceStatus
+      {
+        def prefix = m.DeclaringType.FullName + ".";
+        foreach (name in named(m))
+        {
+          def key = prefix + name;
+          when ((Manager.StateLines.ContainsKey(key) || Manager.ModuleBindings.ContainsKey(key)
+                 || Manager.FileModuleRegistry.Flowing.Contains(key))
+                && !Manager.StateStorage.ContainsKey(key))
+            foreach (field is FieldBuilder in m.DeclaringType.LookupMember(name))
+              when (field.Ast.ty is <[ _ ]>)
+                return BindingInferenceStatus.NotYet;
+        }
+        BindingInferenceStatus.Ready
+      }
+      // Recheck only the *inference copies*, never an already typed function.
+      // This happens on the compiling thread, before parallel method pretyping.
+      def publish() : void
+      {
+        foreach (ti in System.Collections.Generic.List(pendingModules)) InferModuleState(ti)
+      }
+      def visiting = System.Collections.Generic.HashSet.[MethodBuilder]();
+      def inferringFields = System.Collections.Generic.HashSet.[string]();
+      def type(m : MethodBuilder) : bool
+      {
+        def inferField(name : string) : void
+        {
+          when (script != null && m.DeclaringType.FullName == script.TypeName
+                && scriptFields.ContainsKey(name) && script.InferredInitializers.ContainsKey(name)
+                && !script.TypedInitializers.ContainsKey(name) && inferringFields.Add(name))
+          {
+            try
+            {
+              def referenced = namedExpr(script.InferredInitializers[name]);
+              foreach (callee when referenced.Contains(callee.Name) in functions) _ = type(callee);
+              foreach (dependency when referenced.Contains(dependency) in scriptFields.Keys) inferField(dependency);
+              def owner = if (scriptConstructor != null) scriptConstructor else m;
+              scriptFields[name].InferScriptType(Manager.ComponentsFactory.CreateTyper(owner));
+            }
+            finally { _ = inferringFields.Remove(name); }
+          }
+        }
+        if (m.ResultDecided) true
+        else if (visiting.Contains(m)) true  // retain the existing recursive-function behavior
+        else if (state(m) == BindingInferenceStatus.NotYet) false
+        else
+        {
+          _ = visiting.Add(m);
+          try
+          {
+            def names = named(m);
+            mutable ready = true;
+            foreach (callee when callee : object != m && names.Contains(callee.Name) in functions)
+              unless (type(callee)) ready = false;
+            if (!ready || state(m) == BindingInferenceStatus.NotYet) false
+            else
+            {
+              foreach (name when names.Contains(name) in scriptFields.Keys) inferField(name);
+              match (m.Body) { | null => () | body => m.Body = ResultPoints(body); m.ResultBody = m.Body }
+              m.RunBodyTyper();
+              m.ResultDecided = true;
+              publish();
+              true
+            }
+          }
+          finally { _ = visiting.Remove(m); }
         }
       }
-      foreach (m in functions) type(m)
+      // A referenced top-level value may become ready when a different
+      // inferred-return function finishes.  Resolve in dependency order,
+      // without converting a pending result to void/object or retyping a reader.
+      mutable progressed = true;
+      while (progressed)
+      {
+        progressed = false;
+        foreach (m in functions)
+          when (!m.ResultDecided && type(m)) progressed = true;
+      }
+      // A genuine cycle has no valid inferred result.  Report it as NotYet,
+      // rather than using an ordinary user-visible type as an error sentinel.
+      foreach (m in functions)
+        unless (m.ResultDecided)
+          Message.Error(m.Location, $"Cannot infer result of `$(m.Name)`: a top-level binding is NotYet (unresolved dependency or cycle)")
     }
 
     /// Gives a top-level value's field its type: the one type of all its bindings, else a Content.
@@ -1197,6 +1304,14 @@ using Nemerle.Compiler.Utility;
       Iter(tb => when (allow_it(tb))
                    tb.UpdateEmittedInheritance());
 
+      // SCRIPT-STATE-BEFORE-RESULTS: v3
+      // The script's _N_state_types is already an inference-only method.
+      // Resolve its independent bindings before inferred-result functions read
+      // their fields. Bindings that depend on those functions remain pending:
+      // pendingModules will infer those after TypeInferredResults below.
+      // This is single-threaded, before PreTypeInParallel is invoked.
+      when (!aux_phase && Manager.Options.Script != null)
+        InImportOrder(InferModuleState);
       // (a script's functions written without their result's type: typed first, the bindings they read inferred where
       // they read them, as the script's constructor infers its own)
       when (!aux_phase && Manager.Options.Script != null) TypeInferredResults();
@@ -1215,7 +1330,7 @@ using Nemerle.Compiler.Utility;
       // bindings differ in type
       // (in import order: a file's values are inferred after those of the files it imports, whose types its code may
       // use, so the outcome does not depend on the order of the files on the command line)
-      when (!aux_phase) InImportOrder(InferModuleState);
+      when (!aux_phase && Manager.Options.Script == null) InImportOrder(InferModuleState);
       // a file's functions written without their result's type: typed now, after the inference that decides the
       // top-level values they read and before the code that calls them, each after the ones it calls (a call into one
       // being typed, as a recursion, sees a result of its own, which adds nothing); a top-level value bound to the

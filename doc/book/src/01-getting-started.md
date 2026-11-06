@@ -6,7 +6,7 @@ The toolchain lives in the repository. From the root of a cloned or downloaded r
 
 ```bat
 install\install.cmd          rem install the toolchain; installs .NET 10 runtime if needed
-install\install.cmd -Build   rem build from source; also installs SDK, Python, Mono's sn and Git if needed
+install\install.cmd -Build   rem build from source; installs SDK, Python and Git if needed
 ```
 
 It checks the compiler and script host before replacing an existing installation. It also checks that the app-local
@@ -26,8 +26,8 @@ install/install.sh
 If `ncc -version` then says the command is not found, `~/.local/bin` is not on your `PATH`: add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file (`~/.bashrc`, `~/.zshrc`) and open a new terminal.
 
-To build from source instead, install the .NET 10 SDK, Python 3 and Mono's `sn` tool (used to verify signed
-assemblies), then run `./bootstrap --quick` in the clone (`install/install.sh --build` builds and installs). `boot/coreclr`
+To build from source instead, install the .NET 10 SDK and Python 3. The build verifies signed
+assemblies using its own Python strong-name verifier, without Mono. Then run `./bootstrap --quick` in the clone (`install/install.sh --build` builds and installs). `boot/coreclr`
 already holds a working compiler, so you can use it right away; `./bootstrap` rebuilds everything from it and runs the
 tests, and the new toolchain lands in `out/bootstrap/toolchain`. In this book, `ncc` and `nscript` mean the installed
 commands, or the ones in either directory.

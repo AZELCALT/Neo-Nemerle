@@ -292,43 +292,66 @@ System.Console.WriteLine($"$(Add(10)): $(Show())")
 `top` is no keyword: `top name` is the only meaning of two names side by side, so a variable called `top` (`top.x`,
 `top + 1`) is as before.
 
-A top-level value's type comes from the whole top-level code: `mutable items = [];` is a list whose element type a
-later `items ::= 1` gives. A function, a lambda or a local function reads the value's storage, so it may be written
-above the value's binding and sees whatever the storage holds when it runs. Binding a name again writes the same
-storage: `def x = 5; def x = x * 2;` leaves 10.
-
-A top-level value follows the rules of chapter 2: a `def` bound again, or a `mutable` without a type, may change
-type, and the top-level code knows its type after each binding or assignment. Its storage is of that one type, or a
-container when the type changes (which the compiler handles). Code outside the top-level code (a function, a lambda)
-reads the value whenever it runs, so it does not rely on any one of its types: it checks it first, with `match` or
-`if (x is T)`, which give it the value as the type checked. A use without a check is an error there:
-
-```nemerle,fail
-def y = 5;
-def y = y.ToString();
-Twice() : int { y * 2 }
-System.Console.WriteLine(Twice())
-```
-
-```text
-`y' is int or string (declared at lines 1, 2): it is a top-level value, and this code can run at any time
-```
+A top-level `def` creates an immutable binding. Another `def` of the same name
+shadows it without changing the original storage, just as in a local scope.
+Functions and closures retain the binding visible where they are defined.
+A module exports the **last** binding of a public name; earlier bindings remain
+private implementation details of that file.
 
 ```nemerle
 def y = 5;
-def y = y.ToString() + "!";
-Shout() : string { match (y) { | s is string => s.ToUpper() | _ => "a number" } }
-System.Console.WriteLine(Shout())
+Old() : int { y }
+def y = y.ToString();
+New() : string { y }
+System.Console.WriteLine(Old());
+System.Console.WriteLine(New())
 ```
 
 ```text
-5!
+5
+5
 ```
 
-Other .NET languages see a top-level value of several types as what it is stored in, a `Nemerle.Scopes.Content`
-(its `Value`, and the `Type` it currently is). Its field says which types it can be, with
-`[Nemerle.Scopes.ContentTypes(typeof(int), typeof(string))]`, so C# code (and its tools) can read them by reflection
-and check for each.
+A top-level `mutable` remains writable shared state. A mutable without an
+explicit type follows the type flow of assignments. Its field may use
+`Nemerle.Scopes.Content` when its types differ; functions reading it at an
+arbitrary time must first narrow the type with `is` or `match`. That rule does
+not apply to two independent immutable `def` bindings.
+
+### Final module bindings and lexical captures
+
+Every top-level `def` creates its own immutable binding. The initializer of a
+new declaration can still refer to the preceding binding of the same name.
+A function (or closure) uses the binding visible at its declaration, even
+if another declaration with the same name appears later. External modules
+see the **last public binding** under the original name. The earlier versions
+are private and remain alive when a function captures them.
+
+```nemerle
+// file: defs.n
+public def x = 10;
+public Old() : int { x }
+public def x = "latest";
+public Current() : string { x }
+
+// file: main.n
+using defs;
+System.Console.WriteLine(defs.Old());
+System.Console.WriteLine(defs.Current());
+System.Console.WriteLine(defs.x);
+```
+
+```text
+10
+latest
+latest
+```
+
+This is not reassignment: `x = 12` is still illegal for `def`. A `mutable`
+field, by contrast, keeps one identity across assignments. The `.ns` script
+format uses the same `def` shadowing rule within a single submission; see
+[Scripts](11-scripts.md#shadowing-inside-one-submission).
+
 
 The type of a top-level value changes in the top-level code only. A function of the file that assigns it gives it a
 value of a type it already has there: another type is an error, as anywhere a value's type is fixed. Since such a

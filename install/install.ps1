@@ -9,11 +9,11 @@ install\install.cmd
 install\install.cmd -Editor none
 install\install.cmd -Uninstall
 
-Installs missing Windows prerequisites with winget (runtime for an install; SDK, Python and Mono for -Build).
+Installs missing Windows prerequisites with winget (runtime for an install; SDK and Python for -Build).
 -NoDependencies uses existing prerequisites and disables online CodeDOM repair. The editor extension's JavaScript
 dependencies are downloaded from the npm registry as package-lock.json pins them (checked against its hashes); npm
 itself is used only when that cannot be done. -Build compiles everything from source first and needs Python 3 and the
-strong-name tool sn as well.
+its own strong-name signature verifier as well.
 #>
 param(
   [string]$Prefix = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Nemerle' } else { Join-Path $HOME '.local/share/nemerle' }),

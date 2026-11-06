@@ -86,7 +86,7 @@ The installer:
 `install/install.ps1` also runs under PowerShell 7 on Linux and macOS. The Windows-specific parts (`.cmd` launchers, the
 user `PATH`) have not been tested on Windows yet; please report problems.
 
-On Windows, `-Build` installs a missing .NET 10 SDK, Python 3, Mono's strong-name verification tool and Git through winget.
+On Windows, `-Build` installs a missing .NET 10 SDK, Python 3 and Git through winget. Strong-name signatures are verified locally by the Python build tooling (no Mono `sn` required).
 If winget itself is missing, the installer attempts to bootstrap it with Microsoft's `Microsoft.WinGet.Client`
 PowerShell module. It refreshes PATH after installing prerequisites; Windows may still ask for elevation for the
 system packages. An explicitly selected missing editor (`-Editor code` or `-Editor codium`) is installed through
@@ -153,7 +153,7 @@ program, with `Nemerle.dll` and its references, in `out/`. See [Projects](doc/bo
 
 ## Building from source
 
-Building needs the .NET 10 SDK, Python 3 and `sn` (Mono's strong-name tool, which verifies signed outputs).
+Building needs the .NET 10 SDK and Python 3. `build/strong_name.py` verifies RSA strong-name signatures directly, with no external `sn` tool.
 
 ```sh
 ./bootstrap                  # boot/coreclr -> stage 1 -> stage 2, Nitra, scripting, LSP, then every test suite

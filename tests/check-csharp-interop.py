@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--references', type=pathlib.Path, required=True)
@@ -69,7 +71,7 @@ def compile(name, text):
     d = work / name
     d.mkdir()
     (d / 'main.n').write_text('using Lib;\nusing Nemerle.ExtensionsMacros;\n' + text)
-    r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'),
+    r = subprocess.run([*ncc_command(T), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'),
                         '-launcher-', '-no-color', '-r:' + str(work / 'Api.dll')], capture_output=True, text=True)
     return d, r.returncode == 0, r.stdout + r.stderr
 

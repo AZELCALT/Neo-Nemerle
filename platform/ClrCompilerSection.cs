@@ -185,7 +185,63 @@ namespace Nemerle.Platform
             throw new InvalidDataException("RVA outside every section");
         }
 
-        /// SHA-1 over the headers up to the end of the section table, then every section byte from the first section
+#if MODERN_CLR
+        // Convert CAPI RSA2 .snk blobs to portable RSA parameters.
+        private static RSA ImportSnkPrivateKey(byte[] key)
+        {
+            if (key == null || key.Length < 20 ||
+                key[0] != 7 || key[1] != 2 ||
+                BitConverter.ToUInt32(key, 4) != 0x2400u ||
+                BitConverter.ToUInt32(key, 8) != 0x32415352u)
+                throw new InvalidDataException("Invalid RSA2 signing key");
+
+            int bits = checked((int)BitConverter.ToUInt32(key, 12));
+            if (bits < 512 || bits > 16384 || bits % 16 != 0)
+                throw new InvalidDataException("Invalid key length");
+
+            int n = bits / 8, half = n / 2;
+            if (key.Length != 20 + 2 * n + 5 * half)
+                throw new InvalidDataException("Invalid key payload");
+
+            uint e = BitConverter.ToUInt32(key, 16);
+            if (e < 3 || (e & 1) == 0)
+                throw new InvalidDataException("Invalid exponent");
+
+            byte[] exp = BitConverter.GetBytes(e);
+            Array.Reverse(exp);
+            int skip = 0;
+            while (skip < exp.Length - 1 && exp[skip] == 0) skip++;
+            byte[] pubExp = new byte[exp.Length - skip];
+            Buffer.BlockCopy(exp, skip, pubExp, 0, pubExp.Length);
+
+            int offset = 20;
+            byte[] Read(int size)
+            {
+                byte[] part = new byte[size];
+                Buffer.BlockCopy(key, offset, part, 0, size);
+                Array.Reverse(part);
+                offset += size;
+                return part;
+            }
+
+            var p = new RSAParameters {
+                Exponent = pubExp,
+                Modulus = Read(n),
+                P = Read(half),
+                Q = Read(half),
+                DP = Read(half),
+                DQ = Read(half),
+                InverseQ = Read(half),
+                D = Read(n)
+            };
+
+            var rsa = RSA.Create();
+            try { rsa.ImportParameters(p); return rsa; }
+            catch { rsa.Dispose(); throw; }
+        }
+#endif
+
+                /// SHA-1 over the headers up to the end of the section table, then every section byte from the first section
         /// to the end of the file except the signature blob; the RSA signature is stored little-endian in the CLI
         /// header's strong-name blob. This is the region Mono.Cecil signs and sn/CoreCLR accept.
         static void StrongNameSign(byte[] image, bool pe32Plus, int opt, int table, int sections, byte[] key)
@@ -209,10 +265,9 @@ namespace Nemerle.Platform
                 hash.AppendData(image, 0, headerEnd);
                 hash.AppendData(image, firstRaw, sig - firstRaw);
                 hash.AppendData(image, sig + (int)sigSize, image.Length - sig - (int)sigSize);
-                using (var rsa = new RSACryptoServiceProvider())
+                using (var rsa = ImportSnkPrivateKey(key))
                 {
-                    rsa.ImportCspBlob(key);
-                    var signature = rsa.SignHash(hash.GetHashAndReset(), "SHA1");
+                    var signature = rsa.SignHash(hash.GetHashAndReset(), HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
                     if (signature.Length != sigSize) throw new InvalidDataException("signature size does not match the image's slot");
                     Array.Reverse(signature);
                     Array.Copy(signature, 0, image, sig, signature.Length);
@@ -242,9 +297,8 @@ namespace Nemerle.Platform
 #if MODERN_CLR
         internal static void Sign(ManagedPEBuilder image, BlobBuilder blob, byte[] key)
         {
-            using (var rsa = new RSACryptoServiceProvider())
+            using (var rsa = ImportSnkPrivateKey(key))
             {
-                rsa.ImportCspBlob(key);
                 image.Sign(blob, content =>
                 {
                     using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1))
@@ -254,7 +308,7 @@ namespace Nemerle.Platform
                             var bytes = part.GetBytes();
                             hash.AppendData(bytes.Array, bytes.Offset, bytes.Count);
                         }
-                        var signature = rsa.SignHash(hash.GetHashAndReset(), "SHA1");
+                        var signature = rsa.SignHash(hash.GetHashAndReset(), HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
                         Array.Reverse(signature);
                         return signature;
                     }

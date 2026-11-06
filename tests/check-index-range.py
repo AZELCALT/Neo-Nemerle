@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command, nscript_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 a = p.parse_args()
@@ -20,7 +22,7 @@ def compile_run(name, text):
     d = work / name
     d.mkdir()
     (d / 'main.n').write_text(text)
-    r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'),
+    r = subprocess.run([*ncc_command(T), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'),
                         '-launcher-', '-no-color'], capture_output=True, text=True)
     if r.returncode != 0 or not (d / 'main.exe').exists():
         return None, r.stdout + r.stderr
@@ -33,7 +35,7 @@ def run_script(name, text):
     s = work / name
     s.mkdir()
     (s / 'r.ns').write_text(text)
-    r = subprocess.run([str(T / 'nscript'), 'run', str(s / 'r.ns'), '--no-cache'], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([*nscript_command(T), 'run', str(s / 'r.ns'), '--no-cache'], capture_output=True, text=True, timeout=120)
     return r.stdout.strip(), r.stdout + r.stderr
 
 # #n and i..j are first-class System.Index / System.Range

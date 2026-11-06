@@ -115,10 +115,6 @@ function Install-NemerlePrerequisites {
     Install-WinGetDependency 'Python.Python.3.14' 'Python 3'
     if (-not (Find-InstallPython)) { throw 'Python was installed but cannot be started; see dependencies.log.' }
   }
-  if (-not (Get-Command sn -ErrorAction SilentlyContinue)) {
-    Install-WinGetDependency 'Mono.Mono' 'Mono strong-name verification tools'
-    if (-not (Get-Command sn -ErrorAction SilentlyContinue)) { throw 'Mono was installed but sn is not available; see dependencies.log.' }
-  }
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Install-WinGetDependency 'Git.Git' 'Git (source build metadata)'
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git was installed but cannot be started; see dependencies.log.' }

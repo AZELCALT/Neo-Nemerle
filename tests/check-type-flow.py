@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import tempfile
 
+from windows_commands import ncc_command, nscript_command
+
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 a = p.parse_args()
@@ -57,7 +59,7 @@ cases = [
     ('writer', f'mutable count = 0;\nInc() : void {{ count++ }}\nInc();\nInc();\n{W}(count)\n', '2', None),
     # a `def' bound again: a new value, of its own type
     ('redefined', f'def y = 5;\ndef y = y.ToString() + "0";\n{W}(y.Length)\n', '2', None),
-    ('redefined-function', f'def y = 5;\ndef y = y.ToString();\nTwice() : int {{ y * 2 }}\n{W}(Twice())\n', None, "`y' is int or string"),
+    ('redefined-function', f'def y = 5;\nTwice() : int {{ y * 2 }}\ndef y = y.ToString();\n{W}(Twice())\n', '10', None),
     # a top-level `def` has one type, as a local one does: branches of different types are an error, not object
     ('def-branches-differ', f'def x = 5;\ndef r = match (x) {{ | 1 => "one" | _ => 2.5 }};\n{W}(r)\n', None,
      "Cannot implicitly convert type 'double'"),
@@ -86,6 +88,21 @@ cases = [
      '21\nint 1\n61', None),
     ('result-top-level-unchecked', f'Pick(c : bool) {{ if (c) "one" else 1 }}\ndef picked = Pick({YES});\nBlind() : string {{ picked.ToString() }}\n{W}(Blind())\n',
      None, 'it is a top-level value, and this code can run at any time'),
+     # An inferred-return function can read an inferred immutable script binding.
+    # The script compiler must infer the binding before the function result,
+    # even when the binding itself was declared before the function.
+    ('script-inferred-function-reads-def',
+     f'def size = 10;\nTwice() {{ size * 2 }}\n{W}(Twice())\n', '20', None),
+    # A script binding whose initializer calls an inferred function requires
+    # the reverse dependency to be resolved as well.
+    ('script-field-function-dependency',
+     f'def size = 10;\nTwice() {{ size * 2 }}\ndef doubled = Twice();\nAgain() {{ doubled + 1 }}\n{W}(Again())\n',
+     '21', None),
+    # Inferred function -> top-level def -> inferred function -> def: no provisional
+    # object/void may leak into consumers, independent of method declaration order.
+    ('script-field-function-chain',
+     f'def size = 10;\nTwice() {{ size * 2 }}\ndef doubled = Twice();\nAgain() {{ doubled + 1 }}\ndef last = Again();\nEnd() {{ last + 1 }}\n{W}(End())\n',
+     '22', None),
     # a type written down is the type
     ('typed', f'mutable x : int = 1;\nx = "one";\n{W}(x)\n', None, 'expected int'),
     # a name keeps its kind
@@ -118,7 +135,7 @@ def compile_file(name, text):
     d = work / 'file' / name
     d.mkdir(parents=True)
     (d / 'main.n').write_text(text)
-    r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'), '-launcher-',
+    r = subprocess.run([*ncc_command(T), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'), '-launcher-',
                         '-no-color'], capture_output=True, text=True)
     if r.returncode != 0:
         return None, r.stdout + r.stderr
@@ -132,7 +149,7 @@ def run_script(name, text):
     d.mkdir(parents=True)
     script = d / (name.replace('-', '_') + '.ns')   # (a script's file name is its module's)
     script.write_text(text)
-    r = subprocess.run([str(T / 'nscript'), 'run', str(script), '--no-cache'], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([*nscript_command(T), 'run', str(script), '--no-cache'], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         return None, r.stdout + r.stderr
     return r.stdout.strip(), r.stderr
@@ -199,7 +216,7 @@ d.mkdir(parents=True)
     'def m = typeof(main).GetMethod("Pick", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic) :> MethodInfo;\n'
     'foreach (a is Nemerle.Scopes.ContentTypesAttribute in m.ReturnParameter.GetCustomAttributes(false)) '
     'System.Console.WriteLine(m.ReturnType.Name + " " + string.Join(" ", System.Array.ConvertAll(a.Types, t => t.Name)))\n')
-r = subprocess.run([str(T / 'ncc'), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'), '-launcher-', '-no-color', '-flow-log'],
+r = subprocess.run([*ncc_command(T), str(d / 'main.n'), '-source-root:' + str(d), '-out:' + str(d / 'main.exe'), '-launcher-', '-no-color', '-flow-log'],
                    capture_output=True, text=True)
 log = r.stdout + r.stderr
 if r.returncode != 0 or "main.n:2:25:2:30: hint: flow: `Pick' gives string here" not in log or "main.n:2:36:2:37: hint: flow: `Pick' gives int here" not in log:

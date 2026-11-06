@@ -21,6 +21,11 @@ P:  spaces are top-level logical files reached through scopes and dials: a host'
     (scope subsection), a plugin script with no grammar (or no space at all) uses them and the host's grammar, a plain
     space looks across the visible grammars, and a space inside a function or used as an expression is rejected."""
 import argparse, pathlib, shutil, subprocess, tempfile, time
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'build'))
+from tooling import verify_strong_name
+
+from windows_commands import ncc_command, nscript_command
 
 p = argparse.ArgumentParser()
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
@@ -161,7 +166,7 @@ def compile_program(name, rules, extra):
     source = root / 'demo.n'
     source.write_text(grammar_program(rules))
     started = time.time()
-    run([T / 'ncc', source, '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'), '-no-color', *extra])
+    run([*ncc_command(T), source, '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'), '-no-color', *extra])
     elapsed = time.time() - started
     shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'demo.runtimeconfig.json')
     output = run(['dotnet', root / 'demo.exe'], cwd=root).stdout.strip()
@@ -194,10 +199,8 @@ unsigned, t_cont = compile_program('unsigned', 10, [])
 print(reader(unsigned, T, 'Demo', unsigned.parent / 'demo.n', '10'), flush=True)
 signed, _ = compile_program('signed', 10, ['-keyfile:' + str(key)])
 print(reader(signed, T, 'Demo'), flush=True)
-verify = subprocess.run(['sn', '-vf', str(signed)], capture_output=True, text=True)
-if 'is strongnamed' not in verify.stdout:
-    raise SystemExit('FAILED: signed output with a continuation section does not verify\n' + verify.stdout + verify.stderr)
-print('PASS: signed output with a continuation section verifies (sn -vf)', flush=True)
+verify_strong_name(signed)
+print('PASS: signed output with a continuation section verifies', flush=True)
 print('E1 times (10 rules): without section %.2fs, with section %.2fs' % (t_plain, t_cont), flush=True)
 print('PASS: E1 continuation section written, signed, readable', flush=True)
 
@@ -209,7 +212,7 @@ def space_program(name, expression, expected, host):
     source = root / 'use.n'
     source.write_text('space Demo { %s }\n' % expression)
     started = time.time()
-    run([T / 'ncc', source, '-source-root:' + str(root), '-out:' + str(root / 'use.exe'), '-no-color',
+    run([*ncc_command(T), source, '-source-root:' + str(root), '-out:' + str(root / 'use.exe'), '-no-color',
          '-continue:' + str(host)])
     elapsed = time.time() - started
     shutil.copy2(T / 'ncc.runtimeconfig.json', root / 'use.runtimeconfig.json')
@@ -237,7 +240,7 @@ def diff_of(name, text, expected_output):
     source = root / 'demo.n'
     source.write_text(text)
     env = dict(os.environ, NEMERLE_CONTINUATION_DIFF='1')
-    r = subprocess.run([str(T / 'ncc'), str(source), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
+    r = subprocess.run([*ncc_command(T), str(source), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
                         '-no-color', '-continue:' + str(unsigned)], capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise SystemExit('FAILED: %s\n%s%s' % (name, r.stdout, r.stderr))
@@ -275,13 +278,13 @@ if a.stage >= 'E5':
     root = w / 'macrohost'
     root.mkdir()
     (root / 'host.n').write_text('using Nemerle.Compiler;\n\nmacro twice(e)\n{\n  <[ $e * 2 ]>\n}\n\npublic Hello() : string { "host" }\n')
-    run([T / 'ncc', root / 'host.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'), '-no-color',
+    run([*ncc_command(T), root / 'host.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'), '-no-color',
          '-r:' + str(T / 'Nemerle.Compiler.dll')])
     print(reader(root / 'host.dll', T, '--macros', root / 'host.n'), flush=True)
     user = w / 'macrouser'
     user.mkdir()
     (user / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(twice(21)); }\n}\n')
-    run([T / 'ncc', user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
+    run([*ncc_command(T), user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
          '-r:' + str(root / 'host.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', user / 'use.runtimeconfig.json')
     shutil.copy2(root / 'host.dll', user / 'host.dll')
@@ -295,13 +298,13 @@ if a.stage >= 'E6':
     root.mkdir()
     (root / 'host.n').write_text('using Nemerle.Compiler;\n\nmacro tripled(e)\n{\n  <[ host.Helper($e) ]>\n}\n\ninternal Helper(x : int) : int { x * 3 }\n')
     (root / 'other.n').write_text('internal Secret() : int { 7 }\n')
-    run([T / 'ncc', root / 'host.n', root / 'other.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'),
+    run([*ncc_command(T), root / 'host.n', root / 'other.n', '-source-root:' + str(root), '-target:library', '-out:' + str(root / 'host.dll'),
          '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll')])
     print(reader(root / 'host.dll', T, '--macros', root / 'host.n'), flush=True)
     user = w / 'scopeuser'
     user.mkdir()
     (user / 'use.n').write_text('using host;\n\nmodule Program\n{\n  Main() : void { System.Console.WriteLine(tripled(14)); }\n}\n')
-    run([T / 'ncc', user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
+    run([*ncc_command(T), user / 'use.n', '-source-root:' + str(user), '-out:' + str(user / 'use.exe'), '-no-color',
          '-r:' + str(root / 'host.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', user / 'use.runtimeconfig.json')
     shutil.copy2(root / 'host.dll', user / 'host.dll')
@@ -311,7 +314,7 @@ if a.stage >= 'E6':
     hidden = w / 'scopehidden'
     hidden.mkdir()
     (hidden / 'peek.n').write_text('module Program\n{\n  Main() : void { System.Console.WriteLine(other.Secret()); }\n}\n')
-    r = subprocess.run([str(T / 'ncc'), str(hidden / 'peek.n'), '-source-root:' + str(hidden), '-out:' + str(hidden / 'peek.exe'),
+    r = subprocess.run([*ncc_command(T), str(hidden / 'peek.n'), '-source-root:' + str(hidden), '-out:' + str(hidden / 'peek.exe'),
                         '-no-color', '-r:' + str(root / 'host.dll')],
                        capture_output=True, text=True)
     if r.returncode == 0 or 'Secret' not in r.stdout + r.stderr:
@@ -328,7 +331,7 @@ if a.stage in ('E4', 'E6'):
         (root / 'demo.n').write_text(text)
         env = dict(os.environ, NEMERLE_CONTINUATION_DIFF='1')
         started = time.time()
-        r = subprocess.run([str(T / 'ncc'), str(root / 'demo.n'), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
+        r = subprocess.run([*ncc_command(T), str(root / 'demo.n'), '-source-root:' + str(root), '-out:' + str(root / 'demo.exe'),
                             '-no-color', '-continue:' + str(host120)], capture_output=True, text=True, env=env)
         elapsed = time.time() - started
         if r.returncode != 0:
@@ -386,7 +389,7 @@ macro tripled(e)
 
 internal Helper(x : int) : int { x * 3 }
 ''')
-    run([T / 'ncc', lib / 'host.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'host.dll'), '-no-color',
+    run([*ncc_command(T), lib / 'host.n', '-source-root:' + str(lib), '-target:library', '-out:' + str(lib / 'host.dll'), '-no-color',
          '-r:' + str(T / 'Nemerle.Compiler.dll')])
     script = w / 'script'
     script.mkdir()
@@ -394,7 +397,7 @@ internal Helper(x : int) : int { x * 3 }
     (script / 'use.n').write_text('[assembly: DependsOn("host.dll")]\nusing host;\nspace Demo { k0 }\n'
                                   'System.Console.WriteLine(twice(21));\nSystem.Console.WriteLine(tripled(14));\n')
     started = time.time()
-    output = run([T / 'nscript', 'run', script / 'use.n', '--no-cache'], cwd=script).stdout.split()
+    output = run([*nscript_command(T), 'run', script / 'use.n', '--no-cache'], cwd=script).stdout.split()
     elapsed = time.time() - started
     if output != ['40', '42', '42']:
         raise SystemExit('FAILED: script continuation printed %r' % output)
@@ -403,7 +406,7 @@ internal Helper(x : int) : int { x * 3 }
     prog = w / 'refprogram'
     prog.mkdir()
     (prog / 'use.n').write_text('using host;\n\nspace Demo { k1 }\nSystem.Console.WriteLine(twice(20));\n')
-    run([T / 'ncc', prog / 'use.n', '-source-root:' + str(prog), '-out:' + str(prog / 'use.exe'), '-no-color', '-r:' + str(lib / 'host.dll')])
+    run([*ncc_command(T), prog / 'use.n', '-source-root:' + str(prog), '-out:' + str(prog / 'use.exe'), '-no-color', '-r:' + str(lib / 'host.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', prog / 'use.runtimeconfig.json')
     shutil.copy2(lib / 'host.dll', prog / 'host.dll')
     if run(['dotnet', prog / 'use.exe'], cwd=prog).stdout.split() != ['2', '40']:
@@ -413,7 +416,7 @@ internal Helper(x : int) : int { x * 3 }
     own = w / 'scriptgrammar'
     own.mkdir()
     (own / 'g.n').write_text(grammar_program(3))
-    run([T / 'nscript', 'compile', own / 'g.n', own / 'g.dll', '--no-cache'], cwd=own)
+    run([*nscript_command(T), 'compile', own / 'g.n', own / 'g.dll', '--no-cache'], cwd=own)
     if reader(own / 'g.dll', T, 'Demo').find('PASS') < 0:
         raise SystemExit('FAILED: nscript compile output has no continuation section')
     print('PASS: S nscript compile of a script with a grammar writes the continuation section', flush=True)
@@ -425,7 +428,7 @@ if a.stage == 'E6':
     res = w / 'res'
     res.mkdir()
     (res / 'res.n').write_text(RESOLVER)
-    run([T / 'ncc', res / 'res.n', '-source-root:' + str(res), '-target:library', '-out:' + str(res / 'res.dll'), '-no-color',
+    run([*ncc_command(T), res / 'res.n', '-source-root:' + str(res), '-target:library', '-out:' + str(res / 'res.dll'), '-no-color',
          '-r:' + str(T / 'Nemerle.Compiler.dll')])
     shost = w / 'app'
     shost.mkdir()
@@ -434,7 +437,7 @@ if a.stage == 'E6':
             shutil.copy2(f, shost / f.name)
     shutil.copy2(res / 'res.dll', shost / 'res.dll')
     (shost / 'app.n').write_text(APP)
-    run([T / 'ncc', shost / 'app.n', '-source-root:' + str(shost), '-out:' + str(shost / 'app.exe'), '-no-color',
+    run([*ncc_command(T), shost / 'app.n', '-source-root:' + str(shost), '-out:' + str(shost / 'app.exe'), '-no-color',
          '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll'), '-r:' + str(shost / 'res.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', shost / 'app.runtimeconfig.json')
     plugins = [
@@ -462,7 +465,7 @@ if a.stage == 'E6':
     (copies / 'plugin/plug.n').write_text(
         'public Run() : string\n{\n  def s = Nemerle.Scopes.Scope.Of("app.A");\n  def v = s.Read.[int]("value");\n'
         '  s.Set("value", v + 29);\n  s.Read.[string]("box") + " " + v.ToString() + " " + typeof(Nemerle.Scopes.Scope).Assembly.Location\n}\n')
-    run([T / 'ncc', copies / 'plugin/plug.n', '-source-root:' + str(copies / 'plugin'), '-target:library',
+    run([*ncc_command(T), copies / 'plugin/plug.n', '-source-root:' + str(copies / 'plugin'), '-target:library',
          '-out:' + str(copies / 'plugin/plug.dll'), '-no-color'])
     shutil.copy2(T / 'Nemerle.dll', copies / 'plugin/Nemerle.dll')
     (copies / 'host.n').write_text('''using System.IO;
@@ -492,7 +495,7 @@ def own = said.EndsWith(Path.Combine("plugin", "Nemerle.dll"));
 System.Console.WriteLine(said.Substring(0, said.LastIndexOf(' ')) + (if (own) " (its own Nemerle.dll)" else " (the host's Nemerle.dll)"));
 System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
 ''')
-    run([T / 'ncc', copies / 'host.n', '-source-root:' + str(copies), '-out:' + str(copies / 'host.exe'), '-no-color'])
+    run([*ncc_command(T), copies / 'host.n', '-source-root:' + str(copies), '-out:' + str(copies / 'host.exe'), '-no-color'])
     shutil.copy2(T / 'Nemerle.dll', copies / 'Nemerle.dll')
     shutil.copy2(T / 'ncc.runtimeconfig.json', copies / 'host.runtimeconfig.json')
     output = [l for l in run(['dotnet', copies / 'host.exe'], cwd=copies).stdout.split('\n') if l.strip()]
@@ -507,7 +510,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         'try { System.Console.WriteLine(scope.S.n) } catch { | e is System.InvalidOperationException => System.Console.WriteLine(e.Message) }\n'
         'scope S;\nscope.S.registery("n", type("int"));\nscope.S.n = 5;\nSystem.Console.WriteLine(scope.S.n);\n'
         'try { _ = Nemerle.Scopes.Scope.Access("nowhere.A") } catch { | e is System.InvalidOperationException => System.Console.WriteLine(e.Message) }\n')
-    run([T / 'ncc', declared / 'main.n', '-source-root:' + str(declared), '-out:' + str(declared / 'main.exe'), '-launcher-', '-no-color'])
+    run([*ncc_command(T), declared / 'main.n', '-source-root:' + str(declared), '-out:' + str(declared / 'main.exe'), '-launcher-', '-no-color'])
     shutil.copy2(T / 'Nemerle.dll', declared / 'Nemerle.dll')
     shutil.copy2(T / 'ncc.runtimeconfig.json', declared / 'main.runtimeconfig.json')
     output = [l for l in run(['dotnet', declared / 'main.exe'], cwd=declared).stdout.split('\n') if l.strip()]
@@ -547,7 +550,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         'def p = scope.A.p;\n'
         'foreach (dir in ["same", "renamed", "apart"]) System.Console.WriteLine(call(dir));\n'
         'System.Console.WriteLine($"$(scope.A.p) $(object.ReferenceEquals(p, scope.A.p))");\n')
-    run([T / 'ncc', ident / 'main.n', ident / 'shapes.n', ident / 'util.n', '-source-root:' + str(ident), '-out:' + str(ident / 'main.exe'),
+    run([*ncc_command(T), ident / 'main.n', ident / 'shapes.n', ident / 'util.n', '-source-root:' + str(ident), '-out:' + str(ident / 'main.exe'),
          '-launcher-', '-no-color'])
     # the same file, compiled against the host: the host's module, so the plugin works on the host's object
     (ident / 'same/shapes.n').write_text(shapes)
@@ -574,7 +577,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         '  catch { | e is System.InvalidCastException => "apart: " + (if (e.Message.Contains("compiled apart")) "compiled apart" else e.Message) }\n}\n')
     for d, extra in (('same', ['shapes.n']), ('renamed', ['mine.n']), ('apart', ['shapes.n'])):
         refs = [] if d == 'apart' else ['-r:' + str(ident / 'main.exe')]
-        run([T / 'ncc', ident / d / 'plug.n', *[ident / d / f for f in extra], '-source-root:' + str(ident / d), '-target:library',
+        run([*ncc_command(T), ident / d / 'plug.n', *[ident / d / f for f in extra], '-source-root:' + str(ident / d), '-target:library',
              '-out:' + str(ident / d / (d + '.dll')), '-no-color', *refs])
     shutil.copy2(T / 'Nemerle.dll', ident / 'Nemerle.dll')
     shutil.copy2(T / 'ncc.runtimeconfig.json', ident / 'main.runtimeconfig.json')
@@ -586,7 +589,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     (ident / 'util/util.n').write_text('public Twice(x : int) : int { x * 2 }\n')
     for d, f, says in (('other', 'shapes.n', 'module shapes is in main.exe already, with other code'),
                        ('util', 'util.n', 'module util is in main.exe already')):
-        r = subprocess.run([str(T / 'ncc'), str(ident / d / f), '-source-root:' + str(ident / d), '-target:library',
+        r = subprocess.run([*ncc_command(T), str(ident / d / f), '-source-root:' + str(ident / d), '-target:library',
                             '-out:' + str(ident / d / (d + '.dll')), '-no-color', '-r:' + str(ident / 'main.exe')], capture_output=True, text=True)
         if r.returncode == 0 or says not in r.stdout + r.stderr:
             raise SystemExit('FAILED: a second copy of a host module (%s) is not reported\n%s%s' % (d, r.stdout, r.stderr))
@@ -601,7 +604,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     # the host's copy: a script referencing a library the host has loaded shares its types
     common = w / 'common'; common.mkdir()
     (common / 'box.n').write_text('public class Box { public N : int; public this(n : int) { N = n } }\n')
-    run([T / 'ncc', common / 'box.n', '-source-root:' + str(common), '-target:library', '-out:' + str(common / 'box.dll'), '-no-color'])
+    run([*ncc_command(T), common / 'box.n', '-source-root:' + str(common), '-target:library', '-out:' + str(common / 'box.dll'), '-no-color'])
     for f in T.iterdir():
         if f.is_file() and f.suffix in {'.dll', '.json', '.nitrametadata'}:
             shutil.copy2(f, common / f.name)
@@ -620,7 +623,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         'else\n{\n'
         '  def result = host.Evaluate(compiled.Script, Nemerle.Scripting.contracts.ScriptInputs());\n'
         '  when (result.Error != null) System.Console.WriteLine("error " + result.Error.ToString());\n}\n')
-    run([T / 'ncc', common / 'main.n', '-source-root:' + str(common), '-out:' + str(common / 'main.exe'), '-no-color',
+    run([*ncc_command(T), common / 'main.n', '-source-root:' + str(common), '-out:' + str(common / 'main.exe'), '-no-color',
          '-r:' + str(T / 'Nemerle.Compiler.dll'), '-r:' + str(T / 'Nemerle.Scripting.dll'), '-r:' + str(common / 'box.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', common / 'main.runtimeconfig.json')
     output = [l for l in run(['dotnet', common / 'main.exe', T / 'references'], cwd=common).stdout.split('\n') if l.strip()]
@@ -633,7 +636,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     (badgrammar / 'bad.n').write_text('using System;\n\ngrammar Bad\n{\n  using Nemerle.Compiler.Parsetree;\n  syntax module M\n  {\n'
         '    using Nitra.Core;\n    [StartRule] syntax Start = Expr { map PExpr = <[ () ]>; }\n    syntax Expr\n    {\n      map PExpr;\n'
         '      | Sum = Expr "+" Expr precedence 10 { map PExpr = <[ 1 ]>; }\n    }\n  }\n}\n')
-    r = subprocess.run([str(T / 'ncc'), str(badgrammar / 'bad.n'), '-source-root:' + str(badgrammar), '-target:library',
+    r = subprocess.run([*ncc_command(T), str(badgrammar / 'bad.n'), '-source-root:' + str(badgrammar), '-target:library',
                         '-out:' + str(badgrammar / 'bad.dll'), '-no-color', '-r:' + str(T / 'Nemerle.Compiler.dll')], capture_output=True, text=True)
     if r.returncode == 0 or 'bad.n:13:40' not in r.stdout + r.stderr or "at `10 {" not in r.stdout + r.stderr:
         raise SystemExit('FAILED: a grammar error is located at its line and column\n' + r.stdout + r.stderr)
@@ -643,7 +646,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
     for f in ('app.exe', 'res.dll'):
         shutil.copy2(shost / f, plain / f)
     (plain / 'prog.n').write_text('space { go }\nSystem.Console.WriteLine(dial:.prog::twice(4));\n')
-    run([T / 'ncc', plain / 'prog.n', '-source-root:' + str(plain), '-out:' + str(plain / 'prog.exe'), '-no-color',
+    run([*ncc_command(T), plain / 'prog.n', '-source-root:' + str(plain), '-out:' + str(plain / 'prog.exe'), '-no-color',
          '-r:' + str(plain / 'app.exe'), '-r:' + str(plain / 'res.dll')])
     shutil.copy2(T / 'ncc.runtimeconfig.json', plain / 'prog.runtimeconfig.json')
     if run(['dotnet', plain / 'prog.exe'], cwd=plain).stdout.split() != ['8']:
@@ -657,7 +660,7 @@ System.Console.WriteLine("host " + s.Read.[int]("value").ToString());
         d.mkdir()
         shutil.copy2(shost / 'app.exe', d / 'app.exe')
         (d / 'bad.n').write_text(text)
-        r = subprocess.run([str(T / 'ncc'), str(d / 'bad.n'), '-source-root:' + str(d), '-out:' + str(d / 'bad.exe'),
+        r = subprocess.run([*ncc_command(T), str(d / 'bad.n'), '-source-root:' + str(d), '-out:' + str(d / 'bad.exe'),
                             '-no-color', '-r:' + str(d / 'app.exe')], capture_output=True, text=True)
         if r.returncode == 0 or 'top-level' not in r.stdout + r.stderr and 'top level' not in r.stdout + r.stderr:
             raise SystemExit('FAILED: a space %s is not rejected\n%s%s' % (name, r.stdout, r.stderr))

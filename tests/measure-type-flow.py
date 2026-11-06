@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import time
 
+from windows_commands import ncc_command
+
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--toolchain', type=pathlib.Path, required=True)
 p.add_argument('--counts', type=int, nargs='+', default=[100, 500, 1000])
@@ -26,7 +28,7 @@ for count in a.counts:
             lines.extend(['mutable x%d = 1;' % i, 'x%d = %s;' % (i, '"text"' if changing else '2')])
         lines.extend(['System.Console.WriteLine("ok");', '}', 'Run()'])
         source.write_text('\n'.join(lines) + '\n')
-        command = [str(toolchain / 'ncc'), str(source), '-source-root:' + str(work),
+        command = [*ncc_command(toolchain), str(source), '-source-root:' + str(work),
                    '-out:' + str(source.with_suffix('.exe')), '-launcher-', '-no-color']
         row = {'locals': count, 'types': name, 'command': command}
         start = time.perf_counter()

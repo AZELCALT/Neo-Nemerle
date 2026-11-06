@@ -23,7 +23,7 @@ for name in ['parser','lexer','basic-macros','std-macros','quotations']:
     fixture=root/(name.replace('-','_')+'.n'); fixture.write_text(source,encoding='utf-8')
     output=work/(name+'.exe')
     command=['dotnet',str(work/'ncc.exe'),str(fixture),'-source-root:'+str(root),'-no-color','-nowarn:10003',
-        '-out:'+str(output),'-target-references:'+str(a.references.resolve()),
+        '-out:'+str(output),'-launcher-','-target-references:'+str(a.references.resolve()),
         '-r:'+str(work/'Nemerle.Compiler.dll')]
     if name == "quotations": command.append("-target:library")
     compiled=subprocess.run(command,cwd=work,text=True,capture_output=True,timeout=90)

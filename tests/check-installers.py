@@ -8,6 +8,10 @@ prefix with --editor none, and the .vsix each writes next to itself must pass te
 editor step runs against a stand-in editor command that records how it is called (no real editor is touched)."""
 import os, pathlib, shutil, subprocess, sys, tempfile, zipfile
 
+if os.name == 'nt':
+    print('SKIP: Unix install.sh harness on Windows; Windows installer tested separately')
+    raise SystemExit(0)
+
 repo = pathlib.Path(__file__).resolve().parents[1]
 work = pathlib.Path(tempfile.mkdtemp(prefix='nemerle-installers-'))
 # Desktop MIME registration belongs to the same scratch install as the toolchain.

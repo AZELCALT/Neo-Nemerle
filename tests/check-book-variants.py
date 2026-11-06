@@ -44,7 +44,7 @@ def run_program(root, exe):
 
 def compile_n(root, source, out, *extra):
     return subprocess.run(['dotnet', str(T / 'ncc.exe'), '-target-references:' + str(R), str(source),
-                           '-source-root:' + str(root), '-out:' + str(out), '-no-color', *extra],
+                           '-source-root:' + str(root), '-out:' + str(out), '-launcher-', '-no-color', *extra],
                           cwd=root, capture_output=True, text=True)
 
 
