@@ -325,6 +325,12 @@ def pick = (b : bool) => if (b) 1 else "one";
 match (pick(true)) {{ | n is int => {W}(n + 1) | s is string => {W}(s) }}
 match (pick(false)) {{ | n is int => {W}(n + 1) | s is string => {W}(s) }}
 '''}, '2\none'),
+    # The first `is` arm must not fix the return type of the inferred lambda.
+    ('lambda-several-types-matched-reversed', {'main.n': f'''
+def pick = (b : bool) => if (b) 1 else "one";
+match (pick(false)) {{ | s is string => {W}(s) | n is int => {W}(n + 1) }}
+match (pick(true)) {{ | s is string => {W}(s) | n is int => {W}(n + 1) }}
+'''}, 'one\n2'),
     ('local-function-several-types-recursive', {'main.n': f'''
 Run() : void
 {{

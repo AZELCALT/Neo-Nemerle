@@ -6680,6 +6680,27 @@ internal type CustomTyperHandler = TExpr * (TExpr -> TExpr) -> TExpr;
         }
         else
         {
+          // An inferred local function's conditional result can contain
+          // incompatible concrete branch types. In a script initializer this
+          // expression is typed before the enclosing constructor's delayed
+          // pass, so record the existing Content restart *now*, before the
+          // binding's field type is fixed. Ordinary methods use their normal
+          // RunFullTyping delayed pass and are deliberately unchanged here.
+          when (Manager.Options.Script != null && CurrentMethodBuilder != null
+                && CurrentMethodBuilder.IsConstructor && current_fun != null
+                && current_fun.decl != null)
+          {
+            mutable first : FixedType = null;
+            mutable mixed = false;
+            foreach (case when !IsError(case.body) in cases)
+              match (case.body.Type.Hint)
+              {
+                | Some(t) when first == null => first = t
+                | Some(t) when !t.Equals(first) => mixed = true
+                | _ => ()
+              }
+            when (mixed) LocalContentResult(expected);
+          }
           DelayAction(mtch, expected,
             Typer.DelayedLambdaAction(lastTry =>
               if (lastTry)

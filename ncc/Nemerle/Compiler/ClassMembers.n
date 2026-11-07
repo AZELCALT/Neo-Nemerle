@@ -709,24 +709,58 @@ public class FieldBuilder : MemberBuilder, IField
         // the diagnostics here: local async functions and iterators need the root solver to lower their yields.
         // Typing their bodies inside a speculative solver state would both violate that invariant and discard
         // constraints belonging to the initializer tree cached below.
-        def infer() : TExpr
+        def infer(ctx : Typer) : TExpr
         {
-          if (!script.Waits) typer.TypeExpr(value)
+          if (!script.Waits) ctx.TypeExpr(value)
           else
           {
             def messenger = Manager.Solver.CurrentMessenger;
             messenger.PushState ();
             try
             {
-              def typed = typer.TypeExpr(value);
+              def typed = ctx.TypeExpr(value);
               if (messenger.SeenError) null else typed
             }
             finally { messenger.PopState (); }
           }
         }
         when (script.Waits) Manager.QuietMessages++;
-        def typed = try { infer() }
-                    finally { Manager.UserData.Remove("Nemerle.AsyncMacros.blocking"); when (script.Waits) Manager.QuietMessages-- };
+        mutable typed : TExpr = null;
+        try
+        {
+          // Script field types are committed before their constructor reaches
+          // RunFullTyping's delayed pass. A local lambda that learned a mixed
+          // result must be retyped with the recorded Content return type here,
+          // *before* DeepFix() commits the field's signature. This is a retry,
+          // not a fallback to object and not a change to NotYet.
+          def owner = typer.CurrentMethodBuilder;
+          mutable probe = typer;
+          mutable retries = 0;
+          mutable again = true;
+          while (again)
+          {
+            def learnedBefore = if (owner == null) 0 else owner.LocalContentResults.Count;
+            def held = Manager.HoldMessages();
+            mutable released = false;
+            try
+            {
+              typed = infer(probe);
+              when (typed != null && !script.Waits) ResolveDelayed(typed, manager);
+              again = !script.Waits && typed != null && owner != null
+                      && owner.LocalContentResults.Count > learnedBefore && retries < 15;
+              if (again) Manager.ForgetMessages(held)
+              else Manager.ReleaseMessages(held);
+              released = true;
+            }
+            finally { unless (released) Manager.ReleaseMessages(held) }
+            when (again)
+            {
+              retries++;
+              probe = Manager.ComponentsFactory.CreateTyper(owner)
+            }
+          }
+        }
+        finally { Manager.UserData.Remove("Nemerle.AsyncMacros.blocking"); when (script.Waits) Manager.QuietMessages-- }
         when (typed == null)
         {
           ty = InternalType.Object;
@@ -734,7 +768,7 @@ public class FieldBuilder : MemberBuilder, IField
           Ast.ty = PT.PExpr.TypedType(Ast.Location, ty);
           return
         }
-        ResolveDelayed(typed, DeclaringType.Manager);
+        when (script.Waits) ResolveDelayed(typed, manager);
         ty = typed.Type.DeepFix();
         // Cached initializer trees also enter speculative overload checks.
         // Resolve their expression types before those solver states expire.
