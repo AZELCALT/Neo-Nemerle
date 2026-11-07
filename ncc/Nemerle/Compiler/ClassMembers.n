@@ -769,6 +769,42 @@ public class FieldBuilder : MemberBuilder, IField
           return
         }
         when (script.Waits) ResolveDelayed(typed, manager);
+        // The eager script-field pass only needs the initializer's eventual
+        // type. A local function with ref/out parameters has an internal
+        // function type, but cannot be represented as a first-class CLR
+        // function (generic function types cannot contain byrefs). If the
+        // initializer is that function *value*, keep its typed tree intact
+        // for the constructor's normal stage-two LocalFunRef check, rather
+        // than trying to materialize the field before the check runs.
+        // Direct calls (including calls passing ref/out) are not function
+        // values and continue through the normal inference path.
+        def pendingLocalFunctionValue(expr : TExpr) : bool
+        {
+          match (expr)
+          {
+            | TExpr.DefFunctionsIn(_, body) | TExpr.DebugInfo(body, _) =>
+              pendingLocalFunctionValue(body)
+            | TExpr.Sequence(_, last) => pendingLocalFunctionValue(last)
+            | TExpr.LocalFunRef(local, _) =>
+              match (local.ValKind)
+              {
+                | LocalValue.Kind.Function(header, _) =>
+                  header.Parameters.Exists(p => p.kind != ParmKind.Normal)
+                | _ => false
+              }
+            | _ => false
+          }
+        }
+        when (pendingLocalFunctionValue(typed))
+        {
+          // This is not a settled field type. Do not replace the unresolved
+          // semantic function type with object, or cache a DeepFix result.
+          // The actual typed reference travels through __script_binding_value
+          // and is rejected by typer2 at its ordinary semantic-validation
+          // stage, before emission.
+          script.TypedInitializers[Name] = typed;
+          return;
+        }
         ty = typed.Type.DeepFix();
         // Cached initializer trees also enter speculative overload checks.
         // Resolve their expression types before those solver states expire.

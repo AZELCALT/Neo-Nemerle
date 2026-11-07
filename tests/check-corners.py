@@ -443,6 +443,11 @@ def p(x : ref int) : void {{ x = 1 }}
 def f = p;
 ignore(f)
 '''}, "ERROR:`p' has ref or out parameters: it is called"),
+    ('local-function-out-not-a-value', {'main.n': f'''
+def p(x : out int) : void {{ x = 1 }}
+def f = p;
+ignore(f)
+'''}, "ERROR:`p' has ref or out parameters: it is called"),
     ('top-level-value-by-ref', {'main.n': f'''
 mutable count = 1;
 mutable word = "a";
