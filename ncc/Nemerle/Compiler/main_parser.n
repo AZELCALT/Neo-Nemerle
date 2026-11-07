@@ -855,6 +855,12 @@ using Nemerle.Compiler.Utility;
               _ = lex.Manager.TopLevelCalls.Add(ManagerClass.CallKey(expression.Location)); _ = lex.Manager.TopLevelCallModules.Add(moduleName)
             | _ => ()
           }
+        // Keep the original declarations for lexical-history queries. Splitting
+        // `def (x, y) = value` into per-name state fields is a storage lowering,
+        // not a change to where (or how often) the source bound x and y.
+        // Script functions already count their original patterns in `pending`.
+        def lexicalDeclarations : SCG.List[PExpr] = SCG.List();
+        foreach ((expression, _) in collected) lexicalDeclarations.Add(expression);
         def spread = SCG.List();
         foreach ((expression, isPublic) in collected) declarations(expression, isPublic, spread);
         collected.Clear();
@@ -1045,7 +1051,7 @@ using Nemerle.Compiler.Utility;
                 when (pair.Value > 1 && !mutables.Contains(pair.Key))
                 {
                   mutable before = 0;
-                  foreach ((declaration, _) in collected)
+                  foreach (declaration in lexicalDeclarations)
                   {
                     def earlier = declaration.Location.Line < member.Location.Line
                       || declaration.Location.Line == member.Location.Line
@@ -1053,9 +1059,9 @@ using Nemerle.Compiler.Utility;
                     when (earlier)
                       match (declaration)
                       {
-                        | PExpr.Define(PExpr.Ref(n), _)
-                        | PExpr.Define(PExpr.TypeEnforcement(PExpr.Ref(n), _), _)
-                            when n.Id == pair.Key => before++
+                        | PExpr.Define(pattern, _) =>
+                          when (PatternNames(pattern).Exists(r =>
+                            (r :> PExpr.Ref).name.Id == pair.Key)) before++
                         | _ => ()
                       }
                   }

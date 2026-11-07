@@ -110,6 +110,17 @@ New() : int { x + y }
 System.Console.WriteLine(Old());
 System.Console.WriteLine(New());
 """}, "3\n30"),
+    Case("module-tuple-three-lexical-versions", "module", {"main.n": """
+def (x, y) = (1, 2);
+First() : int { x + y }
+def (x, y) = (10, 20);
+Second() : int { x + y }
+def (x, y) = (100, 200);
+Third() : int { x + y }
+System.Console.WriteLine(First());
+System.Console.WriteLine(Second());
+System.Console.WriteLine(Third());
+"""}, "3\n30\n300"),
     Case("module-mutable-remains-shared", "module", {"main.n": """
 mutable x = 1;
 Read() : int { x }
