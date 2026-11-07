@@ -241,10 +241,12 @@ public static class ScriptingChecks {
   var badWaitingInitializer=host.Compile(new ScriptSource("using System.Threading.Tasks;\n"
     + "await Task.Yield();\ndef bad = \"text\" * 2;\nbad\n",Path.Combine(root,"bad_waiting.n")));
   var initializerErrors=badWaitingInitializer.Diagnostics.Where(x=>x.IsError).ToArray();
-  Check(!badWaitingInitializer.Success && initializerErrors.Length==2
-    && initializerErrors.All(x=>x.Line==3)
-    && initializerErrors.Select(x=>x.Message).Distinct().Count()==2,
-    "waiting initializer inference reports operator diagnostics once at the original source line");
+  var initializerDetails=string.Join(" | ", badWaitingInitializer.Diagnostics.Select(x=>
+    x.Line+":"+x.Column+":"+x.Message));
+  Check(!badWaitingInitializer.Success && initializerErrors.Length==1
+    && initializerErrors[0].Line==3 && initializerErrors[0].Column==11
+    && initializerErrors[0].Message.Contains("needed a int, got string"),
+    "waiting initializer inference reports exactly one operator error at the original source line; actual: "+initializerDetails);
   Console.WriteLine("PASS: scripting inputs, identity, exports, masks, inferred bindings/closures, session chaining/shadowing/failures, typed results, source history/replay, refiners, async cancellation, cache integrity and saved artifacts");
  }
  static void Facilities() {

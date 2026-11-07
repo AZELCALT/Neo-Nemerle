@@ -52,7 +52,7 @@ if not a.reuse:
             if f.is_file() and f.suffix in {'.dll','.exe','.json','.nitrametadata'}:shutil.copy2(f,w/f.name)
     if hashlib.sha256((w/'Nemerle.Compiler.dll').read_bytes()).digest()!=hashlib.sha256((toolchain/'Nemerle.Compiler.dll').read_bytes()).digest():
         raise RuntimeError('comparison compiler does not match selected toolchain')
-        runtime = net10_runtime()
+    runtime = net10_runtime()
     common=['dotnet',w/'ncc.exe','-no-color','-source-root:'+str(HERE/'nitra-comparison'),'-target-references:'+str(refs)]
     reference_names=['Nemerle.Compiler','Integrated.Nitra.Runtime','Integrated.DotNetLang','Integrated.Nitra.Grammar']
     command=common+[HERE/'nitra-comparison/Comparison.nitra','-macros:'+str(w/'Integrated.Nitra.Compiler.dll'),'-target:library','-out:'+str(w/'Comparison.dll')]

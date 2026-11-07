@@ -1735,6 +1735,27 @@ using Nemerle.Compiler.Utility;
               add([field], "", true);
             // a tuple of names: each a field, given its part (the script's storage: fields of the script class)
             | PExpr.Tuple as tuple when plainNames(tuple) =>
+              // A method-written mutable tuple component is shared field state.
+              // Avoid creating an identically named constructor local: a
+              // later sprint macro or direct read would see its stale value.
+              def fieldState = mutableBinding && PatternNames(tuple).Exists(r =>
+                stateWritten.Contains((r :> PExpr.Ref).name.Id));
+              def temporary : SCG.Dictionary[string, Name] = SCG.Dictionary();
+              def initPattern(part : PExpr) : PExpr
+              {
+                match (part)
+                {
+                  | PExpr.Tuple(parts) => PExpr.Tuple(part.Location, parts.Map(initPattern))
+                  | PExpr.TypeEnforcement(inner, ty) =>
+                    PExpr.TypeEnforcement(part.Location, initPattern(inner), ty)
+                  | PExpr.Ref(name) =>
+                    def fresh = Macros.NewSymbol("tuple_state");
+                    temporary[name.Id] = fresh;
+                    PExpr.Ref(part.Location, fresh)
+                  | _ => part
+                }
+              }
+              def evaluatedPattern = if (fieldState) initPattern(pattern) else pattern;
               def assignments : SCG.List[PExpr] = SCG.List();
               def collect(part : PExpr) : void
               {
@@ -1758,18 +1779,22 @@ using Nemerle.Compiler.Utility;
                     def mods = AttributesAndModifiers(NemerleModifiers.Public |
                       (if (mutableBinding) NemerleModifiers.Mutable else NemerleModifiers.None), []);
                     def read = PExpr.Ref(part.Location, name);
+                    // Keep the original pattern for field type inference; the
+                    // constructor's one evaluation uses the fresh temporaries.
                     data.InferredInitializers[name.Id] = <[ { def $pattern = $value; $read } ]>;
                     data.InferenceFunctions[name.Id] = functions();
                     add([ClassMember.Field(part.Location, Splicable.Name(name), mods, <[ _ ]>, null)], "", true);
-                    assignments.Add(<[ _N_skip_write_check(this.$(name.Id : usesite)) = $read ]>);
+                    def storedValue = PExpr.Ref(part.Location,
+                      if (fieldState) temporary[name.Id] else name);
+                    assignments.Add(<[ _N_skip_write_check(this.$(name.Id : usesite)) = $storedValue ]>);
                   | _ => ();
                 }
               }
               collect(tuple);
-              // Preserve tuple names in the enclosing statement scope, rather
-              // than hiding them in a temporary block. Each field then copies
-              // its own local binding; evaluation of the tuple happens once.
-              expressions.Add(if (mutableBinding) PExpr.DefMutable(expression.Location, pattern, value)
+              // The tuple expression is evaluated once. Keep ordinary lexical
+              // bindings unless a function can update the shared field.
+              expressions.Add(if (fieldState) PExpr.Define(expression.Location, evaluatedPattern, value)
+                else if (mutableBinding) PExpr.DefMutable(expression.Location, pattern, value)
                 else PExpr.Define(expression.Location, pattern, value));
               expressions.AddRange(assignments);
             | PExpr.Wildcard => expressions.Add(expression);
@@ -1851,8 +1876,9 @@ using Nemerle.Compiler.Utility;
       foreach (e in pending)
         match (e)
         {
-          | PExpr.DefMutable(PExpr.Ref(n), _) =>
-            _ = stateMutables.Add(n.Id)
+          | PExpr.DefMutable(pattern, _) =>
+            foreach (r in PatternNames(pattern))
+              _ = stateMutables.Add((r :> PExpr.Ref).name.Id)
           | _ => ()
         }
       foreach (e in pending)

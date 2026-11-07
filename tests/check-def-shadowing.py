@@ -152,6 +152,12 @@ New() : int { x + y }
 System.Console.WriteLine(Old());
 System.Console.WriteLine(New());
 """}, "3\n30"),
+    Case("script-mutable-tuple-method-write", "script", {"main.ns": """
+mutable (x, y) = (0, 0);
+Move() : void { x += 10; y += 5 }
+Move();
+System.Console.WriteLine($"$x, $y");
+"""}, "10, 5"),
     Case("script-variant-pattern-shadow", "script", {"main.ns": """
 def (Some(x)) = Some(1 : int);
 Old() : int { x }
