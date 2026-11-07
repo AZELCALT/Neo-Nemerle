@@ -57,6 +57,7 @@ using Nemerle.Compiler.manager_class;
 using Nemerle.Compiler.namespace_tree;
 using Nemerle.Compiler.pretty_print;
 using Nemerle.Compiler.type_builder;
+using Nemerle.Compiler.type_var;
 using Nemerle.Compiler.type_var_env;
 using Nemerle.Compiler.Utility;
 
@@ -1077,6 +1078,33 @@ using Nemerle.Compiler.Utility;
       def first = types[0];
       mutable same = true;
       foreach (t in types) unless (t.Equals(first)) same = false;
+      // The inference-only _N_state_types method runs before normal method
+      // stage two. Its inferred byref function type is not yet a valid CLR
+      // field signature: the constructor's Typer2 rejects an uncalled local
+      // ref/out function used as a value. Leave this inference uncommitted
+      // until that ordinary semantic check reports the error; never create a
+      // generic Function[T...] with byref type arguments during this pass.
+      when (Manager.Options.Script != null && ti.FullName == Manager.Options.Script.TypeName)
+      {
+        def byrefFunction(t : FixedType) : bool
+        {
+          match (t.FunReturnTypeAndParms())
+          {
+            | Some((parms, ret)) =>
+              def byref(p : TypeVar) : bool
+              {
+                match (p.Fix())
+                {
+                  | FixedType.Ref(_) | FixedType.Out(_) => true
+                  | _ => false
+                }
+              }
+              parms.Exists(byref) || byref(ret)
+            | _ => false
+          }
+        }
+        when (types.Exists(byrefFunction)) return;
+      }
       foreach (field is FieldBuilder in ti.LookupMember(name))
       {
         if (same)
